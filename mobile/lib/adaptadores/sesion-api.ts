@@ -8,6 +8,7 @@
  * backend/src/modules/sesion/sesion.routes.ts:
  *   GET  /api/sesion/sucursales                            (solo activas)
  *   GET  /api/sesion/sucursales/:sucursalId/colaboradores  (solo activos)
+ *   GET  /api/sesion/administradores                       (solo activos, sin sucursal)
  *   POST /api/sesion/ingresar { colaboradorId, pin }
  *
  * Las 3 rutas coincidían con lo que ya tenía. Rate limit en `ingresar`: 8
@@ -111,6 +112,10 @@ export const sesionApi: RepositorioSesion = {
 
   async colaboradores(sucursalId) {
     return pedir<Colaborador[]>(`${RUTA}/sucursales/${sucursalId}/colaboradores`, { sinSesion: true });
+  },
+
+  async administradores() {
+    return pedir<Colaborador[]>(`${RUTA}/administradores`, { sinSesion: true });
   },
 
   async ingresar(colaboradorId, pin) {

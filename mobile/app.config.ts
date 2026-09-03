@@ -25,6 +25,11 @@ const config: ExpoConfig = {
       },
     ],
     'expo-sqlite',
+    // Cleartext HTTP acotado a hosts de desarrollo (10.0.2.2, localhost) --
+    // NO abre HTTP contra cualquier host. Ver el comentario completo en
+    // plugins/withNetworkSecurityConfigDev.js y mobile/README.md.
+    // BORRAR cuando el backend de desarrollo tenga HTTPS.
+    './plugins/withNetworkSecurityConfigDev.js',
   ],
 };
 

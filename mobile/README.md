@@ -29,6 +29,40 @@ npm start          # Expo dev server
 npm run typecheck  # tsc --noEmit
 ```
 
+## Login
+
+### El Administrador entra por un camino aparte, sin sucursal
+
+`Sesion.sucursal` es `Sucursal | null`, y `null` solo pasa para
+`rol=administrador`: un administrador es del sistema, no de una tienda (así
+se decidió a propósito al sacar la vieja `SUCURSAL_SISTEMA` ficticia — el
+tipo tenía que decir la verdad). Lo que faltó en ese momento fue que la
+pantalla de login acompañara el cambio: como pedía sucursal Y persona
+siempre, y el administrador no aparece en el padrón de ninguna sucursal, no
+había forma de entrar con ese rol en ningún build (bug real, encontrado
+2026-09-03 probando el APK v2.0.0 contra la base real).
+
+**Se resolvió con un camino de login separado**, no mezclando al
+administrador en el combo de una sucursal:
+- Backend: `GET /api/sesion/administradores` (`sesion.service.ts#listarAdministradores`)
+  — colaboradores con `sucursalId: null` y `activo: true`. Nueva, junto a
+  `GET /api/sesion/sucursales/:id/colaboradores`, no la reemplaza.
+- Mobile: `app/index.tsx` tiene un link "¿Sos administrador del sistema?
+  Ingresá acá" que oculta el selector de Sucursal y carga el padrón de
+  administradores en su lugar. El PIN sigue validándose contra argon2 en
+  `POST /api/sesion/ingresar` — el cliente no valida nada, solo pide otra
+  lista de personas para elegir.
+
+**Por qué NO se mezcló al administrador en el padrón de las 4 tiendas**
+(alternativa descartada, y la que tenía el adaptador en memoria antes de
+esta corrección): habría aparecido repetido en las 4 sucursales a la vez,
+inflando el "N colaboradores" que ya se muestra en el selector de Sucursal
+y en las pantallas de Coordinador/Auditor — un dato falso por conveniencia
+de login. Tampoco se dejó la sucursal como "opcional": reusar ese mismo
+campo para significar dos cosas distintas ("no elegí todavía" vs. "elegí
+explícitamente que no hay sucursal") es más confuso que un camino aparte,
+explícito, para un rol que es conceptualmente distinto de entrada.
+
 ## Apuntar la app al backend
 
 La URL base **no esta hardcodeada**: sale de configuracion, en este orden
@@ -63,6 +97,25 @@ EXPO_PUBLIC_API_URL=http://192.168.1.50:3000 ./gradlew assembleRelease
 
 El backend tiene que escuchar en `0.0.0.0`, no solo en `127.0.0.1`, para que
 el telefono lo alcance por la red.
+
+### Cleartext HTTP — solo para desarrollo, y ACOTADO (sacarlo con HTTPS)
+
+Desde Android 9 (API 28) el tráfico HTTP sin cifrar está bloqueado por
+default en un build de release. La URL correcta (`10.0.2.2:3000`) no alcanza
+sola: sin esto, el fetch ni siquiera abre una conexión TCP — falla en
+silencio y el login contra la base queda con la sucursal vacía (confirmado
+así en el APK v2.0.0 antes de esta config).
+
+La solución NO es `android.usesCleartextTraffic: true`: esa bandera
+habilitaría HTTP contra CUALQUIER host, para siempre, en un APK que después
+se instala en teléfonos reales de la tienda. En cambio, `mobile/plugins/withNetworkSecurityConfigDev.js`
+instala un `network_security_config` que permite cleartext **solo** contra
+`10.0.2.2`, `localhost` y `127.0.0.1` — el resto del tráfico sigue exigiendo
+HTTPS.
+
+**Esto es configuración de DESARROLLO.** El día que el backend tenga un
+dominio con HTTPS de verdad, hay que borrar el plugin y su referencia en
+`app.config.ts` — no dejarlo "por las dudas".
 
 ### Volver a memoria sin backend
 

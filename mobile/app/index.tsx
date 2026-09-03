@@ -31,6 +31,16 @@ export default function LoginScreen(): JSX.Element {
   const { sesion, cargando, ingresar } = useSesion();
   const [sucursales, setSucursales] = useState<Sucursal[]>([]);
   const [colaboradoresDisponibles, setColaboradoresDisponibles] = useState<Colaborador[]>([]);
+  const [administradores, setAdministradores] = useState<Colaborador[]>([]);
+
+  /**
+   * El Administrador es del sistema, no de una tienda (`sesion.sucursal`
+   * queda `null` para este rol) — camino de login SEPARADO en vez de
+   * meterlo en el combo de una sucursal cualquiera. Mezclarlo ahí lo haría
+   * aparecer en el padrón de las 4 tiendas a la vez, con un colaborador que
+   * en los hechos no pertenece a ninguna (ver mobile/README.md §Login).
+   */
+  const [modoAdmin, setModoAdmin] = useState(false);
 
   // Nada preseleccionado: criterio explícito del cliente — un default que
   // nadie mira es un dato que nadie verifica.
@@ -60,14 +70,35 @@ export default function LoginScreen(): JSX.Element {
     repositorioSesion.colaboradores(sucursal.id).then(setColaboradoresDisponibles);
   }, [sucursal]);
 
+  // Se pide recién al entrar en modoAdmin (no en el arranque de la
+  // pantalla): es el mismo criterio que ya se usa para colaboradores de una
+  // sucursal — no traer del backend lo que todavía nadie pidió ver.
+  useEffect(() => {
+    if (!modoAdmin) return;
+    repositorioSesion.administradores().then(setAdministradores);
+  }, [modoAdmin]);
+
+  function alternarModoAdmin(): void {
+    setModoAdmin((actual) => !actual);
+    setSucursal(null);
+    setPersona(null);
+    setPin('');
+    setCampoAbierto(null);
+  }
+
   const opcionesSucursal: SelectOpcion[] = useMemo(
     () => sucursales.map((s) => ({ id: s.id, titulo: s.nombre, subtitulo: textoColaboradores(s) })),
     [sucursales],
   );
 
   const opcionesPersona: SelectOpcion[] = useMemo(
-    () => colaboradoresDisponibles.map((p) => ({ id: p.id, titulo: p.nombre, subtitulo: `DNI ••••${p.dni}` })),
-    [colaboradoresDisponibles],
+    () =>
+      (modoAdmin ? administradores : colaboradoresDisponibles).map((p) => ({
+        id: p.id,
+        titulo: p.nombre,
+        subtitulo: `DNI ••••${p.dni}`,
+      })),
+    [modoAdmin, administradores, colaboradoresDisponibles],
   );
 
   const valorSucursal: SelectOpcion | null = sucursal
@@ -78,7 +109,7 @@ export default function LoginScreen(): JSX.Element {
     ? { id: persona.id, titulo: persona.nombre, subtitulo: `DNI ••••${persona.dni}` }
     : null;
 
-  const puedeIngresar = !!sucursal && !!persona && pin.length === LARGO_PIN && !ingresando;
+  const puedeIngresar = (modoAdmin || !!sucursal) && !!persona && pin.length === LARGO_PIN && !ingresando;
 
   async function manejarIngreso(): Promise<void> {
     if (!persona) return;
@@ -114,41 +145,49 @@ export default function LoginScreen(): JSX.Element {
       </View>
 
       <View style={styles.campos}>
-        <View style={styles.campo}>
-          <Text style={styles.label}>Sucursal</Text>
-          <Select
-            icon={MapPin}
-            valor={valorSucursal}
-            placeholder="Selecciona una sucursal"
-            opciones={opcionesSucursal}
-            accessibilityLabel="Sucursal"
-            abierto={campoAbierto === 'sucursal'}
-            onCambiarAbierto={(abierto) => setCampoAbierto(abierto ? 'sucursal' : null)}
-            onSeleccionar={(opcion) => {
-              const elegida = sucursales.find((s) => s.id === opcion.id) ?? null;
-              setSucursal(elegida);
-              setPersona(null);
-            }}
-          />
-        </View>
+        {!modoAdmin && (
+          <View style={styles.campo}>
+            <Text style={styles.label}>Sucursal</Text>
+            <Select
+              icon={MapPin}
+              valor={valorSucursal}
+              placeholder="Selecciona una sucursal"
+              opciones={opcionesSucursal}
+              accessibilityLabel="Sucursal"
+              abierto={campoAbierto === 'sucursal'}
+              onCambiarAbierto={(abierto) => setCampoAbierto(abierto ? 'sucursal' : null)}
+              onSeleccionar={(opcion) => {
+                const elegida = sucursales.find((s) => s.id === opcion.id) ?? null;
+                setSucursal(elegida);
+                setPersona(null);
+              }}
+            />
+          </View>
+        )}
 
         <View style={styles.campo}>
           <Text style={styles.label}>Persona</Text>
           <Select
             icon={User}
             valor={valorPersona}
-            placeholder="Selecciona una persona"
+            placeholder={modoAdmin ? 'Selecciona un administrador' : 'Selecciona una persona'}
             opciones={opcionesPersona}
-            disabled={!sucursal}
+            disabled={!modoAdmin && !sucursal}
             disabledHint="Elegí primero la sucursal"
             accessibilityLabel="Persona"
             abierto={campoAbierto === 'persona'}
             onCambiarAbierto={(abierto) => setCampoAbierto(abierto ? 'persona' : null)}
             onSeleccionar={(opcion) => {
-              const elegida = colaboradoresDisponibles.find((p) => p.id === opcion.id) ?? null;
+              const disponibles = modoAdmin ? administradores : colaboradoresDisponibles;
+              const elegida = disponibles.find((p) => p.id === opcion.id) ?? null;
               setPersona(elegida);
             }}
           />
+          <Pressable onPress={alternarModoAdmin} accessibilityRole="button">
+            <Text style={styles.olvide}>
+              {modoAdmin ? '← Volver al ingreso de tienda' : '¿Sos administrador del sistema? Ingresá acá'}
+            </Text>
+          </Pressable>
         </View>
 
         <View style={styles.campo}>

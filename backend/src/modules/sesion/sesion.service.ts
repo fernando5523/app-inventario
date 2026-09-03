@@ -59,6 +59,22 @@ export async function listarColaboradores(sucursalId: number): Promise<Colaborad
 }
 
 /**
+ * Camino de login separado para el rol=administrador: no pertenece a
+ * ninguna sucursal (sucursalId null a proposito, ver SesionDto#sucursal),
+ * asi que no puede salir de `listarColaboradores(sucursalId)` como el resto.
+ * Sin este endpoint, el rol existe en la base y en el codigo pero nadie
+ * puede entrar por el.
+ */
+export async function listarAdministradores(): Promise<ColaboradorDto[]> {
+  const administradores = await prisma.colaborador.findMany({
+    where: { sucursalId: null, activo: true },
+    orderBy: { id: 'asc' },
+  });
+
+  return administradores.map((c) => ({ id: c.id, nombre: c.nombre, dni: c.dni, rol: c.rol }));
+}
+
+/**
  * El PIN vive hasheado (argon2) en nuestra base -- nunca en claro. El rate
  * limiting por colaborador contra el espacio chico de 6 digitos se aplica
  * ANTES de llegar aca (ver sesion.routes.ts, limitadorIngreso).

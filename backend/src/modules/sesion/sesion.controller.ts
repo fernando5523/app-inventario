@@ -12,6 +12,10 @@ export const colaboradores = asyncHandler(async (req: Request, res: Response) =>
   res.json(await service.listarColaboradores(sucursalId));
 });
 
+export const administradores = asyncHandler(async (_req: Request, res: Response) => {
+  res.json(await service.listarAdministradores());
+});
+
 export const ingresar = asyncHandler(async (req: Request, res: Response) => {
   const { colaboradorId, pin } = req.body as IngresarInput;
   res.json(await service.ingresar(colaboradorId, pin));

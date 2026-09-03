@@ -96,12 +96,15 @@ export const sesionMemoria: RepositorioSesion = {
   },
 
   async colaboradores(sucursalId) {
-    // El Administrador no cuelga de ninguna sucursal, así que "elegí
-    // primero la sucursal" no puede dejarlo invisible — aparece en la
-    // lista de personas de LAS 4, sin importar cuál se eligió (decisión
-    // 2026-09-03; ver ingresar() para cómo se resuelve su sesión.sucursal
-    // real independientemente de cuál se haya elegido acá).
-    return [...(COLABORADORES[sucursalId] ?? []), ...ADMINISTRADORES];
+    return COLABORADORES[sucursalId] ?? [];
+  },
+
+  // Camino aparte para el Administrador (ver RepositorioSesion#administradores):
+  // no cuelga de ninguna sucursal, así que mezclarlo en colaboradores(sucursalId)
+  // lo haría aparecer en el padrón de las 4 tiendas a la vez — exactamente lo
+  // que se descartó al resolver el login del rol (2026-09-04).
+  async administradores() {
+    return ADMINISTRADORES;
   },
 
   async ingresar(colaboradorId, pin) {

@@ -27,4 +27,8 @@ sesionRouter.get(
   validar(parametrosSucursalSchema, 'params'),
   controller.colaboradores,
 );
+// Camino aparte para el rol=administrador: no tiene sucursal (ver
+// sesion.service.ts#listarAdministradores), asi que no puede salir de la
+// ruta de arriba.
+sesionRouter.get('/administradores', controller.administradores);
 sesionRouter.post('/ingresar', limitadorIngreso, validar(ingresarSchema, 'body'), controller.ingresar);
