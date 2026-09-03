@@ -1,0 +1,1406 @@
+<meta charset="utf-8">
+<title>Conteo ciego en tienda</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Baloo+2:wght@600;700&family=Figtree:wght@400;500;600;700&display=swap">
+<style>
+/* =====================================================================
+   TRUJILLO · Sistema de controles de la app de inventario
+   Validado en la pantalla 1 (login). Copiar completo en cada maqueta.
+
+   Regla de oro: los tokens de marca son FIJOS en ambos temas. La app
+   pinta su propio mundo; solo el lienzo que rodea al telefono sigue el
+   tema del visor.
+   ===================================================================== */
+
+:root {
+  /* Marca — valores tomados del PNG del logo, no estimados */
+  --rojo:        #D82018;
+  --rojo-hover:  #B81810;
+  --rojo-suave:  #FDF0EF;
+  --dorado:      #F8B818;
+
+  /* Superficie de la app */
+  --app-fondo:   #FFFFFF;
+  --app-tinta:   #1C1917;
+  --app-gris:    #6B6560;
+  --app-gris-cl: #9A938D;
+  --app-borde:   #E3DEDA;
+  --app-campo:   #FFFFFF;
+
+  /* Lienzo del documento de maqueta (fuera del telefono) — tema claro */
+  --lienzo:      #F2EEEB;
+  --lienzo-alt:  #FFFFFF;
+  --lienzo-tinta:#26211E;
+  --lienzo-gris: #6E6660;
+  --lienzo-borde:#DED7D2;
+
+  --sombra: 0 1px 2px rgba(28,25,23,.04), 0 12px 40px rgba(28,25,23,.10);
+  --radio: 10px;
+
+  --fuente-ui: 'Figtree', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  --fuente-marca: 'Baloo 2', 'Figtree', -apple-system, sans-serif;
+}
+
+/* Solo el lienzo cambia con el tema. Nunca los tokens --app-* */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --lienzo:      #191614;
+    --lienzo-alt:  #221E1B;
+    --lienzo-tinta:#F2EEEB;
+    --lienzo-gris: #A79E97;
+    --lienzo-borde:#332D29;
+    --sombra: 0 1px 2px rgba(0,0,0,.4), 0 16px 48px rgba(0,0,0,.55);
+  }
+}
+:root[data-theme="dark"] {
+  --lienzo:      #191614;
+  --lienzo-alt:  #221E1B;
+  --lienzo-tinta:#F2EEEB;
+  --lienzo-gris: #A79E97;
+  --lienzo-borde:#332D29;
+  --sombra: 0 1px 2px rgba(0,0,0,.4), 0 16px 48px rgba(0,0,0,.55);
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--lienzo);
+  color: var(--lienzo-tinta);
+  font-family: var(--fuente-ui);
+  -webkit-font-smoothing: antialiased;
+}
+
+.lienzo {
+  min-height: 100vh;
+  display: flex; flex-direction: column; align-items: center;
+  gap: 28px; padding: 32px 20px 56px;
+}
+
+/* ---------- Cabecera del documento de maqueta ---------- */
+.cabecera { text-align: center; display: flex; flex-direction: column; gap: 6px; }
+.cabecera .eyebrow {
+  font-size: 11px; font-weight: 600; letter-spacing: .13em;
+  text-transform: uppercase; color: var(--lienzo-gris);
+}
+.cabecera h1 {
+  margin: 0; font-family: var(--fuente-marca); font-weight: 700;
+  font-size: clamp(22px, 4vw, 28px); letter-spacing: -.01em; text-wrap: balance;
+}
+.cabecera p { margin: 0; font-size: 14px; color: var(--lienzo-gris); max-width: 52ch; }
+
+/* ---------- Marco del telefono ---------- */
+/* Pantalla operativa: mas ancho util para listas y tarjetas */
+.telefono.denso { --pad-lateral: 14px; }
+
+.telefono {
+  /* Un solo lugar decide el margen lateral. Lo leen .pantalla, .toast,
+     .chips y .accion-fija, asi una pantalla densa gana ancho sin que
+     haya que recalibrar cada uno a mano. */
+  --pad-lateral: 26px;
+  width: 380px; max-width: 100%;
+  background: var(--app-fondo);
+  border-radius: 34px;
+  border: 1px solid var(--lienzo-borde);
+  box-shadow: var(--sombra);
+  overflow: hidden;
+  position: relative;   /* ancla de los modales */
+}
+.barra-estado {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 12px 22px 4px;
+  font-size: 12px; font-weight: 600; color: var(--app-tinta);
+  font-variant-numeric: tabular-nums;
+}
+.barra-estado .senales { display: flex; gap: 5px; align-items: center; opacity: .75; }
+
+/* OBLIGATORIO el `color`: sin el, todo texto sin color propio hereda
+   --lienzo-tinta, que en tema oscuro es CLARO, y desaparece sobre el
+   fondo blanco de la app. */
+.pantalla {
+  position: relative;
+  padding: 8px var(--pad-lateral) 26px;
+  display: flex; flex-direction: column; gap: 20px;
+  color: var(--app-tinta);
+}
+
+/* ---------- Marca ---------- */
+.marca { display: flex; flex-direction: column; align-items: center; padding: 14px 0 4px; }
+.marca img { width: 172px; height: auto; display: block; }
+
+.saludo { display: flex; flex-direction: column; gap: 2px; }
+.saludo h2 {
+  margin: 0; display: flex; align-items: center; gap: 9px;
+  font-family: var(--fuente-marca); font-weight: 700; font-size: 27px;
+  color: var(--rojo); letter-spacing: -.01em;
+}
+.saludo p { margin: 0; font-size: 14.5px; color: var(--app-gris); }
+
+/* ---------- Campos ---------- */
+.campos { display: flex; flex-direction: column; gap: 15px; }
+/* position: relative -> es el ancla del desplegable */
+.campo { position: relative; display: flex; flex-direction: column; gap: 6px; }
+.campo label { font-size: 13.5px; font-weight: 600; color: var(--app-tinta); }
+
+.control {
+  width: 100%; display: flex; align-items: center; gap: 12px;
+  min-height: 54px; padding: 0 15px;
+  background: var(--app-campo);
+  border: 1px solid var(--app-borde);
+  border-radius: var(--radio);
+  font: inherit; font-size: 15.5px; color: var(--app-tinta);
+  text-align: left; cursor: pointer;
+  transition: border-color .15s ease, box-shadow .15s ease;
+}
+.control:hover:not(:disabled) { border-color: #CFC7C1; }
+.control:focus-visible {
+  outline: none; border-color: var(--rojo);
+  box-shadow: 0 0 0 3px rgba(216,32,24,.14);
+}
+.control[aria-expanded="true"] {
+  border-color: var(--rojo); box-shadow: 0 0 0 3px rgba(216,32,24,.14);
+}
+.control:disabled { background: #F7F5F4; cursor: not-allowed; opacity: .7; }
+.control .valor { flex: 1; min-width: 0; }
+.control .valor.vacio { color: var(--app-gris-cl); }
+.control .sub {
+  display: block; font-size: 11.5px; color: var(--app-gris);
+  margin-top: 1px; font-variant-numeric: tabular-nums;
+}
+.chevron { color: var(--rojo); flex: none; transition: transform .18s ease; }
+.control[aria-expanded="true"] .chevron { transform: rotate(180deg); }
+.control:disabled .chevron { color: var(--app-gris-cl); }
+
+/* Los iconos de campo van SIEMPRE en gris. El rojo se reserva para
+   el chevron, la seleccion y las acciones. */
+.icono { flex: none; color: var(--app-gris-cl); }
+
+/* ---------- Desplegable ---------- */
+.lista {
+  /* Fuera del flujo: si ocupara espacio, abrirlo empujaria todo lo de
+     abajo y la pantalla saltaria. */
+  position: absolute;
+  top: 100%; left: 0; right: 0; z-index: 30;
+  margin-top: 6px;
+  /* El tope NO es multiplo de la altura de fila a proposito: el corte
+     cae sobre una fila a medias y eso avisa que hay mas abajo. */
+  max-height: 262px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+  /* Barra oculta en los tres motores: una lista nativa se desplaza,
+     no muestra barra. */
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+  border: 1px solid var(--app-borde); border-radius: var(--radio);
+  background: var(--app-campo);
+  box-shadow: 0 10px 30px rgba(28,25,23,.14);
+}
+.lista::-webkit-scrollbar { width: 0; height: 0; display: none; }
+.lista[hidden] { display: none; }
+
+.opcion {
+  width: 100%; display: flex; align-items: center; gap: 12px;
+  padding: 12px 15px; background: none; border: 0;
+  border-bottom: 1px solid #F0ECE9;
+  font: inherit; font-size: 15px; color: var(--app-tinta);
+  text-align: left; cursor: pointer;
+}
+.opcion:last-child { border-bottom: 0; }
+.opcion:hover, .opcion:focus-visible { background: var(--rojo-suave); outline: none; }
+.opcion[aria-selected="true"],
+.opcion[aria-selected="true"]:hover {
+  background: var(--rojo); color: #fff; font-weight: 600;
+}
+.opcion[aria-selected="true"] .meta { color: rgba(255,255,255,.82); }
+.opcion .meta {
+  display: block; font-size: 11.5px; font-weight: 400; color: var(--app-gris);
+  margin-top: 1px; font-variant-numeric: tabular-nums;
+}
+
+/* ---------- PIN ---------- */
+.pin-puntos { display: flex; align-items: center; gap: 11px; }
+.pin-puntos.grande { justify-content: center; gap: 15px; min-height: 30px; }
+.pin-puntos.grande .punto-pin { width: 14px; height: 14px; }
+.pin-puntos.grande .punto-pin.visible { min-width: 14px; font-size: 19px; }
+
+.punto-pin {
+  width: 11px; height: 11px; border-radius: 50%;
+  border: 1.5px solid #C9C1BB; background: transparent;
+  display: grid; place-items: center;
+  font-size: 15px; font-weight: 700; color: var(--app-tinta);
+  font-variant-numeric: tabular-nums;
+  transition: background .14s ease, border-color .14s ease, transform .14s ease;
+}
+.punto-pin.lleno { background: var(--app-tinta); border-color: var(--app-tinta); transform: scale(1.06); }
+.punto-pin.visible {
+  width: auto; min-width: 11px; height: auto;
+  background: transparent; border-color: transparent; transform: none;
+}
+
+.teclado { display: grid; grid-template-columns: repeat(3, 1fr); gap: 9px; }
+.tecla {
+  min-height: 50px; display: grid; place-items: center;
+  background: var(--app-campo);
+  border: 1px solid var(--app-borde); border-radius: var(--radio);
+  font: inherit; font-size: 21px; font-weight: 600; color: var(--app-tinta);
+  font-variant-numeric: tabular-nums; cursor: pointer;
+  transition: background .12s ease, border-color .12s ease, transform .08s ease;
+}
+.tecla:hover { border-color: #CFC7C1; }
+.tecla:active { background: var(--rojo-suave); border-color: var(--rojo); transform: scale(.97); }
+.tecla:focus-visible { outline: 2px solid var(--rojo); outline-offset: 2px; }
+.tecla.auxiliar { color: var(--app-gris); }
+.tecla.auxiliar:hover { color: var(--app-tinta); }
+
+/* ---------- Modal ----------
+   Va colgado de .telefono, NO de .campo: colgando del campo se sale de
+   la pantalla cuando el campo esta abajo. Centrado siempre. */
+.modal {
+  position: absolute; inset: 0; z-index: 60;
+  display: flex; align-items: center; justify-content: center;
+  padding: 22px;
+}
+.modal[hidden] { display: none; }
+.modal-fondo {
+  position: absolute; inset: 0;
+  background: rgba(28,25,23,.42);
+  animation: aparecer .18s ease;
+}
+.modal-caja {
+  position: relative;
+  width: 100%; max-width: 310px;
+  display: flex; flex-direction: column; gap: 15px;
+  padding: 17px;
+  background: var(--app-campo);
+  border-radius: 16px;
+  box-shadow: 0 22px 55px rgba(28,25,23,.32);
+  animation: subir .2s cubic-bezier(.2,.8,.3,1);
+}
+@keyframes aparecer { from { opacity: 0; } }
+@keyframes subir { from { opacity: 0; transform: translateY(10px) scale(.97); } }
+
+.modal-cabecera { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.modal-cabecera h3 { margin: 0; font-size: 15px; font-weight: 700; color: var(--app-tinta); }
+.modal-cerrar {
+  width: 32px; height: 32px; flex: none;
+  display: grid; place-items: center;
+  background: none; border: 0; border-radius: 8px;
+  color: var(--app-gris); cursor: pointer;
+  transition: background .14s ease, color .14s ease;
+}
+.modal-cerrar:hover { background: var(--rojo-suave); color: var(--rojo); }
+.modal-cerrar:focus-visible { outline: 2px solid var(--rojo); outline-offset: 1px; }
+
+/* ---------- Grupo segmentado (rol y similares) ---------- */
+.roles {
+  display: grid; grid-template-columns: repeat(3, 1fr);
+  border: 1.5px solid var(--rojo); border-radius: var(--radio);
+  background: var(--app-campo);
+  overflow: hidden;
+  transition: opacity .2s ease;
+}
+.roles.inerte { opacity: .38; }   /* sin dato todavia: se ve, no se toca */
+.rol {
+  padding: 13px 4px; display: grid; place-items: center;
+  border-right: 1.5px solid var(--rojo);
+  background: var(--app-campo); color: var(--app-tinta);
+  font-size: 12.5px; font-weight: 700;
+  letter-spacing: .07em; text-transform: uppercase;
+  transition: background .18s ease, color .18s ease;
+}
+.rol:last-child { border-right: 0; }
+.rol.activo { background: var(--rojo); color: #fff; }
+
+.rol-cabecera { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+.rol-cabecera .nota { font-size: 11px; color: var(--app-gris-cl); font-weight: 500; }
+
+/* ---------- Accion principal ---------- */
+.ingresar {
+  width: 100%; min-height: 56px;
+  display: flex; align-items: center; justify-content: center; gap: 12px;
+  background: var(--rojo); color: #fff;
+  border: 0; border-radius: 6px;
+  font: inherit; font-size: 17px; font-weight: 700; cursor: pointer;
+  transition: background .16s ease, opacity .16s ease;
+}
+.ingresar:hover:not(:disabled) { background: var(--rojo-hover); }
+.ingresar:focus-visible { outline: 3px solid rgba(216,32,24,.35); outline-offset: 2px; }
+.ingresar:disabled { background: #DCD6D2; color: #FBFAFA; cursor: not-allowed; }
+.ingresar svg { color: var(--dorado); }
+.ingresar:disabled svg { color: #FBFAFA; }
+
+.olvide {
+  align-self: flex-start; margin-top: 2px;
+  background: none; border: 0; padding: 0;
+  font: inherit; font-size: 13.5px; color: var(--rojo); cursor: pointer;
+}
+.olvide:hover { text-decoration: underline; }
+
+/* ---------- Pie de pantalla ----------
+   tagline + version agrupados, para que el gap del contenedor los separe
+   sin margenes negativos peleando con el gap de .pantalla. */
+.pie { display: flex; flex-direction: column; align-items: center; gap: 5px; }
+.version {
+  margin: 0;
+  font-size: 11.5px; font-weight: 500;
+  color: var(--app-gris-cl);
+  font-variant-numeric: tabular-nums; letter-spacing: .04em;
+}
+
+.tagline {
+  display: flex; align-items: center; justify-content: center; gap: 10px;
+  font-family: var(--fuente-marca); font-weight: 600;
+  font-size: 13.5px; color: var(--rojo);
+}
+
+/* ---------- Toast ---------- */
+.toast {
+  position: absolute; left: var(--pad-lateral); right: var(--pad-lateral); bottom: 22px;
+  display: flex; align-items: center; gap: 10px;
+  padding: 13px 15px; border-radius: var(--radio);
+  background: var(--app-tinta); color: #fff;
+  font-size: 13.5px; font-weight: 500;
+  box-shadow: 0 10px 30px rgba(28,25,23,.28);
+  opacity: 0; transform: translateY(8px);
+  transition: opacity .22s ease, transform .22s ease;
+  pointer-events: none;
+}
+.toast.visible { opacity: 1; transform: translateY(0); }
+.toast svg { color: var(--dorado); flex: none; }
+
+/* ---------- Panel de validacion (fuera del telefono) ---------- */
+.pruebas {
+  width: 380px; max-width: 100%;
+  background: var(--lienzo-alt);
+  border: 1px solid var(--lienzo-borde);
+  border-radius: 14px; padding: 16px 18px;
+  display: flex; flex-direction: column; gap: 11px;
+}
+.pruebas h3 {
+  margin: 0; font-size: 11px; font-weight: 600;
+  letter-spacing: .13em; text-transform: uppercase; color: var(--lienzo-gris);
+}
+.pruebas p { margin: 0; font-size: 13px; color: var(--lienzo-gris); line-height: 1.5; }
+.atajos { display: flex; flex-wrap: wrap; gap: 8px; }
+.atajo {
+  padding: 7px 13px;
+  background: transparent; color: var(--lienzo-tinta);
+  border: 1px solid var(--lienzo-borde); border-radius: 99px;
+  font: inherit; font-size: 12.5px; font-weight: 500; cursor: pointer;
+  transition: border-color .15s ease, color .15s ease;
+}
+.atajo:hover { border-color: var(--rojo); color: var(--rojo); }
+.atajo:focus-visible { outline: 2px solid var(--rojo); outline-offset: 2px; }
+
+@media (prefers-reduced-motion: reduce) {
+  * { transition: none !important; animation: none !important; }
+}
+@media (max-width: 440px) {
+  .lienzo { padding: 20px 12px 40px; }
+  .telefono { --pad-lateral: 18px; }
+  .pantalla { padding-bottom: 20px; }
+}
+
+/* ============ Pantalla 2: hojas de conteo ============
+   Colores de estado. Son semanticos, no de marca: el rojo Trujillo
+   sigue siendo la accion, no un estado. Todos los pares texto/fondo
+   estan verificados >= 4.5:1. */
+:root {
+  --ok:        #0A6B57;  --ok-suave:      #E7F4EF;   /* 5.71:1 */
+  --proceso:   #8A5A05;  --proceso-suave: #FDF3DC;   /* 5.37:1 */
+  --espera:    #6B6560;  --espera-suave:  #F2EFED;   /* 5.02:1 */
+  --riel:      #EDE9E6;
+}
+
+/* La pantalla se desplaza dentro del telefono, con barra oculta */
+.pantalla.scroll {
+  height: 720px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+  padding-bottom: 92px;   /* deja lugar a la accion fija */
+  gap: 16px;
+}
+.pantalla.scroll::-webkit-scrollbar { width: 0; display: none; }
+
+/* ---------- Cabecera: titulo + avance, como un solo bloque ----------
+   .barra-app y .avance-fila van agrupados en .cabecera-hoja para que
+   se vean como una sola unidad (una linea divisoria al final), no dos
+   secciones separadas por el gap normal de .pantalla.scroll. */
+.cabecera-hoja {
+  display: flex; flex-direction: column; gap: 13px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid var(--app-borde);
+}
+.barra-app {
+  display: flex; align-items: flex-start; gap: 12px;
+}
+.barra-app .rotulo {
+  margin: 0 0 3px; display: flex; align-items: center; gap: 6px;
+  font-size: 10.5px; font-weight: 700; letter-spacing: .11em;
+  text-transform: uppercase; color: var(--rojo);
+}
+.barra-app .contexto { flex: 1; min-width: 0; }
+.barra-app .sede {
+  margin: 0; font-size: 16px; font-weight: 700; color: var(--app-tinta);
+}
+.barra-app .cifras {
+  margin: 2px 0 0; font-size: 12px; color: var(--app-gris);
+  font-variant-numeric: tabular-nums;
+}
+.salir {
+  width: 38px; height: 38px; flex: none;
+  display: grid; place-items: center;
+  background: none; color: var(--app-gris);
+  border: 1px solid var(--app-borde); border-radius: 9px;
+  cursor: pointer; transition: background .14s ease, color .14s ease, border-color .14s ease;
+}
+.salir:hover { background: var(--rojo-suave); color: var(--rojo); border-color: var(--rojo); }
+.salir:focus-visible { outline: 2px solid var(--rojo); outline-offset: 2px; }
+
+/* ---------- Tarjeta ---------- */
+.tarjeta {
+  display: flex; flex-direction: column; gap: 13px;
+  padding: 15px;
+  background: var(--app-campo);
+  border: 1px solid var(--app-borde); border-radius: 13px;
+}
+.tarjeta-cabecera { display: flex; align-items: center; gap: 10px; }
+.tarjeta-cabecera h2 {
+  margin: 0; flex: 1; min-width: 0;
+  font-size: 14.5px; font-weight: 700; color: var(--app-tinta);
+}
+.tarjeta-cabecera .icono { color: var(--rojo); }
+
+/* ---------- Badges de estado ---------- */
+.badge {
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 5px 9px; border-radius: 99px;
+  font-size: 10.5px; font-weight: 700;
+  letter-spacing: .05em; text-transform: uppercase;
+  white-space: nowrap; font-variant-numeric: tabular-nums;
+  background: var(--espera-suave); color: var(--espera);
+}
+.badge.ok      { background: var(--ok-suave);      color: var(--ok); }
+.badge.proceso { background: var(--proceso-suave); color: var(--proceso); }
+
+/* ---------- Bloque de reparto ---------- */
+.reparto {
+  display: flex; flex-direction: column; gap: 9px;
+  padding: 13px;
+  background: var(--rojo-suave);
+  border: 1px solid rgba(216,32,24,.22); border-radius: 11px;
+}
+.reparto-cabecera { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+.reparto-cabecera strong { font-size: 13.5px; color: var(--app-tinta); }
+.reparto-cabecera .ratio {
+  font-size: 11.5px; font-weight: 700; color: var(--rojo);
+  font-variant-numeric: tabular-nums; white-space: nowrap;
+}
+.reparto p { margin: 0; font-size: 12.5px; line-height: 1.45; color: var(--app-gris); }
+
+.accion {
+  width: 100%; min-height: 46px;
+  display: flex; align-items: center; justify-content: center; gap: 9px;
+  background: var(--rojo); color: #fff;
+  border: 0; border-radius: 8px;
+  font: inherit; font-size: 14.5px; font-weight: 700; cursor: pointer;
+  transition: background .16s ease;
+}
+.accion:hover:not(:disabled) { background: var(--rojo-hover); }
+.accion:focus-visible { outline: 3px solid rgba(216,32,24,.35); outline-offset: 2px; }
+.accion:disabled { background: #DCD6D2; color: #FBFAFA; cursor: not-allowed; }
+
+/* ---------- Encabezado de seccion ---------- */
+.seccion {
+  display: flex; align-items: baseline; justify-content: space-between; gap: 10px;
+}
+.seccion h2 {
+  margin: 0; font-size: 11px; font-weight: 600;
+  letter-spacing: .12em; text-transform: uppercase; color: var(--app-gris);
+}
+.seccion .total {
+  font-size: 11.5px; color: var(--app-gris-cl); font-variant-numeric: tabular-nums;
+}
+
+/* ---------- Chips de zona ---------- */
+.chips {
+  display: flex; gap: 7px;
+  overflow-x: auto; overscroll-behavior-x: contain;
+  scrollbar-width: none; -ms-overflow-style: none;
+  /* el margen negativo deja que los chips lleguen al borde al desplazar */
+  margin: 0 calc(var(--pad-lateral) * -1); padding: 2px var(--pad-lateral);
+}
+.chips::-webkit-scrollbar { height: 0; display: none; }
+.chip {
+  flex: none; padding: 8px 13px;
+  background: var(--app-campo); color: var(--app-tinta);
+  border: 1px solid var(--app-borde); border-radius: 99px;
+  font: inherit; font-size: 12.5px; font-weight: 500;
+  white-space: nowrap; cursor: pointer;
+  font-variant-numeric: tabular-nums;
+  transition: background .14s ease, border-color .14s ease, color .14s ease;
+}
+.chip:hover { border-color: var(--rojo); color: var(--rojo); }
+.chip:focus-visible { outline: 2px solid var(--rojo); outline-offset: 2px; }
+.chip[aria-pressed="true"] {
+  background: var(--rojo); border-color: var(--rojo); color: #fff; font-weight: 700;
+}
+
+/* ---------- Hoja de conteo ---------- */
+.hojas { display: flex; flex-direction: column; gap: 10px; }
+.hoja {
+  display: flex; flex-direction: column;
+  border: 1px solid var(--app-borde); border-radius: 12px;
+  background: var(--app-campo);
+  overflow: hidden;
+}
+/* El estado se lee por la franja lateral, no solo por el badge: en
+   una lista larga el ojo la encuentra sin leer. */
+.hoja.en-proceso { border-color: rgba(138,90,5,.42); }
+.hoja.contada    { border-color: rgba(10,107,87,.34); }
+
+.hoja-cuerpo { display: flex; gap: 11px; padding: 13px 14px 11px; }
+.hoja-codigo {
+  flex: none; width: 38px; height: 38px;
+  display: grid; place-items: center; border-radius: 9px;
+  background: var(--espera-suave); color: var(--espera);
+  font-size: 11.5px; font-weight: 700; letter-spacing: .02em;
+  font-variant-numeric: tabular-nums;
+}
+.hoja.contada .hoja-codigo    { background: var(--ok-suave);      color: var(--ok); }
+.hoja.en-proceso .hoja-codigo { background: var(--proceso-suave); color: var(--proceso); }
+
+.hoja-datos { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.hoja-titulo {
+  display: flex; align-items: flex-start; justify-content: space-between; gap: 9px;
+}
+.hoja-titulo h3 {
+  margin: 0; font-size: 14px; font-weight: 700; color: var(--app-tinta);
+  line-height: 1.3; text-wrap: balance;
+}
+.hoja-meta {
+  font-size: 11.5px; color: var(--app-gris); font-variant-numeric: tabular-nums;
+}
+
+.progreso {
+  height: 5px; margin-top: 6px; border-radius: 99px;
+  background: var(--riel); overflow: hidden;
+}
+.progreso span {
+  display: block; height: 100%; border-radius: 99px;
+  background: var(--espera); transition: width .35s ease;
+}
+.hoja.contada .progreso span    { background: var(--ok); }
+.hoja.en-proceso .progreso span { background: var(--proceso); }
+
+.hoja-pie {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  padding: 9px 14px;
+  border-top: 1px solid #F2EFED;
+  background: #FCFBFA;
+  font-size: 12px; color: var(--app-gris);
+}
+.hoja-pie .quien { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hoja-pie .quien strong { color: var(--app-tinta); font-weight: 600; }
+.hoja-pie .sin-asignar { color: var(--app-gris-cl); font-style: italic; }
+.hoja-pie .estado-sync { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; }
+.hoja-pie .estado-sync.ok { color: var(--ok); font-weight: 600; }
+.hoja-pie .abrir {
+  background: none; border: 0; padding: 0;
+  font: inherit; font-size: 12px; font-weight: 700; color: var(--rojo);
+  cursor: pointer; display: inline-flex; align-items: center; gap: 5px;
+  white-space: nowrap;
+}
+.hoja-pie .abrir:hover { text-decoration: underline; }
+.hoja-pie .abrir:focus-visible { outline: 2px solid var(--rojo); outline-offset: 2px; }
+
+/* ---------- Pie de la lista ---------- */
+.pie-lista {
+  display: flex; align-items: center; gap: 9px;
+  padding: 12px 14px; border-radius: 11px;
+  background: var(--espera-suave); color: var(--app-gris);
+  font-size: 12.5px; font-variant-numeric: tabular-nums;
+}
+.pie-lista .icono { color: var(--app-gris-cl); }
+.pie-lista strong { color: var(--app-tinta); font-weight: 700; }
+
+/* ---------- Accion fija sobre el borde inferior ---------- */
+.accion-fija {
+  position: absolute; left: 0; right: 0; bottom: 0; z-index: 20;
+  padding: 12px var(--pad-lateral) 20px;
+  background: linear-gradient(to top, var(--app-fondo) 68%, rgba(255,255,255,0));
+}
+.accion-fija .accion { min-height: 52px; font-size: 16px; }
+
+/* ============ Pantalla 3: conteo ciego en tienda ============
+   Estados de sincronizacion offline-first: la WiFi es de tienda, sin
+   datos moviles, y se cae justo donde se cuenta (almacen, camara fria).
+   Perder señal no pierde el conteo: se guarda local y banda-sync avisa
+   cuantos cambios estan pendientes. Reusa el patron de banda-sync ya
+   creado en ciclo-conteos.html (pantalla 4). */
+:root {
+  --falta:       #A23B2E;  --falta-suave: #FBEAE7;   /* 6.56:1 */
+}
+
+.banda-sync {
+  display: flex; align-items: center; gap: 8px;
+  padding: 9px 12px; border-radius: 10px;
+  font-size: 11.5px; font-weight: 700;
+  background: var(--ok-suave); color: var(--ok);
+}
+.banda-sync .icono-sync { flex: none; }
+.banda-sync.pendiente { background: var(--proceso-suave); color: var(--proceso); }
+.banda-sync.offline   { background: var(--falta-suave);   color: var(--falta); }
+.banda-sync[hidden]   { display: none; }
+
+/* ---------- Fila de avance, debajo de la cabecera ----------
+   Separada de .barra-app para que la cabecera quede en 3 lineas
+   limpias (rotulo / sede / cifras), igual que el resto de pantallas. */
+.avance-fila { display: flex; flex-direction: column; gap: 6px; }
+.avance-cabecera { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.avance-cifra { font-size: 12.5px; font-weight: 700; color: var(--app-tinta); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.avance-barra { width: 100%; height: 5px; border-radius: 99px; background: var(--riel); overflow: hidden; }
+.avance-barra span { display: block; height: 100%; border-radius: 99px; background: var(--rojo); transition: width .3s ease; }
+
+/* ---------- Buscador + Scan ---------- */
+.buscador-fila { display: flex; gap: 8px; }
+.buscador {
+  flex: 1; min-width: 0; display: flex; align-items: center; gap: 9px;
+  min-height: 46px; padding: 0 13px;
+  background: var(--app-campo); border: 1px solid var(--app-borde); border-radius: var(--radio);
+}
+.buscador input {
+  flex: 1; min-width: 0; border: 0; outline: 0; background: none;
+  font: inherit; font-size: 14px; color: var(--app-tinta);
+}
+.buscador input::placeholder { color: var(--app-gris-cl); }
+.btn-scan {
+  flex: none; width: 46px; height: 46px;
+  display: grid; place-items: center;
+  background: var(--rojo); color: #fff;
+  border: 0; border-radius: var(--radio); cursor: pointer;
+  transition: background .16s ease;
+}
+.btn-scan:hover { background: var(--rojo-hover); }
+.btn-scan:focus-visible { outline: 3px solid rgba(216,32,24,.35); outline-offset: 2px; }
+.btn-scan:disabled { background: #DCD6D2; cursor: not-allowed; }
+
+/* ---------- Tarjeta de producto ---------- */
+.productos { display: flex; flex-direction: column; gap: 10px; }
+.producto {
+  display: flex; flex-direction: column; gap: 6px;
+  padding: 12px 13px; border-radius: 12px;
+  border: 1px solid var(--app-borde); background: var(--app-campo);
+  text-align: left; width: 100%;
+}
+.producto.contado { border-color: rgba(10,107,87,.34); cursor: pointer; }
+.producto.contado:hover { background: rgba(10,107,87,.05); }
+.producto.contado:focus-visible { outline: 2px solid var(--ok); outline-offset: 2px; }
+.producto.confirmado-flash { animation: flash-confirmado 1.1s ease; }
+@keyframes flash-confirmado { 0% { background: var(--ok-suave); } 100% { background: var(--app-campo); } }
+.producto.bloqueado.contado { cursor: default; opacity: .82; }
+
+.producto-cabecera { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.empaque-badge {
+  display: inline-flex; align-items: center;
+  padding: 3px 8px; border-radius: 99px;
+  background: var(--espera-suave); color: var(--espera);
+  font-size: 10px; font-weight: 700; letter-spacing: .04em;
+  font-variant-numeric: tabular-nums;
+}
+.producto-num { font-size: 11px; color: var(--app-gris-cl); font-weight: 600; font-variant-numeric: tabular-nums; }
+.producto-nombre { margin: 0; font-size: 13.5px; font-weight: 700; color: var(--app-tinta); line-height: 1.3; }
+.producto-codigo { margin: 0; font-size: 11px; color: var(--app-gris); font-variant-numeric: tabular-nums; display: flex; align-items: center; gap: 6px; }
+.confirmado-tag { display: inline-flex; align-items: center; gap: 3px; color: var(--ok); font-weight: 700; }
+
+.producto-pie { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 2px; }
+.producto-detalle { font-size: 11.5px; color: var(--app-gris); flex: 1; min-width: 0; }
+.producto-total { flex: none; display: flex; align-items: baseline; gap: 3px; color: var(--ok); }
+.producto-total .cifra { font-size: 17px; font-weight: 800; font-variant-numeric: tabular-nums; }
+.producto-total .unidad { font-size: 10.5px; font-weight: 700; }
+.btn-contar {
+  flex: none; padding: 8px 13px;
+  background: var(--rojo); color: #fff;
+  border: 0; border-radius: 8px;
+  font: inherit; font-size: 12px; font-weight: 700; cursor: pointer;
+  transition: background .16s ease;
+}
+.btn-contar:hover:not(:disabled) { background: var(--rojo-hover); }
+.btn-contar:focus-visible { outline: 2px solid rgba(216,32,24,.35); outline-offset: 2px; }
+.btn-contar:disabled { background: #DCD6D2; color: #FBFAFA; cursor: not-allowed; }
+
+/* ---------- Modal: registrar conteo ---------- */
+.modal-producto { display: flex; flex-direction: column; gap: 3px; }
+.modal-meta { margin: 0; font-size: 11.5px; color: var(--app-gris); font-variant-numeric: tabular-nums; }
+.modal-nota { margin: 0; font-size: 12px; color: var(--app-gris); line-height: 1.45; }
+.modal-alerta { margin: 0; font-size: 13px; font-weight: 600; color: var(--proceso); line-height: 1.45; }
+
+.contador-campo { display: flex; flex-direction: column; gap: 6px; }
+.contador-campo label { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; font-size: 12.5px; font-weight: 600; color: var(--app-tinta); }
+.contador-campo .factor { font-size: 11px; font-weight: 500; color: var(--app-gris-cl); }
+.stepper { display: flex; align-items: center; gap: 8px; }
+.stepper-btn {
+  flex: none; width: 38px; height: 38px;
+  display: grid; place-items: center;
+  background: var(--app-campo); border: 1px solid var(--app-borde); border-radius: 9px;
+  font: inherit; font-size: 18px; font-weight: 700; color: var(--app-tinta); cursor: pointer;
+}
+.stepper-btn:hover { border-color: var(--rojo); color: var(--rojo); }
+.stepper-btn:focus-visible { outline: 2px solid var(--rojo); outline-offset: 2px; }
+.stepper input {
+  flex: 1; min-width: 0; text-align: center;
+  min-height: 38px; border: 1px solid var(--app-borde); border-radius: 9px;
+  font: inherit; font-size: 15px; font-weight: 700; color: var(--app-tinta);
+  font-variant-numeric: tabular-nums;
+}
+.stepper input:focus-visible { outline: none; border-color: var(--rojo); box-shadow: 0 0 0 3px rgba(216,32,24,.14); }
+
+.atajos-conteo { display: flex; flex-wrap: wrap; gap: 7px; }
+.atajo-chip {
+  padding: 7px 11px; background: var(--rojo-suave); color: var(--rojo);
+  border: 0; border-radius: 99px; font: inherit; font-size: 12px; font-weight: 700; cursor: pointer;
+}
+.atajo-chip:hover { background: rgba(216,32,24,.16); }
+.atajo-chip:focus-visible { outline: 2px solid var(--rojo); outline-offset: 2px; }
+.atajo-chip.borrar { background: var(--espera-suave); color: var(--espera); }
+
+.total-vivo {
+  display: flex; flex-direction: column; align-items: center; gap: 2px;
+  padding: 13px; border-radius: 11px;
+  background: var(--ok-suave); color: var(--ok);
+  text-align: center;
+}
+.total-vivo .etiqueta { font-size: 10.5px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; }
+.total-vivo strong { font-size: 24px; font-weight: 800; font-variant-numeric: tabular-nums; }
+.total-desglose { font-size: 11px; font-weight: 500; color: var(--app-gris); }
+
+/* ---------- Modal: escaner ---------- */
+.visor-camara {
+  display: flex; align-items: center; justify-content: center;
+  height: 100px; border-radius: 12px;
+  background: var(--app-tinta); color: rgba(255,255,255,.55);
+}
+.atajos-scan { display: flex; flex-direction: column; gap: 8px; }
+.atajo-scan {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  padding: 10px 12px; border-radius: 10px;
+  background: var(--app-campo); border: 1px solid var(--app-borde);
+  font: inherit; font-size: 12.5px; font-weight: 600; color: var(--app-tinta); cursor: pointer;
+  text-align: left;
+}
+.atajo-scan:hover { border-color: var(--rojo); }
+.atajo-scan:focus-visible { outline: 2px solid var(--rojo); outline-offset: 2px; }
+.atajo-scan .codigo { font-variant-numeric: tabular-nums; color: var(--app-gris); font-weight: 500; }
+.scan-resultado { margin: 0; font-size: 12.5px; font-weight: 600; min-height: 17px; }
+.scan-resultado.error { color: var(--falta); }
+.scan-resultado.ok { color: var(--ok); }
+
+/* ---------- Modal: finalizar (punto de no retorno) ---------- */
+.modal-acciones { display: flex; gap: 9px; }
+.accion.secundario {
+  background: var(--app-campo); color: var(--app-tinta); border: 1px solid var(--app-borde);
+}
+.accion.secundario:hover:not(:disabled) { background: #F7F5F4; }
+
+</style>
+
+<div class="lienzo">
+
+  <header class="cabecera">
+    <span class="eyebrow">Inventario de Autoservicio · Pantalla 3 de 7</span>
+    <h1>Conteo ciego en tienda</h1>
+    <p>El operario cuenta su lote sin ver el stock del ERP. Buscar en la lista e ingresar cantidad es el flujo principal — el escáner solo confirma que el producto es el correcto. Se puede editar hasta finalizar, y el conteo se guarda en el equipo si se cae la WiFi de tienda.</p>
+  </header>
+
+  <div class="telefono denso">
+    <div class="barra-estado">
+      <span>09:41</span>
+      <span class="senales">
+        <svg width="15" height="11" viewBox="0 0 15 11" fill="currentColor" aria-hidden="true"><rect x="0" y="7" width="2.5" height="4" rx="1"/><rect x="4" y="5" width="2.5" height="6" rx="1"/><rect x="8" y="2.5" width="2.5" height="8.5" rx="1"/><rect x="12" y="0" width="2.5" height="11" rx="1"/></svg>
+        <svg width="22" height="11" viewBox="0 0 22 11" fill="none" aria-hidden="true"><rect x="0.5" y="0.5" width="18" height="10" rx="2.5" stroke="currentColor"/><rect x="2" y="2" width="15" height="7" rx="1.2" fill="currentColor"/><path d="M20 4v3a1.8 1.8 0 0 0 0-3Z" fill="currentColor"/></svg>
+      </span>
+    </div>
+
+    <div class="pantalla scroll">
+
+      <div class="cabecera-hoja">
+        <div class="barra-app">
+          <div class="contexto">
+            <p class="rotulo" id="rotulo-hoja"><svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="m12 2 10 5-10 5L2 7l10-5Zm0 8.8L4.6 7 12 3.2 19.4 7 12 10.8ZM2 12l10 5 10-5-1.9-.9L12 15l-8.1-3.9L2 12Zm0 5 10 5 10-5-1.9-.9L12 20l-8.1-3.9L2 17Z"/></svg>Conteo ciego · 1er conteo</p>
+          </div>
+        </div>
+
+        <div class="avance-fila" id="avance-fila">
+          <span class="avance-cifra" id="avance-cifra"></span>
+          <div class="avance-barra"><span id="avance-relleno" style="width:0%"></span></div>
+        </div>
+      </div>
+
+      <div class="banda-sync ok" id="banda-sync" role="status" aria-live="polite">
+        <svg class="icono-sync" width="15" height="15" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 20a1.6 1.6 0 1 1 0-3.2 1.6 1.6 0 0 1 0 3.2Zm0-6.8c-2 0-3.9.8-5.3 2.1l1.7 1.8a5.4 5.4 0 0 1 7.2 0l1.7-1.8A7.9 7.9 0 0 0 12 13.2Zm0-5.6c-3.4 0-6.6 1.3-9 3.7l1.7 1.8a10 10 0 0 1 14.6 0l1.7-1.8c-2.4-2.4-5.6-3.7-9-3.7Z"/></svg><span id="texto-sync"></span>
+      </div>
+
+      <div class="buscador-fila">
+        <div class="buscador">
+          <svg class="icono" width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+          <input type="search" id="buscador" placeholder="">
+        </div>
+        <button type="button" class="btn-scan" id="btn-scan" aria-label="Escanear código de barras para confirmar el producto">
+          <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 8V6a2 2 0 0 1 2-2h2M4 16v2a2 2 0 0 0 2 2h2m12-12V6a2 2 0 0 0-2-2h-2m4 12v2a2 2 0 0 1-2 2h-2"/><rect x="8.5" y="9" width="7" height="6" rx="1.3"/></svg>
+        </button>
+      </div>
+
+      <div class="productos" id="productos"></div>
+
+      <div class="pie-lista" id="pie-lista-bloque">
+        <span id="pie-lista"></span>
+      </div>
+
+      <div class="toast" id="toast" role="status" aria-live="polite">
+        <svg width="19" height="19" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 2 4 5.5v6c0 5 3.4 9.4 8 10.5 4.6-1.1 8-5.5 8-10.5v-6L12 2Zm-1.2 13.4-3.2-3.2 1.4-1.4 1.8 1.8 4.6-4.6 1.4 1.4-6 6Z"/></svg>
+        <span id="toast-texto"></span>
+      </div>
+
+    </div>
+
+    <div class="accion-fija" id="accion-fija">
+      <button type="button" class="accion" id="btn-finalizar">Finalizar hoja #002</button>
+    </div>
+
+    <!-- Los modales cuelgan del TELEFONO, no de .pantalla ni de .campo -->
+
+    <div class="modal" id="modal-contar" role="dialog" aria-modal="true" aria-labelledby="titulo-contar" hidden>
+      <div class="modal-fondo" id="fondo-contar"></div>
+      <div class="modal-caja">
+        <div class="modal-cabecera">
+          <h3 id="titulo-contar">Registrar conteo</h3>
+          <button type="button" class="modal-cerrar" id="cerrar-contar" aria-label="Cerrar">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg>
+          </button>
+        </div>
+
+        <div class="modal-producto">
+          <span class="empaque-badge" id="mc-empaque"></span>
+          <h4 id="mc-nombre" style="margin:2px 0 0;font-size:14px;font-weight:700;color:var(--app-tinta);"></h4>
+          <p class="modal-meta" id="mc-meta"></p>
+        </div>
+
+        <div class="contador-campo">
+          <label><span>Empaques cerrados</span><span class="factor" id="mc-factor"></span></label>
+          <div class="stepper">
+            <button type="button" class="stepper-btn" data-accion="restar-caja" aria-label="Restar una caja">−</button>
+            <input type="number" inputmode="numeric" id="mc-cajas" value="0" min="0">
+            <button type="button" class="stepper-btn" data-accion="sumar-caja" aria-label="Sumar una caja">+</button>
+          </div>
+        </div>
+
+        <div class="contador-campo">
+          <label><span>Unidades sueltas</span></label>
+          <div class="stepper">
+            <button type="button" class="stepper-btn" data-accion="restar-suelta" aria-label="Restar una unidad">−</button>
+            <input type="number" inputmode="numeric" id="mc-sueltas" value="0" min="0">
+            <button type="button" class="stepper-btn" data-accion="sumar-suelta" aria-label="Sumar una unidad">+</button>
+          </div>
+        </div>
+
+        <div class="atajos-conteo">
+          <button type="button" class="atajo-chip" data-atajo="caja1">+1 Caja</button>
+          <button type="button" class="atajo-chip" data-atajo="caja5">+5 Cajas</button>
+          <button type="button" class="atajo-chip" data-atajo="suelta5">+5 Und</button>
+          <button type="button" class="atajo-chip borrar" data-atajo="borrar">Borrar</button>
+        </div>
+
+        <div class="total-vivo">
+          <span class="etiqueta">Total para Dynamics</span>
+          <strong id="mc-total">0 und</strong>
+          <span class="total-desglose" id="mc-desglose"></span>
+        </div>
+
+        <button type="button" class="accion" id="mc-guardar">Guardar registro en hoja</button>
+      </div>
+    </div>
+
+    <div class="modal" id="modal-scan" role="dialog" aria-modal="true" aria-labelledby="titulo-scan" hidden>
+      <div class="modal-fondo" id="fondo-scan"></div>
+      <div class="modal-caja">
+        <div class="modal-cabecera">
+          <h3 id="titulo-scan">Confirmar producto con la cámara</h3>
+          <button type="button" class="modal-cerrar" id="cerrar-scan" aria-label="Cerrar">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg>
+          </button>
+        </div>
+        <p class="modal-nota">El escáner confirma que el producto que tenés en la mano es el de la lista — no reemplaza ingresar la cantidad.</p>
+        <div class="visor-camara" aria-hidden="true">
+          <svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 8V6a2 2 0 0 1 2-2h2M4 16v2a2 2 0 0 0 2 2h2m12-12V6a2 2 0 0 0-2-2h-2m4 12v2a2 2 0 0 1-2 2h-2"/><rect x="8.5" y="9" width="7" height="6" rx="1.3"/></svg>
+        </div>
+        <p class="modal-nota">Simulá una lectura:</p>
+        <div class="atajos-scan" id="atajos-scan"></div>
+        <p class="scan-resultado" id="scan-resultado"></p>
+      </div>
+    </div>
+
+    <div class="modal" id="modal-finalizar" role="dialog" aria-modal="true" aria-labelledby="titulo-finalizar" hidden>
+      <div class="modal-fondo" id="fondo-finalizar"></div>
+      <div class="modal-caja">
+        <div class="modal-cabecera">
+          <h3 id="titulo-finalizar">Finalizar hoja #002</h3>
+          <button type="button" class="modal-cerrar" id="cerrar-finalizar" aria-label="Cerrar">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg>
+          </button>
+        </div>
+        <p class="modal-alerta" id="finalizar-texto"></p>
+        <p class="modal-nota">Después de finalizar, la hoja queda congelada: ningún ítem se puede volver a editar.</p>
+        <div class="modal-acciones">
+          <button type="button" class="accion secundario" id="cancelar-finalizar">Seguir contando</button>
+          <button type="button" class="accion" id="confirmar-finalizar">Sí, finalizar</button>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <section class="pruebas">
+    <h3>Atajos para validar</h3>
+    <p>Buscá o filtrá los 50 ítems (sin paginador, con scroll), tocá un ítem ya contado para corregirlo, escaneá un código que sí y uno que no pertenece a la hoja, y simulá la pérdida de WiFi antes de finalizar.</p>
+    <div class="atajos" id="atajos"></div>
+  </section>
+
+</div>
+
+<script>
+(function () {
+  'use strict';
+
+  var $ = function (id) { return document.getElementById(id); };
+  var toast = $('toast'), toastTexto = $('toast-texto');
+
+  var temporizador;
+  function mostrarToast(texto) {
+    toastTexto.textContent = texto;
+    toast.classList.add('visible');
+    clearTimeout(temporizador);
+    temporizador = setTimeout(function () { toast.classList.remove('visible'); }, 2800);
+  }
+
+  // ================= LOGICA DE LA PANTALLA =================
+
+  var FLECHA = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 12h15m-6-7 7 7-7 7"/></svg>';
+  var TILDE = '<svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M9 16.2 4.8 12l-1.4 1.4L9 19 21 7l-1.4-1.4L9 16.2Z"/></svg>';
+
+  /* El tamaño de hoja NO es fijo (decision del cliente: 20/30/50 items
+     por hoja). Esta hoja ya se creo con 50 en el paso 2 -- el numero
+     vive en una sola constante, nunca escrito a mano en el texto. */
+  var TAMANO_HOJA = 50;
+  var HOJA_NUM = '002';
+  var CODIGO_DESDE = 51;   // Hoja #002 = codigos 0051-0100 (docs/pantallas.md, Pantalla 2)
+
+  var EMPAQUES = {
+    caja:    { label: 'CAJA',    factor: 12 },
+    pack:    { label: 'PACK',    factor: 6  },
+    plancha: { label: 'PLANCHA', factor: 24 },
+    fardo:   { label: 'FARDO',   factor: 20 }
+  };
+
+  /* Los 4 productos con nombre, codigo de barras y empaque reales son
+     los del mockup del cliente (docs/pantallas.md, Pantalla 3 / Modal
+     1). El resto de la hoja, hasta completar los 50 items del lote,
+     reutiliza las mismas 4 fichas en rotacion -- no se inventan marcas
+     nuevas solo para rellenar la lista. */
+  var BASE = [
+    { nombre: 'Aceite Vegetal Primor 1L',        empaque: 'caja',    barcode: '7750123051' },
+    { nombre: 'Cerveza Cusqueña Trigo 310ml',    empaque: 'pack',    barcode: '7750999015' },
+    { nombre: 'Leche Evaporada Gloria Azul 400g',empaque: 'plancha', barcode: '7750123088' },
+    { nombre: 'Fideos Canuto Lavaggi 500g',      empaque: 'fardo',   barcode: '7750123054' }
+  ];
+  var NIVELES = ['Nivel 1', 'Nivel 2', 'Nivel 3'];
+
+  /* Construye los 50 items de la hoja. Contado = true en exactamente
+     32 de 50 (el "32 / 50 contados" del mockup): los 3 primeros
+     sourced + 29 mas; el 4to (Lavaggi) sourced como "sin contar"; el
+     resto queda pendiente. Los totales de los 3 primeros son los
+     valores EXACTOS del mockup del cliente -- se verificaron con
+     python antes de cargarlos aca (2x12+0=24, 5x6+2=32, 2x24+5=53). */
+  var PRODUCTOS = (function () {
+    var lista = [];
+    for (var i = 0; i < TAMANO_HOJA; i++) {
+      var id = ('0000' + (CODIGO_DESDE + i)).slice(-4);
+      var base = BASE[i % BASE.length];
+      var barcode = i < BASE.length ? base.barcode : (base.barcode.slice(0, 6) + id);
+      var contado = (i < 3) || (i >= 4 && i < 33);
+      lista.push({
+        id: id,
+        barcode: barcode,
+        nombre: base.nombre,
+        empaque: base.empaque,
+        ubicacion: 'Góndola A2 · ' + NIVELES[i % NIVELES.length],
+        contado: contado,
+        cajas: 0,
+        sueltas: 0
+      });
+    }
+    // Los 3 ejemplos sourced del mockup, valores exactos.
+    lista[0].cajas = 2; lista[0].sueltas = 0;   // 2 Cajas x12 + 0        = 24
+    lista[1].cajas = 5; lista[1].sueltas = 2;   // 5 Packs x6 + 2         = 32
+    lista[2].cajas = 2; lista[2].sueltas = 5;   // 2 Planchas x24 + 5     = 53
+    // El resto de los contados (indices 4..32): conteo generico,
+    // determinista (no aleatorio), para que la maqueta sea reproducible.
+    for (var j = 4; j < 33; j++) {
+      var factor = EMPAQUES[lista[j].empaque].factor;
+      lista[j].cajas = 1 + (j % 3);
+      lista[j].sueltas = (j * 3) % factor;
+    }
+    return lista;
+  })();
+
+  function calcTotal(p) { return p.cajas * EMPAQUES[p.empaque].factor + p.sueltas; }
+  function contadosCount() { return PRODUCTOS.filter(function (p) { return p.contado; }).length; }
+  function buscarProducto(id) {
+    var encontrados = PRODUCTOS.filter(function (p) { return p.id === id; });
+    return encontrados[0] || null;
+  }
+
+  var finalizado = false;
+  var online = true;
+  var pendientesSync = 0;
+  var confirmados = {};   // id -> true, cuando el escaner confirmo el codigo
+  var idEnEdicion = null;
+
+  /* ---------- Cabecera: avance ----------
+     "32 / 50" sale siempre de TAMANO_HOJA y del conteo real de
+     PRODUCTOS -- nunca texto fijo. El estado de la hoja (pendiente/en
+     proceso/finalizada) sigue existiendo en la variable `finalizado`
+     y controla la edicion y el scan, solo dejo de pintar el badge. */
+  function renderCabecera() {
+    var n = contadosCount();
+    $('avance-cifra').textContent = n + ' / ' + TAMANO_HOJA + ' Productos';
+    $('avance-relleno').style.width = Math.round(n / TAMANO_HOJA * 100) + '%';
+  }
+
+  /* ---------- Banda de sincronizacion (offline-first) ----------
+     La WiFi es de tienda, sin datos moviles, y se cae justo donde se
+     cuenta. Perder señal NO pierde el conteo: se guarda en el equipo
+     y esta banda avisa cuantos cambios estan sin sincronizar. */
+  function renderBandaSync() {
+    var banda = $('banda-sync');
+    if (!online) {
+      banda.hidden = false;
+      banda.className = 'banda-sync offline';
+      $('texto-sync').textContent = 'Sin conexión · ' + pendientesSync +
+        (pendientesSync === 1 ? ' cambio guardado en el equipo' : ' cambios guardados en el equipo');
+    } else if (pendientesSync > 0) {
+      banda.hidden = false;
+      banda.className = 'banda-sync pendiente';
+      $('texto-sync').textContent = 'Guardado en el equipo · ' + pendientesSync +
+        (pendientesSync === 1 ? ' cambio sin sincronizar' : ' cambios sin sincronizar');
+    } else {
+      // Todo sincronizado: no hace falta un banner de "todo bien".
+      banda.hidden = true;
+    }
+  }
+
+  function registrarCambioPendiente() {
+    pendientesSync++;
+    renderBandaSync();
+    if (online) {
+      setTimeout(function () {
+        pendientesSync = Math.max(0, pendientesSync - 1);
+        renderBandaSync();
+      }, 1400);
+    }
+  }
+
+  function alternarConexion() {
+    online = !online;
+    if (online) {
+      mostrarToast('WiFi de tienda recuperada · sincronizando cambios pendientes');
+      var pend = pendientesSync;
+      if (pend > 0) {
+        setTimeout(function () {
+          pendientesSync = 0;
+          renderBandaSync();
+          mostrarToast(pend + (pend === 1 ? ' cambio sincronizado' : ' cambios sincronizados'));
+        }, 1300);
+      } else {
+        renderBandaSync();
+      }
+    } else {
+      mostrarToast('Se perdió la WiFi de tienda · el conteo se sigue guardando en el equipo');
+      renderBandaSync();
+    }
+  }
+
+  /* ---------- Lista de productos ----------
+     Regla numero uno: en NINGUN lado de esta tarjeta aparece el stock
+     del ERP. Solo lo que el operario cuenta. */
+  function coincide(p, q) {
+    if (!q) return true;
+    q = q.toLowerCase();
+    return p.nombre.toLowerCase().indexOf(q) > -1 ||
+      p.barcode.indexOf(q) > -1 ||
+      p.id.indexOf(q) > -1;
+  }
+
+  function productoHTML(p) {
+    var emp = EMPAQUES[p.empaque];
+    var confirmadoTag = confirmados[p.id]
+      ? '<span class="confirmado-tag">' + TILDE + ' Confirmado</span>'
+      : '';
+    var claseBloq = finalizado ? ' bloqueado' : '';
+
+    if (p.contado) {
+      var total = calcTotal(p);
+      return '<article class="producto contado' + claseBloq + '" data-codigo="' + p.id + '"' +
+        (finalizado ? '' : ' role="button" tabindex="0"') +
+        ' aria-label="Editar conteo de ' + p.nombre + '">' +
+        '<div class="producto-cabecera"><span class="empaque-badge">' + emp.label + ' ×' + emp.factor + '</span>' +
+        '<span class="producto-num">#' + p.id + '</span></div>' +
+        '<h3 class="producto-nombre">' + p.nombre + '</h3>' +
+        '<p class="producto-codigo">Código ' + p.barcode + confirmadoTag + '</p>' +
+        '<div class="producto-pie">' +
+          '<span class="producto-detalle">Empaque: ' + p.cajas + (p.cajas === 1 ? ' Caja' : ' Cajas') +
+          ' · Sueltas: ' + p.sueltas + ' und</span>' +
+          '<div class="producto-total"><span class="cifra">' + total + '</span><span class="unidad">und</span></div>' +
+        '</div>' +
+      '</article>';
+    }
+
+    return '<article class="producto' + claseBloq + '" data-codigo="' + p.id + '">' +
+      '<div class="producto-cabecera"><span class="empaque-badge">' + emp.label + ' ×' + emp.factor + '</span>' +
+      '<span class="producto-num">#' + p.id + '</span></div>' +
+      '<h3 class="producto-nombre">' + p.nombre + '</h3>' +
+      '<p class="producto-codigo">Código ' + p.barcode + confirmadoTag + '</p>' +
+      '<div class="producto-pie">' +
+        '<span class="producto-detalle">Ubicación: ' + p.ubicacion + '</span>' +
+        '<button type="button" class="btn-contar" data-codigo="' + p.id + '"' + (finalizado ? ' disabled' : '') + '>+ Contar</button>' +
+      '</div>' +
+    '</article>';
+  }
+
+  function renderProductos() {
+    var q = $('buscador').value.trim();
+    var visibles = PRODUCTOS.filter(function (p) { return coincide(p, q); });
+    $('productos').innerHTML = visibles.map(productoHTML).join('');
+    $('pie-lista').innerHTML = q
+      ? 'Mostrando ' + visibles.length + ' de <strong>' + PRODUCTOS.length + ' ítems</strong> · filtro: "' + q + '"'
+      : 'Mostrando los <strong>' + PRODUCTOS.length + ' ítems</strong> de esta hoja · desplazate para ver más';
+  }
+
+  $('buscador').addEventListener('input', renderProductos);
+
+  $('productos').addEventListener('click', function (e) {
+    var btn = e.target.closest('.btn-contar');
+    if (btn && !btn.disabled) { abrirModalContar(btn.getAttribute('data-codigo')); return; }
+    var card = e.target.closest('.producto.contado');
+    if (card && !finalizado) { abrirModalContar(card.getAttribute('data-codigo')); }
+  });
+  $('productos').addEventListener('keydown', function (e) {
+    if (e.key !== 'Enter' && e.key !== ' ') return;
+    var card = e.target.closest('.producto.contado');
+    if (card && !finalizado) { e.preventDefault(); abrirModalContar(card.getAttribute('data-codigo')); }
+  });
+
+  /* ---------- Modal: registrar / editar conteo (Modal 1) ----------
+     Mismo modal para "+ Contar" y para reabrir un item ya contado.
+     El empaque y su factor vienen del catalogo, no los elige el
+     operario. El stock del ERP NUNCA aparece aca. */
+  function factorEnEdicion() {
+    var p = buscarProducto(idEnEdicion);
+    return p ? EMPAQUES[p.empaque].factor : 1;
+  }
+
+  function actualizarTotalVivo() {
+    var cajas = Math.max(0, parseInt($('mc-cajas').value, 10) || 0);
+    var sueltas = Math.max(0, parseInt($('mc-sueltas').value, 10) || 0);
+    var factor = factorEnEdicion();
+    var total = cajas * factor + sueltas;
+    $('mc-total').textContent = total + ' und';
+    $('mc-desglose').textContent = cajas + (cajas === 1 ? ' Caja' : ' Cajas') +
+      ' (' + (cajas * factor) + ' und) + ' + sueltas + ' Sueltas';
+  }
+
+  function abrirModalContar(id) {
+    if (finalizado) return;
+    var p = buscarProducto(id);
+    if (!p) return;
+    idEnEdicion = id;
+    var emp = EMPAQUES[p.empaque];
+
+    $('titulo-contar').textContent = p.contado ? 'Editar conteo' : 'Registrar conteo';
+    $('mc-empaque').textContent = emp.label + ' ×' + emp.factor;
+    $('mc-nombre').textContent = p.nombre;
+    $('mc-meta').textContent = 'Código ' + p.barcode + ' · ' + p.ubicacion;
+    $('mc-factor').textContent = 'Factor: ' + emp.factor + ' und/' + emp.label.toLowerCase();
+    $('mc-cajas').value = p.cajas || 0;
+    $('mc-sueltas').value = p.sueltas || 0;
+    actualizarTotalVivo();
+
+    $('modal-contar').hidden = false;
+    $('mc-cajas').focus();
+  }
+
+  function ajustarStepper(id, delta) {
+    var el = $(id);
+    el.value = Math.max(0, (parseInt(el.value, 10) || 0) + delta);
+    actualizarTotalVivo();
+  }
+
+  $('mc-cajas').addEventListener('input', actualizarTotalVivo);
+  $('mc-sueltas').addEventListener('input', actualizarTotalVivo);
+
+  $('modal-contar').addEventListener('click', function (e) {
+    var accion = e.target.closest('[data-accion]');
+    if (accion) {
+      var a = accion.getAttribute('data-accion');
+      if (a === 'sumar-caja') ajustarStepper('mc-cajas', 1);
+      if (a === 'restar-caja') ajustarStepper('mc-cajas', -1);
+      if (a === 'sumar-suelta') ajustarStepper('mc-sueltas', 1);
+      if (a === 'restar-suelta') ajustarStepper('mc-sueltas', -1);
+    }
+    var atajo = e.target.closest('[data-atajo]');
+    if (atajo) {
+      var t = atajo.getAttribute('data-atajo');
+      if (t === 'caja1') ajustarStepper('mc-cajas', 1);
+      if (t === 'caja5') ajustarStepper('mc-cajas', 5);
+      if (t === 'suelta5') ajustarStepper('mc-sueltas', 5);
+      if (t === 'borrar') { $('mc-cajas').value = 0; $('mc-sueltas').value = 0; actualizarTotalVivo(); }
+    }
+  });
+
+  function guardarConteo() {
+    var p = buscarProducto(idEnEdicion);
+    if (!p) return;
+    var eraContado = p.contado;
+    p.cajas = Math.max(0, parseInt($('mc-cajas').value, 10) || 0);
+    p.sueltas = Math.max(0, parseInt($('mc-sueltas').value, 10) || 0);
+    p.contado = true;
+
+    cerrarModal('modal-contar');
+    registrarCambioPendiente();
+    renderCabecera();
+    renderProductos();
+    mostrarToast((eraContado ? 'Conteo actualizado: ' : 'Guardado: ') + p.nombre + ' — ' + calcTotal(p) + ' und');
+  }
+  $('mc-guardar').addEventListener('click', guardarConteo);
+
+  /* ---------- Modal: escaner (secundario, solo confirma) ----------
+     El escaner NO cuenta por si solo: si el codigo pertenece a la
+     hoja, salta al item y lo marca confirmado; si no pertenece, lo
+     avisa en el propio modal, sin bloquear la pantalla con un alert(). */
+  function abrirModalScan() {
+    $('scan-resultado').className = 'scan-resultado';
+    $('scan-resultado').textContent = '';
+
+    var cont = $('atajos-scan');
+    cont.innerHTML = '';
+    var ejemplos = [PRODUCTOS[0], PRODUCTOS[3]];
+    ejemplos.forEach(function (p) {
+      var b = document.createElement('button');
+      b.type = 'button'; b.className = 'atajo-scan';
+      b.innerHTML = '<span>' + p.nombre + '</span><span class="codigo">' + p.barcode + '</span>';
+      b.addEventListener('click', function () { procesarScan(p.barcode); });
+      cont.appendChild(b);
+    });
+
+    var ajeno = document.createElement('button');
+    ajeno.type = 'button'; ajeno.className = 'atajo-scan';
+    ajeno.innerHTML = '<span>Código de otra hoja</span><span class="codigo">7750450019</span>';
+    ajeno.addEventListener('click', function () { procesarScan('7750450019'); });
+    cont.appendChild(ajeno);
+
+    $('modal-scan').hidden = false;
+  }
+
+  function procesarScan(codigo) {
+    var encontrados = PRODUCTOS.filter(function (p) { return p.barcode === codigo; });
+    var p = encontrados[0];
+    if (!p) {
+      $('scan-resultado').className = 'scan-resultado error';
+      $('scan-resultado').textContent = 'Este código no pertenece a la hoja #' + HOJA_NUM + '.';
+      return;
+    }
+    confirmados[p.id] = true;
+    cerrarModal('modal-scan');
+    renderProductos();
+
+    var el = document.querySelector('.producto[data-codigo="' + p.id + '"]');
+    if (el) {
+      el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      el.classList.add('confirmado-flash');
+      setTimeout(function () { el.classList.remove('confirmado-flash'); }, 1100);
+    }
+    mostrarToast('Código confirmado: coincide con ' + p.nombre + ' (#' + p.id + ')');
+  }
+
+  $('btn-scan').addEventListener('click', abrirModalScan);
+
+  /* ---------- Modal: finalizar hoja (punto de no retorno) ----------
+     Mientras la hoja no este finalizada se puede editar cualquier item
+     ya contado. Al finalizar, queda congelada -- ningun item se puede
+     volver a editar. */
+  function abrirModalFinalizar() {
+    var faltan = TAMANO_HOJA - contadosCount();
+    $('finalizar-texto').textContent = faltan > 0
+      ? 'Quedan ' + faltan + ' de ' + TAMANO_HOJA + ' ítems sin contar. Si finalizás ahora, esos ítems quedan vacíos.'
+      : 'Los ' + TAMANO_HOJA + ' ítems de esta hoja están contados.';
+    $('modal-finalizar').hidden = false;
+  }
+
+  function confirmarFinalizar() {
+    finalizado = true;
+    cerrarModal('modal-finalizar');
+    renderCabecera();
+    renderProductos();
+    $('btn-scan').disabled = true;
+
+    $('accion-fija').innerHTML =
+      '<a class="accion" href="ciclo-conteos.html" id="link-ciclo">Ver ciclo de 3 conteos' + FLECHA + '</a>';
+
+    mostrarToast('Hoja #' + HOJA_NUM + ' finalizada · ya no se puede editar');
+  }
+
+  $('btn-finalizar').addEventListener('click', abrirModalFinalizar);
+  $('confirmar-finalizar').addEventListener('click', confirmarFinalizar);
+  $('cancelar-finalizar').addEventListener('click', function () { cerrarModal('modal-finalizar'); });
+
+  /* ---------- Cierre de modales: fondo, X, Escape y tarea completa ---------- */
+  function cerrarModal(id) { $(id).hidden = true; }
+
+  [
+    ['modal-contar', 'fondo-contar', 'cerrar-contar'],
+    ['modal-scan', 'fondo-scan', 'cerrar-scan'],
+    ['modal-finalizar', 'fondo-finalizar', 'cerrar-finalizar']
+  ].forEach(function (t) {
+    $(t[1]).addEventListener('click', function () { cerrarModal(t[0]); });
+    $(t[2]).addEventListener('click', function () { cerrarModal(t[0]); });
+  });
+
+  document.addEventListener('keydown', function (e) {
+    if (e.key !== 'Escape') return;
+    ['modal-contar', 'modal-scan', 'modal-finalizar'].forEach(function (id) {
+      if (!$(id).hidden) cerrarModal(id);
+    });
+  });
+
+  /* ---------- Atajos de validacion ---------- */
+  function pintarAtajos() {
+    var cont = $('atajos');
+    cont.innerHTML = '';
+    var b = document.createElement('button');
+    b.type = 'button'; b.className = 'atajo';
+    b.textContent = 'Simular pérdida / reconexión de WiFi';
+    b.addEventListener('click', alternarConexion);
+    cont.appendChild(b);
+  }
+
+  $('buscador').placeholder = 'Filtrar entre los ' + TAMANO_HOJA + ' de esta hoja o buscar código...';
+
+  renderCabecera();
+  renderBandaSync();
+  renderProductos();
+  pintarAtajos();
+
+  // =========================================================
+})();
+</script>

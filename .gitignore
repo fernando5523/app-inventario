@@ -1,0 +1,29 @@
+# Dependencias — se instalan desde package-lock.json, no se versionan.
+node_modules/
+node_modules_corrupto*/
+
+# APKs — 125 MB+ cada uno. Un repo con GBs de binarios es un repo que
+# nadie clona. Se generan con gradle (ver mobile/README.md).
+*.apk
+
+# Nativo de mobile/ — expo prebuild lo regenera desde app.config.ts.
+mobile/android/
+mobile/ios/
+mobile/.expo/
+
+# Build/dist genéricos (backend y mobile).
+dist/
+build/
+
+# Credenciales — NUNCA se versionan. Una credencial versionada es una
+# credencial filtrada en cuanto este repo tenga un remoto. Incluye
+# .env.example a propósito: nadie con permiso lo revisó todavía para
+# confirmar que no tiene un valor real filtrado por error (ver
+# mobile/README.md / decisión del 2026-09-03).
+.env
+.env.*
+_env_nuevo.txt
+
+# Editor / SO.
+.DS_Store
+Thumbs.db

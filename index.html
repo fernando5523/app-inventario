@@ -1,0 +1,1179 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>Mockup Interactivo: Inventario Masivo 8,000 Productos (3 Conteos)</title>
+  <!-- Tailwind CSS CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- FontAwesome Icons -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" />
+  <!-- Google Fonts Inter -->
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
+
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          fontFamily: {
+            sans: ['Inter', 'sans-serif'],
+            mono: ['JetBrains Mono', 'monospace'],
+          },
+          colors: {
+            brand: {
+              50: '#eef2ff',
+              100: '#e0e7ff',
+              500: '#6366f1',
+              600: '#4f46e5',
+              700: '#4338ca',
+              800: '#3730a3',
+              900: '#312e81',
+              dark: '#0f172a',
+            }
+          }
+        }
+      }
+    }
+  </script>
+
+  <style>
+    .mobile-frame {
+      width: 100%;
+      max-width: 420px;
+      height: 890px;
+      border-radius: 46px;
+      box-shadow: 0 25px 70px -15px rgba(0, 0, 0, 0.6), 0 0 0 12px #1e293b, 0 0 0 14px #475569;
+      position: relative;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+      background-color: #0f172a;
+    }
+    
+    @media (max-width: 640px) {
+      .mobile-frame {
+        max-width: 100%;
+        height: 100vh;
+        border-radius: 0;
+        box-shadow: none;
+        border: none;
+      }
+      .desktop-nav {
+        display: none !important;
+      }
+      body {
+        padding: 0 !important;
+        background: #0f172a !important;
+      }
+    }
+
+    ::-webkit-scrollbar {
+      width: 4px;
+    }
+    ::-webkit-scrollbar-track {
+      background: rgba(15, 23, 42, 0.6);
+    }
+    ::-webkit-scrollbar-thumb {
+      background: #334155;
+      border-radius: 4px;
+    }
+
+    .dynamic-island {
+      width: 125px;
+      height: 28px;
+      background: #000;
+      border-radius: 20px;
+      position: absolute;
+      top: 10px;
+      left: 50%;
+      transform: translateX(-50%);
+      z-index: 50;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+    }
+
+    .pulse-scan {
+      animation: scanLaser 2s infinite ease-in-out;
+    }
+
+    @keyframes scanLaser {
+      0% { top: 15%; opacity: 0.8; }
+      50% { top: 85%; opacity: 1; }
+      100% { top: 15%; opacity: 0.8; }
+    }
+  </style>
+</head>
+
+<body class="bg-slate-950 text-slate-100 min-h-screen flex flex-col items-center justify-center p-2 sm:p-5 font-sans">
+
+  <!-- BARRA SUPERIOR DE NAVEGACIÓN Y EXPLICACIÓN DE ARQUITECTURA -->
+  <header class="desktop-nav w-full max-w-5xl mb-3 bg-slate-900/90 backdrop-blur border border-slate-800 rounded-2xl p-3.5 flex flex-wrap items-center justify-between gap-3 shadow-xl">
+    <div class="flex items-center gap-3">
+      <div class="w-10 h-10 rounded-xl bg-indigo-600 flex items-center justify-center text-white font-bold text-lg shadow-lg shadow-indigo-500/30">
+        <i class="fa-solid fa-boxes-stacked"></i>
+      </div>
+      <div>
+        <h1 class="text-xs font-bold text-white uppercase tracking-wider flex items-center gap-2">
+          Inventario Masivo: 8,000 Productos
+          <span class="text-[10px] bg-emerald-500/20 text-emerald-300 px-2 py-0.5 rounded-full font-mono border border-emerald-500/30">3 Conteos Completos</span>
+        </h1>
+        <p class="text-[11px] text-slate-400">160 Hojas de 50 ítems • Auto-asignación • Filtro de Discrepancias (1er, 2do y 3er Reconteo)</p>
+      </div>
+    </div>
+
+    <!-- Selector de Pantallas -->
+    <div class="flex items-center gap-1.5 flex-wrap">
+      <button onclick="goToScreen('screen-login')" id="btn-screen-login" class="nav-btn px-2.5 py-1.5 rounded-lg text-xs font-semibold bg-indigo-600 text-white transition-all">
+        1. Login
+      </button>
+      <button onclick="goToScreen('screen-coordinador')" id="btn-screen-coordinador" class="nav-btn px-2.5 py-1.5 rounded-lg text-xs font-semibold bg-slate-800 text-slate-300 hover:bg-slate-700 transition-all">
+        2. Coord. 8K Hojas
+      </button>
+      <button onclick="goToScreen('screen-conteo')" id="btn-screen-conteo" class="nav-btn px-2.5 py-1.5 rounded-lg text-xs font-semibold bg-slate-800 text-slate-300 hover:bg-slate-700 transition-all">
+        3. 1er Conteo (8K)
+      </button>
+      <button onclick="goToScreen('screen-ciclos')" id="btn-screen-ciclos" class="nav-btn px-2.5 py-1.5 rounded-lg text-xs font-semibold bg-slate-800 text-slate-300 hover:bg-slate-700 transition-all">
+        4. Los 3 Conteos
+      </button>
+      <button onclick="goToScreen('screen-auditoria')" id="btn-screen-auditoria" class="nav-btn px-2.5 py-1.5 rounded-lg text-xs font-semibold bg-slate-800 text-slate-300 hover:bg-slate-700 transition-all">
+        5. Auditoría Gilmer
+      </button>
+      <button onclick="goToScreen('screen-liquidacion')" id="btn-screen-liquidacion" class="nav-btn px-2.5 py-1.5 rounded-lg text-xs font-semibold bg-slate-800 text-slate-300 hover:bg-slate-700 transition-all">
+        6. Liquidación & Multas
+      </button>
+      <button onclick="goToScreen('screen-lacrado')" id="btn-screen-lacrado" class="nav-btn px-2.5 py-1.5 rounded-lg text-xs font-semibold bg-slate-800 text-slate-300 hover:bg-slate-700 transition-all">
+        7. Lacrado Final
+      </button>
+    </div>
+  </header>
+
+  <!-- CONTENEDOR DISPOSITIVO SMARTPHONE -->
+  <main class="mobile-frame bg-slate-900 border border-slate-800 text-slate-100 select-none">
+
+    <!-- Notch / Dynamic Island -->
+    <div class="dynamic-island">
+      <div class="w-2.5 h-2.5 rounded-full bg-slate-800 border border-slate-700"></div>
+      <div class="w-2.5 h-2.5 rounded-full bg-indigo-500/70 animate-ping"></div>
+    </div>
+
+    <!-- Status Bar iOS/Android -->
+    <div class="pt-3.5 px-7 pb-2 flex justify-between items-center text-[11px] font-semibold text-slate-400 tracking-tight z-40">
+      <span>09:41</span>
+      <div class="flex items-center gap-1.5 text-xs">
+        <i class="fa-solid fa-signal text-[10px]"></i>
+        <i class="fa-solid fa-wifi text-[10px]"></i>
+        <i class="fa-solid fa-battery-full text-slate-200"></i>
+      </div>
+    </div>
+
+    <!-- ============================================================ -->
+    <!-- PANTALLA 1: LOGIN / SELECCIÓN DE TIENDA Y ROL (8,000 PRODUCTOS) -->
+    <!-- ============================================================ -->
+    <div id="screen-login" class="screen-view flex-1 flex flex-col justify-between p-6 overflow-y-auto">
+      <div>
+        <div class="flex items-center justify-center mt-3 mb-5">
+          <div class="w-16 h-16 rounded-2xl bg-gradient-to-tr from-indigo-600 to-indigo-400 flex items-center justify-center text-white text-3xl shadow-xl shadow-indigo-500/30">
+            <i class="fa-solid fa-barcode"></i>
+          </div>
+        </div>
+        <div class="text-center mb-5">
+          <h2 class="text-lg font-bold text-white tracking-tight">Inventario Mensual de Autoservicio</h2>
+          <p class="text-xs text-slate-400 mt-1">Escala Masiva: 8,000 Códigos • Sincronización ERP</p>
+        </div>
+
+        <!-- Selección de Sucursal -->
+        <div class="space-y-3.5">
+          <div>
+            <label class="block text-xs font-semibold text-slate-300 mb-1 uppercase tracking-wider">Sucursal / Gran Market</label>
+            <div class="relative">
+              <select id="login-store" class="w-full bg-slate-800 border border-slate-700 rounded-xl px-3.5 py-2.5 text-xs text-white appearance-none focus:outline-none focus:border-indigo-500">
+                <option value="Luzuriaga" selected>Market Central Luzuriaga (8,000 ítems • 11 colaboradores)</option>
+                <option value="Carhuaz">Market Carhuaz (3,500 ítems)</option>
+                <option value="Bolivar">Market Bolívar (4,200 ítems)</option>
+                <option value="Sucre">Market Sucre (2,800 ítems)</option>
+              </select>
+              <div class="absolute right-3 top-3 pointer-events-none text-slate-400">
+                <i class="fa-solid fa-chevron-down text-xs"></i>
+              </div>
+            </div>
+          </div>
+
+          <!-- Selección de Perfil / Rol -->
+          <div>
+            <label class="block text-xs font-semibold text-slate-300 mb-1 uppercase tracking-wider">Rol de Acceso</label>
+            <div class="grid grid-cols-3 gap-2">
+              <button type="button" onclick="selectRole('coordinador')" id="role-coordinador" class="role-btn p-2.5 rounded-xl border border-indigo-500 bg-indigo-500/10 text-center transition-all">
+                <i class="fa-solid fa-user-shield text-indigo-400 mb-1 text-sm block"></i>
+                <span class="text-[11px] font-semibold text-white block">Coord.</span>
+                <span class="text-[9px] text-slate-400">160 Hojas</span>
+              </button>
+              <button type="button" onclick="selectRole('conteo')" id="role-conteo" class="role-btn p-2.5 rounded-xl border border-slate-700 bg-slate-800 text-center hover:border-slate-600 transition-all">
+                <i class="fa-solid fa-user-tag text-slate-400 mb-1 text-sm block"></i>
+                <span class="text-[11px] font-semibold text-slate-300 block">Conteo</span>
+                <span class="text-[9px] text-slate-400">Mi Lote</span>
+              </button>
+              <button type="button" onclick="selectRole('auditor')" id="role-auditor" class="role-btn p-2.5 rounded-xl border border-slate-700 bg-slate-800 text-center hover:border-slate-600 transition-all">
+                <i class="fa-solid fa-chart-pie text-slate-400 mb-1 text-sm block"></i>
+                <span class="text-[11px] font-semibold text-slate-300 block">Auditor</span>
+                <span class="text-[9px] text-slate-400">Gilmer</span>
+              </button>
+            </div>
+          </div>
+
+          <!-- Colaborador / DNI -->
+          <div>
+            <label class="block text-xs font-semibold text-slate-300 mb-1 uppercase tracking-wider">Usuario Conectado</label>
+            <div class="relative">
+              <input type="text" id="login-user" value="Coordinador General de Market" class="w-full bg-slate-800 border border-slate-700 rounded-xl px-3.5 py-2.5 text-xs text-white focus:outline-none focus:border-indigo-500 font-medium" />
+              <div class="absolute right-3 top-2.5 text-slate-400">
+                <i class="fa-solid fa-circle-check text-emerald-400 text-sm"></i>
+              </div>
+            </div>
+          </div>
+
+          <!-- Tarjeta de Resumen del Snapshot ERP -->
+          <div class="bg-indigo-950/40 border border-indigo-500/30 rounded-xl p-3 space-y-1.5">
+            <div class="flex items-center justify-between text-xs">
+              <span class="font-bold text-white flex items-center gap-1.5">
+                <i class="fa-solid fa-database text-indigo-400"></i> Snapshot Microsoft Dynamics
+              </span>
+              <span class="text-[9px] bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 px-1.5 py-0.2 rounded font-mono font-bold">8,000 ÍTEMS</span>
+            </div>
+            <div class="grid grid-cols-3 gap-1 text-center text-[10px] font-mono pt-1 border-t border-indigo-500/20">
+              <div class="bg-slate-900/60 p-1 rounded">
+                <span class="text-slate-400 block text-[8px]">1ER CONTEO</span>
+                <span class="text-white font-bold">160 Hojas</span>
+              </div>
+              <div class="bg-slate-900/60 p-1 rounded">
+                <span class="text-slate-400 block text-[8px]">POR HOJA</span>
+                <span class="text-indigo-300 font-bold">50 Ítems</span>
+              </div>
+              <div class="bg-slate-900/60 p-1 rounded">
+                <span class="text-slate-400 block text-[8px]">ESTIMADO</span>
+                <span class="text-emerald-400 font-bold">~4 Horas</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Botón de Ingreso -->
+      <div class="mt-4">
+        <button onclick="handleLogin()" class="w-full bg-indigo-600 hover:bg-indigo-500 active:scale-[0.98] text-white font-bold py-3.5 rounded-xl shadow-lg shadow-indigo-600/40 transition-all flex items-center justify-center gap-2 text-xs">
+          <span>Ingresar a Gestión de Hojas (8,000 Ítems)</span>
+          <i class="fa-solid fa-arrow-right text-xs"></i>
+        </button>
+      </div>
+    </div>
+
+
+    <!-- ============================================================ -->
+    <!-- PANTALLA 2: PANEL DEL COORDINADOR (PARTICIÓN Y ASIGNACIÓN DE 8,000 ÍTEMS) -->
+    <!-- ============================================================ -->
+    <div id="screen-coordinador" class="screen-view flex-1 flex flex-col hidden overflow-hidden">
+      <!-- Header Superior -->
+      <div class="bg-slate-900 border-b border-slate-800 p-3 flex items-center justify-between">
+        <div>
+          <span class="text-[9px] font-bold uppercase tracking-wider text-indigo-400 flex items-center gap-1">
+            <i class="fa-solid fa-layer-group"></i> Gestión Masiva (8,000 Ítems)
+          </span>
+          <h2 class="text-xs font-bold text-white">Market Luzuriaga • 160 Hojas</h2>
+        </div>
+        <button onclick="goToScreen('screen-login')" class="text-xs bg-slate-800 text-slate-400 hover:text-white px-2 py-1 rounded-lg border border-slate-700">
+          <i class="fa-solid fa-arrow-right-from-bracket"></i>
+        </button>
+      </div>
+
+      <!-- Contenido Scrollable -->
+      <div class="flex-1 overflow-y-auto p-3 space-y-3">
+        
+        <!-- Control de Asistencia y Asignación Rápida -->
+        <div class="bg-slate-800/90 border border-slate-700 rounded-2xl p-3 space-y-2.5">
+          <div class="flex items-center justify-between text-xs">
+            <span class="font-bold text-white flex items-center gap-1.5">
+              <i class="fa-solid fa-users text-indigo-400"></i> Personal Presente para Conteo
+            </span>
+            <span class="text-[10px] font-mono bg-emerald-500/20 text-emerald-300 px-2 py-0.5 rounded-full font-bold">8 / 11 Asistieron</span>
+          </div>
+
+          <!-- Botón de Auto-Distribución Masiva -->
+          <div class="p-2.5 bg-indigo-950/60 border border-indigo-500/40 rounded-xl space-y-1.5">
+            <div class="flex items-center justify-between">
+              <span class="text-[11px] font-bold text-indigo-200">⚡ Auto-Distribuir las 160 Hojas</span>
+              <span class="text-[10px] text-indigo-300 font-mono">20 Hojas / persona</span>
+            </div>
+            <p class="text-[10px] text-slate-400 leading-tight">Divide equitativamente los 8,000 productos entre los 8 colaboradores presentes por zonas físicas.</p>
+            <button onclick="autoAsignarHojas()" id="btn-auto-asignar" class="w-full bg-indigo-600 hover:bg-indigo-500 py-2 rounded-lg text-xs font-bold text-white shadow-md shadow-indigo-600/30 flex items-center justify-center gap-1.5 mt-1">
+              <i class="fa-solid fa-wand-magic-sparkles"></i>
+              <span>Repartir Hojas Automáticamente</span>
+            </button>
+          </div>
+        </div>
+
+        <!-- Filtro por Zonas Físicas de la Tienda -->
+        <div class="space-y-1.5">
+          <div class="flex items-center justify-between text-xs">
+            <span class="font-bold text-slate-300 uppercase tracking-wider text-[10px]">Zonas y Pasillos de Tienda</span>
+            <span class="text-[10px] text-slate-400">Total: 160 Hojas</span>
+          </div>
+
+          <!-- Selector de Zonas Horizontales -->
+          <div class="flex gap-1.5 overflow-x-auto pb-1 text-[11px]">
+            <button class="px-2.5 py-1 rounded-lg bg-indigo-600 text-white font-bold whitespace-nowrap">Todas (160)</button>
+            <button class="px-2.5 py-1 rounded-lg bg-slate-800 text-slate-300 whitespace-nowrap hover:bg-slate-700">Zona A: Abarrotes (40)</button>
+            <button class="px-2.5 py-1 rounded-lg bg-slate-800 text-slate-300 whitespace-nowrap hover:bg-slate-700">Zona B: Lácteos (30)</button>
+            <button class="px-2.5 py-1 rounded-lg bg-slate-800 text-slate-300 whitespace-nowrap hover:bg-slate-700">Zona C: Licores (25)</button>
+            <button class="px-2.5 py-1 rounded-lg bg-slate-800 text-slate-300 whitespace-nowrap hover:bg-slate-700">Zona D: Almacén (65)</button>
+          </div>
+        </div>
+
+        <!-- Lista de Hojas de Conteo (Simulación de Partición) -->
+        <div class="space-y-2" id="lista-hojas">
+          
+          <!-- Hoja 1 -->
+          <div class="p-2.5 bg-slate-800 border border-slate-700 rounded-xl space-y-1.5">
+            <div class="flex items-center justify-between">
+              <div class="flex items-center gap-2">
+                <span class="w-6 h-6 rounded-lg bg-indigo-600/30 text-indigo-400 font-bold text-xs flex items-center justify-center font-mono">H01</span>
+                <div>
+                  <h4 class="text-xs font-bold text-white">Hoja #001 • Abarrotes (Arroz & Azúcar)</h4>
+                  <p class="text-[9px] text-slate-400">Códigos 0001 - 0050 • Góndola A1</p>
+                </div>
+              </div>
+              <span class="text-[9px] bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 px-1.5 py-0.2 rounded font-bold">50 / 50 CONTADO</span>
+            </div>
+            <div class="flex items-center justify-between pt-1 border-t border-slate-700/60 text-[10px]">
+              <span class="text-slate-400">Asignado: <strong class="text-slate-200">Carlos Méndez</strong></span>
+              <span class="text-emerald-400 font-bold"><i class="fa-solid fa-check"></i> Sincronizado</span>
+            </div>
+          </div>
+
+          <!-- Hoja 2 (En Progreso) -->
+          <div class="p-2.5 bg-slate-800 border border-amber-500/40 rounded-xl space-y-1.5">
+            <div class="flex items-center justify-between">
+              <div class="flex items-center gap-2">
+                <span class="w-6 h-6 rounded-lg bg-indigo-600/30 text-indigo-400 font-bold text-xs flex items-center justify-center font-mono">H02</span>
+                <div>
+                  <h4 class="text-xs font-bold text-white">Hoja #002 • Abarrotes (Aceites & Fideos)</h4>
+                  <p class="text-[9px] text-slate-400">Códigos 0051 - 0100 • Góndola A2</p>
+                </div>
+              </div>
+              <span class="text-[9px] bg-amber-500/20 text-amber-300 border border-amber-500/30 px-1.5 py-0.2 rounded font-bold">32 / 50 EN PROCESO</span>
+            </div>
+            <div class="flex items-center justify-between pt-1 border-t border-slate-700/60 text-[10px]">
+              <span class="text-slate-400">Asignado: <strong class="text-slate-200">Ana Valdivia</strong></span>
+              <button onclick="goToScreen('screen-conteo')" class="text-indigo-400 font-bold hover:text-indigo-300">Abrir Hoja <i class="fa-solid fa-arrow-right"></i></button>
+            </div>
+          </div>
+
+          <!-- Hoja 3 -->
+          <div class="p-2.5 bg-slate-800 border border-slate-700 rounded-xl space-y-1.5">
+            <div class="flex items-center justify-between">
+              <div class="flex items-center gap-2">
+                <span class="w-6 h-6 rounded-lg bg-indigo-600/30 text-indigo-400 font-bold text-xs flex items-center justify-center font-mono">H03</span>
+                <div>
+                  <h4 class="text-xs font-bold text-white">Hoja #003 • Conservas de Pescado</h4>
+                  <p class="text-[9px] text-slate-400">Códigos 0101 - 0150 • Góndola A3</p>
+                </div>
+              </div>
+              <span class="text-[9px] bg-slate-700 text-slate-300 px-1.5 py-0.2 rounded font-bold">PENDIENTE</span>
+            </div>
+            <div class="flex items-center justify-between pt-1 border-t border-slate-700/60 text-[10px]">
+              <span class="text-slate-400">Asignado: <strong class="text-slate-200">Lucía Guerrero</strong></span>
+              <span class="text-slate-400">En cola de trabajo</span>
+            </div>
+          </div>
+
+          <!-- Resumen de las 157 Hojas Restantes -->
+          <div class="p-2.5 bg-slate-900 border border-slate-800 rounded-xl text-center text-xs text-slate-400">
+            <i class="fa-solid fa-list-check text-slate-500 mr-1"></i>
+            Mostrando 3 de <strong>160 Hojas de Conteo</strong> (8,000 ítems en total)
+          </div>
+        </div>
+
+      </div>
+
+      <!-- Barra Inferior -->
+      <div class="p-3 bg-slate-900 border-t border-slate-800">
+        <button onclick="goToScreen('screen-conteo')" class="w-full bg-indigo-600 hover:bg-indigo-500 py-3 rounded-xl font-bold text-xs text-white flex items-center justify-center gap-2 shadow-lg shadow-indigo-600/30">
+          <i class="fa-solid fa-play"></i>
+          <span>Comenzar a Contar Mi Lote Asignado</span>
+        </button>
+      </div>
+    </div>
+
+
+    <!-- ============================================================ -->
+    <!-- PANTALLA 3: CONTEO CIEGO EN TIENDA (COLABORADOR EN LOTE DE 50 ÍTEMS) -->
+    <!-- ============================================================ -->
+    <div id="screen-conteo" class="screen-view flex-1 flex flex-col hidden overflow-hidden">
+      <!-- Header de Conteo -->
+      <div class="bg-slate-900 border-b border-slate-800 p-3 flex items-center justify-between">
+        <div class="flex items-center gap-2">
+          <button onclick="goToScreen('screen-coordinador')" class="w-7 h-7 rounded-lg bg-slate-800 text-slate-300 flex items-center justify-center text-xs">
+            <i class="fa-solid fa-chevron-left"></i>
+          </button>
+          <div>
+            <div class="text-[9px] font-bold text-indigo-400 uppercase tracking-wider">Hoja #002 (Lote de 50) • 1er Conteo</div>
+            <h2 class="text-xs font-bold text-white">Aceites & Fideos (Góndola A2)</h2>
+          </div>
+        </div>
+        <div class="text-right">
+          <span class="text-[10px] font-mono font-bold text-emerald-400" id="progress-text">32 / 50 contados</span>
+          <div class="w-16 h-1 bg-slate-800 rounded-full mt-1 overflow-hidden">
+            <div class="h-full bg-emerald-500 rounded-full" style="width: 64%"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Buscador y Escáner Rápido en Catálogo Masivo -->
+      <div class="p-2.5 bg-slate-900/80 border-b border-slate-800 flex items-center gap-2">
+        <div class="flex-1 relative">
+          <i class="fa-solid fa-magnifying-glass absolute left-3 top-2.5 text-slate-400 text-xs"></i>
+          <input type="text" placeholder="Filtrar entre los 50 de esta hoja o buscar código..." class="w-full bg-slate-800 border border-slate-700 rounded-xl pl-8 pr-3 py-1.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500" />
+        </div>
+        <button onclick="openScannerModal()" class="bg-indigo-600 hover:bg-indigo-500 px-3 py-1.5 rounded-xl text-white text-xs font-bold flex items-center gap-1 shadow-md shadow-indigo-600/30">
+          <i class="fa-solid fa-camera"></i>
+          <span>Scan</span>
+        </button>
+      </div>
+
+      <!-- Lista de Productos en la Hoja (Conteo Ciego Estricto) -->
+      <div class="flex-1 overflow-y-auto p-2.5 space-y-2">
+
+        <!-- Producto 1: Aceite en Caja x 12 -->
+        <div class="p-2.5 bg-slate-800/90 border border-emerald-500/40 rounded-xl flex items-center justify-between">
+          <div class="flex-1 pr-2">
+            <div class="flex items-center gap-1 mb-0.5">
+              <span class="font-mono text-[8px] bg-slate-700 px-1 py-0.2 rounded text-slate-300 font-bold">#0051 • 7750123051</span>
+              <span class="text-[8px] bg-indigo-500/20 text-indigo-300 px-1 py-0.2 rounded font-bold">📦 CAJA x12</span>
+            </div>
+            <h4 class="text-xs font-bold text-white leading-tight">Aceite Vegetal Primor 1L</h4>
+            <div class="text-[9px] text-slate-400 mt-0.5 flex items-center gap-2">
+              <span>Empaque: <strong>2 Cajas</strong></span>
+              <span>Sueltas: <strong>0 und</strong></span>
+            </div>
+          </div>
+          <button onclick="openCountModal('Aceite Vegetal Primor 1L', '7750123051', 'Caja', 12, 2, 0)" class="bg-slate-700 hover:bg-slate-600 px-2.5 py-1.5 rounded-xl text-center border border-slate-600">
+            <span class="text-[8px] text-slate-400 block uppercase font-bold">Total</span>
+            <span class="text-xs font-bold font-mono text-emerald-400">24 und</span>
+          </button>
+        </div>
+
+        <!-- Producto 2: Cerveza en Pack x 6 -->
+        <div class="p-2.5 bg-slate-800/90 border border-amber-500/40 rounded-xl flex items-center justify-between">
+          <div class="flex-1 pr-2">
+            <div class="flex items-center gap-1 mb-0.5">
+              <span class="font-mono text-[8px] bg-slate-700 px-1 py-0.2 rounded text-slate-300 font-bold">#0052 • 7750999015</span>
+              <span class="text-[8px] bg-amber-500/20 text-amber-300 px-1 py-0.2 rounded font-bold">📦 PACK x6</span>
+            </div>
+            <h4 class="text-xs font-bold text-white leading-tight">Cerveza Cusqueña Trigo 310ml</h4>
+            <div class="text-[9px] text-slate-400 mt-0.5 flex items-center gap-2">
+              <span>Empaque: <strong>5 Packs</strong></span>
+              <span>Sueltas: <strong>2 und</strong></span>
+            </div>
+          </div>
+          <button onclick="openCountModal('Cerveza Cusqueña Trigo 310ml', '7750999015', 'Pack', 6, 5, 2)" class="bg-slate-700 hover:bg-slate-600 px-2.5 py-1.5 rounded-xl text-center border border-slate-600">
+            <span class="text-[8px] text-slate-400 block uppercase font-bold">Total</span>
+            <span class="text-xs font-bold font-mono text-emerald-400">32 und</span>
+          </button>
+        </div>
+
+        <!-- Producto 3: Leche en Plancha x 24 -->
+        <div class="p-2.5 bg-slate-800/90 border border-emerald-500/40 rounded-xl flex items-center justify-between">
+          <div class="flex-1 pr-2">
+            <div class="flex items-center gap-1 mb-0.5">
+              <span class="font-mono text-[8px] bg-slate-700 px-1 py-0.2 rounded text-slate-300 font-bold">#0053 • 7750123088</span>
+              <span class="text-[8px] bg-cyan-500/20 text-cyan-300 px-1 py-0.2 rounded font-bold">📦 PLANCHA x24</span>
+            </div>
+            <h4 class="text-xs font-bold text-white leading-tight">Leche Evaporada Gloria Azul 400g</h4>
+            <div class="text-[9px] text-slate-400 mt-0.5 flex items-center gap-2">
+              <span>Empaque: <strong>2 Planchas</strong></span>
+              <span>Sueltas: <strong>5 und</strong></span>
+            </div>
+          </div>
+          <button onclick="openCountModal('Leche Evaporada Gloria Azul 400g', '7750123088', 'Plancha', 24, 2, 5)" class="bg-slate-700 hover:bg-slate-600 px-2.5 py-1.5 rounded-xl text-center border border-slate-600">
+            <span class="text-[8px] text-slate-400 block uppercase font-bold">Total</span>
+            <span class="text-xs font-bold font-mono text-emerald-400">53 und</span>
+          </button>
+        </div>
+
+        <!-- Producto 4: Fideos en Fardo x 20 (SIN CONTAR) -->
+        <div class="p-2.5 bg-slate-800/60 border border-slate-700 rounded-xl flex items-center justify-between hover:border-indigo-500/60 transition-all">
+          <div class="flex-1 pr-2">
+            <div class="flex items-center gap-1 mb-0.5">
+              <span class="font-mono text-[8px] bg-slate-700 px-1 py-0.2 rounded text-slate-300 font-bold">#0054 • 7750123054</span>
+              <span class="text-[8px] bg-slate-700 text-slate-300 px-1 py-0.2 rounded font-bold">📦 FARDO x20</span>
+            </div>
+            <h4 class="text-xs font-bold text-white leading-tight">Fideos Canuto Lavaggi 500g</h4>
+            <div class="text-[9px] text-slate-400 mt-0.5">Ubicación: Góndola A2 • Nivel 3</div>
+          </div>
+          <button onclick="openCountModal('Fideos Canuto Lavaggi 500g', '7750123054', 'Fardo', 20, 0, 0)" class="bg-indigo-600 hover:bg-indigo-500 px-3 py-2 rounded-xl text-center shadow-md shadow-indigo-600/30">
+            <span class="text-xs font-bold text-white flex items-center gap-1"><i class="fa-solid fa-plus"></i> Contar</span>
+          </button>
+        </div>
+
+        <!-- Paginación de la Hoja -->
+        <div class="p-2 bg-slate-900/60 border border-slate-800 rounded-xl flex items-center justify-between text-[11px] text-slate-400">
+          <span>Mostrando ítems 1 al 10 de 50</span>
+          <div class="flex gap-1">
+            <button class="px-2 py-0.5 rounded bg-slate-800 text-slate-300 hover:bg-slate-700">1</button>
+            <button class="px-2 py-0.5 rounded bg-slate-800 text-slate-300 hover:bg-slate-700">2</button>
+            <button class="px-2 py-0.5 rounded bg-slate-800 text-slate-300 hover:bg-slate-700">3</button>
+          </div>
+        </div>
+
+      </div>
+
+      <!-- Barra de Envío de la Hoja -->
+      <div class="p-2.5 bg-slate-900 border-t border-slate-800 flex gap-2">
+        <button onclick="goToScreen('screen-ciclos')" class="flex-1 bg-emerald-600 hover:bg-emerald-500 py-2.5 rounded-xl font-bold text-xs text-white flex items-center justify-center gap-1.5 shadow-lg shadow-emerald-600/30">
+          <i class="fa-solid fa-check-double"></i>
+          <span>Finalizar Hoja #002 y Ver Ciclo de 3 Conteos</span>
+        </button>
+      </div>
+    </div>
+
+
+    <!-- ============================================================ -->
+    <!-- PANTALLA 4: EL CICLO COMPLETO DE LOS 3 CONTEOS (EMBUDO DE DISCREPANCIAS) -->
+    <!-- ============================================================ -->
+    <div id="screen-ciclos" class="screen-view flex-1 flex flex-col hidden overflow-hidden">
+      <!-- Header Ciclos -->
+      <div class="bg-slate-900 border-b border-slate-800 p-3 flex items-center justify-between">
+        <div>
+          <span class="text-[9px] font-bold uppercase tracking-wider text-indigo-400">Embudo de Auditoría</span>
+          <h2 class="text-xs font-bold text-white">Flujo de los 3 Conteos (8,000 Ítems)</h2>
+        </div>
+        <span class="text-[9px] bg-indigo-500/20 text-indigo-300 px-2 py-0.5 rounded-full font-bold font-mono">3 PASES</span>
+      </div>
+
+      <!-- Contenedor Scrollable del Embudo -->
+      <div class="flex-1 overflow-y-auto p-3 space-y-3">
+
+        <!-- Visualizador del Embudo de Depuración -->
+        <div class="bg-slate-800/90 border border-slate-700 rounded-2xl p-3 space-y-2.5">
+          <h3 class="text-xs font-bold text-white flex items-center gap-1.5">
+            <i class="fa-solid fa-filter text-indigo-400"></i> Reducción Automática de Discrepancias
+          </h3>
+
+          <!-- Paso 1: 1er Conteo Masivo -->
+          <div class="p-2.5 bg-slate-900 rounded-xl border border-slate-700 space-y-1.5">
+            <div class="flex items-center justify-between text-xs">
+              <span class="font-bold text-white flex items-center gap-1.5">
+                <span class="w-5 h-5 rounded-full bg-indigo-600 text-white font-mono text-[10px] flex items-center justify-center font-bold">1</span>
+                1er Conteo General (100% Catálogo)
+              </span>
+              <span class="font-mono text-slate-300 font-bold text-[10px]">8,000 ÍTEMS</span>
+            </div>
+            <div class="w-full bg-slate-800 h-2 rounded-full overflow-hidden flex">
+              <div class="bg-emerald-500 h-full" style="width: 91.8%"></div>
+              <div class="bg-rose-500 h-full" style="width: 8.2%"></div>
+            </div>
+            <div class="flex justify-between text-[10px] font-mono text-slate-400 pt-0.5">
+              <span class="text-emerald-400">✓ 7,350 Cuadrados (OK)</span>
+              <span class="text-rose-400">✗ 650 Observados (Pasan a 2do)</span>
+            </div>
+          </div>
+
+          <!-- Flecha de Conexión -->
+          <div class="text-center text-slate-500 text-xs">
+            <i class="fa-solid fa-arrow-down"></i> <span class="text-[9px] uppercase font-bold text-slate-400">El sistema genera automáticamente el 2do Conteo</span>
+          </div>
+
+          <!-- Paso 2: 2do Reconteo Filtrado -->
+          <div class="p-2.5 bg-amber-950/40 rounded-xl border border-amber-500/40 space-y-1.5">
+            <div class="flex items-center justify-between text-xs">
+              <span class="font-bold text-amber-200 flex items-center gap-1.5">
+                <span class="w-5 h-5 rounded-full bg-amber-600 text-white font-mono text-[10px] flex items-center justify-center font-bold">2</span>
+                2do Reconteo (Filtro de Diferencias)
+              </span>
+              <span class="font-mono text-amber-300 font-bold text-[10px]">650 ÍTEMS (13 Hojas)</span>
+            </div>
+            <div class="w-full bg-slate-800 h-2 rounded-full overflow-hidden flex">
+              <div class="bg-emerald-500 h-full" style="width: 80%"></div>
+              <div class="bg-amber-500 h-full" style="width: 20%"></div>
+            </div>
+            <div class="flex justify-between text-[10px] font-mono text-slate-400 pt-0.5">
+              <span class="text-emerald-400">✓ 520 Cuadrados en 2da pasada</span>
+              <span class="text-amber-300">✗ 130 Persisten (Pasan a 3ro)</span>
+            </div>
+          </div>
+
+          <!-- Flecha de Conexión -->
+          <div class="text-center text-slate-500 text-xs">
+            <i class="fa-solid fa-arrow-down"></i> <span class="text-[9px] uppercase font-bold text-slate-400">Última Pasada de Cierre</span>
+          </div>
+
+          <!-- Paso 3: 3er Reconteo y Cierre Definitivo -->
+          <div class="p-2.5 bg-indigo-950/50 rounded-xl border border-indigo-500/50 space-y-1.5">
+            <div class="flex items-center justify-between text-xs">
+              <span class="font-bold text-white flex items-center gap-1.5">
+                <span class="w-5 h-5 rounded-full bg-emerald-600 text-white font-mono text-[10px] flex items-center justify-center font-bold">3</span>
+                3er Reconteo Definitivo (Cierre Gilmer)
+              </span>
+              <span class="font-mono text-emerald-400 font-bold text-[10px]">130 ÍTEMS (3 Hojas)</span>
+            </div>
+            <p class="text-[10px] text-slate-300 leading-tight">Conteo final auditado directamente por Gilmer Mendoza. Las cantidades resultantes se fijan para la liquidación.</p>
+          </div>
+
+        </div>
+
+      </div>
+
+      <!-- Barra Inferior -->
+      <div class="p-3 bg-slate-900 border-t border-slate-800">
+        <button onclick="goToScreen('screen-auditoria')" class="w-full bg-indigo-600 hover:bg-indigo-500 py-3 rounded-xl font-bold text-xs text-white flex items-center justify-center gap-2 shadow-lg shadow-indigo-600/30">
+          <i class="fa-solid fa-calculator"></i>
+          <span>Ver Comparativo de los 3 Conteos en Auditoría</span>
+        </button>
+      </div>
+    </div>
+
+
+    <!-- ============================================================ -->
+    <!-- PANTALLA 5: PANEL DE AUDITORÍA (MATRIZ COMPARATIVA DE 3 CONTEOS) -->
+    <!-- ============================================================ -->
+    <div id="screen-auditoria" class="screen-view flex-1 flex flex-col hidden overflow-hidden">
+      <!-- Header Auditoría -->
+      <div class="bg-slate-900 border-b border-slate-800 p-3 flex items-center justify-between">
+        <div>
+          <span class="text-[9px] font-bold uppercase tracking-wider text-indigo-400">Auditoría Central (Gilmer)</span>
+          <h2 class="text-xs font-bold text-white">Matriz de 3 Conteos vs ERP</h2>
+        </div>
+        <span class="text-[9px] bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 px-2 py-0.5 rounded-full font-bold">8,000 Ítems</span>
+      </div>
+
+      <!-- Resumen Global de Métricas -->
+      <div class="p-2.5 grid grid-cols-3 gap-1.5 bg-slate-900/80 border-b border-slate-800 text-center text-xs font-mono">
+        <div class="bg-slate-800 p-1.5 rounded-xl border border-slate-700">
+          <span class="text-[8px] text-slate-400 block uppercase">100% Cuadrados</span>
+          <span class="text-emerald-400 font-bold">7,870 items</span>
+        </div>
+        <div class="bg-slate-800 p-1.5 rounded-xl border border-slate-700">
+          <span class="text-[8px] text-slate-400 block uppercase">Faltante Neto</span>
+          <span class="text-rose-400 font-bold">-S/ 1,850.00</span>
+        </div>
+        <div class="bg-slate-800 p-1.5 rounded-xl border border-slate-700">
+          <span class="text-[8px] text-slate-400 block uppercase">Sobrante Neto</span>
+          <span class="text-cyan-400 font-bold">+S/ 460.00</span>
+        </div>
+      </div>
+
+      <!-- Tabla / Tarjetas de Ítems Auditados con Histórico de 3 Conteos -->
+      <div class="flex-1 overflow-y-auto p-2.5 space-y-2">
+        <div class="text-[10px] font-bold text-slate-300 uppercase tracking-wider flex items-center justify-between">
+          <span>Traza de Conteos (Pase 1 → Pase 2 → Pase 3)</span>
+          <span class="text-slate-500">Reglas Automáticas</span>
+        </div>
+
+        <!-- Fila 1: Producto con Ajuste en 2do Conteo -->
+        <div class="p-2.5 bg-slate-800/90 border border-slate-700 rounded-xl space-y-2">
+          <div class="flex items-start justify-between">
+            <div>
+              <h4 class="text-xs font-bold text-white">Arroz Superior Costeño 1kg</h4>
+              <p class="text-[9px] text-slate-400 font-mono">Código: 7750123004 • P. Venta: S/ 4.50</p>
+            </div>
+            <span class="text-[8px] bg-rose-500/20 text-rose-300 border border-rose-500/40 px-1.5 py-0.2 rounded font-bold">FALTANTE (-2)</span>
+          </div>
+
+          <!-- Matriz de Evolución de Conteos -->
+          <div class="grid grid-cols-4 gap-1 text-center bg-slate-900/90 p-1.5 rounded-lg text-[10px] font-mono">
+            <div>
+              <span class="text-[8px] text-slate-500 block">Stock ERP</span>
+              <span class="text-slate-300 font-bold">50</span>
+            </div>
+            <div>
+              <span class="text-[8px] text-slate-500 block">1er Conteo</span>
+              <span class="text-rose-400">45 ✗</span>
+            </div>
+            <div>
+              <span class="text-[8px] text-slate-500 block">2do Conteo</span>
+              <span class="text-emerald-400 font-bold">48 ✓</span>
+            </div>
+            <div>
+              <span class="text-[8px] text-slate-500 block">Diferencia</span>
+              <span class="text-rose-400 font-bold">-S/ 9.00</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Fila 2: Caso Cervezas (Regla Empresa) -->
+        <div class="p-2.5 bg-indigo-950/40 border border-indigo-500/40 rounded-xl space-y-2">
+          <div class="flex items-start justify-between">
+            <div>
+              <div class="flex items-center gap-1">
+                <i class="fa-solid fa-shield-check text-indigo-400 text-xs"></i>
+                <h4 class="text-xs font-bold text-white">Cerveza Cusqueña Trigo 310ml</h4>
+              </div>
+              <p class="text-[9px] text-indigo-300">Regla Gerencia: <strong>Asumido por Empresa (S/ 0 a nómina)</strong></p>
+            </div>
+            <span class="text-[8px] bg-indigo-500/20 text-indigo-300 border border-indigo-500/40 px-1.5 py-0.2 rounded font-bold">EMPRESA</span>
+          </div>
+          <div class="grid grid-cols-4 gap-1 text-center bg-slate-900/90 p-1.5 rounded-lg text-[10px] font-mono">
+            <div>
+              <span class="text-[8px] text-slate-500 block">Stock ERP</span>
+              <span class="text-slate-300 font-bold">42</span>
+            </div>
+            <div>
+              <span class="text-[8px] text-slate-500 block">1er Conteo</span>
+              <span class="text-amber-400">30</span>
+            </div>
+            <div>
+              <span class="text-[8px] text-slate-500 block">3er Conteo</span>
+              <span class="text-amber-400 font-bold">36 (-6)</span>
+            </div>
+            <div>
+              <span class="text-[8px] text-slate-500 block">Cobro Tienda</span>
+              <span class="text-emerald-400 font-bold">S/ 0.00</span>
+            </div>
+          </div>
+        </div>
+
+      </div>
+
+      <div class="p-2.5 bg-slate-900 border-t border-slate-800">
+        <button onclick="goToScreen('screen-liquidacion')" class="w-full bg-indigo-600 hover:bg-indigo-500 py-3 rounded-xl font-bold text-xs text-white flex items-center justify-center gap-2 shadow-lg shadow-indigo-600/30">
+          <i class="fa-solid fa-calculator"></i>
+          <span>Generar Liquidación de Descuentos & Multas</span>
+        </button>
+      </div>
+    </div>
+
+
+    <!-- ============================================================ -->
+    <!-- PANTALLA 6: LIQUIDACIÓN, NÓMINA Y MULTAS DE ASISTENCIA -->
+    <!-- ============================================================ -->
+    <div id="screen-liquidacion" class="screen-view flex-1 flex flex-col hidden overflow-hidden">
+      <!-- Header Liquidación -->
+      <div class="bg-slate-900 border-b border-slate-800 p-3 flex items-center justify-between">
+        <div>
+          <span class="text-[9px] font-bold uppercase tracking-wider text-emerald-400">Cierre de Nómina</span>
+          <h2 class="text-xs font-bold text-white">Liquidación Final Luzuriaga (8,000 Ítems)</h2>
+        </div>
+        <span class="text-[9px] bg-slate-800 text-slate-300 px-2 py-0.5 rounded-full font-mono font-bold">Agosto 2026</span>
+      </div>
+
+      <!-- Resumen Matemático Global -->
+      <div class="p-2.5 bg-slate-900/90 border-b border-slate-800 space-y-2">
+        <div class="bg-slate-800 p-2.5 rounded-xl space-y-1 text-[11px] font-mono">
+          <div class="flex justify-between text-slate-300">
+            <span>Faltante Bruto (8,000 ítems):</span>
+            <span class="text-rose-400 font-bold">S/ 1,850.00</span>
+          </div>
+          <div class="flex justify-between text-slate-300">
+            <span>(-) Negativos Mes (Jocelyn):</span>
+            <span class="text-cyan-400 font-bold">-S/ 310.00</span>
+          </div>
+          <div class="flex justify-between text-slate-300">
+            <span>(-) Faltante Empresa (Cervezas):</span>
+            <span class="text-indigo-400 font-bold">-S/ 150.00</span>
+          </div>
+          <div class="flex justify-between pt-1 border-t border-slate-700 text-xs font-bold text-white">
+            <span>Faltante Neto a Descontar:</span>
+            <span class="text-rose-400">S/ 1,390.00</span>
+          </div>
+          <div class="text-[9px] text-slate-400 flex justify-between">
+            <span>Cuota Base (11 colaboradores):</span>
+            <span class="font-bold text-slate-200">S/ 126.36 / persona</span>
+          </div>
+        </div>
+
+        <!-- Regla de Multas de Asistencia (S/ 20) -->
+        <div class="bg-indigo-950/40 border border-indigo-500/30 p-2 rounded-xl flex items-center justify-between text-[10px]">
+          <div>
+            <span class="text-indigo-300 font-bold block">Fondo Multas Inasistencia:</span>
+            <span class="text-slate-400">3 faltas x S/ 20 = S/ 60 redistribuido</span>
+          </div>
+          <span class="text-emerald-400 font-bold font-mono">-S/ 7.50 / asistente</span>
+        </div>
+      </div>
+
+      <!-- Cuadro Individual de Descuento por Colaborador -->
+      <div class="flex-1 overflow-y-auto p-2.5 space-y-1.5">
+        <div class="text-[10px] font-bold text-slate-300 uppercase tracking-wider">Planilla de Descuentos a RRHH</div>
+
+        <!-- Asistente 1 -->
+        <div class="p-2 bg-slate-800/80 border border-emerald-500/30 rounded-xl flex items-center justify-between text-xs">
+          <div>
+            <div class="flex items-center gap-1.5">
+              <span class="w-2 h-2 rounded-full bg-emerald-400"></span>
+              <h5 class="font-bold text-white text-[11px]">Carlos Méndez</h5>
+            </div>
+            <p class="text-[9px] text-slate-400">Asistió • Cuota S/ 126.36 - Bono S/ 7.50</p>
+          </div>
+          <div class="text-right font-mono">
+            <span class="text-xs font-bold text-emerald-400">S/ 118.86</span>
+            <span class="text-[8px] text-slate-400 block">descuento</span>
+          </div>
+        </div>
+
+        <!-- Asistente 2 -->
+        <div class="p-2 bg-slate-800/80 border border-emerald-500/30 rounded-xl flex items-center justify-between text-xs">
+          <div>
+            <div class="flex items-center gap-1.5">
+              <span class="w-2 h-2 rounded-full bg-emerald-400"></span>
+              <h5 class="font-bold text-white text-[11px]">Ana Valdivia</h5>
+            </div>
+            <p class="text-[9px] text-slate-400">Asistió • Cuota S/ 126.36 - Bono S/ 7.50</p>
+          </div>
+          <div class="text-right font-mono">
+            <span class="text-xs font-bold text-emerald-400">S/ 118.86</span>
+            <span class="text-[8px] text-slate-400 block">descuento</span>
+          </div>
+        </div>
+
+        <!-- Inasistente con Multa -->
+        <div class="p-2 bg-rose-950/40 border border-rose-500/40 rounded-xl flex items-center justify-between text-xs">
+          <div>
+            <div class="flex items-center gap-1.5">
+              <span class="w-2 h-2 rounded-full bg-rose-400"></span>
+              <h5 class="font-bold text-white text-[11px]">Roberto Sánchez</h5>
+            </div>
+            <p class="text-[9px] text-rose-300">Falta a Inventario (+S/ 20 Multa)</p>
+          </div>
+          <div class="text-right font-mono">
+            <span class="text-xs font-bold text-rose-400">S/ 146.36</span>
+            <span class="text-[8px] text-rose-300/80 block">descuento</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="p-2.5 bg-slate-900 border-t border-slate-800">
+        <button onclick="goToScreen('screen-lacrado')" class="w-full bg-emerald-600 hover:bg-emerald-500 py-3 rounded-xl font-bold text-xs text-white flex items-center justify-center gap-2 shadow-lg shadow-emerald-600/30">
+          <i class="fa-solid fa-stamp"></i>
+          <span>Proceder al Lacrado Digital (Oscar Zarzosa)</span>
+        </button>
+      </div>
+    </div>
+
+
+    <!-- ============================================================ -->
+    <!-- PANTALLA 7: APROBACIÓN, LACRADO DIGITAL & ENVÍO A DYNAMICS -->
+    <!-- ============================================================ -->
+    <div id="screen-lacrado" class="screen-view flex-1 flex flex-col hidden overflow-y-auto p-4 space-y-3.5">
+      <div class="text-center mt-1">
+        <div class="w-12 h-12 rounded-2xl bg-indigo-600/20 border border-indigo-500/40 text-indigo-400 flex items-center justify-center text-xl mx-auto mb-1.5">
+          <i class="fa-solid fa-lock"></i>
+        </div>
+        <h2 class="text-sm font-bold text-white">Lacrado Digital de Cierre (8,000 Ítems)</h2>
+        <p class="text-[11px] text-slate-400">Gobernanza e Inmutabilidad de Periodo</p>
+      </div>
+
+      <!-- Directriz de Oscar Zarzosa -->
+      <div class="bg-slate-800/90 border border-slate-700 rounded-2xl p-3 space-y-1.5">
+        <div class="flex items-center gap-1.5 text-xs font-bold text-slate-200">
+          <i class="fa-solid fa-quote-left text-indigo-400"></i>
+          <span>Directriz de Auditoría</span>
+        </div>
+        <p class="text-[10px] text-slate-300 italic leading-relaxed">
+          "Cierras el mes, firmas, sellas y lacras. El inventario de los 8,000 ítems queda grabado de forma inmutable; cualquier ajuste posterior entra en el siguiente periodo."
+        </p>
+        <div class="text-[9px] text-slate-400 font-semibold text-right">— Oscar J. Zarzosa Tinoco</div>
+      </div>
+
+      <!-- Firmas y Validaciones -->
+      <div class="space-y-1.5 text-xs">
+        <div class="p-2 bg-slate-800/60 border border-emerald-500/40 rounded-xl flex items-center justify-between">
+          <div class="flex items-center gap-1.5">
+            <i class="fa-solid fa-circle-check text-emerald-400 text-xs"></i>
+            <span class="text-slate-200 font-medium text-[11px]">Validación Gilmer Mendoza</span>
+          </div>
+          <span class="text-[9px] font-mono text-emerald-300">APROBADO</span>
+        </div>
+        <div class="p-2 bg-slate-800/60 border border-emerald-500/40 rounded-xl flex items-center justify-between">
+          <div class="flex items-center gap-1.5">
+            <i class="fa-solid fa-circle-check text-emerald-400 text-xs"></i>
+            <span class="text-slate-200 font-medium text-[11px]">Validación Michell (Tiendas)</span>
+          </div>
+          <span class="text-[9px] font-mono text-emerald-300">APROBADO</span>
+        </div>
+        <div class="p-2 bg-slate-800/60 border border-indigo-500/40 rounded-xl flex items-center justify-between">
+          <div class="flex items-center gap-1.5">
+            <i class="fa-solid fa-database text-indigo-400 text-xs"></i>
+            <span class="text-slate-200 font-medium text-[11px]">Sincronización Dynamics ERP</span>
+          </div>
+          <span class="text-[9px] font-mono text-indigo-300">LISTO PARA REGISTRO</span>
+        </div>
+      </div>
+
+      <!-- Sello de Lacrado Final -->
+      <div class="mt-1">
+        <button onclick="ejecutarLacrado()" id="btn-lacrar" class="w-full bg-gradient-to-r from-indigo-600 to-indigo-700 hover:from-indigo-500 hover:to-indigo-600 py-3 rounded-xl font-bold text-xs text-white shadow-xl shadow-indigo-600/40 flex items-center justify-center gap-2">
+          <i class="fa-solid fa-stamp"></i>
+          <span>Ejecutar Lacrado y Ajuste en ERP</span>
+        </button>
+      </div>
+
+      <div id="lacrado-success" class="hidden p-3 bg-emerald-950/60 border border-emerald-500/50 rounded-2xl text-center space-y-1 animate-pulse">
+        <div class="text-emerald-400 font-bold text-xs"><i class="fa-solid fa-shield-check"></i> ¡INVENTARIO LACRADO EXITOSAMENTE!</div>
+        <div class="text-[9px] text-slate-300 font-mono">Hash ID: #INV-2026-08-LUZ-8000-K99</div>
+        <div class="text-[9px] text-emerald-300">8,000 ítems auditados y transmitidos a Microsoft Dynamics ERP.</div>
+      </div>
+    </div>
+
+
+    <!-- ============================================================ -->
+    <!-- MODAL 1: REGISTRO DE CONTEO CON SOPORTE DE EMPAQUES Y UNIDADES -->
+    <!-- ============================================================ -->
+    <div id="modal-count" class="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-end justify-center hidden">
+      <div class="w-full max-w-[420px] bg-slate-900 border-t border-slate-700 rounded-t-3xl p-5 space-y-3.5 animate-slide-up">
+        <div class="w-12 h-1 bg-slate-700 rounded-full mx-auto"></div>
+        
+        <!-- Cabecera del Producto -->
+        <div class="flex items-start justify-between">
+          <div>
+            <div class="flex items-center gap-1.5 mb-1">
+              <span class="font-mono text-[9px] bg-slate-800 text-slate-300 px-1.5 py-0.5 rounded font-bold" id="modal-barcode">7750123051</span>
+              <span class="text-[9px] bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 px-2 py-0.5 rounded-full font-bold font-mono" id="modal-package-badge">📦 Caja x 12 und</span>
+            </div>
+            <h3 class="text-sm font-bold text-white leading-tight" id="modal-product-name">Aceite Vegetal Primor 1L</h3>
+          </div>
+          <button onclick="closeCountModal()" class="w-7 h-7 rounded-full bg-slate-800 text-slate-400 hover:text-white flex items-center justify-center text-xs">
+            <i class="fa-solid fa-xmark"></i>
+          </button>
+        </div>
+
+        <!-- Panel de Conteo: Empaques Cerrados + Unidades Sueltas -->
+        <div class="bg-slate-800/80 p-3.5 rounded-2xl border border-slate-700 space-y-3">
+          
+          <!-- Fila 1: Empaques Cerrados -->
+          <div class="flex items-center justify-between">
+            <div>
+              <label class="block text-xs font-bold text-slate-200" id="label-empaque">Cajas Cerradas</label>
+              <span class="text-[9px] text-slate-400 font-mono" id="label-factor">Factor: 12 und / caja</span>
+            </div>
+            <div class="flex items-center gap-1.5">
+              <button onclick="adjustBoxes(-1)" class="w-9 h-9 rounded-xl bg-slate-700 hover:bg-slate-600 active:scale-95 text-white font-bold flex items-center justify-center border border-slate-600">
+                <i class="fa-solid fa-minus text-xs"></i>
+              </button>
+              <input type="number" id="input-boxes" oninput="calcPackageTotal()" value="0" min="0" class="w-16 bg-slate-950 border border-indigo-500 rounded-xl py-1.5 text-center text-lg font-bold font-mono text-white focus:outline-none" />
+              <button onclick="adjustBoxes(1)" class="w-9 h-9 rounded-xl bg-indigo-600 hover:bg-indigo-500 active:scale-95 text-white font-bold flex items-center justify-center shadow-md shadow-indigo-600/30">
+                <i class="fa-solid fa-plus text-xs"></i>
+              </button>
+            </div>
+          </div>
+
+          <!-- Fila 2: Unidades Sueltas -->
+          <div class="flex items-center justify-between pt-2 border-t border-slate-700/60">
+            <div>
+              <label class="block text-xs font-bold text-slate-200">Unidades Sueltas</label>
+              <span class="text-[9px] text-slate-400 font-mono">Sueltas / Fracción</span>
+            </div>
+            <div class="flex items-center gap-1.5">
+              <button onclick="adjustUnits(-1)" class="w-9 h-9 rounded-xl bg-slate-700 hover:bg-slate-600 active:scale-95 text-white font-bold flex items-center justify-center border border-slate-600">
+                <i class="fa-solid fa-minus text-xs"></i>
+              </button>
+              <input type="number" id="input-units" oninput="calcPackageTotal()" value="0" min="0" class="w-16 bg-slate-950 border border-slate-700 rounded-xl py-1.5 text-center text-lg font-bold font-mono text-white focus:outline-none" />
+              <button onclick="adjustUnits(1)" class="w-9 h-9 rounded-xl bg-indigo-600 hover:bg-indigo-500 active:scale-95 text-white font-bold flex items-center justify-center shadow-md shadow-indigo-600/30">
+                <i class="fa-solid fa-plus text-xs"></i>
+              </button>
+            </div>
+          </div>
+
+          <!-- Botones de Acción Rápida Dinámicos -->
+          <div class="grid grid-cols-4 gap-1.5 pt-1 border-t border-slate-700/60">
+            <button onclick="addQuickBoxes(1)" id="btn-quick-box" class="py-1 rounded-lg bg-indigo-950 text-indigo-300 hover:bg-indigo-900 font-mono font-bold text-[11px] border border-indigo-500/30">+1 Caja</button>
+            <button onclick="addQuickBoxes(5)" id="btn-quick-boxes5" class="py-1 rounded-lg bg-indigo-950 text-indigo-300 hover:bg-indigo-900 font-mono font-bold text-[11px] border border-indigo-500/30">+5 Cajas</button>
+            <button onclick="adjustUnits(5)" class="py-1 rounded-lg bg-slate-900 text-slate-300 hover:bg-slate-700 font-mono font-bold text-[11px] border border-slate-700">+5 Und</button>
+            <button onclick="clearCounts()" class="py-1 rounded-lg bg-rose-950/60 text-rose-300 hover:bg-rose-900 font-mono font-bold text-[11px] border border-rose-500/30">Borrar</button>
+          </div>
+        </div>
+
+        <!-- Total Convertido Automático -->
+        <div class="bg-indigo-950/50 border border-indigo-500/40 p-3 rounded-2xl flex items-center justify-between">
+          <div>
+            <span class="text-[10px] text-slate-400 block uppercase font-bold">Total para Dynamics ERP:</span>
+            <span class="text-xs text-indigo-300 font-mono" id="breakdown-text">0 Cajas + 0 Und</span>
+          </div>
+          <span class="text-xl font-bold font-mono text-emerald-400" id="total-units-display">0 und</span>
+        </div>
+
+        <!-- Botón Guardar -->
+        <button onclick="saveCount()" class="w-full bg-emerald-600 hover:bg-emerald-500 py-3.5 rounded-xl font-bold text-xs text-white shadow-lg shadow-emerald-600/30 flex items-center justify-center gap-2">
+          <i class="fa-solid fa-check"></i>
+          <span>Guardar Registro en Hoja</span>
+        </button>
+      </div>
+    </div>
+
+    <!-- ============================================================ -->
+    <!-- MODAL 2: SIMULADOR DE ESCÁNER BARCODE -->
+    <!-- ============================================================ -->
+    <div id="modal-scanner" class="fixed inset-0 bg-black/90 backdrop-blur-md z-50 flex items-center justify-center hidden p-4">
+      <div class="w-full max-w-xs bg-slate-900 border border-slate-700 rounded-3xl p-5 space-y-4 text-center relative">
+        <div class="flex justify-between items-center">
+          <h3 class="text-xs font-bold uppercase tracking-wider text-indigo-400">Escáner de Código de Barras</h3>
+          <button onclick="closeScannerModal()" class="w-7 h-7 rounded-full bg-slate-800 text-slate-400 hover:text-white flex items-center justify-center text-xs">
+            <i class="fa-solid fa-xmark"></i>
+          </button>
+        </div>
+
+        <div class="w-full h-44 bg-slate-950 rounded-2xl border-2 border-dashed border-indigo-500/50 relative overflow-hidden flex items-center justify-center">
+          <div class="absolute inset-x-4 h-0.5 bg-rose-500 shadow-lg shadow-rose-500 pulse-scan"></div>
+          <div class="text-center space-y-2 z-10">
+            <i class="fa-solid fa-barcode text-4xl text-slate-600"></i>
+            <p class="text-[10px] text-slate-400">Apunte al código de barras del producto</p>
+          </div>
+        </div>
+
+        <div class="space-y-2">
+          <div class="text-[10px] text-slate-400 font-semibold uppercase">Simular Lectura de Empaque:</div>
+          <div class="grid grid-cols-2 gap-2 text-xs">
+            <button onclick="simulateScan('Aceite Vegetal Primor 1L', '7750123051', 'Caja', 12)" class="bg-slate-800 hover:bg-slate-700 p-2 rounded-xl border border-slate-700 font-medium text-slate-200 text-[10px]">
+              Aceite (Caja x12)
+            </button>
+            <button onclick="simulateScan('Cerveza Cusqueña Trigo', '7750999015', 'Pack', 6)" class="bg-slate-800 hover:bg-slate-700 p-2 rounded-xl border border-slate-700 font-medium text-slate-200 text-[10px]">
+              Cusqueña (Pack x6)
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </main>
+
+  <!-- SCRIPTS -->
+  <script>
+    function goToScreen(screenId) {
+      document.querySelectorAll('.screen-view').forEach(s => s.classList.add('hidden'));
+      const target = document.getElementById(screenId);
+      if (target) target.classList.remove('hidden');
+
+      document.querySelectorAll('.nav-btn').forEach(btn => {
+        btn.classList.remove('bg-indigo-600', 'text-white');
+        btn.classList.add('bg-slate-800', 'text-slate-300');
+      });
+      const activeBtn = document.getElementById('btn-' + screenId);
+      if (activeBtn) {
+        activeBtn.classList.remove('bg-slate-800', 'text-slate-300');
+        activeBtn.classList.add('bg-indigo-600', 'text-white');
+      }
+    }
+
+    let currentRole = 'coordinador';
+    function selectRole(role) {
+      currentRole = role;
+      document.querySelectorAll('.role-btn').forEach(b => {
+        b.classList.remove('border-indigo-500', 'bg-indigo-500/10');
+        b.classList.add('border-slate-700', 'bg-slate-800');
+      });
+      const selected = document.getElementById('role-' + role);
+      if (selected) {
+        selected.classList.remove('border-slate-700', 'bg-slate-800');
+        selected.classList.add('border-indigo-500', 'bg-indigo-500/10');
+      }
+
+      const userInput = document.getElementById('login-user');
+      if (role === 'conteo') userInput.value = 'Carlos Méndez (Asignado 20 Hojas)';
+      if (role === 'coordinador') userInput.value = 'Coordinador General (160 Hojas)';
+      if (role === 'auditor') userInput.value = 'Gilmer Roger Mendoza (Auditor ERP)';
+    }
+
+    function handleLogin() {
+      if (currentRole === 'conteo') goToScreen('screen-conteo');
+      else if (currentRole === 'coordinador') goToScreen('screen-coordinador');
+      else if (currentRole === 'auditor') goToScreen('screen-auditoria');
+    }
+
+    function autoAsignarHojas() {
+      const btn = document.getElementById('btn-auto-asignar');
+      btn.innerHTML = '<i class="fa-solid fa-check"></i> ¡160 Hojas Asignadas a los 8 Colaboradores!';
+      btn.classList.remove('bg-indigo-600');
+      btn.classList.add('bg-emerald-600');
+      alert('Distribución inteligente completada: 160 hojas (8,000 productos) repartidas equitativamente en lotes de 20 hojas por cada colaborador presente.');
+    }
+
+    // Variables de Estado de Empaque
+    let currentPackType = 'Caja';
+    let currentPackFactor = 12;
+
+    function openCountModal(name, barcode, packType, packFactor, boxes, units) {
+      currentPackType = packType || 'Caja';
+      currentPackFactor = packFactor || 1;
+
+      document.getElementById('modal-product-name').textContent = name;
+      document.getElementById('modal-barcode').textContent = barcode;
+      document.getElementById('modal-package-badge').textContent = `📦 ${currentPackType} x ${currentPackFactor} und`;
+      
+      document.getElementById('label-empaque').textContent = `${currentPackType}s Cerradas`;
+      document.getElementById('label-factor').textContent = `Factor: ${currentPackFactor} und / ${currentPackType.toLowerCase()}`;
+      document.getElementById('btn-quick-box').textContent = `+1 ${currentPackType}`;
+      document.getElementById('btn-quick-boxes5').textContent = `+5 ${currentPackType}s`;
+
+      document.getElementById('input-boxes').value = boxes || 0;
+      document.getElementById('input-units').value = units || 0;
+
+      calcPackageTotal();
+      document.getElementById('modal-count').classList.remove('hidden');
+    }
+
+    function closeCountModal() {
+      document.getElementById('modal-count').classList.add('hidden');
+    }
+
+    function adjustBoxes(amount) {
+      const input = document.getElementById('input-boxes');
+      let val = parseInt(input.value) || 0;
+      val = Math.max(0, val + amount);
+      input.value = val;
+      calcPackageTotal();
+    }
+
+    function adjustUnits(amount) {
+      const input = document.getElementById('input-units');
+      let val = parseInt(input.value) || 0;
+      val = Math.max(0, val + amount);
+      input.value = val;
+      calcPackageTotal();
+    }
+
+    function addQuickBoxes(amount) {
+      adjustBoxes(amount);
+    }
+
+    function clearCounts() {
+      document.getElementById('input-boxes').value = 0;
+      document.getElementById('input-units').value = 0;
+      calcPackageTotal();
+    }
+
+    function calcPackageTotal() {
+      const b = parseInt(document.getElementById('input-boxes').value) || 0;
+      const u = parseInt(document.getElementById('input-units').value) || 0;
+      const total = (b * currentPackFactor) + u;
+      document.getElementById('total-units-display').textContent = total + ' und';
+      document.getElementById('breakdown-text').textContent = `${b} ${currentPackType}s (${b * currentPackFactor} und) + ${u} Sueltas`;
+    }
+
+    function saveCount() {
+      const b = parseInt(document.getElementById('input-boxes').value) || 0;
+      const u = parseInt(document.getElementById('input-units').value) || 0;
+      const total = (b * currentPackFactor) + u;
+      closeCountModal();
+      alert(`¡Conteo Guardado!\n${b} ${currentPackType}s + ${u} sueltas = ${total} unidades totales.\nRegistrado en la hoja de auditoría.`);
+    }
+
+    function openScannerModal() {
+      document.getElementById('modal-scanner').classList.remove('hidden');
+    }
+
+    function closeScannerModal() {
+      document.getElementById('modal-scanner').classList.add('hidden');
+    }
+
+    function simulateScan(name, barcode, packType, packFactor) {
+      closeScannerModal();
+      openCountModal(name, barcode, packType, packFactor, 0, 0);
+    }
+
+    function ejecutarLacrado() {
+      document.getElementById('btn-lacrar').disabled = true;
+      document.getElementById('btn-lacrar').classList.add('opacity-50', 'cursor-not-allowed');
+      document.getElementById('lacrado-success').classList.remove('hidden');
+    }
+  </script>
+</body>
+</html>

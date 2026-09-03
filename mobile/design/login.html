@@ -1,0 +1,900 @@
+<meta charset="utf-8">
+<title>Login Inventario Trujillo</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Baloo+2:wght@600;700&family=Figtree:wght@400;500;600;700&display=swap">
+<style>
+  /* ---------------------------------------------------------------
+     TOKENS DE MARCA — fijos en ambos temas.
+     Son la identidad Trujillo tal cual sale del logo (#D82018 / #F8B818):
+     la pantalla del telefono es la app real, no cambia con el tema del
+     visor. Lo que si respeta el tema es el lienzo que la rodea.
+     --------------------------------------------------------------- */
+  :root {
+    --rojo:        #D82018;
+    --rojo-hover:  #B81810;
+    --rojo-suave:  #FDF0EF;
+    --dorado:      #F8B818;
+
+    --app-fondo:   #FFFFFF;
+    --app-tinta:   #1C1917;
+    --app-gris:    #6B6560;
+    --app-gris-cl: #9A938D;
+    --app-borde:   #E3DEDA;
+    --app-campo:   #FFFFFF;
+
+    /* Lienzo (fuera del telefono) — tema claro */
+    --lienzo:      #F2EEEB;
+    --lienzo-alt:  #FFFFFF;
+    --lienzo-tinta:#26211E;
+    --lienzo-gris: #6E6660;
+    --lienzo-borde:#DED7D2;
+
+    --sombra: 0 1px 2px rgba(28,25,23,.04), 0 12px 40px rgba(28,25,23,.10);
+    --radio: 10px;
+
+    --fuente-ui: 'Figtree', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    --fuente-marca: 'Baloo 2', 'Figtree', -apple-system, sans-serif;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --lienzo:      #191614;
+      --lienzo-alt:  #221E1B;
+      --lienzo-tinta:#F2EEEB;
+      --lienzo-gris: #A79E97;
+      --lienzo-borde:#332D29;
+      --sombra: 0 1px 2px rgba(0,0,0,.4), 0 16px 48px rgba(0,0,0,.55);
+    }
+  }
+  :root[data-theme="dark"] {
+    --lienzo:      #191614;
+    --lienzo-alt:  #221E1B;
+    --lienzo-tinta:#F2EEEB;
+    --lienzo-gris: #A79E97;
+    --lienzo-borde:#332D29;
+    --sombra: 0 1px 2px rgba(0,0,0,.4), 0 16px 48px rgba(0,0,0,.55);
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    background: var(--lienzo);
+    color: var(--lienzo-tinta);
+    font-family: var(--fuente-ui);
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .lienzo {
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 28px;
+    padding: 32px 20px 56px;
+  }
+
+  /* ---------- Cabecera del documento ---------- */
+  .cabecera { text-align: center; display: flex; flex-direction: column; gap: 6px; }
+  .cabecera .eyebrow {
+    font-size: 11px; font-weight: 600; letter-spacing: .13em; text-transform: uppercase;
+    color: var(--lienzo-gris);
+  }
+  .cabecera h1 {
+    margin: 0; font-family: var(--fuente-marca); font-weight: 700;
+    font-size: clamp(22px, 4vw, 28px); letter-spacing: -.01em; text-wrap: balance;
+  }
+  .cabecera p { margin: 0; font-size: 14px; color: var(--lienzo-gris); max-width: 52ch; }
+
+  /* ---------- Marco del telefono ---------- */
+  .telefono {
+    /* Un solo lugar decide el margen lateral. Lo leen .pantalla, .toast,
+       .chips y .accion-fija, asi una pantalla densa gana ancho sin que
+       haya que recalibrar cada uno a mano. */
+    --pad-lateral: 26px;
+    width: 380px; max-width: 100%;
+    background: var(--app-fondo);
+    border-radius: 34px;
+    border: 1px solid var(--lienzo-borde);
+    box-shadow: var(--sombra);
+    overflow: hidden;
+    position: relative;
+  }
+  .barra-estado {
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 12px 22px 4px;
+    font-size: 12px; font-weight: 600; color: var(--app-tinta);
+    font-variant-numeric: tabular-nums;
+  }
+  .barra-estado .senales { display: flex; gap: 5px; align-items: center; opacity: .75; }
+
+  .pantalla {
+    position: relative;
+    padding: 8px var(--pad-lateral) 26px;
+    display: flex; flex-direction: column; gap: 20px;
+    /* La app fija su propio color: sin esto el texto sin color explicito
+       hereda el del documento, que en tema oscuro es claro, y se pierde
+       sobre el fondo blanco de la pantalla. */
+    color: var(--app-tinta);
+  }
+
+  /* ---------- Marca ---------- */
+  .marca { display: flex; flex-direction: column; align-items: center; padding: 14px 0 4px; }
+  .marca img { width: 172px; height: auto; display: block; }
+
+  .saludo { display: flex; flex-direction: column; gap: 2px; }
+  .saludo h2 {
+    margin: 0; display: flex; align-items: center; gap: 9px;
+    font-family: var(--fuente-marca); font-weight: 700; font-size: 27px;
+    color: var(--rojo); letter-spacing: -.01em;
+  }
+  .saludo p { margin: 0; font-size: 14.5px; color: var(--app-gris); }
+
+  /* ---------- Campos ---------- */
+  .campos { display: flex; flex-direction: column; gap: 15px; }
+  .campo { position: relative; display: flex; flex-direction: column; gap: 6px; }
+  .campo label {
+    font-size: 13.5px; font-weight: 600; color: var(--app-tinta);
+  }
+
+  .control {
+    width: 100%; display: flex; align-items: center; gap: 12px;
+    min-height: 54px; padding: 0 15px;
+    background: var(--app-campo);
+    border: 1px solid var(--app-borde);
+    border-radius: var(--radio);
+    font: inherit; font-size: 15.5px; color: var(--app-tinta);
+    text-align: left; cursor: pointer;
+    transition: border-color .15s ease, box-shadow .15s ease;
+  }
+  .control:hover:not(:disabled) { border-color: #CFC7C1; }
+  .control:focus-visible {
+    outline: none; border-color: var(--rojo);
+    box-shadow: 0 0 0 3px rgba(216,32,24,.14);
+  }
+  .control[aria-expanded="true"] {
+    border-color: var(--rojo); box-shadow: 0 0 0 3px rgba(216,32,24,.14);
+  }
+  .control:disabled { background: #F7F5F4; cursor: not-allowed; opacity: .7; }
+  .control .valor { flex: 1; min-width: 0; }
+  .control .valor.vacio { color: var(--app-gris-cl); }
+  .control .sub {
+    display: block; font-size: 11.5px; color: var(--app-gris);
+    margin-top: 1px; font-variant-numeric: tabular-nums;
+  }
+  .chevron { color: var(--rojo); flex: none; transition: transform .18s ease; }
+  .control[aria-expanded="true"] .chevron { transform: rotate(180deg); }
+  .control:disabled .chevron { color: var(--app-gris-cl); }
+
+  .icono { flex: none; color: var(--app-gris-cl); }
+
+  /* ---------- Lista desplegable ---------- */
+  .lista {
+    /* Fuera del flujo: si la lista ocupara espacio, abrirla empujaria
+       Persona, Clave y Rol hacia abajo y la pantalla saltaria. */
+    position: absolute;
+    top: 100%; left: 0; right: 0; z-index: 30;
+    margin-top: 6px;
+    /* El corte cae sobre una fila a medias: eso avisa que hay mas abajo
+       sin necesidad de barra ni de controles de pagina. */
+    max-height: 262px;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    -webkit-overflow-scrolling: touch;
+    /* Barra oculta en las tres familias de motores. Es como se comporta
+       una lista nativa en el telefono: se desplaza, no se ve la barra. */
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+    border: 1px solid var(--app-borde); border-radius: var(--radio);
+    background: var(--app-campo);
+    box-shadow: 0 10px 30px rgba(28,25,23,.14);
+  }
+  .lista::-webkit-scrollbar { width: 0; height: 0; display: none; }
+  .lista[hidden] { display: none; }
+  .opcion {
+    width: 100%; display: flex; align-items: center; gap: 12px;
+    padding: 12px 15px; background: none; border: 0;
+    border-bottom: 1px solid #F0ECE9;
+    font: inherit; font-size: 15px; color: var(--app-tinta);
+    text-align: left; cursor: pointer;
+  }
+  .opcion:last-child { border-bottom: 0; }
+  .opcion:hover, .opcion:focus-visible { background: var(--rojo-suave); outline: none; }
+  .opcion[aria-selected="true"],
+  .opcion[aria-selected="true"]:hover {
+    background: var(--rojo); color: #fff; font-weight: 600;
+  }
+  .opcion[aria-selected="true"] .meta { color: rgba(255,255,255,.82); }
+  .opcion .meta {
+    display: block; font-size: 11.5px; font-weight: 400; color: var(--app-gris);
+    margin-top: 1px; font-variant-numeric: tabular-nums;
+  }
+
+  /* ---------- Clave: PIN numerico ----------
+     Teclado propio, no el del sistema: se tipea con el pulgar sin mirar
+     y no aparece el teclado alfanumerico tapando media pantalla. */
+  /* Los puntos viven dentro del control, para ver el avance del PIN
+     tanto con el teclado abierto como cerrado. */
+  .pin-puntos { display: flex; align-items: center; gap: 11px; }
+  .pin-puntos.grande { justify-content: center; gap: 15px; min-height: 30px; }
+  .pin-puntos.grande .punto-pin { width: 14px; height: 14px; }
+  .pin-puntos.grande .punto-pin.visible { min-width: 14px; font-size: 19px; }
+  .punto-pin {
+    width: 11px; height: 11px; border-radius: 50%;
+    border: 1.5px solid #C9C1BB; background: transparent;
+    display: grid; place-items: center;
+    font-size: 15px; font-weight: 700; color: var(--app-tinta);
+    font-variant-numeric: tabular-nums;
+    transition: background .14s ease, border-color .14s ease, transform .14s ease;
+  }
+  .punto-pin.lleno { background: var(--app-tinta); border-color: var(--app-tinta); transform: scale(1.06); }
+  .punto-pin.visible {
+    width: auto; min-width: 11px; height: auto;
+    background: transparent; border-color: transparent; transform: none;
+  }
+
+  /* El teclado no puede colgar del campo: abajo de todo se salia de la
+     pantalla. Va en un modal centrado sobre el telefono, asi cae siempre
+     al medio sin importar donde este el campo. */
+  .modal {
+    position: absolute; inset: 0; z-index: 60;
+    display: flex; align-items: center; justify-content: center;
+    padding: 22px;
+  }
+  .modal[hidden] { display: none; }
+  .modal-fondo {
+    position: absolute; inset: 0;
+    background: rgba(28,25,23,.42);
+    animation: aparecer .18s ease;
+  }
+  .modal-caja {
+    position: relative;
+    width: 100%; max-width: 310px;
+    display: flex; flex-direction: column; gap: 15px;
+    padding: 17px;
+    background: var(--app-campo);
+    border-radius: 16px;
+    box-shadow: 0 22px 55px rgba(28,25,23,.32);
+    animation: subir .2s cubic-bezier(.2,.8,.3,1);
+  }
+  @keyframes aparecer { from { opacity: 0; } }
+  @keyframes subir { from { opacity: 0; transform: translateY(10px) scale(.97); } }
+
+  .modal-cabecera { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+  .modal-cabecera h3 {
+    margin: 0; font-size: 15px; font-weight: 700; color: var(--app-tinta);
+  }
+  .modal-cerrar {
+    width: 32px; height: 32px; flex: none;
+    display: grid; place-items: center;
+    background: none; border: 0; border-radius: 8px;
+    color: var(--app-gris); cursor: pointer;
+    transition: background .14s ease, color .14s ease;
+  }
+  .modal-cerrar:hover { background: var(--rojo-suave); color: var(--rojo); }
+  .modal-cerrar:focus-visible { outline: 2px solid var(--rojo); outline-offset: 1px; }
+  .teclado { display: grid; grid-template-columns: repeat(3, 1fr); gap: 9px; }
+  .tecla {
+    min-height: 50px;
+    display: grid; place-items: center;
+    background: var(--app-campo);
+    border: 1px solid var(--app-borde); border-radius: var(--radio);
+    font: inherit; font-size: 21px; font-weight: 600; color: var(--app-tinta);
+    font-variant-numeric: tabular-nums;
+    cursor: pointer;
+    transition: background .12s ease, border-color .12s ease, transform .08s ease;
+  }
+  .tecla:hover { border-color: #CFC7C1; }
+  .tecla:active { background: var(--rojo-suave); border-color: var(--rojo); transform: scale(.97); }
+  .tecla:focus-visible { outline: 2px solid var(--rojo); outline-offset: 2px; }
+  .tecla.auxiliar { color: var(--app-gris); }
+  .tecla.auxiliar:hover { color: var(--app-tinta); }
+
+  .olvide {
+    align-self: flex-start; margin-top: 2px;
+    background: none; border: 0; padding: 0;
+    font: inherit; font-size: 13.5px; color: var(--rojo); cursor: pointer;
+  }
+  .olvide:hover { text-decoration: underline; }
+
+  /* ---------- Rol (derivado, no elegible) ---------- */
+  .rol-cabecera { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+  .rol-cabecera .nota {
+    font-size: 11px; color: var(--app-gris-cl); font-weight: 500;
+  }
+  .roles {
+    display: grid; grid-template-columns: repeat(3, 1fr);
+    border: 1.5px solid var(--rojo); border-radius: var(--radio);
+    background: var(--app-campo);
+    overflow: hidden;
+    transition: opacity .2s ease;
+  }
+  .roles.inerte { opacity: .38; }
+  .rol {
+    padding: 13px 4px;
+    display: grid; place-items: center;
+    border-right: 1.5px solid var(--rojo);
+    background: var(--app-campo); color: var(--app-tinta);
+    font-size: 12.5px; font-weight: 700;
+    letter-spacing: .07em; text-transform: uppercase;
+    transition: background .18s ease, color .18s ease;
+  }
+  .rol:last-child { border-right: 0; }
+  .rol.activo { background: var(--rojo); color: #fff; }
+
+
+  /* ---------- Ingresar ---------- */
+  .ingresar {
+    width: 100%; min-height: 56px;
+    display: flex; align-items: center; justify-content: center; gap: 12px;
+    background: var(--rojo); color: #fff;
+    border: 0; border-radius: 6px;
+    font: inherit; font-size: 17px; font-weight: 700;
+    cursor: pointer;
+    transition: background .16s ease, opacity .16s ease;
+  }
+  .ingresar:hover:not(:disabled) { background: var(--rojo-hover); }
+  .ingresar:focus-visible { outline: 3px solid rgba(216,32,24,.35); outline-offset: 2px; }
+  .ingresar:disabled { background: #DCD6D2; color: #FBFAFA; cursor: not-allowed; }
+  .ingresar svg { color: var(--dorado); }
+  .ingresar:disabled svg { color: #FBFAFA; }
+
+  /* Pie: tagline + version agrupados, para que el gap del contenedor
+     los separe sin margenes negativos peleando con el gap de .pantalla. */
+  .pie { display: flex; flex-direction: column; align-items: center; gap: 5px; }
+  .version {
+    margin: 0;
+    font-size: 11.5px; font-weight: 500;
+    color: var(--app-gris-cl);
+    font-variant-numeric: tabular-nums; letter-spacing: .04em;
+  }
+
+  .tagline {
+    display: flex; align-items: center; justify-content: center; gap: 10px;
+    font-family: var(--fuente-marca); font-weight: 600;
+    font-size: 13.5px; color: var(--rojo);
+  }
+
+  /* ---------- Toast ---------- */
+  .toast {
+    position: absolute; left: var(--pad-lateral); right: var(--pad-lateral); bottom: 22px;
+    display: flex; align-items: center; gap: 10px;
+    padding: 13px 15px; border-radius: var(--radio);
+    background: var(--app-tinta); color: #fff;
+    font-size: 13.5px; font-weight: 500;
+    box-shadow: 0 10px 30px rgba(28,25,23,.28);
+    opacity: 0; transform: translateY(8px);
+    transition: opacity .22s ease, transform .22s ease;
+    pointer-events: none;
+  }
+  .toast.visible { opacity: 1; transform: translateY(0); }
+  .toast svg { color: var(--dorado); flex: none; }
+
+  /* ---------- Atajos de prueba ---------- */
+  .pruebas {
+    width: 380px; max-width: 100%;
+    background: var(--lienzo-alt);
+    border: 1px solid var(--lienzo-borde);
+    border-radius: 14px;
+    padding: 16px 18px;
+    display: flex; flex-direction: column; gap: 11px;
+  }
+  .pruebas h3 {
+    margin: 0; font-size: 11px; font-weight: 600;
+    letter-spacing: .13em; text-transform: uppercase; color: var(--lienzo-gris);
+  }
+  .pruebas p { margin: 0; font-size: 13px; color: var(--lienzo-gris); line-height: 1.5; }
+  .atajos { display: flex; flex-wrap: wrap; gap: 8px; }
+  .atajo {
+    padding: 7px 13px;
+    background: transparent; color: var(--lienzo-tinta);
+    border: 1px solid var(--lienzo-borde); border-radius: 99px;
+    font: inherit; font-size: 12.5px; font-weight: 500; cursor: pointer;
+    transition: border-color .15s ease, color .15s ease;
+  }
+  .atajo:hover { border-color: var(--rojo); color: var(--rojo); }
+  .atajo:focus-visible { outline: 2px solid var(--rojo); outline-offset: 2px; }
+
+  @media (prefers-reduced-motion: reduce) {
+    * { transition: none !important; animation: none !important; }
+  }
+  @media (max-width: 440px) {
+    .lienzo { padding: 20px 12px 40px; }
+    .telefono { --pad-lateral: 18px; }
+    .pantalla { padding-bottom: 20px; }
+  }
+</style>
+
+<div class="lienzo">
+
+  <header class="cabecera">
+    <span class="eyebrow">Inventario de Autoservicio · Pantalla 1 de 7</span>
+    <h1>Acceso al inventario</h1>
+    <p>Maqueta funcional para validar antes de llevarla a React Native. Elegí sucursal y persona: el rol se resuelve solo.</p>
+  </header>
+
+  <div class="telefono">
+    <div class="barra-estado">
+      <span>09:41</span>
+      <span class="senales">
+        <svg width="15" height="11" viewBox="0 0 15 11" fill="currentColor" aria-hidden="true"><rect x="0" y="7" width="2.5" height="4" rx="1"/><rect x="4" y="5" width="2.5" height="6" rx="1"/><rect x="8" y="2.5" width="2.5" height="8.5" rx="1"/><rect x="12" y="0" width="2.5" height="11" rx="1"/></svg>
+        <svg width="22" height="11" viewBox="0 0 22 11" fill="none" aria-hidden="true"><rect x="0.5" y="0.5" width="18" height="10" rx="2.5" stroke="currentColor"/><rect x="2" y="2" width="15" height="7" rx="1.2" fill="currentColor"/><path d="M20 4v3a1.8 1.8 0 0 0 0-3Z" fill="currentColor"/></svg>
+      </span>
+    </div>
+
+    <div class="pantalla">
+
+      <div class="marca">
+        <img src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAWkAAACNCAYAAAB12YtuAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8YQUAAAAJcEhZcwAADsMAAA7DAcdvqGQAABGGSURBVHhe7d2/i25HGQfw/B2CjYW1YGkh2ApaW5haJHVILcRWyC0lVZrL7bYIsRDcRSFFWF4CKbIQvAG5iEgiuUUicrMr3+HMcvLM+THPM8+cOXPOt/iQZLM7zzvnnfm+856fr93f3z8QEdE+vSZ/QERE+8GQJvL0+bOH+7/89OHVn77/cP/RGw/333yR/g6RAkOayMvL5w/f/vlHIaCj+0/eTn+PSIEhTeTls3e/E9CA0E5+j0iBIU3kZdjNId2/+CD9XaJMDGkiD19+nITzY0hf3kp/nygTQ5rIwydvJ+EccZcHlWBIEzmQBwylcNbHxN8RrWFIE5V68UESylI4HU/+HVEGhjRRqY/eSEJ5Cs+ZJguGNFGJl8+TMJ6DU/SSvydawZAmKrFwwFDCKXrJ3xOtYEgTFVg7YCjd/+tvSRtESxjSRFafP0tCeM39h6+n7RAtYEgTWeAg4F9/mYRwDl6BSBoMaSIt7LKYuQQ8V7jxEs/2oAwMaaJcCFXFgcI14UAi91HTCoY0Hdqrr5xWqw6r5zlcVdMShjQd093l4R8/+eHD33/wvYd//+pn9rBGeF7eSoLVW1hVc181TWBI0yG9fPPXIaCjV0+fJL+z6vNn6lPsSoXLx18+T18LnRZDmg4Hq+ZxQMfVtPy9RZmXetcQ7pr35cfpa6JTYkjT4bx6/70kpOHbF5kr1IwbJtXG86kpYkjT4WDVLAMa/vfH3ye/O+nTd5LQbCF5XXRKDGk6FKyWZThH//z5j5PfnzTxrMKt8T4fFDGk6VCwWpbhPHZ/e538TWLiqd9b41PGKWJI06HE0+7mfP273yZ/MwkH7iqdF72GAU1jDGk6jLkDhlL2AUT49J3NVtXhYCHP6iCBIU2HMXfAUMo+gBjhvOWKp+SFU+74DESawZCmY7i7JGE8B7tEkr/P8eID91V1uHiFl4TTAoY09e/manVftBQubrm7pG2twar6w9eTsNUKq2deBk4ZGNLULVxZKC//1lLv+og+e9e8qg77nnnpN2ViSFOXcJBQu3qeE1bVOafmScYbL3H3BmkwpKkrODPjP7/5RRK0Hv77hzd1d8v78uMkgNcg2JN2iBYwpKkbnqvnOeGqRM2+auUjtHiTf9JiSFMXli739qa6Y57iYbS81JssGNLUh9vrJExrSuovyD2AiION8m+J1jCkqQtbrqSzb8QUZTz3MJxyxwOGZMCQpm6s3TzJQ7jQ5eYqqb3o5fMklCUeMCQrhjT15fY6+/JvLZxzrbqvx9jKAUQeMCQrhjR1CatqrzM9wu4Ny3nSYwv3oOYBQyrBkKZueZwzrT43es43XyTh/BjSvPUoFWBIU/cs+6rDvufS1bM0c6e8KpeA41zum6vQd3zQ4MMK4q6g+N8QLn2/ufL5MBo+HLHt0C5gN9G4fvx3/Ny79hkxpOkYbq6SIF5SJTQmHmBb44Gysi+58MH06umTpD0N2WYuj9pnxZCmw8C+ZRkOU7KfzmIhDiDWOGAo+6NV0n/ZllZJ7bNiSNNh5O72cN/NMYZzoXED/0/fqfaUFdkfC+s2kO1Y4PJ+2S7NY0jTYeRc8KK65HunZJ8s1Bfs7KD2WalDOh406Jbm5jnUnbWzPY6wipN9srKcEy7bsOI8zJcV0ngzS2+uvhfhAEaNg0a0C0sPoz3Key/7ZWX5wJJtWPEgYr7VkN7i9pBbswxO6sfceD3KQSvZLyvLU2lkG1aW2me1HNKKh3v25Aj7JWkezhuW7zmo78mxU7JfVpaglG1YWWqf1WJIY+UhN+5RWPbHUScmFhdHOlgl+2ZlCUrZhhWOHci2adpiSMsNeyThIOJEn+kY5E2YsLqWv9MrOZatGNJ9mA1pHGCRG/ZIeODi4EZXIB7lgGEkx7IVQ7oPsyGNlabcsEdiGaDUl3i66JECGuRYtrLMAdmGFUM632xIL53KdAQcJNQrOZatGNJ9OG1I47xv2WeiHsixbMWQ7sNsSHN3B9E+ybFsZZkDsg0rhnS+2ZDmgUOifZJj2Yoh3YfZkAa5YY+Ep+BRr+RYtmJI92ExpNduVtOrmhc24IwC7M/HBABcEBSfVIG68ckV+Dn+P1b0vLCGNOR4tjp1SOMGT6Ony0Ccp+P5GbYRrlS9vW42TxdDGgEiN+4RuN674+4SthMORM7dMyJHGLTG1X04xWx0p7/xwAuDbPh59UE2DPxgeLRT/CB6/HnNu5+N6qPmeIKFn1U8Fe877wEeFzXus/F9nSPHjtWZQjounhC+JfMUi6xwYVTNcSwsh/TB9ku7PcLn7lL8Zs/JvQlQvDNh7tNIIvy+ZXLOic/Xk3WW4DWUPgAW/Y+rH837gEnm0X+0od3+XrVlu1aW1yLbsNoqpBHM8upTLxh3mK+1Fz+LIQ1HuH8HJhImVMnGRKAg4Gu94WNZQV149g36URKSkWxXIzwM1roiadx/2Z5G2N1m7Xdh7bEjhzTCWfMBWqpmWK+GdLHCySR95ytkDvl6lDCR5+6qVtPqHdsctqvHRJFtapkv2Xbof0lQy7a0WtaODhnSN1ebhrNU+g1xSn8hLduvCCtnzVdpT6uD2Gm7lu6fl+1ZWMLCq/+m2i377VQbLPVlG1ar49tgL9/6i74hTmBIT8AnoXY/aw2Ln8hO27V0ssj2LMKgnmh7kVP/rWf6yHYsTP12qg1HCem9zNex8A2xcAEUMaQFvOFb7HfOsbi7xnG7Jm0ryLas1CsPx/5b9iXKNqzU/Xas3TKks4675Li7NN29scayjSWGtLCnT+TNQtoQFJFsy0q96vDs/9J2niHbsFL327G2JUBkG1aW2om7S7PdkRqlH0gM6ZG9nRe+GB6O23WxzgrZlpV60jr2n0GZT7ZhZak9tqdvvDksYyxiSI/s7VN5cYXruF3PHtLq2i37feLaY3s5SKixOJ8XMKSj0ZM89iJ5jWOO25Uhrazdst8nrh3t7RtvLuvppgzpAQaNrNXS6lkHjtuVIa2s3bLfJ64NOMgr2+qJ5awWhvSgxQUrS1YvX3fcrgxpZe2W/T5xbehxN4eknW8M6cGezuqA1dPCHLerdtCMybas1JPWsf/q2i37feLava+iI+1qmiE92DKksW8K9eLtEMd3agtyDjA4bleGtLJ2y36fuHbNVTR2L2JO4nXFm4bVPJFAM+cY0oNaIR0DOQxKz9tlOm5XzYCRZFtW6knr2H917Zb9PmntWqvosKpdWBTh1LkaYa1ZTTOkB54hHW9huHqTpBKO25Uhrazdst8nrV3jmNHqcZ9BrcvOlz4cxhjSA883QbZdheN2ZUgra7fs90lre1/6ra1f4+KZ3A8JhvSAIT1RI4Nsy0o7aTz7r67dst8nrO29q0Ozq6Hm68A97mWNKQzpAUN6okYG2ZaVZtIGjv1X127Z7xPWxn5h+fclSsa798FL2f4UhvTAK6Stt59Uc9yuJYNWtmWlmbSBY//VtVv2+4S1seKUf2+FXRayfQ3v1XTO3GNID7xC2vpVSs1xu+YMlDmyLSvNpA0c+6+u3bLfJ6zteXZF7n7gJZ77psNDbSdqjDGkBwzpiRoZZFtWmkkbOPZfXbtlv09WGwfs5N+WWL1ILANeu2zXKicvGNIDhvREjQyyLavcSfvIsf/q2i37fbbaju8zJO1bON6MLScvGNIDhvREjQyyLavsSRs59l9du2W/z1bb8X1evWlZLsfXlHMMiyE9YEhP1Mgg27LKnrSRY//VtVv2+2y1N161Zrm7JG2XSNoXGNIDhvREjQyyLavsSRs59l9du2W/T1Ybvyf/1ir3vOQcsu0Ssm2JIT1gSE/UyCDbssqdtI8c+6+u3bLfJ6vtGdK5NXPItkusHcxkSA8Y0hM1Msi2rNQTyLH/6tot+32y2nsNaa+8gLX5x5AeeG10hrSNegI59l9du2W/T1Z7ryEt2y6xdqMlhvSAIT1RI4Nsy0o9gRz7r67dst8nq+0Z0twnPcdxMkHSvhOG9ESNDLItq9xJ+8ix/+raLft9tto8u4MhHTGkJ2pkkG1ZZU/ayLH/6tot+3222o7vM8+TnuPYIUjad8KQnqiRQbZllT1pI8f+q2u37PfZaju+z5C0b7Hx6p4hPTh1SBc8QUa2ZZU9aSPH/qtrt+z3yWp733XO4/F1eO2yXaucvGBID84c0rkTZopsy0r9Ghr3X7ZhxdrrXO+C9/57SftannfBC4/Zm6gxxpAe9BbSniuMnIEyR7ZlpZm0geO4Utdu2e8T1va8n3TpGR6e8w5yPjQY0oPeQhpkbauS1yzbstJM2sBxXKlrt+z3CWvjHtDy70usnZe8BK9btldi7WpDYEgPzhzSkDNYpsh2rDSTNnAcV+raLft9wtreq1frHMXr8Nz1kvuUGIb0oMeQ9hww1q+Bsh0rzaQNHMeVunbLfp+0tvfTwi1PaPHKiCjnqSzAkB54vQFbhrTnvjqw7JuWbVhpJ63nuFLXbtnvk9b2fgAs5OwPrlk/96wqhvSgx5D2fooy4CvY2uDFaUxYiXge5dZOWs9xpa7dMKxOW9vx/R7DQmdxV9/ttes4j/AtOPd0QIb0oMuQdn7+m4SBhP5gIOOfXttoSstJq67dMqxOXLvm+EMQ4zWNee9iGdP0nyE98BoAW4Y01PiUb0EzaAPHcaWu3TisZBtWvdX2fM9b0qyigSE96DWkvU9PakU9aR3Hlbp247CSbVj1Vhu85mlL2r4zpAdeb/7mIf3VF65nebSCcSL7tshxXGknDcg2rFhbyfF9b0G7igaG9KDXkIYjrKYZ0vlkG1a91Y5w6ppsrxeWU/8Y0oOeQxpqHuSoLed2jQnHcWUJDNmGFWvbeM3XLVmzoX5Ib3yDbCuvN936RhRzDK2t5Z7UX6u/lsCQbVixtg12GfS0MLHs5ojqh7TjGwuybS9eJ6s3C+lOvwZi8C6epzqHIV2st9oJ5wVgLeGbYsH9QjYJac9PPNm2FwwaWcuiZUiD14fNVnKvuko0DmmvMd1bba9vnJbak26vd33gvDSgYZOQ9gwO2bYbp0nfOqTBc3vXEr7+rVzZuMjp/QJLYHht495qe31bs9Seg29ie7xeIFy9a9zFMbZJSHvexUq27cljhbKHkAYE4F5XGOFZc4Wri9Yh7XVJfm+1vba7qfYChKH3vWxKWO6DM2eTkAavT2DZriuHZ5ftJaQBA9dr1eUB4Vy0eh5zCguwBobH6q3H2h67PKy116DdlouT4m+IEzYLafAIatmmt9JQ21NIP7q9dplYVq7hHO0gpPFtoDQQeqztcV9la+0cWJxsHdaohZoeuzekTUM6uLuEIMzdtYDOI2DCBvCe6HNurrJfn2Q6nWwjmFx4fda+aaBG2BaluzVmYDzImlbmg5fDNi35mm25uGFcu+TDtyQoW9bOtUVY1wznaPuQFkLncLWZNPG7m7u7hA8GvAmADxcMTEzK+LMw2DDJK4VRNbfX4bWjLx6hja/f2D5he2ywLTy+lUUe4w2hhcCN2xTjRIrjJSw2PLcRxunTJ2GbjOvhfY3/Ht+b8KHg0N9HQ+04N2JdbNepvqN2zUCbdXcJ9T12E8X+uL6HC5qHNO1D/LAcfyiNP5gQAOOfxwm31UCVPD5YItfQot0LY/3m6nEcyw+3qQ+Xx/E+0V5tDGnqjufZQtBq8hHlYEhTdzx3dYDpikeijTCkqSveq+hwRdhEHaK9YEhTN7Av0ePAzxj2O8o6RHvCkKYu1AhoCAeEJuoR7QVDmvbv7lIloKHkHGmiLTCkabfixQgyWL1wfzT1gCFNu1UzoGHPV4cSRQxp2i+HG14taXUhDpEGQ5r2q+KTN3hWB/WCIU27JsPVCy9goV4wpGnXSu4wN4f7oqknDGnaN+f90l6PNCLaCkOadg/7j2XYWjCgqUcMado9jyeBuDxXkagBhjT1oeBxUdgHzRU09YohTd3QPlgXBx15r2jqHUOauhMfVRUfUzV+TFRYNT99wpUzHQZDmohoxxjSREQ7xpAmItoxhjQR0Y79H7JoHy8z2H4KAAAAAElFTkSuQmCC" alt="Trujillo">
+      </div>
+
+      <div class="saludo">
+        <h2>
+          <svg width="19" height="19" viewBox="0 0 24 24" fill="#F8B818" aria-hidden="true"><path d="M12 1c1.3 8.4 2.3 9.4 10.7 10.7C14.3 13 13.3 14 12 22.4 10.7 14 9.7 13 1.3 11.7 9.7 10.4 10.7 9.4 12 1Z"/></svg>
+          Bienvenido
+        </h2>
+        <p>Ingresa para continuar</p>
+      </div>
+
+      <div class="campos">
+
+        <!-- Sucursal -->
+        <div class="campo">
+          <label id="lbl-suc">Sucursal</label>
+          <button type="button" class="control" id="btn-sucursal" aria-labelledby="lbl-suc" aria-expanded="false" aria-haspopup="listbox">
+            <svg class="icono" width="20" height="20" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 2a7 7 0 0 0-7 7c0 5 7 13 7 13s7-8 7-13a7 7 0 0 0-7-7Zm0 9.5A2.5 2.5 0 1 1 12 6.5a2.5 2.5 0 0 1 0 5Z"/></svg>
+            <span class="valor" id="val-sucursal"></span>
+            <svg class="chevron" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
+          </button>
+          <div class="lista" id="lista-sucursal" role="listbox" aria-labelledby="lbl-suc" hidden></div>
+        </div>
+
+        <!-- Persona -->
+        <div class="campo">
+          <label id="lbl-per">Persona</label>
+          <button type="button" class="control" id="btn-persona" aria-labelledby="lbl-per" aria-expanded="false" aria-haspopup="listbox">
+            <svg class="icono" width="20" height="20" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 12a5 5 0 1 0 0-10 5 5 0 0 0 0 10Zm0 2c-4.4 0-8 2.5-8 5.5V22h16v-2.5c0-3-3.6-5.5-8-5.5Z"/></svg>
+            <span class="valor vacio" id="val-persona">Selecciona una persona</span>
+            <svg class="chevron" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
+          </button>
+          <div class="lista" id="lista-persona" role="listbox" aria-labelledby="lbl-per" hidden></div>
+        </div>
+
+        <!-- Clave -->
+        <div class="campo">
+          <label id="lbl-clave">Clave</label>
+          <button type="button" class="control" id="btn-clave" aria-labelledby="lbl-clave" aria-expanded="false" aria-haspopup="true">
+            <svg class="icono" width="19" height="19" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M17 9V7A5 5 0 0 0 7 7v2H5.5A1.5 1.5 0 0 0 4 10.5v10A1.5 1.5 0 0 0 5.5 22h13a1.5 1.5 0 0 0 1.5-1.5v-10A1.5 1.5 0 0 0 18.5 9H17ZM9 7a3 3 0 1 1 6 0v2H9V7Zm3 8a1.6 1.6 0 0 1 .8 3v1.5a.8.8 0 0 1-1.6 0V18A1.6 1.6 0 0 1 12 15Z"/></svg>
+            <span class="valor vacio" id="val-clave">Ingresa tu clave</span>
+            <svg class="chevron" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
+          </button>
+          <button type="button" class="olvide">¿Olvidaste tu clave?</button>
+        </div>
+
+        <!-- Rol derivado -->
+        <div class="campo">
+          <div class="rol-cabecera">
+            <label id="lbl-rol">Rol</label>
+            <span class="nota">Lo define la persona</span>
+          </div>
+          <div class="roles inerte" id="roles" role="group" aria-labelledby="lbl-rol"></div>
+        </div>
+
+      </div>
+
+      <button type="button" class="ingresar" id="btn-ingresar" disabled>
+        Ingresar
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 12h15m-6-7 7 7-7 7"/></svg>
+      </button>
+
+      <div class="pie">
+        <p class="tagline">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="#F8B818" aria-hidden="true"><path d="M12 1c1.3 8.4 2.3 9.4 10.7 10.7C14.3 13 13.3 14 12 22.4 10.7 14 9.7 13 1.3 11.7 9.7 10.4 10.7 9.4 12 1Z"/></svg>
+          porque mereces lo mejor
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="#D82018" aria-hidden="true"><path d="M12 1c1.3 8.4 2.3 9.4 10.7 10.7C14.3 13 13.3 14 12 22.4 10.7 14 9.7 13 1.3 11.7 9.7 10.4 10.7 9.4 12 1Z"/></svg>
+        </p>
+        <!-- En la app sale de app.config.ts, fuente unica de verdad de la
+             version (ver mobile/README.md). -->
+        <p class="version">v1.0.0</p>
+      </div>
+
+      <div class="toast" id="toast" role="status" aria-live="polite">
+        <svg width="19" height="19" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 2 4 5.5v6c0 5 3.4 9.4 8 10.5 4.6-1.1 8-5.5 8-10.5v-6L12 2Zm-1.2 13.4-3.2-3.2 1.4-1.4 1.8 1.8 4.6-4.6 1.4 1.4-6 6Z"/></svg>
+        <span id="toast-texto"></span>
+      </div>
+
+    </div>
+
+    <div class="modal" id="modal-clave" role="dialog" aria-modal="true" aria-labelledby="titulo-clave" hidden>
+      <div class="modal-fondo" id="modal-fondo"></div>
+      <div class="modal-caja">
+        <div class="modal-cabecera">
+          <h3 id="titulo-clave">Ingresa tu clave</h3>
+          <button type="button" class="modal-cerrar" id="btn-cerrar-clave" aria-label="Cerrar el teclado">
+            <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12"/></svg>
+          </button>
+        </div>
+        <div class="pin-puntos grande" id="pin-modal" role="status" aria-live="polite"></div>
+        <div class="teclado" id="teclado" role="group" aria-labelledby="titulo-clave"></div>
+      </div>
+    </div>
+  </div>
+
+  <section class="pruebas">
+    <h3>Atajos para validar</h3>
+    <p>Cada persona trae su rol desde el padrón. Tocá una y mirá cómo cambia la fila de abajo — nadie elige qué rol tiene.</p>
+    <div class="atajos" id="atajos"></div>
+  </section>
+
+</div>
+
+<script>
+(function () {
+  'use strict';
+
+  var SUCURSALES = [
+    { id: 'luz', nombre: 'Market Central Luzuriaga', colaboradores: 11 },
+    { id: 'car', nombre: 'Market Carhuaz',           colaboradores: 6  },
+    { id: 'bol', nombre: 'Market Bolívar',           colaboradores: 7  },
+    { id: 'suc', nombre: 'Market Sucre',             colaboradores: 5  }
+  ];
+
+  var ROLES = {
+    coordinador: {
+      etiqueta: 'Coordinador', corta: 'Coord.'
+    },
+    conteo: {
+      etiqueta: 'Conteo', corta: 'Conteo'
+    },
+    auditor: {
+      etiqueta: 'Auditor', corta: 'Auditor'
+    }
+  };
+  var ORDEN_ROLES = ['coordinador', 'conteo', 'auditor'];
+
+  /* La cantidad de personas coincide con el numero de colaboradores que
+     anuncia cada sucursal: si el campo dice 11, la lista trae 11. */
+  var PERSONAS = {
+    luz: [
+      { nombre: 'José Tarazona',    dni: '1256', rol: 'coordinador' },
+      { nombre: 'María Rojas',      dni: '8890', rol: 'conteo' },
+      { nombre: 'Gilmer Quispe',    dni: '3421', rol: 'auditor' },
+      { nombre: 'Elena Príncipe',   dni: '7714', rol: 'conteo' },
+      { nombre: 'Walter Norabuena', dni: '2038', rol: 'conteo' },
+      { nombre: 'Rosa Melgarejo',   dni: '5567', rol: 'auditor' },
+      { nombre: 'Luis Shuan',       dni: '9102', rol: 'conteo' },
+      { nombre: 'Carla Depaz',      dni: '4483', rol: 'conteo' },
+      { nombre: 'Manuel Chávez',    dni: '6017', rol: 'conteo' },
+      { nombre: 'Yeni Sotelo',      dni: '3390', rol: 'conteo' },
+      { nombre: 'Hugo Vergaray',    dni: '8845', rol: 'conteo' }
+    ],
+    car: [
+      { nombre: 'Ana Villanueva',   dni: '4410', rol: 'coordinador' },
+      { nombre: 'Pedro Cochachin',  dni: '6689', rol: 'conteo' },
+      { nombre: 'Nilda Ramírez',    dni: '1174', rol: 'auditor' },
+      { nombre: 'Julio Espinoza',   dni: '5528', rol: 'conteo' },
+      { nombre: 'Betty Salazar',    dni: '9063', rol: 'conteo' },
+      { nombre: 'Raúl Colonia',     dni: '2295', rol: 'conteo' }
+    ],
+    bol: [
+      { nombre: 'Óscar Maguiña',    dni: '3391', rol: 'coordinador' },
+      { nombre: 'Silvia Huerta',    dni: '8021', rol: 'conteo' },
+      { nombre: 'Jorge Alvarado',   dni: '5543', rol: 'auditor' },
+      { nombre: 'Delia Ocaña',      dni: '7716', rol: 'conteo' },
+      { nombre: 'Marco Zarzosa',    dni: '1108', rol: 'conteo' },
+      { nombre: 'Pilar Antúnez',    dni: '6634', rol: 'conteo' },
+      { nombre: 'Iván Loli',        dni: '2280', rol: 'conteo' }
+    ],
+    suc: [
+      { nombre: 'Carmen Solís',     dni: '2287', rol: 'coordinador' },
+      { nombre: 'Iván Castromonte', dni: '6650', rol: 'conteo' },
+      { nombre: 'Teresa Bailón',    dni: '4419', rol: 'auditor' },
+      { nombre: 'Fredy Minaya',     dni: '9971', rol: 'conteo' },
+      { nombre: 'Nancy Chinchay',   dni: '3302', rol: 'conteo' }
+    ]
+  };
+
+  var LARGO_PIN = 6;
+  var estado = { sucursal: null, persona: null, clave: '' };
+  var pinVisible = false;
+
+  var $ = function (id) { return document.getElementById(id); };
+  var btnSucursal = $('btn-sucursal'), listaSucursal = $('lista-sucursal'), valSucursal = $('val-sucursal');
+  var btnPersona  = $('btn-persona'),  listaPersona  = $('lista-persona'),  valPersona  = $('val-persona');
+  var btnClave = $('btn-clave'), valClave = $('val-clave');
+  var modalClave = $('modal-clave'), pinModal = $('pin-modal');
+  var contRoles = $('roles');
+  var btnIngresar = $('btn-ingresar'), toast = $('toast'), toastTexto = $('toast-texto');
+
+  function cerrarListas(excepto) {
+    [[btnSucursal, listaSucursal], [btnPersona, listaPersona]].forEach(function (par) {
+      if (par[1] === excepto) return;
+      par[1].hidden = true;
+      par[0].setAttribute('aria-expanded', 'false');
+    });
+  }
+
+  function alternarLista(boton, lista) {
+    var abrir = lista.hidden;
+    cerrarListas(abrir ? lista : null);
+    lista.hidden = !abrir;
+    boton.setAttribute('aria-expanded', String(abrir));
+  }
+
+  function textoColaboradores(s) {
+    return s.colaboradores + ' colaborador' + (s.colaboradores === 1 ? '' : 'es');
+  }
+
+  /* ---------- Sucursal ---------- */
+  function pintarSucursal() {
+    if (!estado.sucursal) {
+      valSucursal.className = 'valor vacio';
+      valSucursal.textContent = 'Selecciona una sucursal';
+      return;
+    }
+    valSucursal.className = 'valor';
+    valSucursal.innerHTML = estado.sucursal.nombre +
+      '<span class="sub">' + textoColaboradores(estado.sucursal) + '</span>';
+  }
+
+  function pintarListaSucursales() {
+    listaSucursal.innerHTML = '';
+    SUCURSALES.forEach(function (s) {
+      var b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'opcion';
+      b.setAttribute('role', 'option');
+      b.setAttribute('aria-selected', String(!!estado.sucursal && s.id === estado.sucursal.id));
+      b.innerHTML = '<span>' + s.nombre +
+        '<span class="meta">' + textoColaboradores(s) + '</span></span>';
+      b.addEventListener('click', function () {
+        estado.sucursal = s;
+        estado.persona = null;
+        pintarSucursal();
+        pintarListaSucursales();
+        pintarPersona();
+        pintarListaPersonas();
+        pintarRoles();
+        pintarAtajos();
+        actualizarBoton();
+        cerrarListas();
+        btnSucursal.focus();
+      });
+      listaSucursal.appendChild(b);
+    });
+  }
+
+  /* ---------- Persona ---------- */
+  function pintarPersona() {
+    btnPersona.disabled = !estado.sucursal;
+    if (estado.persona) {
+      valPersona.className = 'valor';
+      valPersona.innerHTML = estado.persona.nombre +
+        '<span class="sub">DNI ••••' + estado.persona.dni + '</span>';
+    } else {
+      valPersona.className = 'valor vacio';
+      valPersona.textContent = estado.sucursal ? 'Selecciona una persona' : 'Elegí primero la sucursal';
+    }
+  }
+
+  function personasDeSucursal() {
+    return estado.sucursal ? (PERSONAS[estado.sucursal.id] || []) : [];
+  }
+
+  function pintarListaPersonas() {
+    listaPersona.innerHTML = '';
+    personasDeSucursal().forEach(function (p) {
+      var b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'opcion';
+      b.setAttribute('role', 'option');
+      b.setAttribute('aria-selected', String(!!estado.persona && estado.persona.dni === p.dni));
+      b.innerHTML = '<span>' + p.nombre +
+        '<span class="meta">DNI ••••' + p.dni + '</span></span>';
+      b.addEventListener('click', function () { elegirPersona(p); });
+      listaPersona.appendChild(b);
+    });
+  }
+
+  function elegirPersona(p) {
+    estado.persona = p;
+    pintarPersona();
+    pintarListaPersonas();
+    pintarRoles();
+    actualizarBoton();
+    cerrarListas();
+    btnPersona.focus();
+  }
+
+  /* ---------- Clave: PIN numerico ---------- */
+  function construirPuntos() {
+    var frag = document.createDocumentFragment();
+    for (var i = 0; i < LARGO_PIN; i++) {
+      var d = document.createElement('span');
+      var lleno = i < estado.clave.length;
+      d.className = 'punto-pin' + (lleno ? ' lleno' : '') + (lleno && pinVisible ? ' visible' : '');
+      if (lleno && pinVisible) d.textContent = estado.clave.charAt(i);
+      frag.appendChild(d);
+    }
+    return frag;
+  }
+
+  /* Los puntos se pintan en dos lugares: en el campo (para ver el avance
+     con el teclado cerrado) y dentro del modal, que tapa el campo. */
+  function pintarPin() {
+    pinModal.innerHTML = '';
+    pinModal.appendChild(construirPuntos());
+
+    if (!estado.clave.length) {
+      valClave.className = 'valor vacio';
+      valClave.textContent = 'Ingresa tu clave';
+      return;
+    }
+    valClave.className = 'valor';
+    var puntos = document.createElement('span');
+    puntos.className = 'pin-puntos';
+    puntos.appendChild(construirPuntos());
+    valClave.innerHTML = '';
+    valClave.appendChild(puntos);
+  }
+
+  function abrirClave() {
+    cerrarListas();
+    modalClave.hidden = false;
+    btnClave.setAttribute('aria-expanded', 'true');
+    var primera = modalClave.querySelector('.tecla');
+    if (primera) primera.focus();
+  }
+
+  function cerrarClave() {
+    if (modalClave.hidden) return;
+    modalClave.hidden = true;
+    btnClave.setAttribute('aria-expanded', 'false');
+    btnClave.focus();
+  }
+
+  function tecleaDigito(d) {
+    if (estado.clave.length >= LARGO_PIN) return;
+    estado.clave += d;
+    pintarPin();
+    actualizarBoton();
+    // Completo el PIN: guardo el teclado solo, como hace el select al elegir
+    if (estado.clave.length === LARGO_PIN) cerrarClave();
+  }
+
+  function borrarDigito() {
+    estado.clave = estado.clave.slice(0, -1);
+    pintarPin();
+    actualizarBoton();
+  }
+
+  var OJO = '<svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 5C6.5 5 2.3 9.1 1 12c1.3 2.9 5.5 7 11 7s9.7-4.1 11-7c-1.3-2.9-5.5-7-11-7Zm0 11.5A4.5 4.5 0 1 1 12 7.5a4.5 4.5 0 0 1 0 9Zm0-2a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5Z"/></svg>';
+  var BORRAR = '<svg width="23" height="23" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M9 4h11a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H9a2 2 0 0 1-1.5-.7l-5.2-5.9a2 2 0 0 1 0-2.8l5.2-5.9A2 2 0 0 1 9 4Zm3.6 8L10 9.4 11.4 8 14 10.6 16.6 8 18 9.4 15.4 12l2.6 2.6-1.4 1.4L14 13.4 11.4 16 10 14.6 12.6 12Z"/></svg>';
+
+  function construirTeclado() {
+    var cont = $('teclado');
+    cont.innerHTML = '';
+    ['1', '2', '3', '4', '5', '6', '7', '8', '9', 'ver', '0', 'borrar'].forEach(function (t) {
+      var b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'tecla';
+
+      if (t === 'ver') {
+        b.className += ' auxiliar';
+        b.innerHTML = OJO;
+        b.setAttribute('aria-label', 'Mostrar la clave');
+        b.setAttribute('aria-pressed', 'false');
+        b.addEventListener('click', function () {
+          pinVisible = !pinVisible;
+          b.setAttribute('aria-pressed', String(pinVisible));
+          b.setAttribute('aria-label', pinVisible ? 'Ocultar la clave' : 'Mostrar la clave');
+          pintarPin();
+        });
+      } else if (t === 'borrar') {
+        b.className += ' auxiliar';
+        b.innerHTML = BORRAR;
+        b.setAttribute('aria-label', 'Borrar un dígito');
+        b.addEventListener('click', borrarDigito);
+      } else {
+        b.textContent = t;
+        b.addEventListener('click', function () { tecleaDigito(t); });
+      }
+      cont.appendChild(b);
+    });
+  }
+
+  /* ---------- Rol: derivado de la persona ---------- */
+  function pintarRoles() {
+    contRoles.innerHTML = '';
+    contRoles.classList.toggle('inerte', !estado.persona);
+    ORDEN_ROLES.forEach(function (clave) {
+      var activo = !!estado.persona && estado.persona.rol === clave;
+      var d = document.createElement('div');
+      d.className = 'rol' + (activo ? ' activo' : '');
+      d.textContent = ROLES[clave].corta;
+      if (activo) d.setAttribute('aria-current', 'true');
+      contRoles.appendChild(d);
+    });
+  }
+
+  /* ---------- Atajos de prueba ---------- */
+  function pintarAtajos() {
+    var cont = $('atajos');
+    cont.innerHTML = '';
+    var sucursal = estado.sucursal || SUCURSALES[0];
+    var vistos = {};
+    (PERSONAS[sucursal.id] || []).forEach(function (p) {
+      if (vistos[p.rol]) return;
+      vistos[p.rol] = true;
+      var b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'atajo';
+      b.textContent = p.nombre + ' · ' + ROLES[p.rol].etiqueta;
+      b.addEventListener('click', function () {
+        estado.sucursal = sucursal;
+        pintarSucursal();
+        pintarListaSucursales();
+        pintarListaPersonas();
+        elegirPersona(p);
+        estado.clave = '123456';
+        pintarPin();
+        actualizarBoton();
+      });
+      cont.appendChild(b);
+    });
+  }
+
+  function actualizarBoton() {
+    btnIngresar.disabled = !(estado.sucursal && estado.persona && estado.clave.length === LARGO_PIN);
+  }
+
+  var temporizador;
+  function mostrarToast(texto) {
+    toastTexto.textContent = texto;
+    toast.classList.add('visible');
+    clearTimeout(temporizador);
+    temporizador = setTimeout(function () { toast.classList.remove('visible'); }, 2800);
+  }
+
+  btnSucursal.addEventListener('click', function () { alternarLista(btnSucursal, listaSucursal); });
+  btnPersona.addEventListener('click', function () {
+    var abriendo = listaPersona.hidden;
+    alternarLista(btnPersona, listaPersona);
+    // Al reabrir, dejo la persona elegida a la vista en lugar de
+    // arrancar siempre desde el tope de la lista.
+    if (abriendo && estado.persona) {
+      var elegida = listaPersona.querySelector('[aria-selected="true"]');
+      if (elegida) elegida.scrollIntoView({ block: 'nearest' });
+    }
+  });
+  btnClave.addEventListener('click', abrirClave);
+  $('btn-cerrar-clave').addEventListener('click', cerrarClave);
+  $('modal-fondo').addEventListener('click', cerrarClave);
+
+  btnIngresar.addEventListener('click', function () {
+    mostrarToast('Entrando como ' + ROLES[estado.persona.rol].etiqueta + ' · ' + estado.sucursal.nombre);
+  });
+
+  document.addEventListener('click', function (e) {
+    if (!e.target.closest('.campo') && !e.target.closest('.modal')) cerrarListas();
+  });
+
+  /* Teclado fisico: comodo para probar desde el navegador */
+  document.addEventListener('keydown', function (e) {
+    if (e.key === 'Escape') { cerrarListas(); cerrarClave(); return; }
+    if (e.key >= '0' && e.key <= '9') {
+      if (modalClave.hidden) abrirClave();
+      tecleaDigito(e.key);
+    } else if (e.key === 'Backspace') borrarDigito();
+  });
+
+  pintarSucursal();
+  pintarListaSucursales();
+  pintarPersona();
+  pintarListaPersonas();
+  construirTeclado();
+  pintarPin();
+  pintarRoles();
+  pintarAtajos();
+  actualizarBoton();
+})();
+</script>

@@ -1,0 +1,296 @@
+// Esquema derivado de mobile/lib/dominio/tipos.ts y mobile/lib/puertos/repositorios.ts.
+// No inventa entidades: cada modelo sirve un puerto o un campo ya declarado
+// en el dominio del front. Nombres de tabla en snake_case via @@map, como el
+// schema del proyecto viejo (monorepo/inventario).
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------------------------------------------------------------------------
+// Enums
+// ---------------------------------------------------------------------------
+
+/// Rol derivado del padron de la sucursal (tipos.ts: Colaborador.rol).
+/// Nunca lo elige la persona -- lo fija quien la dio de alta en el padron,
+/// y el JWT/sesion nunca lo acepta del cliente (ver sesion.service.ts).
+/// Jerarquia de alta de cuentas (ver usuarios.service.ts):
+///   administrador > auditor > {coordinador, conteo}
+/// administrador gestiona todo; auditor puede dar de alta coordinador/conteo
+/// de SU sucursal unicamente, nunca otro auditor ni un administrador.
+enum Rol {
+  administrador
+  coordinador
+  conteo
+  auditor
+
+  @@map("rol")
+}
+
+/// Tipo de dato del `valor` (guardado siempre como texto) de una fila de
+/// Configuracion -- ver el comentario del modelo para la justificacion de
+/// por que es clave-valor y no columnas fijas.
+enum TipoConfiguracion {
+  entero
+  decimal
+  texto
+
+  @@map("tipo_configuracion")
+}
+
+/// tipos.ts: EstadoHoja. El orden importa y no se puede saltear.
+enum EstadoHoja {
+  pendiente
+  en_proceso @map("en-proceso")
+  finalizada
+
+  @@map("estado_hoja")
+}
+
+/// tipos.ts: EstadoSync. Estado del dato frente al servidor, aparte del
+/// estado del conteo -- una hoja finalizada puede seguir sin sincronizar.
+enum EstadoSync {
+  local
+  sincronizando
+  sincronizado
+  error
+
+  @@map("estado_sync")
+}
+
+// ---------------------------------------------------------------------------
+// Sesion / padron
+// ---------------------------------------------------------------------------
+
+model Sucursal {
+  id            Int           @id @default(autoincrement())
+  nombre        String
+  /// Deshabilitar sin borrar -- mismo criterio que Colaborador.activo: una
+  /// tienda cerrada sigue siendo dueña de inventarios historicos reales.
+  activa        Boolean       @default(true)
+  direccion     String?
+  telefono      String?
+  colaboradores Colaborador[]
+  inventarios   Inventario[]
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("sucursales")
+}
+
+model Colaborador {
+  id         Int      @id @default(autoincrement())
+  nombre     String
+  dni        String
+  /// Derivado del padron (ver comentario del enum Rol), nunca elegido por la persona.
+  rol        Rol
+  /// PIN de 6 digitos, SIEMPRE hasheado (argon2). Nunca se guarda en claro.
+  pinHash    String    @map("pin_hash")
+  /// NULL unicamente para rol=administrador: es del sistema, no de una
+  /// tienda, y gestiona las 4 sucursales por rol, no colgando de una fila.
+  /// Para los otros 3 roles sigue siendo obligatorio -- se exige en la capa
+  /// de aplicacion (usuarios.schema.ts), no con un CHECK de Postgres.
+  /// OJO al leer @@unique([sucursalId, dni]) mas abajo: Postgres trata cada
+  /// NULL como distinto, asi que esa unicidad NO cubre DNI duplicado entre
+  /// administradores -- aceptable hoy porque solo hay un administrador
+  /// sembrado y los crea otro administrador (accion infrecuente y auditada).
+  sucursalId Int?      @map("sucursal_id")
+  sucursal   Sucursal? @relation(fields: [sucursalId], references: [id])
+  /// Deshabilitar en vez de borrar -- en un sistema que se audita, una
+  /// cuenta borrada es un conteo huerfano (queda sin autor). ingresar()
+  /// rechaza el login si esto es false (ver sesion.service.ts).
+  activo     Boolean  @default(true)
+
+  /// Trazabilidad de alta (ver RegistroAuditoria para el detalle de la
+  /// accion): quien creo esta cuenta y, por createdAt, cuando. Null =
+  /// sembrada por el seed inicial, no dada de alta por la API.
+  creadoPorId    Int?          @map("creado_por_id")
+  creadoPor      Colaborador?  @relation("CreadoPor", fields: [creadoPorId], references: [id])
+  cuentasCreadas Colaborador[] @relation("CreadoPor")
+
+  asignadoComoPrincipal   HojaConteo[]        @relation("AsignadoA")
+  asignadoComoSecundario  HojaConteo[]        @relation("AsignadoA2")
+  sesiones                SesionToken[]
+  accionesDeAuditoria     RegistroAuditoria[] @relation("ActorAuditoria")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@unique([sucursalId, dni])
+  @@map("colaboradores")
+}
+
+/// Configuracion global del sistema (no por sucursal): clave-valor tipado
+/// en vez de columnas fijas. Se elige asi porque ya hay una pregunta
+/// abierta del propio negocio sobre sumar mas ajustes a futuro (ver
+/// docs/pantallas.md, pregunta 1) -- una tabla de columnas fijas exige una
+/// migracion por cada config nueva; clave-valor no. El costo es que la
+/// forma de "valor" (int vs decimal vs texto) se valida en la capa de
+/// aplicacion (ver modules/config/config.schema.ts) segun `tipo`, no en el
+/// tipo de columna de Postgres -- aceptable con 3 valores conocidos hoy.
+/// El umbral de "media unidad de paquete" (config UMBRAL_MEDIA_UNIDAD_PAQUETE)
+/// es el default sugerido, no una regla dura: la propia reunion aclara que
+/// el auditor lo ajusta caso por caso (ver docs/pantallas.md, pregunta 1).
+model Configuracion {
+  id          Int               @id @default(autoincrement())
+  clave       String            @unique
+  valor       String
+  tipo        TipoConfiguracion
+  descripcion String
+
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("configuraciones")
+}
+
+/// Rastro de acciones de administracion (alta/baja/reset de PIN de
+/// cuentas, altas o cambios de tienda, cambios de configuracion): si se
+/// puede dar de alta gente que despues cuenta inventario, tiene que quedar
+/// registro de quien lo hizo y cuando. `entidad` + `entidadId` apuntan a
+/// filas de distintas tablas (Colaborador, Sucursal, Configuracion) --
+/// Prisma no modela relaciones polimorficas, asi que queda como puntero
+/// libre en vez de una FK; cada *.service.ts arma el valor correcto, nunca
+/// se acepta del cliente.
+model RegistroAuditoria {
+  id        Int         @id @default(autoincrement())
+  actorId   Int         @map("actor_id")
+  actor     Colaborador @relation("ActorAuditoria", fields: [actorId], references: [id])
+  /// "colaborador.creado" | "colaborador.habilitado" | "colaborador.deshabilitado"
+  /// | "colaborador.pin_reseteado" | "sucursal.creada" | "sucursal.actualizada"
+  /// | "configuracion.actualizada" -- string libre, no enum: quien agrega un
+  /// modulo de administracion nuevo no deberia migrar este enum para loguear.
+  accion    String
+  entidad   String
+  entidadId Int      @map("entidad_id")
+  /// Nunca el PIN en claro (ver comentario de pinHash arriba): un reseteo
+  /// de PIN audita QUE paso y A QUIEN, jamas el valor nuevo.
+  detalle   Json?
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([entidad, entidadId])
+  @@map("registro_auditoria")
+}
+
+/// Token de sesion emitido por RepositorioSesion.ingresar(). tipos.ts#Sesion
+/// no tiene id porque es un DTO de respuesta, no una entidad -- esta tabla es
+/// lo que auth.middleware.ts necesita para validar el token en cada request.
+model SesionToken {
+  id            Int         @id @default(autoincrement())
+  token         String      @unique
+  colaboradorId Int         @map("colaborador_id")
+  colaborador   Colaborador @relation(fields: [colaboradorId], references: [id])
+  expiraEn      DateTime    @map("expira_en")
+  createdAt     DateTime    @default(now()) @map("created_at")
+
+  @@map("sesiones_token")
+}
+
+// ---------------------------------------------------------------------------
+// Inventario / hojas
+// ---------------------------------------------------------------------------
+
+/// Referenciado por HojaConteo.inventarioId en tipos.ts. Agrupa las hojas de
+/// una corrida de conteo en una sucursal y guarda el snapshot de Dynamics
+/// (RepositorioInventario.traerSnapshot).
+model Inventario {
+  id               Int          @id @default(autoincrement())
+  sucursalId       Int          @map("sucursal_id")
+  sucursal         Sucursal     @relation(fields: [sucursalId], references: [id])
+  snapshotItems    Int?         @map("snapshot_items")
+  snapshotTomadoEn DateTime?    @map("snapshot_tomado_en")
+  hojas            HojaConteo[]
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@map("inventarios")
+}
+
+/// tipos.ts#HojaConteo. `numeroConteo` es la ronda (1, 2 o 3): el schema
+/// viejo solo tenia conteo1/conteo2 como columnas fijas; este dominio pide
+/// TRES rondas (la 3ra es la de auditoria/reconciliacion, ver Rol.auditor),
+/// asi que se modela como una ronda mas -- no como columnas hardcodeadas --
+/// para no repetir el problema del schema viejo si algun dia hay una 4ta.
+model HojaConteo {
+  id           Int        @id @default(autoincrement())
+  inventarioId Int        @map("inventario_id")
+  inventario   Inventario @relation(fields: [inventarioId], references: [id])
+  numeroConteo Int        @map("numero_conteo")
+  /// "002" -- numero de hoja dentro de la ronda, no id.
+  numero       String
+  zona         String
+  gondola      String
+  /// 20 | 30 | 50 (tipos.ts: TAMANOS_HOJA).
+  tamano       Int
+  estado       EstadoHoja @default(pendiente)
+  sync         EstadoSync @default(local)
+
+  /// Hasta 2 asignados por hoja (tipos.ts: HojaConteo.asignados).
+  asignadoAId  Int?         @map("asignado_a_id")
+  asignadoA    Colaborador? @relation("AsignadoA", fields: [asignadoAId], references: [id])
+  asignadoA2Id Int?         @map("asignado_a_2_id")
+  asignadoA2   Colaborador? @relation("AsignadoA2", fields: [asignadoA2Id], references: [id])
+
+  productos Producto[]
+  conteos   Conteo[]
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@unique([inventarioId, numeroConteo, numero])
+  @@map("hojas_conteo")
+}
+
+/// tipos.ts#Producto + Empaque embebido. Empaque no tiene id propio en el
+/// dominio (es un value object), asi que se aplana en columnas propias en vez
+/// de crear una tabla separada sin razon (ver regla de corte de puertos).
+model Producto {
+  id           Int    @id @default(autoincrement())
+  hojaId       Int    @map("hoja_id")
+  hoja         HojaConteo @relation(fields: [hojaId], references: [id])
+  /// codigo interno del item en la hoja: "0051".
+  codigo       String
+  /// codigo de barras de la unidad SUELTA.
+  codigoBarras String @map("codigo_barras")
+  descripcion  String
+  ubicacion    String?
+
+  /// -- Empaque (tipos.ts#Empaque) --
+  empaqueNombre       String  @map("empaque_nombre")       // "Caja", "Pack", "Plancha", "Fardo"
+  empaqueFactor       Int     @map("empaque_factor")       // 12, 6, 24, 20
+  /// codigo de barras PROPIO del empaque (puede diferir del de la unidad suelta).
+  empaqueCodigoBarras String? @map("empaque_codigo_barras")
+
+  conteos Conteo[]
+
+  @@unique([hojaId, codigo])
+  @@index([hojaId, codigoBarras])
+  @@map("productos")
+}
+
+/// tipos.ts#Conteo. El total NUNCA se guarda -- se calcula desde empaques y
+/// sueltas (empaque.factor * empaques + sueltas). Guardar un total junto a
+/// sus partes es garantizar que algun dia no coincidan (comentario textual
+/// de tipos.ts): por eso este modelo no tiene columna `total`.
+model Conteo {
+  id     Int        @id @default(autoincrement())
+  hojaId Int        @map("hoja_id")
+  hoja   HojaConteo @relation(fields: [hojaId], references: [id])
+
+  productoId Int      @map("producto_id")
+  producto   Producto @relation(fields: [productoId], references: [id])
+
+  empaques Int
+  sueltas  Int
+  /// Marcado por el escaner: el fisico coincide con lo que dice la linea.
+  confirmadoPorEscaner Boolean  @default(false) @map("confirmado_por_escaner")
+  contadoEn            DateTime @map("contado_en")
+
+  @@unique([hojaId, productoId])
+  @@map("conteos")
+}

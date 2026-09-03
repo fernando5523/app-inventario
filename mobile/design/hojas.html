@@ -1,0 +1,1106 @@
+<meta charset="utf-8">
+<title>Hojas de conteo</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Baloo+2:wght@600;700&family=Figtree:wght@400;500;600;700&display=swap">
+<style>
+/* =====================================================================
+   TRUJILLO · Sistema de controles de la app de inventario
+   Validado en la pantalla 1 (login). Copiar completo en cada maqueta.
+
+   Regla de oro: los tokens de marca son FIJOS en ambos temas. La app
+   pinta su propio mundo; solo el lienzo que rodea al telefono sigue el
+   tema del visor.
+   ===================================================================== */
+
+:root {
+  /* Marca — valores tomados del PNG del logo, no estimados */
+  --rojo:        #D82018;
+  --rojo-hover:  #B81810;
+  --rojo-suave:  #FDF0EF;
+  --dorado:      #F8B818;
+
+  /* Superficie de la app */
+  --app-fondo:   #FFFFFF;
+  --app-tinta:   #1C1917;
+  --app-gris:    #6B6560;
+  --app-gris-cl: #9A938D;
+  --app-borde:   #E3DEDA;
+  --app-campo:   #FFFFFF;
+
+  /* Lienzo del documento de maqueta (fuera del telefono) — tema claro */
+  --lienzo:      #F2EEEB;
+  --lienzo-alt:  #FFFFFF;
+  --lienzo-tinta:#26211E;
+  --lienzo-gris: #6E6660;
+  --lienzo-borde:#DED7D2;
+
+  --sombra: 0 1px 2px rgba(28,25,23,.04), 0 12px 40px rgba(28,25,23,.10);
+  --radio: 10px;
+
+  --fuente-ui: 'Figtree', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  --fuente-marca: 'Baloo 2', 'Figtree', -apple-system, sans-serif;
+}
+
+/* Solo el lienzo cambia con el tema. Nunca los tokens --app-* */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --lienzo:      #191614;
+    --lienzo-alt:  #221E1B;
+    --lienzo-tinta:#F2EEEB;
+    --lienzo-gris: #A79E97;
+    --lienzo-borde:#332D29;
+    --sombra: 0 1px 2px rgba(0,0,0,.4), 0 16px 48px rgba(0,0,0,.55);
+  }
+}
+:root[data-theme="dark"] {
+  --lienzo:      #191614;
+  --lienzo-alt:  #221E1B;
+  --lienzo-tinta:#F2EEEB;
+  --lienzo-gris: #A79E97;
+  --lienzo-borde:#332D29;
+  --sombra: 0 1px 2px rgba(0,0,0,.4), 0 16px 48px rgba(0,0,0,.55);
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--lienzo);
+  color: var(--lienzo-tinta);
+  font-family: var(--fuente-ui);
+  -webkit-font-smoothing: antialiased;
+}
+
+.lienzo {
+  min-height: 100vh;
+  display: flex; flex-direction: column; align-items: center;
+  gap: 28px; padding: 32px 20px 56px;
+}
+
+/* ---------- Cabecera del documento de maqueta ---------- */
+.cabecera { text-align: center; display: flex; flex-direction: column; gap: 6px; }
+.cabecera .eyebrow {
+  font-size: 11px; font-weight: 600; letter-spacing: .13em;
+  text-transform: uppercase; color: var(--lienzo-gris);
+}
+.cabecera h1 {
+  margin: 0; font-family: var(--fuente-marca); font-weight: 700;
+  font-size: clamp(22px, 4vw, 28px); letter-spacing: -.01em; text-wrap: balance;
+}
+.cabecera p { margin: 0; font-size: 14px; color: var(--lienzo-gris); max-width: 52ch; }
+
+/* ---------- Marco del telefono ---------- */
+/* Pantalla operativa: mas ancho util para listas y tarjetas */
+.telefono.denso { --pad-lateral: 14px; }
+
+.telefono {
+  /* Un solo lugar decide el margen lateral. Lo leen .pantalla, .toast
+     y .accion-fija, asi una pantalla densa gana ancho sin que
+     haya que recalibrar cada uno a mano. */
+  --pad-lateral: 26px;
+  width: 380px; max-width: 100%;
+  background: var(--app-fondo);
+  border-radius: 34px;
+  border: 1px solid var(--lienzo-borde);
+  box-shadow: var(--sombra);
+  overflow: hidden;
+  position: relative;   /* ancla de los modales */
+}
+.barra-estado {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 12px 22px 4px;
+  font-size: 12px; font-weight: 600; color: var(--app-tinta);
+  font-variant-numeric: tabular-nums;
+}
+.barra-estado .senales { display: flex; gap: 5px; align-items: center; opacity: .75; }
+
+/* OBLIGATORIO el `color`: sin el, todo texto sin color propio hereda
+   --lienzo-tinta, que en tema oscuro es CLARO, y desaparece sobre el
+   fondo blanco de la app. */
+.pantalla {
+  position: relative;
+  padding: 8px var(--pad-lateral) 26px;
+  display: flex; flex-direction: column; gap: 20px;
+  color: var(--app-tinta);
+}
+
+/* ---------- Marca ---------- */
+.marca { display: flex; flex-direction: column; align-items: center; padding: 14px 0 4px; }
+.marca img { width: 172px; height: auto; display: block; }
+
+.saludo { display: flex; flex-direction: column; gap: 2px; }
+.saludo h2 {
+  margin: 0; display: flex; align-items: center; gap: 9px;
+  font-family: var(--fuente-marca); font-weight: 700; font-size: 27px;
+  color: var(--rojo); letter-spacing: -.01em;
+}
+.saludo p { margin: 0; font-size: 14.5px; color: var(--app-gris); }
+
+/* ---------- Campos ---------- */
+.campos { display: flex; flex-direction: column; gap: 15px; }
+/* position: relative -> es el ancla del desplegable */
+.campo { position: relative; display: flex; flex-direction: column; gap: 6px; }
+.campo label { font-size: 13.5px; font-weight: 600; color: var(--app-tinta); }
+
+.control {
+  width: 100%; display: flex; align-items: center; gap: 12px;
+  min-height: 54px; padding: 0 15px;
+  background: var(--app-campo);
+  border: 1px solid var(--app-borde);
+  border-radius: var(--radio);
+  font: inherit; font-size: 15.5px; color: var(--app-tinta);
+  text-align: left; cursor: pointer;
+  transition: border-color .15s ease, box-shadow .15s ease;
+}
+.control:hover:not(:disabled) { border-color: #CFC7C1; }
+.control:focus-visible {
+  outline: none; border-color: var(--rojo);
+  box-shadow: 0 0 0 3px rgba(216,32,24,.14);
+}
+.control[aria-expanded="true"] {
+  border-color: var(--rojo); box-shadow: 0 0 0 3px rgba(216,32,24,.14);
+}
+.control:disabled { background: #F7F5F4; cursor: not-allowed; opacity: .7; }
+.control .valor { flex: 1; min-width: 0; }
+.control .valor.vacio { color: var(--app-gris-cl); }
+.control .sub {
+  display: block; font-size: 11.5px; color: var(--app-gris);
+  margin-top: 1px; font-variant-numeric: tabular-nums;
+}
+.chevron { color: var(--rojo); flex: none; transition: transform .18s ease; }
+.control[aria-expanded="true"] .chevron { transform: rotate(180deg); }
+.control:disabled .chevron { color: var(--app-gris-cl); }
+
+/* Los iconos de campo van SIEMPRE en gris. El rojo se reserva para
+   el chevron, la seleccion y las acciones. */
+.icono { flex: none; color: var(--app-gris-cl); }
+
+/* ---------- Campo numerico (tamano personalizado, paso 2) ----------
+   Mismo alto y tipografia que .rol (los botones 20/30/50/Otro), no
+   que .control -- es una alternativa a esos botones, tiene que verse
+   del mismo porte que ellos, no como un campo de formulario aparte. */
+.campo-numero {
+  width: 100%; padding: 13px 15px;
+  background: var(--app-campo);
+  border: 1px solid var(--app-borde);
+  border-radius: var(--radio);
+  font: inherit; font-size: 12.5px; font-weight: 700; color: var(--app-tinta);
+  cursor: text;
+}
+.campo-numero::placeholder { color: var(--app-gris-cl); font-weight: 500; }
+.campo-numero:focus-visible {
+  outline: none; border-color: var(--rojo);
+  box-shadow: 0 0 0 3px rgba(216,32,24,.14);
+}
+/* Solo numeros: sin las flechitas de incremento nativas, que en un
+   campo tactil no aportan y desentonan con el resto de los controles
+   planos de esta pantalla. */
+.campo-numero::-webkit-outer-spin-button,
+.campo-numero::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+.campo-numero { -moz-appearance: textfield; }
+/* .campo hereda display:flex -- sin este override el [hidden] nativo
+   pierde contra esa regla propia, mismo gotcha que .resultado[hidden]. */
+#campo-personalizado[hidden] { display: none; }
+/* ---------- Desplegable ---------- */
+.lista {
+  /* Fuera del flujo: si ocupara espacio, abrirlo empujaria todo lo de
+     abajo y la pantalla saltaria. */
+  position: absolute;
+  top: 100%; left: 0; right: 0; z-index: 30;
+  margin-top: 6px;
+  /* El tope NO es multiplo de la altura de fila a proposito: el corte
+     cae sobre una fila a medias y eso avisa que hay mas abajo. */
+  max-height: 262px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+  /* Barra oculta en los tres motores: una lista nativa se desplaza,
+     no muestra barra. */
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+  border: 1px solid var(--app-borde); border-radius: var(--radio);
+  background: var(--app-campo);
+  box-shadow: 0 10px 30px rgba(28,25,23,.14);
+}
+.lista::-webkit-scrollbar { width: 0; height: 0; display: none; }
+.lista[hidden] { display: none; }
+
+.opcion {
+  width: 100%; display: flex; align-items: center; gap: 12px;
+  padding: 12px 15px; background: none; border: 0;
+  border-bottom: 1px solid #F0ECE9;
+  font: inherit; font-size: 15px; color: var(--app-tinta);
+  text-align: left; cursor: pointer;
+}
+.opcion:last-child { border-bottom: 0; }
+.opcion:hover, .opcion:focus-visible { background: var(--rojo-suave); outline: none; }
+.opcion[aria-selected="true"],
+.opcion[aria-selected="true"]:hover {
+  background: var(--rojo); color: #fff; font-weight: 600;
+}
+.opcion[aria-selected="true"] .meta { color: rgba(255,255,255,.82); }
+.opcion .meta {
+  display: block; font-size: 11.5px; font-weight: 400; color: var(--app-gris);
+  margin-top: 1px; font-variant-numeric: tabular-nums;
+}
+
+/* ---------- PIN ---------- */
+.pin-puntos { display: flex; align-items: center; gap: 11px; }
+.pin-puntos.grande { justify-content: center; gap: 15px; min-height: 30px; }
+.pin-puntos.grande .punto-pin { width: 14px; height: 14px; }
+.pin-puntos.grande .punto-pin.visible { min-width: 14px; font-size: 19px; }
+
+.punto-pin {
+  width: 11px; height: 11px; border-radius: 50%;
+  border: 1.5px solid #C9C1BB; background: transparent;
+  display: grid; place-items: center;
+  font-size: 15px; font-weight: 700; color: var(--app-tinta);
+  font-variant-numeric: tabular-nums;
+  transition: background .14s ease, border-color .14s ease, transform .14s ease;
+}
+.punto-pin.lleno { background: var(--app-tinta); border-color: var(--app-tinta); transform: scale(1.06); }
+.punto-pin.visible {
+  width: auto; min-width: 11px; height: auto;
+  background: transparent; border-color: transparent; transform: none;
+}
+
+.teclado { display: grid; grid-template-columns: repeat(3, 1fr); gap: 9px; }
+.tecla {
+  min-height: 50px; display: grid; place-items: center;
+  background: var(--app-campo);
+  border: 1px solid var(--app-borde); border-radius: var(--radio);
+  font: inherit; font-size: 21px; font-weight: 600; color: var(--app-tinta);
+  font-variant-numeric: tabular-nums; cursor: pointer;
+  transition: background .12s ease, border-color .12s ease, transform .08s ease;
+}
+.tecla:hover { border-color: #CFC7C1; }
+.tecla:active { background: var(--rojo-suave); border-color: var(--rojo); transform: scale(.97); }
+.tecla:focus-visible { outline: 2px solid var(--rojo); outline-offset: 2px; }
+.tecla.auxiliar { color: var(--app-gris); }
+.tecla.auxiliar:hover { color: var(--app-tinta); }
+
+/* ---------- Modal ----------
+   Va colgado de .telefono, NO de .campo: colgando del campo se sale de
+   la pantalla cuando el campo esta abajo. Centrado siempre. */
+.modal {
+  position: absolute; inset: 0; z-index: 60;
+  display: flex; align-items: center; justify-content: center;
+  padding: 22px;
+}
+.modal[hidden] { display: none; }
+.modal-fondo {
+  position: absolute; inset: 0;
+  background: rgba(28,25,23,.42);
+  animation: aparecer .18s ease;
+}
+.modal-caja {
+  position: relative;
+  width: 100%; max-width: 310px;
+  display: flex; flex-direction: column; gap: 15px;
+  padding: 17px;
+  background: var(--app-campo);
+  border-radius: 16px;
+  box-shadow: 0 22px 55px rgba(28,25,23,.32);
+  animation: subir .2s cubic-bezier(.2,.8,.3,1);
+}
+@keyframes aparecer { from { opacity: 0; } }
+@keyframes subir { from { opacity: 0; transform: translateY(10px) scale(.97); } }
+
+.modal-cabecera { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.modal-cabecera h3 { margin: 0; font-size: 15px; font-weight: 700; color: var(--app-tinta); }
+.modal-cerrar {
+  width: 32px; height: 32px; flex: none;
+  display: grid; place-items: center;
+  background: none; border: 0; border-radius: 8px;
+  color: var(--app-gris); cursor: pointer;
+  transition: background .14s ease, color .14s ease;
+}
+.modal-cerrar:hover { background: var(--rojo-suave); color: var(--rojo); }
+.modal-cerrar:focus-visible { outline: 2px solid var(--rojo); outline-offset: 1px; }
+
+/* ---------- Grupo segmentado (rol y similares) ---------- */
+.roles {
+  display: grid; grid-template-columns: repeat(4, 1fr);
+  border: 1.5px solid var(--rojo); border-radius: var(--radio);
+  background: var(--app-campo);
+  overflow: hidden;
+  transition: opacity .2s ease;
+}
+.roles.inerte { opacity: .38; }   /* sin dato todavia: se ve, no se toca */
+.rol {
+  padding: 13px 4px; display: grid; place-items: center;
+  border-right: 1.5px solid var(--rojo);
+  background: var(--app-campo); color: var(--app-tinta);
+  font-size: 12.5px; font-weight: 700;
+  letter-spacing: .07em; text-transform: uppercase;
+  transition: background .18s ease, color .18s ease;
+}
+.rol:last-child { border-right: 0; }
+.rol.activo { background: var(--rojo); color: #fff; }
+
+/* El selector de tamano de hoja (paso 2) reusa .roles/.rol pero con
+   boton real (button, no div): no hay estado inerte, el coordinador
+   elige de una vez entre las 4 opciones (20 / 30 / 50 / Otro). Solo se
+   resetea lo que un boton trae por defecto -- OJO: "font: inherit"
+   ganaba por especificidad sobre el font-size/weight de .rol y los
+   dejaba en el tamano por defecto del navegador (por eso se veian
+   gigantes). */
+button.rol {
+  cursor: pointer;
+  border-top: 0; border-left: 0; border-bottom: 0;
+  -webkit-appearance: none; appearance: none;
+}
+.rol:disabled { cursor: not-allowed; }
+.roles[hidden] { display: none; }
+
+.rol-cabecera { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+/* Mismo tamano que .campo label: un <label> suelto sin clase hereda
+   el tamano por defecto del navegador, mucho mas grande que el resto
+   de los rotulos de esta pantalla. */
+.rol-cabecera label { font-size: 13.5px; font-weight: 600; color: var(--app-tinta); }
+.rol-cabecera .nota { font-size: 11px; color: var(--app-gris-cl); font-weight: 500; }
+.rol-cabecera[hidden] { display: none; }
+
+/* ---------- Accion principal ---------- */
+.ingresar {
+  width: 100%; min-height: 56px;
+  display: flex; align-items: center; justify-content: center; gap: 12px;
+  background: var(--rojo); color: #fff;
+  border: 0; border-radius: 6px;
+  font: inherit; font-size: 17px; font-weight: 700; cursor: pointer;
+  transition: background .16s ease, opacity .16s ease;
+}
+.ingresar:hover:not(:disabled) { background: var(--rojo-hover); }
+.ingresar:focus-visible { outline: 3px solid rgba(216,32,24,.35); outline-offset: 2px; }
+.ingresar:disabled { background: #DCD6D2; color: #FBFAFA; cursor: not-allowed; }
+.ingresar svg { color: var(--dorado); }
+.ingresar:disabled svg { color: #FBFAFA; }
+
+.olvide {
+  align-self: flex-start; margin-top: 2px;
+  background: none; border: 0; padding: 0;
+  font: inherit; font-size: 13.5px; color: var(--rojo); cursor: pointer;
+}
+.olvide:hover { text-decoration: underline; }
+
+/* ---------- Pie de pantalla ----------
+   tagline + version agrupados, para que el gap del contenedor los separe
+   sin margenes negativos peleando con el gap de .pantalla. */
+.pie { display: flex; flex-direction: column; align-items: center; gap: 5px; }
+.version {
+  margin: 0;
+  font-size: 11.5px; font-weight: 500;
+  color: var(--app-gris-cl);
+  font-variant-numeric: tabular-nums; letter-spacing: .04em;
+}
+
+.tagline {
+  display: flex; align-items: center; justify-content: center; gap: 10px;
+  font-family: var(--fuente-marca); font-weight: 600;
+  font-size: 13.5px; color: var(--rojo);
+}
+
+/* ---------- Toast ---------- */
+.toast {
+  position: absolute; left: var(--pad-lateral); right: var(--pad-lateral); bottom: 22px;
+  display: flex; align-items: center; gap: 10px;
+  padding: 13px 15px; border-radius: var(--radio);
+  background: var(--app-tinta); color: #fff;
+  font-size: 13.5px; font-weight: 500;
+  box-shadow: 0 10px 30px rgba(28,25,23,.28);
+  opacity: 0; transform: translateY(8px);
+  transition: opacity .22s ease, transform .22s ease;
+  pointer-events: none;
+}
+.toast.visible { opacity: 1; transform: translateY(0); }
+.toast svg { color: var(--dorado); flex: none; }
+
+/* ---------- Panel de validacion (fuera del telefono) ---------- */
+.pruebas {
+  width: 380px; max-width: 100%;
+  background: var(--lienzo-alt);
+  border: 1px solid var(--lienzo-borde);
+  border-radius: 14px; padding: 16px 18px;
+  display: flex; flex-direction: column; gap: 11px;
+}
+.pruebas h3 {
+  margin: 0; font-size: 11px; font-weight: 600;
+  letter-spacing: .13em; text-transform: uppercase; color: var(--lienzo-gris);
+}
+.pruebas p { margin: 0; font-size: 13px; color: var(--lienzo-gris); line-height: 1.5; }
+.atajos { display: flex; flex-wrap: wrap; gap: 8px; }
+.atajo {
+  padding: 7px 13px;
+  background: transparent; color: var(--lienzo-tinta);
+  border: 1px solid var(--lienzo-borde); border-radius: 99px;
+  font: inherit; font-size: 12.5px; font-weight: 500; cursor: pointer;
+  transition: border-color .15s ease, color .15s ease;
+}
+.atajo:hover { border-color: var(--rojo); color: var(--rojo); }
+.atajo:focus-visible { outline: 2px solid var(--rojo); outline-offset: 2px; }
+
+@media (prefers-reduced-motion: reduce) {
+  * { transition: none !important; animation: none !important; }
+}
+@media (max-width: 440px) {
+  .lienzo { padding: 20px 12px 40px; }
+  .telefono { --pad-lateral: 18px; }
+  .pantalla { padding-bottom: 20px; }
+}
+
+  /* ============ Pantalla 2: hojas de conteo ============
+     Colores de estado. La marca Trujillo no tiene verde: por pedido
+     del cliente, "ok"/"hecho" tambien usa el rojo de marca en vez de
+     un verde de exito que no existe en la paleta real. Contraste
+     texto/fondo verificado >= 4.5:1 (rojo sobre rojo-suave: 4.56:1). */
+  :root {
+    --ok:        var(--rojo); --ok-suave:      var(--rojo-suave);
+    --proceso:   #8A5A05;     --proceso-suave: #FDF3DC;   /* 5.37:1 */
+    --espera:    #6B6560;     --espera-suave:  #F2EFED;   /* 5.02:1 */
+  }
+
+  /* La pantalla se desplaza dentro del telefono, con barra oculta */
+  .pantalla.scroll {
+    height: 720px;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+    padding-bottom: 92px;   /* deja lugar a la accion fija */
+    gap: 16px;
+  }
+  .pantalla.scroll::-webkit-scrollbar { width: 0; display: none; }
+
+  /* ---------- Barra superior de contexto ---------- */
+  .barra-app {
+    display: flex; align-items: flex-start; gap: 12px;
+    padding-bottom: 14px;
+    border-bottom: 1px solid var(--app-borde);
+  }
+  .barra-app .rotulo {
+    margin: 0 0 3px; display: flex; align-items: center; gap: 6px;
+    font-size: 10.5px; font-weight: 700; letter-spacing: .11em;
+    text-transform: uppercase; color: var(--rojo);
+  }
+  .barra-app .contexto { flex: 1; min-width: 0; }
+  .barra-app .sede {
+    margin: 0; font-size: 16px; font-weight: 700; color: var(--app-tinta);
+  }
+  .barra-app .cifras {
+    margin: 2px 0 0; font-size: 12px; color: var(--app-gris);
+    font-variant-numeric: tabular-nums;
+  }
+  .salir {
+    width: 38px; height: 38px; flex: none;
+    display: grid; place-items: center;
+    background: none; color: var(--app-gris);
+    border: 1px solid var(--app-borde); border-radius: 9px;
+    cursor: pointer; transition: background .14s ease, color .14s ease, border-color .14s ease;
+  }
+  .salir:hover { background: var(--rojo-suave); color: var(--rojo); border-color: var(--rojo); }
+  .salir:focus-visible { outline: 2px solid var(--rojo); outline-offset: 2px; }
+
+  /* ---------- Numero de paso en la cabecera de la tarjeta ----------
+     Antes vivia en una tarjeta propia, separado de la tarjeta con el
+     contenido del paso. El cliente pidio unirlos: el numero pasa a
+     la cabecera de cada tarjeta, junto al icono y al titulo.
+     Excepcion pedida por el cliente a la regla "el rojo es la accion,
+     nunca un estado": el paso EN CURSO usa rojo de marca a proposito,
+     porque es el numero el que llama la atencion aca, no un badge de
+     estado nuevo. Hecho sigue en verde con tilde; pendiente en gris. */
+  .paso-marca {
+    width: 24px; height: 24px; flex: none; border-radius: 50%;
+    display: grid; place-items: center;
+    background: var(--espera-suave); color: var(--espera);
+    font-size: 12px; font-weight: 700; font-variant-numeric: tabular-nums;
+  }
+  .paso-marca.en-curso { background: var(--rojo); color: #fff; }
+  .paso-marca.hecho { background: var(--ok); color: #fff; }
+
+  /* ---------- Texto de tarjeta y resultado de un paso ---------- */
+  .tarjeta-texto { margin: 0; font-size: 12.5px; line-height: 1.45; color: var(--app-gris); }
+  /* Un paso bloqueado se ve pero no se toca: mismo criterio que
+     .roles.inerte en el login. El motivo va escrito en tarjeta-texto,
+     no solo insinuado con el opacity. */
+  .tarjeta.bloqueada { opacity: .55; }
+  /* Sin icono de check: ya lo dice el badge "Hecho" y el numero del
+     paso, repetirlo en el texto era ruido. El color queda neutro por
+     el mismo motivo -- no hace falta que el texto tambien "grite". */
+  .resultado {
+    margin: 0;
+    font-size: 12.5px; line-height: 1.45; font-weight: 600; color: var(--app-gris);
+  }
+  /* display:flex pisa el display:none por defecto de [hidden] si no
+     se lo devolvemos explicitamente: sin esto, un .resultado oculto
+     se ve igual como una caja vacia. */
+  .resultado[hidden] { display: none; }
+
+  /* ---------- Tarjeta ---------- */
+  .tarjeta {
+    display: flex; flex-direction: column; gap: 13px;
+    padding: 15px;
+    background: var(--app-campo);
+    border: 1px solid var(--app-borde); border-radius: 13px;
+  }
+  .tarjeta-cabecera { display: flex; align-items: center; gap: 10px; }
+  .tarjeta-cabecera h2 {
+    margin: 0; flex: 1; min-width: 0;
+    font-size: 14.5px; font-weight: 700; color: var(--app-tinta);
+  }
+  .tarjeta-cabecera .icono { color: var(--rojo); }
+
+  /* ---------- Badges de estado ---------- */
+  .badge {
+    display: inline-flex; align-items: center; gap: 5px;
+    padding: 5px 9px; border-radius: 99px;
+    font-size: 10.5px; font-weight: 700;
+    letter-spacing: .05em; text-transform: uppercase;
+    white-space: nowrap; font-variant-numeric: tabular-nums;
+    background: var(--espera-suave); color: var(--espera);
+  }
+  .badge.ok      { background: var(--ok-suave);      color: var(--ok); }
+  .badge.proceso { background: var(--proceso-suave); color: var(--proceso); }
+
+  .accion {
+    width: 100%; min-height: 46px;
+    display: flex; align-items: center; justify-content: center; gap: 9px;
+    background: var(--rojo); color: #fff;
+    border: 0; border-radius: 8px;
+    font: inherit; font-size: 14.5px; font-weight: 700; cursor: pointer;
+    transition: background .16s ease;
+  }
+  .accion:hover:not(:disabled) { background: var(--rojo-hover); }
+  .accion:focus-visible { outline: 3px solid rgba(216,32,24,.35); outline-offset: 2px; }
+  .accion:disabled { background: #DCD6D2; color: #FBFAFA; cursor: not-allowed; }
+
+  /* ---------- Accion fija sobre el borde inferior ---------- */
+  .accion-fija {
+    position: absolute; left: 0; right: 0; bottom: 0; z-index: 20;
+    padding: 12px var(--pad-lateral) 20px;
+    background: linear-gradient(to top, var(--app-fondo) 68%, rgba(255,255,255,0));
+  }
+  .accion-fija .accion { min-height: 52px; font-size: 16px; }
+
+</style>
+
+<div class="lienzo">
+
+  <header class="cabecera">
+    <span class="eyebrow">Inventario de Autoservicio · Pantalla 2 de 7</span>
+    <h1>Hojas de conteo</h1>
+    <p>Flujo completo del Coordinador: traer la foto del catálogo de Dynamics, crear las hojas de conteo (tamaño configurable: 20, 30, 50 o una cantidad personalizada de ítems) y recién entonces repartirlas entre el personal presente.</p>
+  </header>
+
+  <div class="telefono denso">
+    <div class="barra-estado">
+      <span>09:41</span>
+      <span class="senales">
+        <svg width="15" height="11" viewBox="0 0 15 11" fill="currentColor" aria-hidden="true"><rect x="0" y="7" width="2.5" height="4" rx="1"/><rect x="4" y="5" width="2.5" height="6" rx="1"/><rect x="8" y="2.5" width="2.5" height="8.5" rx="1"/><rect x="12" y="0" width="2.5" height="11" rx="1"/></svg>
+        <svg width="22" height="11" viewBox="0 0 22 11" fill="none" aria-hidden="true"><rect x="0.5" y="0.5" width="18" height="10" rx="2.5" stroke="currentColor"/><rect x="2" y="2" width="15" height="7" rx="1.2" fill="currentColor"/><path d="M20 4v3a1.8 1.8 0 0 0 0-3Z" fill="currentColor"/></svg>
+      </span>
+    </div>
+
+    <div class="pantalla scroll">
+
+      <div class="barra-app">
+        <div class="contexto">
+          <p class="rotulo"><svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="m12 2 10 5-10 5L2 7l10-5Zm0 8.8L4.6 7 12 3.2 19.4 7 12 10.8ZM2 12l10 5 10-5-1.9-.9L12 15l-8.1-3.9L2 12Zm0 5 10 5 10-5-1.9-.9L12 20l-8.1-3.9L2 17Z"/></svg>Gestión masiva</p>
+          <p class="sede" id="sede">Market Central Luzuriaga</p>
+          <p class="cifras" id="cifras"></p>
+        </div>
+        <button type="button" class="salir" id="btn-salir" aria-label="Cerrar sesión">
+          <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4m7 14 5-5-5-5m5 5H9"/></svg>
+        </button>
+      </div>
+
+      <div class="tarjeta" id="tarjeta-paso1">
+        <div class="tarjeta-cabecera">
+          <span class="paso-marca" id="marca-1" aria-hidden="true">1</span>
+          <h2>Catálogo de Dynamics</h2>
+          <span class="badge" id="badge-paso1" aria-live="polite">Pendiente</span>
+        </div>
+        <p class="tarjeta-texto" id="texto-paso1">Trae el catálogo completo de la sucursal desde Dynamics: es la foto contra la que se compara todo el inventario. Es una lectura del catálogo — no escribe ni ajusta nada en Dynamics.</p>
+      </div>
+
+      <div class="tarjeta bloqueada" id="tarjeta-paso2">
+        <div class="tarjeta-cabecera">
+          <span class="paso-marca" id="marca-2" aria-hidden="true">2</span>
+          <h2>Crear hojas de conteo</h2>
+          <span class="badge" id="badge-paso2" aria-live="polite">Bloqueado</span>
+        </div>
+        <p class="tarjeta-texto" id="texto-paso2">Traé primero la foto del catálogo de Dynamics para poder crear las hojas.</p>
+
+        <div class="rol-cabecera" id="cabecera-tamano" hidden>
+          <label id="lbl-tamano">Ítems por hoja</label>
+          <span class="nota">El tamaño lo elegís vos</span>
+        </div>
+        <div class="roles" id="tamanos" role="group" aria-labelledby="lbl-tamano" hidden>
+          <button type="button" class="rol" data-tamano="20" aria-pressed="false" disabled>20</button>
+          <button type="button" class="rol" data-tamano="30" aria-pressed="false" disabled>30</button>
+          <button type="button" class="rol" data-tamano="50" aria-pressed="false" disabled>50</button>
+          <button type="button" class="rol" id="rol-personalizado" aria-pressed="false" disabled>Otro</button>
+        </div>
+        <div class="campo" id="campo-personalizado" hidden>
+          <label id="lbl-personalizado" for="input-personalizado">Cantidad personalizada</label>
+          <input type="number" inputmode="numeric" pattern="[0-9]*" id="input-personalizado" class="campo-numero"
+                 placeholder="Ej: 40" min="1" max="8000" step="1"
+                 aria-labelledby="lbl-personalizado">
+        </div>
+      </div>
+
+      <div class="tarjeta bloqueada" id="tarjeta-paso3">
+        <div class="tarjeta-cabecera">
+          <span class="paso-marca" id="marca-3" aria-hidden="true">3</span>
+          <h2>Asignar hojas de conteo</h2>
+          <span class="badge" id="badge-presentes" aria-live="polite">Bloqueado</span>
+        </div>
+        <p class="tarjeta-texto" id="texto-paso3-bloqueo">Creá primero las hojas de conteo para poder asignarlas.</p>
+        <p class="resultado" id="texto-reparto" hidden></p>
+      </div>
+
+      <div class="toast" id="toast" role="status" aria-live="polite">
+        <svg width="19" height="19" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 2 4 5.5v6c0 5 3.4 9.4 8 10.5 4.6-1.1 8-5.5 8-10.5v-6L12 2Zm-1.2 13.4-3.2-3.2 1.4-1.4 1.8 1.8 4.6-4.6 1.4 1.4-6 6Z"/></svg>
+        <span id="toast-texto"></span>
+      </div>
+
+    </div>
+
+    <div class="accion-fija">
+      <button type="button" class="accion" id="btn-accion-principal">
+        <svg id="icono-accion-principal" width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M19 9h-4V3H9v6H5l7 7 7-7Zm-14 9v2h14v-2H5Z"/></svg>
+        <span id="texto-accion-principal">Traer foto del catálogo de Dynamics</span>
+      </button>
+    </div>
+
+  </div>
+
+  <section class="pruebas">
+    <h3>Atajos para validar</h3>
+    <p>Los 3 pasos son reales y en orden: traé la foto del catálogo, elegí el tamaño de hoja (20, 30, 50 o una cantidad personalizada de ítems) para crearlas y repartilas entre los 8 contadores presentes. La foto y la creación se simulan con un pequeño retardo.</p>
+    <div class="atajos" id="atajos"></div>
+  </section>
+
+</div>
+
+<script>
+(function () {
+  'use strict';
+
+  var $ = function (id) { return document.getElementById(id); };
+  var toast = $('toast'), toastTexto = $('toast-texto');
+
+  var temporizador;
+  function mostrarToast(texto) {
+    toastTexto.textContent = texto;
+    toast.classList.add('visible');
+    clearTimeout(temporizador);
+    temporizador = setTimeout(function () { toast.classList.remove('visible'); }, 2800);
+  }
+
+  /* El tamaño de hoja es configurable (20 / 30 / 50 items): lo elige
+     el coordinador en el paso 2. Nunca hay un default preseleccionado. */
+  var TAMANOS_HOJA = [20, 30, 50];
+
+  /* El catalogo es plano: no hay agrupacion por zona fisica (no existe
+     esa funcionalidad en el negocio). Un total fijo de items alcanza
+     para generar hojas numeradas de forma contigua. */
+  var TOTAL_ITEMS = 8000;
+
+  /* Los 8 contadores presentes de los 11 colaboradores de Luzuriaga.
+     Los otros 3 son el coordinador y los dos auditores: no cuentan. */
+  var CONTADORES = [
+    'María Rojas', 'Elena Príncipe', 'Walter Norabuena', 'Luis Shuan',
+    'Carla Depaz', 'Manuel Chávez', 'Yeni Sotelo', 'Hugo Vergaray'
+  ];
+
+  var nf = new Intl.NumberFormat('es-PE');
+
+  var TILDE = '<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M9 16.2 4.8 12l-1.4 1.4L9 19 21 7l-1.4-1.4L9 16.2Z"/></svg>';
+
+  /* ---------- Iconos del CTA unico (paso 2 del wizard) ----------
+     El boton fijo de .accion-fija cambia de icono segun el estado que
+     calcula pintarAccionPrincipal(). Un solo <path d> por estado,
+     tomado de los botones que antes vivian dentro de cada tarjeta. */
+  var ICONO_DESCARGA = 'M19 9h-4V3H9v6H5l7 7 7-7Zm-14 9v2h14v-2H5Z';
+  var ICONO_CREAR    = 'M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2Zm5 11h-4v4h-2v-4H7v-2h4V7h2v4h4v2Z';
+  var ICONO_REPARTIR = 'M12 1c.9 5.6 1.5 6.2 7.1 7.1-5.6.9-6.2 1.5-7.1 7.1-.9-5.6-1.5-6.2-7.1-7.1C10.5 7.2 11.1 6.6 12 1Zm7 12c.5 3 .8 3.3 3.8 3.8-3 .5-3.3.8-3.8 3.8-.5-3-.8-3.3-3.8-3.8 3-.5 3.3-.8 3.8-3.8ZM5.5 15c.4 2.3.6 2.5 2.9 2.9-2.3.4-2.5.6-2.9 2.9-.4-2.3-.6-2.5-2.9-2.9 2.3-.4 2.5-.6 2.9-2.9Z';
+  var ICONO_CONTAR   = 'M8 5v14l11-7L8 5Z';
+
+  /* ---------- Estado de los 3 pasos ----------
+     El orden es una regla de negocio: no hay hojas sin snapshot, ni
+     asignacion sin hojas. Cada paso se habilita solo cuando el anterior
+     termino. */
+  var estado = {
+    snapshot: null,       // { items, fecha, hora } una vez traido
+    hojasCreadas: false,
+    tamano: null,         // entero > 0 -- se elige en el paso 2, nunca preseleccionado
+    /* 'preset' | 'personalizado' -- de que MODO viene tamano, no se infiere
+       del numero: el coordinador podria escribir a mano "30" en el campo
+       personalizado y no por eso paso a estar en modo preset. Decide que
+       boton del grupo segmentado queda .activo (pintarTamanos) y que rama
+       de mensaje usa el CTA cuando tamano todavia es null. */
+    modoTamano: 'preset',
+    totalHojas: 0,        // se calcula con calcularReparto(), nunca se hardcodea
+    cargando: null        // null | 'snapshot' | 'hojas' -- protege el CTA unico de doble click
+  };
+
+  var HOJAS = [];
+
+  /* ---------- Calculo de hojas segun el tamaño elegido ----------
+     Catalogo plano de TOTAL_ITEMS, sin agrupacion por zona: la cuenta
+     es un floor/resto global. La ultima hoja es parcial solo si el
+     total no es multiplo exacto del tamaño elegido. */
+  function calcularReparto(tamano) {
+    var completas = Math.floor(TOTAL_ITEMS / tamano);
+    var parcial = TOTAL_ITEMS % tamano;
+    var totalHojas = completas + (parcial > 0 ? 1 : 0);
+    return {
+      completas: completas,
+      parcial: parcial,
+      totalHojas: totalHojas
+    };
+  }
+
+  /* Texto compartido entre la vista previa (antes de crear) y el
+     resultado final (despues de crear): mismo calculo, misma frase. */
+  function resumenCalculo(calculo) {
+    var extra = calculo.parcial > 0
+      ? ' · la última con ' + calculo.parcial + ' ítems'
+      : '';
+    return { extra: extra };
+  }
+
+  /* ---------- Armado de las hojas (solo al terminar el paso 2) ----------
+     Catalogo plano: cada hoja toma un tramo contiguo de tamano items
+     (1..TOTAL_ITEMS), sin distincion de zona ni de hoja "mixta". La
+     ultima hoja es parcial cuando el total no cierra exacto. */
+  function crearHojas(tamano, calculo) {
+    var hojas = [];
+    var cursor = 1;
+
+    for (var n = 1; n <= calculo.totalHojas; n++) {
+      var esUltima = n === calculo.totalHojas && calculo.parcial > 0;
+      var tam = esUltima ? calculo.parcial : tamano;
+      var desde = cursor;
+      var hasta = cursor + tam - 1;
+      hojas.push({
+        numero: n,
+        desde: desde, hasta: hasta,
+        asignado: null, tamano: tam
+      });
+      cursor += tam;
+    }
+
+    return hojas;
+  }
+
+  /* ---------- Indicador de progreso de 3 pasos ---------- */
+  function aplicarPaso(idMarca, estadoPaso, numero) {
+    var marca = $(idMarca);
+    marca.classList.remove('hecho', 'en-curso');
+    if (estadoPaso !== 'pendiente') marca.classList.add(estadoPaso);
+    marca.innerHTML = estadoPaso === 'hecho' ? TILDE : numero;
+  }
+
+  function pintarPasos() {
+    var p1 = estado.snapshot ? 'hecho' : 'en-curso';
+    var p2 = !estado.snapshot ? 'pendiente' : (estado.hojasCreadas ? 'hecho' : 'en-curso');
+    var todasAsignadas = estado.hojasCreadas && HOJAS.every(function (h) { return !!h.asignado; });
+    var p3 = !estado.hojasCreadas ? 'pendiente' : (todasAsignadas ? 'hecho' : 'en-curso');
+
+    aplicarPaso('marca-1', p1, '1');
+    aplicarPaso('marca-2', p2, '2');
+    aplicarPaso('marca-3', p3, '3');
+
+    pintarAccionPrincipal();
+  }
+
+  /* ---------- CTA unico tipo wizard ----------
+     Reemplaza a btn-snapshot, btn-crear-hojas y btn-repartir: un solo
+     boton fijo en .accion-fija cuyo label, icono, disabled y title se
+     derivan siempre de estado.snapshot / estado.tamano /
+     estado.hojasCreadas / estado.cargando / si todas las hojas estan
+     asignadas. Se recalcula en el mismo punto que pintarPasos() para
+     que nunca quede desincronizado del resto de la pantalla. */
+  function pintarAccionPrincipal() {
+    var btn = $('btn-accion-principal');
+    var icono = $('icono-accion-principal');
+    var texto = $('texto-accion-principal');
+    var todasAsignadas = estado.hojasCreadas && HOJAS.length > 0 &&
+      HOJAS.every(function (h) { return !!h.asignado; });
+
+    function fijar(pathD, label, deshabilitado, motivo) {
+      icono.innerHTML = '<path d="' + pathD + '"/>';
+      texto.textContent = label;
+      btn.disabled = deshabilitado;
+      if (motivo) { btn.setAttribute('title', motivo); } else { btn.removeAttribute('title'); }
+    }
+
+    if (estado.cargando === 'snapshot') {
+      fijar(ICONO_DESCARGA, 'Trayendo la foto del catálogo...', true, 'Esperá a que termine de traer la foto del catálogo de Dynamics');
+    } else if (estado.cargando === 'hojas') {
+      fijar(ICONO_CREAR, 'Creando hojas...', true, 'Esperá a que termine de crear las hojas de conteo');
+    } else if (!estado.snapshot) {
+      fijar(ICONO_DESCARGA, 'Traer foto del catálogo de Dynamics', false, null);
+    } else if (!estado.tamano && estado.modoTamano === 'personalizado') {
+      fijar(ICONO_CREAR, 'Ingresá la cantidad de ítems', true,
+        'Ingresá un número entero entre 1 y ' + nf.format(TOTAL_ITEMS) + ' ítems por hoja');
+    } else if (!estado.tamano) {
+      fijar(ICONO_CREAR, 'Elegí el tamaño de hoja', true, 'Elegí 20, 30, 50 o "Otro" para un tamaño personalizado');
+    } else if (!estado.hojasCreadas) {
+      var calculo = calcularReparto(estado.tamano);
+      fijar(ICONO_CREAR, 'Crear ' + nf.format(calculo.totalHojas) + ' hojas de ' + estado.tamano + ' ítems', false, null);
+    } else if (!todasAsignadas) {
+      fijar(ICONO_REPARTIR, 'Repartir automáticamente', false, null);
+    } else {
+      fijar(ICONO_CONTAR, 'Finalizar', false, null);
+    }
+  }
+
+  /* ---------- Cifras de la barra de contexto ---------- */
+  function pintarCifras() {
+    var el = $('cifras');
+    if (!estado.snapshot) {
+      el.textContent = 'Sin foto del catálogo de Dynamics todavía';
+    } else if (!estado.hojasCreadas) {
+      el.textContent = nf.format(estado.snapshot.items) + ' ítems desde Dynamics · sin hojas creadas';
+    } else {
+      var asignadas = HOJAS.filter(function (h) { return h.asignado; }).length;
+      el.textContent = nf.format(estado.totalHojas) + ' hojas · ' +
+        nf.format(TOTAL_ITEMS) + ' ítems · ' +
+        nf.format(asignadas) + ' asignadas';
+    }
+  }
+
+  /* Mostrar cada hoja en detalle (asignado, progreso, sincronizado) no
+     hace falta en este formulario: el coordinador arma el lote, no
+     hace seguimiento hoja por hoja aca. HOJAS sigue existiendo en
+     memoria (crearHojas/repartir la necesitan para los conteos de
+     arriba), solo se saco la lista visual. */
+
+  /* ---------- Paso 3: reparto ----------
+     Reparte en bloques contiguos de hojas: a un contador le tocan
+     hojas numeradas de forma consecutiva, no salteadas. */
+  function pintarReparto() {
+    var asignadas = HOJAS.filter(function (h) { return h.asignado; }).length;
+    var sinAsignar = estado.totalHojas - asignadas;
+
+    /* Mismo patron que los badges de paso 1 y 2: Pendiente mientras no
+       termino, Hecho cuando termino. El "8/11 presentes" ya esta
+       explicado en el texto de abajo -- repetirlo en el badge una vez
+       que el paso esta listo era un dato de mas. */
+    if (sinAsignar === 0) {
+      $('badge-presentes').className = 'badge ok';
+      $('badge-presentes').textContent = 'Hecho';
+    } else {
+      $('badge-presentes').className = 'badge';
+      $('badge-presentes').textContent = 'Pendiente';
+    }
+
+    var base = Math.floor(estado.totalHojas / CONTADORES.length);
+    var resto = estado.totalHojas % CONTADORES.length;
+    var ratio = resto === 0
+      ? (base + ' hojas por persona')
+      : (base + '–' + (base + 1) + ' hojas por persona');
+
+    $('texto-reparto').textContent = sinAsignar
+      ? 'Repartí las ' + nf.format(estado.totalHojas) + ' hojas entre los ' +
+        CONTADORES.length + ' contadores presentes, en bloques contiguos (' + ratio + ').'
+      : 'Las ' + nf.format(estado.totalHojas) + ' hojas ya están repartidas entre los ' +
+        CONTADORES.length + ' contadores presentes (' + ratio + ').';
+
+    pintarCifras();
+    pintarPasos();
+  }
+
+  function repartir() {
+    var sinAsignar = HOJAS.filter(function (h) { return !h.asignado; });
+    if (!sinAsignar.length) return;
+
+    var porPersona = Math.ceil(sinAsignar.length / CONTADORES.length);
+    sinAsignar.forEach(function (h, i) {
+      h.asignado = CONTADORES[Math.min(Math.floor(i / porPersona), CONTADORES.length - 1)];
+    });
+
+    pintarReparto();
+    mostrarToast(nf.format(sinAsignar.length) + ' hojas repartidas entre ' +
+      CONTADORES.length + ' contadores');
+  }
+
+  /* ---------- CTA unico: snapshot -> tamaño -> crear -> repartir -> contar ----------
+     Los 3 botones que antes vivian en cada tarjeta (btn-snapshot,
+     btn-crear-hojas, btn-repartir) se fusionaron en btn-accion-principal
+     (en .accion-fija). El click mira el estado actual y dispara la
+     accion que toque; label/icono/disabled los pinta aparte
+     pintarAccionPrincipal(), siempre junto a pintarPasos(). */
+
+  /* Es una LECTURA del catalogo: trae datos, no escribe ni ajusta nada
+     en Dynamics. El ajuste automatico hacia Dynamics queda para una
+     fase 2 futura (acordado por Gilmer y Fernando en la reunion). */
+  function traerSnapshot() {
+    estado.cargando = 'snapshot';
+    pintarAccionPrincipal();
+
+    setTimeout(function () {
+      estado.snapshot = { items: TOTAL_ITEMS, fecha: '01/09/2026', hora: '09:41' };
+      estado.cargando = null;
+
+      $('badge-paso1').className = 'badge ok';
+      $('badge-paso1').textContent = 'Hecho';
+
+      var texto = $('texto-paso1');
+      texto.className = 'resultado';
+      texto.textContent = nf.format(estado.snapshot.items) +
+        ' ítems traídos de Dynamics · ' + estado.snapshot.fecha + ', ' + estado.snapshot.hora +
+        '. Es una lectura del catálogo: no escribe ni ajusta nada en Dynamics.';
+
+      desbloquearPaso2();
+      pintarCifras();
+      pintarPasos();
+      mostrarToast(nf.format(estado.snapshot.items) + ' ítems traídos de Dynamics');
+    }, 1100);
+  }
+
+  function desbloquearPaso2() {
+    $('tarjeta-paso2').classList.remove('bloqueada');
+    $('badge-paso2').textContent = 'Pendiente';
+    $('texto-paso2').textContent = 'Elegí cuántos ítems por hoja querés (20, 30, 50 o una cantidad personalizada) y mirá cuántas hojas salen antes de crearlas.';
+    $('cabecera-tamano').hidden = false;
+    $('tamanos').hidden = false;
+    Array.prototype.forEach.call($('tamanos').querySelectorAll('.rol'), function (b) { b.disabled = false; });
+  }
+
+  /* ---------- Selector de tamaño de hoja (paso 2) ----------
+     Son botones reales (button, no div): el coordinador elige de una,
+     no hay estado inerte de por medio. Sin elegir, el CTA unico sigue
+     deshabilitado. El .activo de "Otro" se decide por estado.modoTamano,
+     nunca comparando numeros: el coordinador podria tipear "30" en el
+     campo personalizado y eso no lo pasa a modo preset. */
+  function pintarTamanos() {
+    Array.prototype.forEach.call($('tamanos').querySelectorAll('.rol[data-tamano]'), function (b) {
+      var t = Number(b.getAttribute('data-tamano'));
+      var activo = estado.modoTamano === 'preset' && t === estado.tamano;
+      b.classList.toggle('activo', activo);
+      b.setAttribute('aria-pressed', String(activo));
+    });
+    var otro = $('rol-personalizado');
+    var activoOtro = estado.modoTamano === 'personalizado';
+    otro.classList.toggle('activo', activoOtro);
+    otro.setAttribute('aria-pressed', String(activoOtro));
+  }
+
+  function seleccionarTamano(tamano) {
+    estado.modoTamano = 'preset';
+    estado.tamano = tamano;
+    ocultarPersonalizado();
+    pintarTamanos();
+    pintarAccionPrincipal();
+  }
+
+  /* ---------- Cantidad personalizada (4ta opcion, "Otro") ----------
+     Entero positivo entre 1 y TOTAL_ITEMS: una hoja no puede ser mas
+     grande que el catalogo entero. Vacio, cero, negativo, con decimales
+     o no numerico devuelve null -- el CTA unico lo interpreta igual que
+     un tamano todavia sin elegir. */
+  function validarPersonalizado(valorTexto) {
+    if (!/^[0-9]+$/.test(valorTexto)) return null;
+    var n = Number(valorTexto);
+    if (n < 1 || n > TOTAL_ITEMS) return null;
+    return n;
+  }
+
+  function ocultarPersonalizado() {
+    $('campo-personalizado').hidden = true;
+    $('input-personalizado').value = '';
+  }
+
+  function activarPersonalizado() {
+    estado.modoTamano = 'personalizado';
+    estado.tamano = null;
+    $('campo-personalizado').hidden = false;
+    $('input-personalizado').value = '';
+    pintarTamanos();
+    pintarAccionPrincipal();
+    $('input-personalizado').focus();
+  }
+
+  Array.prototype.forEach.call($('tamanos').querySelectorAll('.rol[data-tamano]'), function (b) {
+    b.addEventListener('click', function () { seleccionarTamano(Number(b.getAttribute('data-tamano'))); });
+  });
+
+  $('rol-personalizado').addEventListener('click', activarPersonalizado);
+
+  $('input-personalizado').addEventListener('input', function (e) {
+    // type="number" igual deja escribir "e", "+" o "-" en algunos
+    // navegadores: se descarta todo lo que no sea digito antes de
+    // validar, asi el campo nunca muestra otra cosa que numeros.
+    var soloDigitos = e.target.value.replace(/[^0-9]/g, '');
+    if (soloDigitos !== e.target.value) { e.target.value = soloDigitos; }
+    estado.tamano = validarPersonalizado(soloDigitos);
+    pintarAccionPrincipal();
+  });
+
+  /* ---------- Paso 2: crear las hojas ---------- */
+  function crearHojasAhora() {
+    if (!estado.tamano) return;
+    estado.cargando = 'hojas';
+    pintarAccionPrincipal();
+
+    setTimeout(function () {
+      var calculo = calcularReparto(estado.tamano);
+      HOJAS = crearHojas(estado.tamano, calculo);
+      estado.hojasCreadas = true;
+      estado.totalHojas = calculo.totalHojas;
+      estado.cargando = null;
+
+      var r = resumenCalculo(calculo);
+      var texto = $('texto-paso2');
+      texto.className = 'resultado';
+      texto.textContent = nf.format(estado.totalHojas) + ' hojas creadas de ' +
+        estado.tamano + ' ítems (' + nf.format(TOTAL_ITEMS) + ' ítems en total)' +
+        r.extra;
+
+      $('badge-paso2').className = 'badge ok';
+      $('badge-paso2').textContent = 'Hecho';
+      $('cabecera-tamano').hidden = true;
+      $('tamanos').hidden = true;
+      $('campo-personalizado').hidden = true;
+
+      desbloquearPaso3();
+
+      pintarReparto();
+      mostrarToast(nf.format(estado.totalHojas) + ' hojas creadas');
+    }, 1300);
+  }
+
+  function desbloquearPaso3() {
+    $('tarjeta-paso3').classList.remove('bloqueada');
+    $('texto-paso3-bloqueo').hidden = true;
+    $('texto-reparto').hidden = false;
+  }
+
+  /* ---------- Paso 3 (contar): abre el lote ya repartido ---------- */
+  function comenzarConteo() {
+    if (!estado.hojasCreadas) return;
+    var base = Math.floor(estado.totalHojas / CONTADORES.length);
+    mostrarToast('Abriendo el lote asignado · ' + nf.format(base) + ' hojas aprox.');
+  }
+
+  /* ---------- El unico click: decide la accion segun el estado actual ----------
+     El boton esta disabled durante "Elegí el tamaño de hoja" y durante
+     ambos estados de carga, asi que un click real solo llega en un
+     estado donde SI hay algo que hacer. */
+  $('btn-accion-principal').addEventListener('click', function () {
+    if (estado.cargando) return;
+    if (!estado.snapshot) { traerSnapshot(); return; }
+    if (!estado.hojasCreadas) { crearHojasAhora(); return; }
+    var todasAsignadas = HOJAS.length > 0 && HOJAS.every(function (h) { return !!h.asignado; });
+    if (!todasAsignadas) { repartir(); return; }
+    comenzarConteo();
+  });
+
+  $('btn-salir').addEventListener('click', function () { mostrarToast('Cerrando la sesión de José Tarazona'); });
+
+  pintarPasos();
+  pintarCifras();
+})();
+</script>

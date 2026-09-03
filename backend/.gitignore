@@ -1,0 +1,6 @@
+node_modules/
+dist/
+.env
+# Contenido real de .env, esperando el mv manual (ver README.md) -- tiene
+# una credencial real, no se commitea bajo ningun nombre.
+_env_nuevo.txt

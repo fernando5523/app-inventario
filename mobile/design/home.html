@@ -1,0 +1,1161 @@
+<meta charset="utf-8">
+<title>Inicio</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Baloo+2:wght@600;700&family=Figtree:wght@400;500;600;700&display=swap">
+<style>
+/* =====================================================================
+   TRUJILLO · Sistema de controles de la app de inventario
+   Validado en la pantalla 1 (login). Copiar completo en cada maqueta.
+
+   Regla de oro: los tokens de marca son FIJOS en ambos temas. La app
+   pinta su propio mundo; solo el lienzo que rodea al telefono sigue el
+   tema del visor.
+   ===================================================================== */
+
+:root {
+  /* Marca — valores tomados del PNG del logo, no estimados */
+  --rojo:        #D82018;
+  --rojo-hover:  #B81810;
+  --rojo-suave:  #FDF0EF;
+  --dorado:      #F8B818;
+
+  /* Superficie de la app */
+  --app-fondo:   #FFFFFF;
+  --app-tinta:   #1C1917;
+  --app-gris:    #6B6560;
+  --app-gris-cl: #9A938D;
+  --app-borde:   #E3DEDA;
+  --app-campo:   #FFFFFF;
+
+  /* Lienzo del documento de maqueta (fuera del telefono) — tema claro */
+  --lienzo:      #F2EEEB;
+  --lienzo-alt:  #FFFFFF;
+  --lienzo-tinta:#26211E;
+  --lienzo-gris: #6E6660;
+  --lienzo-borde:#DED7D2;
+
+  --sombra: 0 1px 2px rgba(28,25,23,.04), 0 12px 40px rgba(28,25,23,.10);
+  --radio: 10px;
+
+  --fuente-ui: 'Figtree', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  --fuente-marca: 'Baloo 2', 'Figtree', -apple-system, sans-serif;
+}
+
+/* Solo el lienzo cambia con el tema. Nunca los tokens --app-* */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --lienzo:      #191614;
+    --lienzo-alt:  #221E1B;
+    --lienzo-tinta:#F2EEEB;
+    --lienzo-gris: #A79E97;
+    --lienzo-borde:#332D29;
+    --sombra: 0 1px 2px rgba(0,0,0,.4), 0 16px 48px rgba(0,0,0,.55);
+  }
+}
+:root[data-theme="dark"] {
+  --lienzo:      #191614;
+  --lienzo-alt:  #221E1B;
+  --lienzo-tinta:#F2EEEB;
+  --lienzo-gris: #A79E97;
+  --lienzo-borde:#332D29;
+  --sombra: 0 1px 2px rgba(0,0,0,.4), 0 16px 48px rgba(0,0,0,.55);
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--lienzo);
+  color: var(--lienzo-tinta);
+  font-family: var(--fuente-ui);
+  -webkit-font-smoothing: antialiased;
+}
+
+.lienzo {
+  min-height: 100vh;
+  display: flex; flex-direction: column; align-items: center;
+  gap: 28px; padding: 32px 20px 56px;
+}
+
+/* ---------- Cabecera del documento de maqueta ---------- */
+.cabecera { text-align: center; display: flex; flex-direction: column; gap: 6px; }
+.cabecera .eyebrow {
+  font-size: 11px; font-weight: 600; letter-spacing: .13em;
+  text-transform: uppercase; color: var(--lienzo-gris);
+}
+.cabecera h1 {
+  margin: 0; font-family: var(--fuente-marca); font-weight: 700;
+  font-size: clamp(22px, 4vw, 28px); letter-spacing: -.01em; text-wrap: balance;
+}
+.cabecera p { margin: 0; font-size: 14px; color: var(--lienzo-gris); max-width: 52ch; }
+
+/* ---------- Marco del telefono ---------- */
+/* Pantalla operativa: mas ancho util para listas y tarjetas */
+.telefono.denso { --pad-lateral: 14px; }
+
+.telefono {
+  /* Un solo lugar decide el margen lateral. Lo leen .pantalla, .toast,
+     .chips y .accion-fija, asi una pantalla densa gana ancho sin que
+     haya que recalibrar cada uno a mano. */
+  --pad-lateral: 26px;
+  width: 380px; max-width: 100%;
+  background: var(--app-fondo);
+  border-radius: 34px;
+  border: 1px solid var(--lienzo-borde);
+  box-shadow: var(--sombra);
+  overflow: hidden;
+  position: relative;   /* ancla de los modales */
+}
+.barra-estado {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 12px 22px 4px;
+  font-size: 12px; font-weight: 600; color: var(--app-tinta);
+  font-variant-numeric: tabular-nums;
+}
+.barra-estado .senales { display: flex; gap: 5px; align-items: center; opacity: .75; }
+
+/* OBLIGATORIO el `color`: sin el, todo texto sin color propio hereda
+   --lienzo-tinta, que en tema oscuro es CLARO, y desaparece sobre el
+   fondo blanco de la app. */
+.pantalla {
+  position: relative;
+  padding: 8px var(--pad-lateral) 26px;
+  display: flex; flex-direction: column; gap: 20px;
+  color: var(--app-tinta);
+}
+
+/* ---------- Marca ---------- */
+.marca { display: flex; flex-direction: column; align-items: center; padding: 14px 0 4px; }
+.marca img { width: 172px; height: auto; display: block; }
+
+.saludo { display: flex; flex-direction: column; gap: 2px; }
+.saludo h2 {
+  margin: 0; display: flex; align-items: center; gap: 9px;
+  font-family: var(--fuente-marca); font-weight: 700; font-size: 27px;
+  color: var(--rojo); letter-spacing: -.01em;
+}
+.saludo p { margin: 0; font-size: 14.5px; color: var(--app-gris); }
+
+/* ---------- Campos ---------- */
+.campos { display: flex; flex-direction: column; gap: 15px; }
+/* position: relative -> es el ancla del desplegable */
+.campo { position: relative; display: flex; flex-direction: column; gap: 6px; }
+.campo label { font-size: 13.5px; font-weight: 600; color: var(--app-tinta); }
+
+.control {
+  width: 100%; display: flex; align-items: center; gap: 12px;
+  min-height: 54px; padding: 0 15px;
+  background: var(--app-campo);
+  border: 1px solid var(--app-borde);
+  border-radius: var(--radio);
+  font: inherit; font-size: 15.5px; color: var(--app-tinta);
+  text-align: left; cursor: pointer;
+  transition: border-color .15s ease, box-shadow .15s ease;
+}
+.control:hover:not(:disabled) { border-color: #CFC7C1; }
+.control:focus-visible {
+  outline: none; border-color: var(--rojo);
+  box-shadow: 0 0 0 3px rgba(216,32,24,.14);
+}
+.control[aria-expanded="true"] {
+  border-color: var(--rojo); box-shadow: 0 0 0 3px rgba(216,32,24,.14);
+}
+.control:disabled { background: #F7F5F4; cursor: not-allowed; opacity: .7; }
+.control .valor { flex: 1; min-width: 0; }
+.control .valor.vacio { color: var(--app-gris-cl); }
+.control .sub {
+  display: block; font-size: 11.5px; color: var(--app-gris);
+  margin-top: 1px; font-variant-numeric: tabular-nums;
+}
+.chevron { color: var(--rojo); flex: none; transition: transform .18s ease; }
+.control[aria-expanded="true"] .chevron { transform: rotate(180deg); }
+.control:disabled .chevron { color: var(--app-gris-cl); }
+
+/* Los iconos de campo van SIEMPRE en gris. El rojo se reserva para
+   el chevron, la seleccion y las acciones. */
+.icono { flex: none; color: var(--app-gris-cl); }
+
+/* ---------- Desplegable ---------- */
+.lista {
+  /* Fuera del flujo: si ocupara espacio, abrirlo empujaria todo lo de
+     abajo y la pantalla saltaria. */
+  position: absolute;
+  top: 100%; left: 0; right: 0; z-index: 30;
+  margin-top: 6px;
+  /* El tope NO es multiplo de la altura de fila a proposito: el corte
+     cae sobre una fila a medias y eso avisa que hay mas abajo. */
+  max-height: 262px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+  /* Barra oculta en los tres motores: una lista nativa se desplaza,
+     no muestra barra. */
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+  border: 1px solid var(--app-borde); border-radius: var(--radio);
+  background: var(--app-campo);
+  box-shadow: 0 10px 30px rgba(28,25,23,.14);
+}
+.lista::-webkit-scrollbar { width: 0; height: 0; display: none; }
+.lista[hidden] { display: none; }
+
+.opcion {
+  width: 100%; display: flex; align-items: center; gap: 12px;
+  padding: 12px 15px; background: none; border: 0;
+  border-bottom: 1px solid #F0ECE9;
+  font: inherit; font-size: 15px; color: var(--app-tinta);
+  text-align: left; cursor: pointer;
+}
+.opcion:last-child { border-bottom: 0; }
+.opcion:hover, .opcion:focus-visible { background: var(--rojo-suave); outline: none; }
+.opcion[aria-selected="true"],
+.opcion[aria-selected="true"]:hover {
+  background: var(--rojo); color: #fff; font-weight: 600;
+}
+.opcion[aria-selected="true"] .meta { color: rgba(255,255,255,.82); }
+.opcion .meta {
+  display: block; font-size: 11.5px; font-weight: 400; color: var(--app-gris);
+  margin-top: 1px; font-variant-numeric: tabular-nums;
+}
+
+/* ---------- PIN ---------- */
+.pin-puntos { display: flex; align-items: center; gap: 11px; }
+.pin-puntos.grande { justify-content: center; gap: 15px; min-height: 30px; }
+.pin-puntos.grande .punto-pin { width: 14px; height: 14px; }
+.pin-puntos.grande .punto-pin.visible { min-width: 14px; font-size: 19px; }
+
+.punto-pin {
+  width: 11px; height: 11px; border-radius: 50%;
+  border: 1.5px solid #C9C1BB; background: transparent;
+  display: grid; place-items: center;
+  font-size: 15px; font-weight: 700; color: var(--app-tinta);
+  font-variant-numeric: tabular-nums;
+  transition: background .14s ease, border-color .14s ease, transform .14s ease;
+}
+.punto-pin.lleno { background: var(--app-tinta); border-color: var(--app-tinta); transform: scale(1.06); }
+.punto-pin.visible {
+  width: auto; min-width: 11px; height: auto;
+  background: transparent; border-color: transparent; transform: none;
+}
+
+.teclado { display: grid; grid-template-columns: repeat(3, 1fr); gap: 9px; }
+.tecla {
+  min-height: 50px; display: grid; place-items: center;
+  background: var(--app-campo);
+  border: 1px solid var(--app-borde); border-radius: var(--radio);
+  font: inherit; font-size: 21px; font-weight: 600; color: var(--app-tinta);
+  font-variant-numeric: tabular-nums; cursor: pointer;
+  transition: background .12s ease, border-color .12s ease, transform .08s ease;
+}
+.tecla:hover { border-color: #CFC7C1; }
+.tecla:active { background: var(--rojo-suave); border-color: var(--rojo); transform: scale(.97); }
+.tecla:focus-visible { outline: 2px solid var(--rojo); outline-offset: 2px; }
+.tecla.auxiliar { color: var(--app-gris); }
+.tecla.auxiliar:hover { color: var(--app-tinta); }
+
+/* ---------- Modal ----------
+   Va colgado de .telefono, NO de .campo: colgando del campo se sale de
+   la pantalla cuando el campo esta abajo. Centrado siempre. */
+.modal {
+  position: absolute; inset: 0; z-index: 60;
+  display: flex; align-items: center; justify-content: center;
+  padding: 22px;
+}
+.modal[hidden] { display: none; }
+.modal-fondo {
+  position: absolute; inset: 0;
+  background: rgba(28,25,23,.42);
+  animation: aparecer .18s ease;
+}
+.modal-caja {
+  position: relative;
+  width: 100%; max-width: 310px;
+  display: flex; flex-direction: column; gap: 15px;
+  padding: 17px;
+  background: var(--app-campo);
+  border-radius: 16px;
+  box-shadow: 0 22px 55px rgba(28,25,23,.32);
+  animation: subir .2s cubic-bezier(.2,.8,.3,1);
+}
+@keyframes aparecer { from { opacity: 0; } }
+@keyframes subir { from { opacity: 0; transform: translateY(10px) scale(.97); } }
+
+.modal-cabecera { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.modal-cabecera h3 { margin: 0; font-size: 15px; font-weight: 700; color: var(--app-tinta); }
+.modal-cerrar {
+  width: 32px; height: 32px; flex: none;
+  display: grid; place-items: center;
+  background: none; border: 0; border-radius: 8px;
+  color: var(--app-gris); cursor: pointer;
+  transition: background .14s ease, color .14s ease;
+}
+.modal-cerrar:hover { background: var(--rojo-suave); color: var(--rojo); }
+.modal-cerrar:focus-visible { outline: 2px solid var(--rojo); outline-offset: 1px; }
+
+/* ---------- Grupo segmentado NO elegible (dato derivado: .roles) ----------
+   El rol sale del padron de la persona: se muestra, no se elige. Son
+   divs, no botones. Distinto de .segmentado/.segmento (mas abajo),
+   que SI es elegible. Confundirlos rompe la regla de "un dato derivado
+   se muestra, no se elige". */
+.roles {
+  display: grid; grid-template-columns: repeat(3, 1fr);
+  border: 1.5px solid var(--rojo); border-radius: var(--radio);
+  background: var(--app-campo);
+  overflow: hidden;
+  transition: opacity .2s ease;
+}
+.roles.inerte { opacity: .38; }   /* sin dato todavia: se ve, no se toca */
+.rol {
+  padding: 13px 4px; display: grid; place-items: center;
+  border-right: 1.5px solid var(--rojo);
+  background: var(--app-campo); color: var(--app-tinta);
+  font-size: 12.5px; font-weight: 700;
+  letter-spacing: .07em; text-transform: uppercase;
+  transition: background .18s ease, color .18s ease;
+}
+.rol:last-child { border-right: 0; }
+.rol.activo { background: var(--rojo); color: #fff; }
+
+.rol-cabecera { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+.rol-cabecera .nota { font-size: 11px; color: var(--app-gris-cl); font-weight: 500; }
+
+/* ---------- Grupo segmentado ELEGIBLE (.segmentado/.segmento) ----------
+   Visualmente parecido a .roles, pero son botones reales: la persona
+   SI elige (p.ej. el tamano de hoja para un reconteo). Usar .roles
+   cuando el dato ya esta derivado y solo se muestra; usar .segmentado
+   cuando el usuario tiene que decidir entre opciones reales. */
+.segmentado {
+  display: grid; grid-template-columns: repeat(3, 1fr);
+  border: 1.5px solid var(--rojo); border-radius: var(--radio);
+  background: var(--app-campo); overflow: hidden;
+}
+.segmento {
+  padding: 11px 4px; display: grid; place-items: center;
+  border-right: 1.5px solid var(--rojo); border-left: 0; border-top: 0; border-bottom: 0;
+  background: var(--app-campo); color: var(--app-tinta);
+  font: inherit; font-size: 12.5px; font-weight: 700;
+  letter-spacing: .04em; cursor: pointer;
+  transition: background .16s ease, color .16s ease;
+}
+.segmento:last-child { border-right: 0; }
+.segmento:hover { background: var(--rojo-suave); }
+.segmento:focus-visible { outline: 2px solid var(--rojo); outline-offset: -2px; }
+.segmento.activo { background: var(--rojo); color: #fff; }
+
+/* ---------- Accion principal ---------- */
+.ingresar {
+  width: 100%; min-height: 56px;
+  display: flex; align-items: center; justify-content: center; gap: 12px;
+  background: var(--rojo); color: #fff;
+  border: 0; border-radius: 6px;
+  font: inherit; font-size: 17px; font-weight: 700; cursor: pointer;
+  transition: background .16s ease, opacity .16s ease;
+}
+.ingresar:hover:not(:disabled) { background: var(--rojo-hover); }
+.ingresar:focus-visible { outline: 3px solid rgba(216,32,24,.35); outline-offset: 2px; }
+.ingresar:disabled { background: #DCD6D2; color: #FBFAFA; cursor: not-allowed; }
+.ingresar svg { color: var(--dorado); }
+.ingresar:disabled svg { color: #FBFAFA; }
+
+.olvide {
+  align-self: flex-start; margin-top: 2px;
+  background: none; border: 0; padding: 0;
+  font: inherit; font-size: 13.5px; color: var(--rojo); cursor: pointer;
+}
+.olvide:hover { text-decoration: underline; }
+
+/* ---------- Pie de pantalla ----------
+   tagline + version agrupados, para que el gap del contenedor los separe
+   sin margenes negativos peleando con el gap de .pantalla. */
+.pie { display: flex; flex-direction: column; align-items: center; gap: 5px; }
+.version {
+  margin: 0;
+  font-size: 11.5px; font-weight: 500;
+  color: var(--app-gris-cl);
+  font-variant-numeric: tabular-nums; letter-spacing: .04em;
+}
+
+.tagline {
+  display: flex; align-items: center; justify-content: center; gap: 10px;
+  font-family: var(--fuente-marca); font-weight: 600;
+  font-size: 13.5px; color: var(--rojo);
+}
+
+/* ---------- Toast ---------- */
+.toast {
+  position: absolute; left: var(--pad-lateral); right: var(--pad-lateral); bottom: 22px;
+  display: flex; align-items: center; gap: 10px;
+  padding: 13px 15px; border-radius: var(--radio);
+  background: var(--app-tinta); color: #fff;
+  font-size: 13.5px; font-weight: 500;
+  box-shadow: 0 10px 30px rgba(28,25,23,.28);
+  opacity: 0; transform: translateY(8px);
+  transition: opacity .22s ease, transform .22s ease;
+  pointer-events: none;
+}
+.toast.visible { opacity: 1; transform: translateY(0); }
+.toast svg { color: var(--dorado); flex: none; }
+
+/* ---------- Panel de validacion (fuera del telefono) ---------- */
+.pruebas {
+  width: 380px; max-width: 100%;
+  background: var(--lienzo-alt);
+  border: 1px solid var(--lienzo-borde);
+  border-radius: 14px; padding: 16px 18px;
+  display: flex; flex-direction: column; gap: 11px;
+}
+.pruebas h3 {
+  margin: 0; font-size: 11px; font-weight: 600;
+  letter-spacing: .13em; text-transform: uppercase; color: var(--lienzo-gris);
+}
+.pruebas p { margin: 0; font-size: 13px; color: var(--lienzo-gris); line-height: 1.5; }
+.atajos { display: flex; flex-wrap: wrap; gap: 8px; }
+.atajo {
+  padding: 7px 13px;
+  background: transparent; color: var(--lienzo-tinta);
+  border: 1px solid var(--lienzo-borde); border-radius: 99px;
+  font: inherit; font-size: 12.5px; font-weight: 500; cursor: pointer;
+  transition: border-color .15s ease, color .15s ease;
+}
+.atajo:hover { border-color: var(--rojo); color: var(--rojo); }
+.atajo:focus-visible { outline: 2px solid var(--rojo); outline-offset: 2px; }
+
+@media (prefers-reduced-motion: reduce) {
+  * { transition: none !important; animation: none !important; }
+}
+@media (max-width: 440px) {
+  .lienzo { padding: 20px 12px 40px; }
+  .telefono { --pad-lateral: 18px; }
+  .pantalla { padding-bottom: 20px; }
+}
+
+/* ============ Pantalla 2: hojas de conteo ============
+   Colores de estado. Son semanticos, no de marca: el rojo Trujillo
+   sigue siendo la accion, no un estado. Todos los pares texto/fondo
+   estan verificados >= 4.5:1. */
+:root {
+  --ok:        #0A6B57;  --ok-suave:      #E7F4EF;   /* 5.71:1 */
+  --proceso:   #8A5A05;  --proceso-suave: #FDF3DC;   /* 5.37:1 */
+  --espera:    #6B6560;  --espera-suave:  #F2EFED;   /* 5.02:1 */
+  --falta:     #A23B2E;  --falta-suave:   #FBEAE7;   /* 6.56:1 / 5.63:1 */
+  --riel:      #EDE9E6;
+}
+
+/* La pantalla se desplaza dentro del telefono, con barra oculta */
+.pantalla.scroll {
+  height: 720px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+  /* --tabbar-alto + 16px de aire para que la ultima tarjeta de "Tus
+     accesos" no quede pegada al tab bar. Si esta pantalla alguna vez
+     suma una accion-fija transaccional (ver comentario largo junto a
+     .tab-bar mas abajo), este valor tiene que crecer para dejar lugar
+     a los DOS elementos apilados. */
+  padding-bottom: calc(var(--tabbar-alto) + 16px);
+  gap: 16px;
+}
+.pantalla.scroll::-webkit-scrollbar { width: 0; display: none; }
+
+/* ---------- Barra superior de contexto ---------- */
+.barra-app {
+  display: flex; align-items: flex-start; gap: 12px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid var(--app-borde);
+}
+.barra-app .rotulo {
+  margin: 0 0 3px; display: flex; align-items: center; gap: 6px;
+  font-size: 10.5px; font-weight: 700; letter-spacing: .11em;
+  text-transform: uppercase; color: var(--rojo);
+}
+.barra-app .contexto { flex: 1; min-width: 0; }
+.barra-app .sede {
+  margin: 0; font-size: 16px; font-weight: 700; color: var(--app-tinta);
+}
+.barra-app .cifras {
+  margin: 2px 0 0; font-size: 12px; color: var(--app-gris);
+  font-variant-numeric: tabular-nums;
+}
+.salir {
+  width: 38px; height: 38px; flex: none;
+  display: grid; place-items: center;
+  background: none; color: var(--app-gris);
+  border: 1px solid var(--app-borde); border-radius: 9px;
+  cursor: pointer; transition: background .14s ease, color .14s ease, border-color .14s ease;
+}
+.salir:hover { background: var(--rojo-suave); color: var(--rojo); border-color: var(--rojo); }
+.salir:focus-visible { outline: 2px solid var(--rojo); outline-offset: 2px; }
+
+/* ---------- Tarjeta ---------- */
+.tarjeta {
+  display: flex; flex-direction: column; gap: 13px;
+  padding: 15px;
+  background: var(--app-campo);
+  border: 1px solid var(--app-borde); border-radius: 13px;
+}
+.tarjeta-cabecera { display: flex; align-items: center; gap: 10px; }
+.tarjeta-cabecera h2 {
+  margin: 0; flex: 1; min-width: 0;
+  font-size: 14.5px; font-weight: 700; color: var(--app-tinta);
+}
+.tarjeta-cabecera .icono { color: var(--rojo); }
+
+/* ---------- Badges de estado ---------- */
+.badge {
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 5px 9px; border-radius: 99px;
+  font-size: 10.5px; font-weight: 700;
+  letter-spacing: .05em; text-transform: uppercase;
+  white-space: nowrap; font-variant-numeric: tabular-nums;
+  background: var(--espera-suave); color: var(--espera);
+}
+.badge.ok      { background: var(--ok-suave);      color: var(--ok); }
+.badge.proceso { background: var(--proceso-suave); color: var(--proceso); }
+.badge.falta   { background: var(--falta-suave);   color: var(--falta); }
+
+/* ---------- Bloque de reparto ---------- */
+.reparto {
+  display: flex; flex-direction: column; gap: 9px;
+  padding: 13px;
+  background: var(--rojo-suave);
+  border: 1px solid rgba(216,32,24,.22); border-radius: 11px;
+}
+.reparto-cabecera { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+.reparto-cabecera strong { font-size: 13.5px; color: var(--app-tinta); }
+.reparto-cabecera .ratio {
+  font-size: 11.5px; font-weight: 700; color: var(--rojo);
+  font-variant-numeric: tabular-nums; white-space: nowrap;
+}
+.reparto p { margin: 0; font-size: 12.5px; line-height: 1.45; color: var(--app-gris); }
+
+.accion {
+  width: 100%; min-height: 46px;
+  display: flex; align-items: center; justify-content: center; gap: 9px;
+  background: var(--rojo); color: #fff;
+  border: 0; border-radius: 8px;
+  font: inherit; font-size: 14.5px; font-weight: 700; cursor: pointer;
+  transition: background .16s ease;
+}
+.accion:hover:not(:disabled) { background: var(--rojo-hover); }
+.accion:focus-visible { outline: 3px solid rgba(216,32,24,.35); outline-offset: 2px; }
+.accion:disabled { background: #DCD6D2; color: #FBFAFA; cursor: not-allowed; }
+/* .accion tambien se usa como <a> (link a la siguiente pantalla del flujo) */
+.accion { text-decoration: none; }
+/* Accion secundaria dentro de una fila (p.ej. "Aprobar" en una validacion) */
+.accion-mini { width: auto; min-height: 38px; padding: 0 16px; font-size: 13px; }
+
+/* ---------- Encabezado de seccion ---------- */
+.seccion {
+  display: flex; align-items: baseline; justify-content: space-between; gap: 10px;
+}
+.seccion h2 {
+  margin: 0; font-size: 11px; font-weight: 600;
+  letter-spacing: .12em; text-transform: uppercase; color: var(--app-gris);
+}
+.seccion .total {
+  font-size: 11.5px; color: var(--app-gris-cl); font-variant-numeric: tabular-nums;
+}
+
+/* ---------- Chips de zona ---------- */
+.chips {
+  display: flex; gap: 7px;
+  overflow-x: auto; overscroll-behavior-x: contain;
+  scrollbar-width: none; -ms-overflow-style: none;
+  /* el margen negativo deja que los chips lleguen al borde al desplazar */
+  margin: 0 calc(var(--pad-lateral) * -1); padding: 2px var(--pad-lateral);
+}
+.chips::-webkit-scrollbar { height: 0; display: none; }
+.chip {
+  flex: none; padding: 8px 13px;
+  background: var(--app-campo); color: var(--app-tinta);
+  border: 1px solid var(--app-borde); border-radius: 99px;
+  font: inherit; font-size: 12.5px; font-weight: 500;
+  white-space: nowrap; cursor: pointer;
+  font-variant-numeric: tabular-nums;
+  transition: background .14s ease, border-color .14s ease, color .14s ease;
+}
+.chip:hover { border-color: var(--rojo); color: var(--rojo); }
+.chip:focus-visible { outline: 2px solid var(--rojo); outline-offset: 2px; }
+.chip[aria-pressed="true"] {
+  background: var(--rojo); border-color: var(--rojo); color: #fff; font-weight: 700;
+}
+
+/* ---------- Hoja de conteo ---------- */
+.hojas { display: flex; flex-direction: column; gap: 10px; }
+.hoja {
+  display: flex; flex-direction: column;
+  border: 1px solid var(--app-borde); border-radius: 12px;
+  background: var(--app-campo);
+  overflow: hidden;
+}
+/* El estado se lee por la franja lateral, no solo por el badge: en
+   una lista larga el ojo la encuentra sin leer. */
+.hoja.en-proceso { border-color: rgba(138,90,5,.42); }
+.hoja.contada    { border-color: rgba(10,107,87,.34); }
+
+.hoja-cuerpo { display: flex; gap: 11px; padding: 13px 14px 11px; }
+.hoja-codigo {
+  flex: none; width: 38px; height: 38px;
+  display: grid; place-items: center; border-radius: 9px;
+  background: var(--espera-suave); color: var(--espera);
+  font-size: 11.5px; font-weight: 700; letter-spacing: .02em;
+  font-variant-numeric: tabular-nums;
+}
+.hoja.contada .hoja-codigo    { background: var(--ok-suave);      color: var(--ok); }
+.hoja.en-proceso .hoja-codigo { background: var(--proceso-suave); color: var(--proceso); }
+
+.hoja-datos { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.hoja-titulo {
+  display: flex; align-items: flex-start; justify-content: space-between; gap: 9px;
+}
+.hoja-titulo h3 {
+  margin: 0; font-size: 14px; font-weight: 700; color: var(--app-tinta);
+  line-height: 1.3; text-wrap: balance;
+}
+.hoja-meta {
+  font-size: 11.5px; color: var(--app-gris); font-variant-numeric: tabular-nums;
+}
+
+.progreso {
+  height: 5px; margin-top: 6px; border-radius: 99px;
+  background: var(--riel); overflow: hidden;
+}
+.progreso span {
+  display: block; height: 100%; border-radius: 99px;
+  background: var(--espera); transition: width .35s ease;
+}
+.hoja.contada .progreso span    { background: var(--ok); }
+.hoja.en-proceso .progreso span { background: var(--proceso); }
+
+.hoja-pie {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  padding: 9px 14px;
+  border-top: 1px solid #F2EFED;
+  background: #FCFBFA;
+  font-size: 12px; color: var(--app-gris);
+}
+.hoja-pie .quien { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hoja-pie .quien strong { color: var(--app-tinta); font-weight: 600; }
+.hoja-pie .sin-asignar { color: var(--app-gris-cl); font-style: italic; }
+.hoja-pie .estado-sync { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; }
+.hoja-pie .estado-sync.ok { color: var(--ok); font-weight: 600; }
+.hoja-pie .abrir {
+  background: none; border: 0; padding: 0;
+  font: inherit; font-size: 12px; font-weight: 700; color: var(--rojo);
+  cursor: pointer; display: inline-flex; align-items: center; gap: 5px;
+  white-space: nowrap;
+}
+.hoja-pie .abrir:hover { text-decoration: underline; }
+.hoja-pie .abrir:focus-visible { outline: 2px solid var(--rojo); outline-offset: 2px; }
+
+/* ---------- Pie de la lista ---------- */
+.pie-lista {
+  display: flex; align-items: center; gap: 9px;
+  padding: 12px 14px; border-radius: 11px;
+  background: var(--espera-suave); color: var(--app-gris);
+  font-size: 12.5px; font-variant-numeric: tabular-nums;
+}
+.pie-lista .icono { color: var(--app-gris-cl); }
+.pie-lista strong { color: var(--app-tinta); font-weight: 700; }
+
+/* ---------- Accion fija sobre el borde inferior ---------- */
+.accion-fija {
+  position: absolute; left: 0; right: 0; bottom: 0; z-index: 20;
+  padding: 12px var(--pad-lateral) 20px;
+  background: linear-gradient(to top, var(--app-fondo) 68%, rgba(255,255,255,0));
+}
+.accion-fija .accion { min-height: 52px; font-size: 16px; }
+
+/* ============ Pantallas 4-7: ciclo de conteos, auditoria, liquidacion, lacrado ============ */
+
+/* ---------- Banda de sincronizacion (offline-first) ----------
+   Los equipos son WiFi de tienda, sin datos moviles: la WiFi es punto
+   unico de falla. Toda pantalla con datos sincronizados necesita este
+   estado visible, no solo texto suelto. Usado en 5 de las 7 pantallas. */
+.banda-sync {
+  display: flex; align-items: center; gap: 8px;
+  padding: 9px 12px; border-radius: 10px;
+  font-size: 11.5px; font-weight: 700;
+  background: var(--ok-suave); color: var(--ok);
+}
+.banda-sync .icono-sync { flex: none; }
+.banda-sync.pendiente { background: var(--proceso-suave); color: var(--proceso); }
+.banda-sync.offline   { background: var(--falta-suave);   color: var(--falta); }
+.banda-sync[hidden]   { display: none; }
+
+/* ---------- Resumen de cifras clave (tira de KPIs) ---------- */
+.resumen-global { display: flex; flex-direction: column; gap: 10px; }
+.resumen-dato { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+.resumen-etiqueta { font-size: 12.5px; color: var(--app-gris); }
+.resumen-dato strong { font-size: 16px; font-variant-numeric: tabular-nums; color: var(--app-tinta); }
+.resumen-dato strong.ok { color: var(--ok); }
+.resumen-dato strong.falta { color: var(--falta); }
+.resumen-pct { font-size: 11.5px; font-weight: 500; color: var(--app-gris); }
+
+/* ---------- Identidad de persona (nombre + subtitulo) ----------
+   Bloque reusable dentro de una fila de planilla o de validacion. */
+.persona-datos { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.persona-datos strong { font-size: 13.5px; color: var(--app-tinta); font-weight: 700; }
+.persona-datos span { font-size: 11.5px; color: var(--app-gris); }
+
+/* ============ Pantalla 8: inicio (post-login) ============
+   El home es uno solo; el contenido se adapta al rol derivado del
+   padron (ver .roles mas arriba). No agrega tokens nuevos. */
+.rol-bloque { display: flex; flex-direction: column; gap: 8px; }
+.tarjeta p { margin: 0; font-size: 12.5px; line-height: 1.45; color: var(--app-gris); }
+
+.accesos { display: flex; flex-direction: column; gap: 10px; }
+.acceso {
+  flex-direction: row; align-items: center; gap: 12px;
+  width: 100%; text-align: left; cursor: pointer;
+  font: inherit; transition: background .14s ease, border-color .14s ease;
+}
+.acceso:hover { background: var(--rojo-suave); border-color: rgba(216,32,24,.3); }
+.acceso:focus-visible { outline: 2px solid var(--rojo); outline-offset: 2px; }
+.acceso-icono {
+  flex: none; width: 40px; height: 40px; border-radius: 10px;
+  display: grid; place-items: center;
+  background: var(--rojo-suave); color: var(--rojo);
+}
+.acceso-flecha { flex: none; color: var(--rojo); }
+
+/* ---------- Tab bar (menu inferior, por rol) ----------
+   Cuelga de .telefono, NO de .pantalla -- mismo motivo que .accion-fija:
+   tiene que quedar fijo aunque el contenido scrollee.
+
+   EL CONFLICTO CON .accion-fija: en esta pantalla la accion fija ("Ir a
+   mis hojas" / "Gestionar las 160 hojas" / "Abrir panel de auditoria") era
+   pura navegacion -- repetia EXACTO el destino del primer tab de cada rol.
+   Con el tab bar ese boton queda redundante, asi que en Inicio se saca del
+   todo (opcion "b": el tab bar reemplaza a la accion fija).
+
+   Pero esa no es la regla general. hojas.html tiene "Comenzar a contar mi
+   lote" y conteo.html tiene "Finalizar hoja #002": esas NO son navegacion a
+   otra seccion, son la accion transaccional de ESA pantalla (confirman o
+   cierran algo). Ahi el tab bar no la reemplaza, conviven (opcion "a") --
+   la accion fija se apoya justo arriba del tab bar usando --tabbar-alto,
+   y el padding-bottom de .pantalla.scroll tiene que crecer para dejar
+   lugar a los DOS. Ese ajuste queda pendiente para cuando se promueva el
+   tab bar a esas pantallas, no aplica aca porque Inicio no tiene una
+   accion transaccional propia.
+
+   Regla para decidir, pantalla por pantalla: si el boton de abajo navega
+   a una seccion paralela -> lo reemplaza el tab bar. Si confirma o cierra
+   algo de ESTA pantalla -> conviven, apilados. */
+:root { --tabbar-alto: 60px; }
+
+.tab-bar {
+  position: absolute; left: 0; right: 0; bottom: 0; z-index: 25;
+  display: flex;
+  min-height: var(--tabbar-alto);
+  background: var(--app-fondo);
+  border-top: 1px solid var(--app-borde);
+}
+.tab {
+  position: relative;
+  flex: 1; min-height: 58px;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px;
+  padding: 9px 4px 7px;
+  background: none; border: 0;
+  font: inherit; color: var(--app-gris); cursor: pointer;
+  transition: color .14s ease;
+}
+.tab:hover { color: var(--app-tinta); }
+.tab:active { background: var(--rojo-suave); }
+.tab:focus-visible { outline: 2px solid var(--rojo); outline-offset: -2px; }
+.tab-indicador {
+  position: absolute; top: 0; left: 50%; transform: translateX(-50%);
+  width: 26px; height: 3px; border-radius: 0 0 4px 4px;
+  background: var(--rojo);
+  opacity: 0; transition: opacity .14s ease;
+}
+.tab-etiqueta { font-size: 10.5px; font-weight: 600; }
+/* El activo se lee por TRES señales, no solo color: el indicador de
+   arriba, el color rojo del icono+texto, y el peso de la tipografia. */
+.tab.activo { color: var(--rojo); }
+.tab.activo .tab-indicador { opacity: 1; }
+.tab.activo .tab-etiqueta { font-weight: 700; }
+
+</style>
+
+<div class="lienzo">
+
+  <header class="cabecera">
+    <span class="eyebrow">Inventario de Autoservicio · Pantalla 8 · después del login</span>
+    <h1>Inicio</h1>
+    <p>Pantalla que carga después del login. El contenido se adapta al rol derivado del padrón.</p>
+  </header>
+
+  <div class="telefono denso">
+    <div class="barra-estado">
+      <span>09:41</span>
+      <span class="senales">
+        <svg width="15" height="11" viewBox="0 0 15 11" fill="currentColor" aria-hidden="true"><rect x="0" y="7" width="2.5" height="4" rx="1"/><rect x="4" y="5" width="2.5" height="6" rx="1"/><rect x="8" y="2.5" width="2.5" height="8.5" rx="1"/><rect x="12" y="0" width="2.5" height="11" rx="1"/></svg>
+        <svg width="22" height="11" viewBox="0 0 22 11" fill="none" aria-hidden="true"><rect x="0.5" y="0.5" width="18" height="10" rx="2.5" stroke="currentColor"/><rect x="2" y="2" width="15" height="7" rx="1.2" fill="currentColor"/><path d="M20 4v3a1.8 1.8 0 0 0 0-3Z" fill="currentColor"/></svg>
+      </span>
+    </div>
+
+    <div class="pantalla scroll">
+
+      <div class="barra-app">
+        <div class="contexto">
+          <p class="rotulo"><svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="m12 2 10 5-10 5L2 7l10-5Zm0 8.8L4.6 7 12 3.2 19.4 7 12 10.8ZM2 12l10 5 10-5-1.9-.9L12 15l-8.1-3.9L2 12Zm0 5 10 5 10-5-1.9-.9L12 20l-8.1-3.9L2 17Z"/></svg>Inicio</p>
+          <p class="sede" id="sede">Market Central Luzuriaga</p>
+          <p class="cifras" id="cifras"></p>
+        </div>
+        <button type="button" class="salir" id="btn-salir" aria-label="Cerrar sesión">
+          <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4m7 14 5-5-5-5m5 5H9"/></svg>
+        </button>
+      </div>
+
+      <div class="banda-sync ok" id="banda-sync" role="status" aria-live="polite">
+        <svg class="icono-sync" width="15" height="15" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 20a1.6 1.6 0 1 1 0-3.2 1.6 1.6 0 0 1 0 3.2Zm0-6.8c-2 0-3.9.8-5.3 2.1l1.7 1.8a5.4 5.4 0 0 1 7.2 0l1.7-1.8A7.9 7.9 0 0 0 12 13.2Zm0-5.6c-3.4 0-6.6 1.3-9 3.7l1.7 1.8a10 10 0 0 1 14.6 0l1.7-1.8c-2.4-2.4-5.6-3.7-9-3.7Z"/></svg><span id="texto-sync"></span>
+      </div>
+
+      <div class="saludo">
+        <h2 id="saludo-nombre">Hola</h2>
+        <p id="saludo-sub"></p>
+      </div>
+
+      <!-- Rol con el que se ingresó: dato derivado del padrón, se muestra,
+           no se elige (.roles, nunca .segmentado) -- si alguien entró con
+           el rol equivocado, tiene que notarlo ACA, no dos pantallas después. -->
+      <div class="roles" id="roles-badge" role="group" aria-label="Rol con el que ingresaste"></div>
+
+      <div class="tarjeta">
+        <div class="tarjeta-cabecera">
+          <svg class="icono" width="17" height="17" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M4 20V10h4v10H4Zm6 0V4h4v16h-4Zm6 0v-7h4v7h-4Z"/></svg>
+          <h2 id="estado-titulo">Estado</h2>
+          <span class="badge" id="estado-badge"></span>
+        </div>
+        <div class="resumen-global" id="estado-cuerpo"></div>
+      </div>
+
+      <div class="seccion">
+        <h2>Tus accesos</h2>
+        <span class="total" id="accesos-total"></span>
+      </div>
+      <div class="accesos" id="accesos"></div>
+
+      <div class="toast" id="toast" role="status" aria-live="polite">
+        <svg width="19" height="19" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 2 4 5.5v6c0 5 3.4 9.4 8 10.5 4.6-1.1 8-5.5 8-10.5v-6L12 2Zm-1.2 13.4-3.2-3.2 1.4-1.4 1.8 1.8 4.6-4.6 1.4 1.4-6 6Z"/></svg>
+        <span id="toast-texto"></span>
+      </div>
+
+    </div>
+
+    <!-- Los modales cuelgan del TELEFONO, no de .pantalla ni de .campo -->
+
+    <!-- Tab bar: reemplaza a .accion-fija en esta pantalla porque la accion
+         principal de Inicio era puramente navegacional (repetia el destino
+         del primer tab) -- ver comentario largo en el CSS de .tab-bar. -->
+    <nav class="tab-bar" id="tab-bar" role="navigation" aria-label="Navegación principal"></nav>
+
+  </div>
+
+  <section class="pruebas">
+    <h3>Atajos para validar</h3>
+    <p>El home es uno solo: cambiá de rol con los atajos y mirá cómo cambian el saludo, el badge de rol activo, los accesos y los tabs de abajo.</p>
+    <div class="atajos" id="atajos"></div>
+  </section>
+
+</div>
+
+<script>
+(function () {
+  'use strict';
+
+  var $ = function (id) { return document.getElementById(id); };
+  var toast = $('toast'), toastTexto = $('toast-texto');
+
+  var temporizador;
+  function mostrarToast(texto) {
+    toastTexto.textContent = texto;
+    toast.classList.add('visible');
+    clearTimeout(temporizador);
+    temporizador = setTimeout(function () { toast.classList.remove('visible'); }, 2800);
+  }
+
+  // ================= LOGICA DE LA PANTALLA =================
+
+  /* Los 3 roles y las 3 personas son las mismas de las otras maquetas
+     (mobile/lib/adaptadores/sesion-memoria.ts, hojas.html, mis-hojas.html,
+     auditoria.html) -- no se inventan datos nuevos para este home. */
+  var PERSONAS = {
+    coordinador: { nombre: 'José', completo: 'José Tarazona', rolTexto: 'Coordinador' },
+    conteo:      { nombre: 'Elena', completo: 'Elena Príncipe', rolTexto: 'Conteo' },
+    auditor:     { nombre: 'Gilmer', completo: 'Gilmer Quispe', rolTexto: 'Auditor' }
+  };
+
+  var ORDEN_ROLES = ['coordinador', 'conteo', 'auditor'];
+  var ROL_CORTO = { coordinador: 'Coord.', conteo: 'Conteo', auditor: 'Auditor' };
+
+  /* Cada rol aterriza en accesos distintos (decisión del cliente):
+     Coordinador arma y liquida, Conteo solo cuenta su lote, Auditor
+     verifica y lacra. Ninguno repite el destino de otro -- el lacrado es
+     del Auditor, nunca del Coordinador (lo aprueban Gilmer + Rosa). */
+  var ACCESOS = {
+    coordinador: [
+      { destino: 'hojas.html', titulo: 'Gestión de hojas', sub: 'Crear y asignar las 160 hojas' },
+      { destino: 'ciclo-conteos.html', titulo: 'Ciclo de conteos', sub: 'Embudo de discrepancias entre las 3 pasadas' },
+      { destino: 'liquidacion.html', titulo: 'Liquidación y nómina', sub: 'Cierre de Agosto 2026 · 11 colaboradores' }
+    ],
+    conteo: [
+      { destino: 'mis-hojas.html', titulo: 'Mis hojas', sub: 'Tu bloque de 20 hojas · #002 a #021' }
+    ],
+    auditor: [
+      { destino: 'auditoria.html', titulo: 'Panel de auditoría', sub: '8.000 ítems auditados · 130 con diferencia final' },
+      { destino: 'ciclo-conteos.html', titulo: 'Ciclo de conteos', sub: '3er conteo cerrado · listo para auditar' },
+      { destino: 'lacrado.html', titulo: 'Aprobación y lacrado', sub: 'Firma y cierre del inventario auditado' }
+    ]
+  };
+
+  /* Los tabs por rol -- misma decision de negocio que ACCESOS, pero acá
+     entra un criterio mas: un tab se gana el lugar si se vuelve varias
+     veces por jornada. "Liquidación" y "Lacrado" pasan UNA vez al mes al
+     cerrar el período (igual de infrecuentes los dos, aunque el cliente
+     solo nombró a Liquidación como ejemplo) -- por eso quedan afuera del
+     tab bar y viven solo como acceso del home (ver ACCESOS). "Ciclo" sí
+     entra para Coordinador y Auditor: durante el día activo lo chequean
+     como pulso del avance, no es un cierre. */
+  var TABS = {
+    coordinador: [
+      { id: 'inicio', destino: 'home.html', etiqueta: 'Inicio' },
+      { id: 'hojas', destino: 'hojas.html', etiqueta: 'Hojas' },
+      { id: 'ciclo', destino: 'ciclo-conteos.html', etiqueta: 'Ciclo' }
+    ],
+    conteo: [
+      { id: 'inicio', destino: 'home.html', etiqueta: 'Inicio' },
+      { id: 'mis-hojas', destino: 'mis-hojas.html', etiqueta: 'Mis hojas' },
+      { id: 'contar', destino: 'conteo.html', etiqueta: 'Contar' }
+    ],
+    auditor: [
+      { id: 'inicio', destino: 'home.html', etiqueta: 'Inicio' },
+      { id: 'auditoria', destino: 'auditoria.html', etiqueta: 'Auditoría' },
+      { id: 'ciclo', destino: 'ciclo-conteos.html', etiqueta: 'Ciclo' }
+    ]
+  };
+
+  var ICONO_TAB = {
+    inicio: '<svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 3 2 12h3v9h14v-9h3Z"/></svg>',
+    hojas: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 9h10M7 13h10M7 17h6"/></svg>',
+    ciclo: '<svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="m12 2 10 5-10 5L2 7l10-5Zm0 8.8L4.6 7 12 3.2 19.4 7 12 10.8ZM2 12l10 5 10-5-1.9-.9L12 15l-8.1-3.9L2 12Zm0 5 10 5 10-5-1.9-.9L12 20l-8.1-3.9L2 17Z"/></svg>',
+    auditoria: '<svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M4 20V10h4v10H4Zm6 0V4h4v16h-4Zm6 0v-7h4v7h-4Z"/></svg>',
+    'mis-hojas': '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 9h10M7 13h10M7 17h6"/></svg>',
+    contar: '<svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 2 4 5.5v6c0 5 3.4 9.4 8 10.5 4.6-1.1 8-5.5 8-10.5v-6L12 2Zm-1.2 13.4-3.2-3.2 1.4-1.4 1.8 1.8 4.6-4.6 1.4 1.4-6 6Z"/></svg>'
+  };
+
+  /* La barra de contexto tambien es conteo ciego para Conteo: mostrarle el
+     total de 8.000 items o el % del inventario ahi arriba, antes de que
+     llegue a ver el bloque de estado, contamina el conteo igual que
+     mostrarselo mas abajo -- por eso NO comparte texto con los otros dos. */
+  var CIFRAS = {
+    coordinador: '160 hojas · 8.000 ítems · 160 asignadas',
+    auditor:     '160 hojas · 8.000 ítems · 3er conteo cerrado',
+    conteo:      'Hoja #002 · Lote de 50 · Góndola A2'
+  };
+
+  /* El corazón del home: Coordinador y Auditor ya manejan totales del
+     inventario en sus propias pantallas (hojas.html, auditoria.html) --
+     Conteo NUNCA los ve, ni aca ni en ningun lado: su bloque es SU avance
+     (su hoja, sus hojas pendientes), nunca una cifra del ERP ni del total
+     de 8.000 items. Es la regla de conteo ciego aplicada al home. */
+  var ESTADO = {
+    coordinador: {
+      titulo: 'Estado del inventario',
+      badgeClase: 'proceso',
+      badgeTexto: '21% finalizado',
+      filas: [
+        { etiqueta: 'Hojas asignadas', valor: '160', pct: '/ 160 (100%)' },
+        { etiqueta: 'Hojas finalizadas', valor: '34', pct: '/ 160 (21%)', clase: 'ok' },
+        { etiqueta: 'Contando ahora', valor: '8', pct: 'de 11 colaboradores' }
+      ]
+    },
+    conteo: {
+      titulo: 'Tu avance',
+      badgeClase: 'proceso',
+      badgeTexto: '1 hoja en proceso',
+      filas: [
+        { etiqueta: 'Hoja #002 · Aceites y Fideos', valor: '32', pct: '/ 50 ítems', clase: 'ok' },
+        { etiqueta: 'Tus hojas sin empezar', valor: '19', pct: 'de 20' }
+      ]
+    },
+    auditor: {
+      titulo: 'Estado de la auditoría',
+      badgeClase: 'falta',
+      badgeTexto: '130 con diferencia',
+      filas: [
+        { etiqueta: 'Ciclo de conteos', valor: '3er conteo', pct: 'cerrado', clase: 'ok' },
+        { etiqueta: 'Cuadrado tras 3 pasadas', valor: '7.870', pct: '/ 8.000 (98,4%)', clase: 'ok' },
+        { etiqueta: 'Por auditar', valor: '130', pct: 'ítems', clase: 'falta' }
+      ]
+    }
+  };
+
+  var ICONO_ACCESO = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 9h10M7 13h10M7 17h6"/></svg>';
+  var FLECHA = '<svg class="acceso-flecha" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg>';
+
+  var rolActual = 'conteo';
+  var tabActivo = 'inicio';
+
+  function tarjetaAcceso(a) {
+    return '<button type="button" class="tarjeta acceso" data-destino="' + a.destino + '" data-titulo="' + a.titulo + '">' +
+      '<span class="acceso-icono">' + ICONO_ACCESO + '</span>' +
+      '<span class="persona-datos"><strong>' + a.titulo + '</strong><span>' + a.sub + '</span></span>' +
+      FLECHA +
+    '</button>';
+  }
+
+  function pintarRoles() {
+    $('roles-badge').innerHTML = ORDEN_ROLES.map(function (r) {
+      var activo = r === rolActual;
+      return '<div class="rol' + (activo ? ' activo' : '') + '"' + (activo ? ' aria-current="true"' : '') + '>' + ROL_CORTO[r] + '</div>';
+    }).join('');
+  }
+
+  function filaEstado(f) {
+    var clase = f.clase ? ' class="' + f.clase + '"' : '';
+    return '<div class="resumen-dato">' +
+      '<span class="resumen-etiqueta">' + f.etiqueta + '</span>' +
+      '<strong' + clase + '>' + f.valor + ' <span class="resumen-pct">' + f.pct + '</span></strong>' +
+    '</div>';
+  }
+
+  function pintarEstado() {
+    var e = ESTADO[rolActual];
+    $('estado-titulo').textContent = e.titulo;
+    var badge = $('estado-badge');
+    badge.className = 'badge ' + e.badgeClase;
+    badge.textContent = e.badgeTexto;
+    $('estado-cuerpo').innerHTML = e.filas.map(filaEstado).join('');
+  }
+
+  function tabBoton(t) {
+    var activo = t.id === tabActivo;
+    return '<button type="button" class="tab' + (activo ? ' activo' : '') + '" data-destino="' + t.destino + '" data-id="' + t.id + '"' +
+      (activo ? ' aria-current="page"' : '') + '>' +
+      '<span class="tab-indicador" aria-hidden="true"></span>' +
+      ICONO_TAB[t.id] +
+      '<span class="tab-etiqueta">' + t.etiqueta + '</span>' +
+    '</button>';
+  }
+
+  function pintarTabs() {
+    var lista = TABS[rolActual];
+    $('tab-bar').innerHTML = lista.map(tabBoton).join('');
+    Array.prototype.forEach.call(document.querySelectorAll('.tab'), function (btn) {
+      btn.addEventListener('click', function () {
+        tabActivo = btn.getAttribute('data-id');
+        pintarTabs();
+        mostrarToast('Iría a "' + btn.querySelector('.tab-etiqueta').textContent + '" (' + btn.getAttribute('data-destino') + ').');
+      });
+    });
+  }
+
+  function render() {
+    var p = PERSONAS[rolActual];
+    $('saludo-nombre').textContent = 'Hola, ' + p.nombre;
+    $('saludo-sub').textContent = p.completo + ' · ' + p.rolTexto;
+    $('cifras').textContent = CIFRAS[rolActual];
+
+    pintarRoles();
+    pintarEstado();
+
+    var lista = ACCESOS[rolActual];
+    $('accesos').innerHTML = lista.map(tarjetaAcceso).join('');
+    $('accesos-total').textContent = lista.length + (lista.length === 1 ? ' acceso' : ' accesos');
+
+    Array.prototype.forEach.call(document.querySelectorAll('.acceso'), function (btn) {
+      btn.addEventListener('click', function () {
+        mostrarToast('Iría a "' + btn.getAttribute('data-titulo') + '" (' + btn.getAttribute('data-destino') + ').');
+      });
+    });
+
+    tabActivo = 'inicio';
+    pintarTabs();
+  }
+
+  $('btn-salir').addEventListener('click', function () {
+    mostrarToast('Cerrando la sesión de ' + PERSONAS[rolActual].completo);
+  });
+
+  /* ---------- Banda de sincronizacion (offline-first) ----------
+     Mismo patron que conteo.html: se oculta cuando todo esta sincronizado,
+     solo avisa si hay algo pendiente u offline. Es independiente del rol
+     -- refleja el estado de ESTE equipo, no de quien inicio sesion. */
+  var online = true;
+  var pendientesSync = 0;
+
+  function renderBandaSync() {
+    var banda = $('banda-sync');
+    if (!online) {
+      banda.hidden = false;
+      banda.className = 'banda-sync offline';
+      $('texto-sync').textContent = 'Sin conexión · ' + pendientesSync +
+        (pendientesSync === 1 ? ' cambio guardado en el equipo' : ' cambios guardados en el equipo');
+    } else if (pendientesSync > 0) {
+      banda.hidden = false;
+      banda.className = 'banda-sync pendiente';
+      $('texto-sync').textContent = 'Guardado en el equipo · ' + pendientesSync +
+        (pendientesSync === 1 ? ' cambio sin sincronizar' : ' cambios sin sincronizar');
+    } else {
+      banda.hidden = true;
+    }
+  }
+
+  function simularWifi() {
+    online = !online;
+    if (online) {
+      mostrarToast('WiFi de tienda recuperada · sincronizando cambios pendientes');
+      var pend = pendientesSync;
+      if (pend > 0) {
+        setTimeout(function () {
+          pendientesSync = 0;
+          renderBandaSync();
+          mostrarToast(pend + (pend === 1 ? ' cambio sincronizado' : ' cambios sincronizados'));
+        }, 1300);
+      } else {
+        renderBandaSync();
+      }
+    } else {
+      pendientesSync += 2;
+      renderBandaSync();
+      mostrarToast('Sin conexión · el equipo sigue guardando los cambios');
+    }
+  }
+
+  function pintarAtajos() {
+    var cont = $('atajos');
+    cont.innerHTML = '';
+    [
+      { rol: 'coordinador', etiqueta: 'Ver como Coordinador (José)' },
+      { rol: 'conteo', etiqueta: 'Ver como Conteo (Elena)' },
+      { rol: 'auditor', etiqueta: 'Ver como Auditor (Gilmer)' }
+    ].forEach(function (o) {
+      var b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'atajo';
+      b.textContent = o.etiqueta;
+      b.addEventListener('click', function () {
+        rolActual = o.rol;
+        render();
+        mostrarToast('Ahora ves el home como ' + PERSONAS[o.rol].completo + ' (' + PERSONAS[o.rol].rolTexto + ')');
+      });
+      cont.appendChild(b);
+    });
+
+    var btnWifi = document.createElement('button');
+    btnWifi.type = 'button';
+    btnWifi.className = 'atajo';
+    btnWifi.textContent = 'Simular pérdida de WiFi';
+    btnWifi.addEventListener('click', simularWifi);
+    cont.appendChild(btnWifi);
+  }
+
+  render();
+  renderBandaSync();
+  pintarAtajos();
+
+  // =========================================================
+})();
+</script>
