@@ -2,12 +2,9 @@
  * Adaptador en memoria de RepositorioUsuarios.
  *
  * Sembrado a partir del MISMO padrón de sesion-memoria.ts (4 sucursales,
- * sus colaboradores) — no se inventa una lista paralela de personas. Se
- * le suma UNA cuenta de rol Administrador (id 999): no existe ningún
- * Administrador en el padrón de login todavía (sesion-memoria.ts no es
- * parte de esta tarea, lo agrega el agente de sesión/integración), así
- * que esta cuenta es gestionable acá pero, hoy, no puede entrar por el
- * login — ver el resumen de la tarea.
+ * sus colaboradores, y el Administrador que ahora aparece en las 4 listas
+ * — ver sesion-memoria.ts#colaboradores) — no se inventa una lista
+ * paralela de personas.
  *
  * `rolesQuePuedeCrear`/`puedeCrearRol` viven en lib/dominio/roles.ts (regla
  * de negocio pura, sin dependencias) — este adaptador solo la importa para
@@ -26,15 +23,7 @@ import { sesionMemoria } from './sesion-memoria';
 /** Las mismas 4 sucursales de sesion-memoria.ts — se listan por id, sin duplicar sus nombres. */
 const IDS_SUCURSAL = [1, 2, 3, 4];
 
-const usuarios: Usuario[] = [
-  {
-    id: 999,
-    nombre: 'Administrador General',
-    dni: '0000',
-    rol: 'administrador',
-    activo: true,
-  },
-];
+const usuarios: Usuario[] = [];
 let proximoId = 1000;
 
 let semillaPromise: Promise<void> | null = null;
@@ -44,7 +33,12 @@ function asegurarSemilla(): Promise<void> {
       for (const sucursalId of IDS_SUCURSAL) {
         const colaboradores = await sesionMemoria.colaboradores(sucursalId);
         for (const c of colaboradores) {
-          usuarios.push({ id: c.id, nombre: c.nombre, dni: c.dni, rol: c.rol, sucursalId, activo: true });
+          // El Administrador viene en las 4 listas (no cuelga de una sola
+          // sucursal, ver sesion-memoria.ts) — se agrega una sola vez, sin
+          // sucursalId, la primera vez que aparece.
+          if (usuarios.some((u) => u.id === c.id)) continue;
+          const esAdministrador = c.rol === 'administrador';
+          usuarios.push({ id: c.id, nombre: c.nombre, dni: c.dni, rol: c.rol, sucursalId: esAdministrador ? undefined : sucursalId, activo: true });
         }
       }
     })();
