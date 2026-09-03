@@ -34,6 +34,13 @@ export interface RepositorioSesion {
   sucursales(): Promise<Sucursal[]>;
   /** Padron de la sucursal. El rol viene de aca, no lo elige la persona. */
   colaboradores(sucursalId: number): Promise<Colaborador[]>;
+  /**
+   * El Administrador es del sistema, no de una tienda (`Sesion.sucursal` es
+   * `null` para este rol) — por eso no sale de `colaboradores(sucursalId)`
+   * como el resto y necesita su propio padron. Sin esto, el login no tiene
+   * forma de ofrecerlo en ningun combo de sucursal.
+   */
+  administradores(): Promise<Colaborador[]>;
   ingresar(colaboradorId: number, pin: string): Promise<Sesion>;
   sesionActiva(): Promise<Sesion | null>;
   cerrar(): Promise<void>;
@@ -397,4 +404,139 @@ export interface RepositorioConfigDynamics {
   guardar(datos: DatosConfigDynamics): Promise<EstadoConfigDynamics>;
   /** Prueba las credenciales YA guardadas contra Azure AD, sin traer los 8.000 ítems del catálogo. */
   probarConexion(): Promise<ResultadoPruebaDynamics>;
+}
+
+// ---------------------------------------------------------------------------
+// Histórico (rol Administrador y Auditor)
+// ---------------------------------------------------------------------------
+
+/**
+ * Ciclo de vida de un inventario (backend/README.md#Histórico):
+ *
+ *   en_curso ──▶ conteo_cerrado ──▶ liquidado ──▶ lacrado (INMUTABLE)
+ *       └──▶ anulado
+ *
+ * `lacrado` es el único estado del que no se vuelve: cualquier ajuste
+ * posterior entra en el período siguiente.
+ */
+export type EstadoInventario = 'en_curso' | 'conteo_cerrado' | 'liquidado' | 'lacrado' | 'anulado';
+
+/** Cifras del cierre. Casi todo es `number | null`: un inventario en curso todavía no tiene resultado calculado, y `0` no es lo mismo que "no se calculó". */
+export interface ResultadoInventario {
+  itemsTotales: number;
+  itemsConDiferencia: number;
+  itemsCuadrados: number;
+  porcentajeCuadrado: number;
+  montoFaltanteBruto: number;
+  montoFaltanteNeto: number | null;
+  cuotaBase: number | null;
+  /** Solo en el detalle: el embudo de las 3 rondas y el desglose de unidades. */
+  itemsSegundoConteo?: number;
+  itemsTercerConteo?: number;
+  unidadesFaltantes?: number;
+  unidadesSobrantes?: number;
+}
+
+/** Una fila del listado. Sin hojas ni firmas: eso lo trae el detalle. */
+export interface InventarioHistorico {
+  id: number;
+  sucursalId: number;
+  sucursalNombre: string;
+  estado: EstadoInventario;
+  /** "2026-08" — el identificador con el que la gente habla del inventario. */
+  periodo: string;
+  periodoAnio: number;
+  periodoMes: number;
+  tamanoHoja: number | null;
+  snapshotItems: number;
+  cerradoEn: string | null;
+  resultado: ResultadoInventario | null;
+  /** Cuántas de las 2 firmas de auditoría ya están. */
+  aprobaciones: number;
+  /** Solo el folio: para la lista alcanza con saber SI hay sello y cuál es. */
+  folio: string | null;
+}
+
+/**
+ * Una de las dos firmas que habilitaron el lacrado.
+ *
+ * `rolAlAprobar` es el rol CONGELADO al firmar, no el actual: si mañana
+ * esa persona cambia de rol, la firma tiene que seguir diciendo con qué
+ * autoridad se dio.
+ */
+export interface AprobacionCierre {
+  aprobadorId: number;
+  aprobadorNombre: string;
+  rolAlAprobar: Rol;
+  aprobadoEn: string;
+  nota: string | null;
+}
+
+/** El sello. Existe únicamente si el inventario está lacrado. */
+export interface SelloLacrado {
+  /** "INV-2026-06-LUZ-8000-06A" — el identificador legible que se cita en un acta. */
+  folio: string;
+  /** SHA-256 del contenido canónico del cierre: permite recalcular la huella y detectar una alteración. */
+  hash: string;
+  lacradoEn: string;
+  lacradoPor: { id: number; nombre: string };
+  /** Constancia del registro MANUAL en Dynamics — el ajuste automático es fase 2. */
+  registroErp: { referencia: string; registradoEn: string; registradoPor: { id: number; nombre: string } } | null;
+}
+
+export interface HojaHistorica {
+  id: number;
+  numero: string;
+  zona: string | null;
+  gondola: string | null;
+  tamano: number;
+  estado: string;
+  asignados: { id: number; nombre: string }[];
+  productos: number;
+  contados: number;
+}
+
+export interface DetalleInventarioHistorico extends Omit<InventarioHistorico, 'folio' | 'aprobaciones'> {
+  cerradoPor: { id: number; nombre: string } | null;
+  hojas: HojaHistorica[];
+  /** Cuántos ítems tienen diferencia (el listado en sí es paginado aparte). */
+  diferencias: number;
+  liquidaciones: number;
+  aprobaciones: AprobacionCierre[];
+  lacrado: SelloLacrado | null;
+}
+
+export interface FiltroHistorial {
+  sucursalId?: number;
+  estado?: EstadoInventario;
+  limite?: number;
+  desplazamiento?: number;
+}
+
+export interface PaginaHistorial {
+  total: number;
+  inventarios: InventarioHistorico[];
+}
+
+/**
+ * El registro de todos los inventarios: en qué estado está cada uno, cómo
+ * cerró y quién lo firmó. Responde la pregunta del cliente ("falta el
+ * registro de todos los inventarios, dónde llevaremos el control y el
+ * histórico").
+ *
+ * SOLO Administrador y Auditor. `coordinador` y `conteo` NO — y no es una
+ * omisión: es la misma regla de conteo ciego que sostiene el sistema. Quien
+ * cuenta no puede ver el resultado del mes pasado ni el faltante ya
+ * detectado, porque entonces deja de contar a ciegas y pasa a confirmar un
+ * número que vio antes. El backend devuelve 403; la app no ofrece el acceso.
+ *
+ * Es de solo lectura a propósito: firmar y lacrar viven en la pantalla de
+ * Lacrado (RepositorioLacrado), donde el control de dos personas ya está
+ * resuelto. Un histórico que además escribe es un histórico que se puede
+ * reescribir.
+ */
+export interface RepositorioHistorial {
+  listar(filtro?: FiltroHistorial): Promise<PaginaHistorial>;
+  /** Rechaza con 403 si el inventario es de otra sucursal y quien pide es Auditor. */
+  detalle(inventarioId: number): Promise<DetalleInventarioHistorico>;
 }

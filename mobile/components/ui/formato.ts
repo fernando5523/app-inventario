@@ -26,3 +26,28 @@ export function formatoMoneda(valor: number): string {
   const [enteros, decimales] = Math.abs(valor).toFixed(2).split('.');
   return `${negativo ? '-' : ''}${conMiles(Number(enteros))},${decimales}`;
 }
+
+/**
+ * "2026-06-29T16:00:00.000Z" -> "29/06/2026" y "29/06/2026 16:00".
+ *
+ * A mano, como todo lo de este archivo: `toLocaleDateString` depende de los
+ * datos ICU, que en Hermes no están garantizados y caen a formato inglés en
+ * silencio — un histórico que dice "06/29/2026" a un usuario peruano es un
+ * dato mal leído, no un detalle cosmético.
+ */
+export function formatoFecha(iso: string): string {
+  const d = new Date(iso);
+  const dd = String(d.getDate()).padStart(2, '0');
+  const mm = String(d.getMonth() + 1).padStart(2, '0');
+  return `${dd}/${mm}/${d.getFullYear()}`;
+}
+
+export function formatoFechaHora(iso: string): string {
+  const d = new Date(iso);
+  const hh = String(d.getHours()).padStart(2, '0');
+  const mi = String(d.getMinutes()).padStart(2, '0');
+  return `${formatoFecha(iso)} ${hh}:${mi}`;
+}
+
+/** ["ENE".."DIC"] — los meses en la abreviatura de tres letras que usan las maquetas. */
+export const MESES_CORTOS = ['ENE', 'FEB', 'MAR', 'ABR', 'MAY', 'JUN', 'JUL', 'AGO', 'SET', 'OCT', 'NOV', 'DIC'];

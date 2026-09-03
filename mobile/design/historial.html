@@ -1,0 +1,1620 @@
+<meta charset="utf-8">
+<title>Historial de inventarios</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Baloo+2:wght@600;700&family=Figtree:wght@400;500;600;700&display=swap">
+<style>
+/* =====================================================================
+   TRUJILLO · Sistema de controles de la app de inventario
+   Validado en la pantalla 1 (login). Copiar completo en cada maqueta.
+
+   Regla de oro: los tokens de marca son FIJOS en ambos temas. La app
+   pinta su propio mundo; solo el lienzo que rodea al telefono sigue el
+   tema del visor.
+   ===================================================================== */
+
+:root {
+  /* Marca — valores tomados del PNG del logo, no estimados */
+  --rojo:        #D82018;
+  --rojo-hover:  #B81810;
+  --rojo-suave:  #FDF0EF;
+  --dorado:      #F8B818;
+
+  /* Superficie de la app */
+  --app-fondo:   #FFFFFF;
+  --app-tinta:   #1C1917;
+  --app-gris:    #6B6560;
+  --app-gris-cl: #9A938D;
+  --app-borde:   #E3DEDA;
+  --app-campo:   #FFFFFF;
+
+  /* Lienzo del documento de maqueta (fuera del telefono) — tema claro */
+  --lienzo:      #F2EEEB;
+  --lienzo-alt:  #FFFFFF;
+  --lienzo-tinta:#26211E;
+  --lienzo-gris: #6E6660;
+  --lienzo-borde:#DED7D2;
+
+  --sombra: 0 1px 2px rgba(28,25,23,.04), 0 12px 40px rgba(28,25,23,.10);
+  --radio: 10px;
+  --tabbar-alto: 60px;
+
+  --fuente-ui: 'Figtree', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  --fuente-marca: 'Baloo 2', 'Figtree', -apple-system, sans-serif;
+}
+
+/* Solo el lienzo cambia con el tema. Nunca los tokens --app-* */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --lienzo:      #191614;
+    --lienzo-alt:  #221E1B;
+    --lienzo-tinta:#F2EEEB;
+    --lienzo-gris: #A79E97;
+    --lienzo-borde:#332D29;
+    --sombra: 0 1px 2px rgba(0,0,0,.4), 0 16px 48px rgba(0,0,0,.55);
+  }
+}
+:root[data-theme="dark"] {
+  --lienzo:      #191614;
+  --lienzo-alt:  #221E1B;
+  --lienzo-tinta:#F2EEEB;
+  --lienzo-gris: #A79E97;
+  --lienzo-borde:#332D29;
+  --sombra: 0 1px 2px rgba(0,0,0,.4), 0 16px 48px rgba(0,0,0,.55);
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--lienzo);
+  color: var(--lienzo-tinta);
+  font-family: var(--fuente-ui);
+  -webkit-font-smoothing: antialiased;
+}
+
+.lienzo {
+  min-height: 100vh;
+  display: flex; flex-direction: column; align-items: center;
+  gap: 28px; padding: 32px 20px 56px;
+}
+
+/* ---------- Cabecera del documento de maqueta ---------- */
+.cabecera { text-align: center; display: flex; flex-direction: column; gap: 6px; }
+.cabecera .eyebrow {
+  font-size: 11px; font-weight: 600; letter-spacing: .13em;
+  text-transform: uppercase; color: var(--lienzo-gris);
+}
+.cabecera h1 {
+  margin: 0; font-family: var(--fuente-marca); font-weight: 700;
+  font-size: clamp(22px, 4vw, 28px); letter-spacing: -.01em; text-wrap: balance;
+}
+.cabecera p { margin: 0; font-size: 14px; color: var(--lienzo-gris); max-width: 52ch; }
+
+/* ---------- Marco del telefono ---------- */
+/* Pantalla operativa: mas ancho util para listas y tarjetas */
+.telefono.denso { --pad-lateral: 14px; }
+
+.telefono {
+  /* Un solo lugar decide el margen lateral. Lo leen .pantalla, .toast,
+     .chips y .accion-fija, asi una pantalla densa gana ancho sin que
+     haya que recalibrar cada uno a mano. */
+  --pad-lateral: 26px;
+  width: 380px; max-width: 100%;
+  background: var(--app-fondo);
+  border-radius: 34px;
+  border: 1px solid var(--lienzo-borde);
+  box-shadow: var(--sombra);
+  overflow: hidden;
+  position: relative;   /* ancla de los modales */
+}
+.barra-estado {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 12px 22px 4px;
+  font-size: 12px; font-weight: 600; color: var(--app-tinta);
+  font-variant-numeric: tabular-nums;
+}
+.barra-estado .senales { display: flex; gap: 5px; align-items: center; opacity: .75; }
+
+/* OBLIGATORIO el `color`: sin el, todo texto sin color propio hereda
+   --lienzo-tinta, que en tema oscuro es CLARO, y desaparece sobre el
+   fondo blanco de la app. */
+.pantalla {
+  position: relative;
+  padding: 8px var(--pad-lateral) 26px;
+  display: flex; flex-direction: column; gap: 20px;
+  color: var(--app-tinta);
+}
+
+/* ---------- Marca ---------- */
+.marca { display: flex; flex-direction: column; align-items: center; padding: 14px 0 4px; }
+.marca img { width: 172px; height: auto; display: block; }
+
+.saludo { display: flex; flex-direction: column; gap: 2px; }
+.saludo h2 {
+  margin: 0; display: flex; align-items: center; gap: 9px;
+  font-family: var(--fuente-marca); font-weight: 700; font-size: 27px;
+  color: var(--rojo); letter-spacing: -.01em;
+}
+.saludo p { margin: 0; font-size: 14.5px; color: var(--app-gris); }
+
+/* ---------- Campos ---------- */
+.campos { display: flex; flex-direction: column; gap: 15px; }
+/* position: relative -> es el ancla del desplegable */
+.campo { position: relative; display: flex; flex-direction: column; gap: 6px; }
+.campo label { font-size: 13.5px; font-weight: 600; color: var(--app-tinta); }
+
+.control {
+  width: 100%; display: flex; align-items: center; gap: 12px;
+  min-height: 54px; padding: 0 15px;
+  background: var(--app-campo);
+  border: 1px solid var(--app-borde);
+  border-radius: var(--radio);
+  font: inherit; font-size: 15.5px; color: var(--app-tinta);
+  text-align: left; cursor: pointer;
+  transition: border-color .15s ease, box-shadow .15s ease;
+}
+.control:hover:not(:disabled) { border-color: #CFC7C1; }
+.control:focus-visible {
+  outline: none; border-color: var(--rojo);
+  box-shadow: 0 0 0 3px rgba(216,32,24,.14);
+}
+.control[aria-expanded="true"] {
+  border-color: var(--rojo); box-shadow: 0 0 0 3px rgba(216,32,24,.14);
+}
+.control:disabled { background: #F7F5F4; cursor: not-allowed; opacity: .7; }
+.control .valor { flex: 1; min-width: 0; }
+.control .valor.vacio { color: var(--app-gris-cl); }
+.control .sub {
+  display: block; font-size: 11.5px; color: var(--app-gris);
+  margin-top: 1px; font-variant-numeric: tabular-nums;
+}
+.chevron { color: var(--rojo); flex: none; transition: transform .18s ease; }
+.control[aria-expanded="true"] .chevron { transform: rotate(180deg); }
+.control:disabled .chevron { color: var(--app-gris-cl); }
+
+/* Los iconos de campo van SIEMPRE en gris. El rojo se reserva para
+   el chevron, la seleccion y las acciones. */
+.icono { flex: none; color: var(--app-gris-cl); }
+
+/* ---------- Desplegable ---------- */
+.lista {
+  /* Fuera del flujo: si ocupara espacio, abrirlo empujaria todo lo de
+     abajo y la pantalla saltaria. */
+  position: absolute;
+  top: 100%; left: 0; right: 0; z-index: 30;
+  margin-top: 6px;
+  /* El tope NO es multiplo de la altura de fila a proposito: el corte
+     cae sobre una fila a medias y eso avisa que hay mas abajo. */
+  max-height: 262px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+  /* Barra oculta en los tres motores: una lista nativa se desplaza,
+     no muestra barra. */
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+  border: 1px solid var(--app-borde); border-radius: var(--radio);
+  background: var(--app-campo);
+  box-shadow: 0 10px 30px rgba(28,25,23,.14);
+}
+.lista::-webkit-scrollbar { width: 0; height: 0; display: none; }
+.lista[hidden] { display: none; }
+
+.opcion {
+  width: 100%; display: flex; align-items: center; gap: 12px;
+  padding: 12px 15px; background: none; border: 0;
+  border-bottom: 1px solid #F0ECE9;
+  font: inherit; font-size: 15px; color: var(--app-tinta);
+  text-align: left; cursor: pointer;
+}
+.opcion:last-child { border-bottom: 0; }
+.opcion:hover, .opcion:focus-visible { background: var(--rojo-suave); outline: none; }
+.opcion[aria-selected="true"],
+.opcion[aria-selected="true"]:hover {
+  background: var(--rojo); color: #fff; font-weight: 600;
+}
+.opcion[aria-selected="true"] .meta { color: rgba(255,255,255,.82); }
+.opcion .meta {
+  display: block; font-size: 11.5px; font-weight: 400; color: var(--app-gris);
+  margin-top: 1px; font-variant-numeric: tabular-nums;
+}
+
+/* ---------- PIN ---------- */
+.pin-puntos { display: flex; align-items: center; gap: 11px; }
+.pin-puntos.grande { justify-content: center; gap: 15px; min-height: 30px; }
+.pin-puntos.grande .punto-pin { width: 14px; height: 14px; }
+.pin-puntos.grande .punto-pin.visible { min-width: 14px; font-size: 19px; }
+
+.punto-pin {
+  width: 11px; height: 11px; border-radius: 50%;
+  border: 1.5px solid #C9C1BB; background: transparent;
+  display: grid; place-items: center;
+  font-size: 15px; font-weight: 700; color: var(--app-tinta);
+  font-variant-numeric: tabular-nums;
+  transition: background .14s ease, border-color .14s ease, transform .14s ease;
+}
+.punto-pin.lleno { background: var(--app-tinta); border-color: var(--app-tinta); transform: scale(1.06); }
+.punto-pin.visible {
+  width: auto; min-width: 11px; height: auto;
+  background: transparent; border-color: transparent; transform: none;
+}
+
+.teclado { display: grid; grid-template-columns: repeat(3, 1fr); gap: 9px; }
+.tecla {
+  min-height: 50px; display: grid; place-items: center;
+  background: var(--app-campo);
+  border: 1px solid var(--app-borde); border-radius: var(--radio);
+  font: inherit; font-size: 21px; font-weight: 600; color: var(--app-tinta);
+  font-variant-numeric: tabular-nums; cursor: pointer;
+  transition: background .12s ease, border-color .12s ease, transform .08s ease;
+}
+.tecla:hover { border-color: #CFC7C1; }
+.tecla:active { background: var(--rojo-suave); border-color: var(--rojo); transform: scale(.97); }
+.tecla:focus-visible { outline: 2px solid var(--rojo); outline-offset: 2px; }
+.tecla.auxiliar { color: var(--app-gris); }
+.tecla.auxiliar:hover { color: var(--app-tinta); }
+
+/* ---------- Modal ----------
+   Va colgado de .telefono, NO de .campo: colgando del campo se sale de
+   la pantalla cuando el campo esta abajo. Centrado siempre. */
+.modal {
+  position: absolute; inset: 0; z-index: 60;
+  display: flex; align-items: center; justify-content: center;
+  padding: 22px;
+}
+.modal[hidden] { display: none; }
+.modal-fondo {
+  position: absolute; inset: 0;
+  background: rgba(28,25,23,.42);
+  animation: aparecer .18s ease;
+}
+.modal-caja {
+  position: relative;
+  width: 100%; max-width: 310px;
+  display: flex; flex-direction: column; gap: 15px;
+  padding: 17px;
+  background: var(--app-campo);
+  border-radius: 16px;
+  box-shadow: 0 22px 55px rgba(28,25,23,.32);
+  animation: subir .2s cubic-bezier(.2,.8,.3,1);
+}
+@keyframes aparecer { from { opacity: 0; } }
+@keyframes subir { from { opacity: 0; transform: translateY(10px) scale(.97); } }
+
+.modal-cabecera { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.modal-cabecera h3 { margin: 0; font-size: 15px; font-weight: 700; color: var(--app-tinta); }
+.modal-cerrar {
+  width: 32px; height: 32px; flex: none;
+  display: grid; place-items: center;
+  background: none; border: 0; border-radius: 8px;
+  color: var(--app-gris); cursor: pointer;
+  transition: background .14s ease, color .14s ease;
+}
+.modal-cerrar:hover { background: var(--rojo-suave); color: var(--rojo); }
+.modal-cerrar:focus-visible { outline: 2px solid var(--rojo); outline-offset: 1px; }
+
+/* ---------- Grupo segmentado NO elegible (dato derivado: .roles) ----------
+   El rol sale del padron de la persona: se muestra, no se elige. Son
+   elementos div, no button. Distinto de .segmentado/.segmento (mas abajo),
+   que SI es elegible. Confundirlos rompe la regla de "un dato derivado
+   se muestra, no se elige". */
+.roles {
+  display: grid; grid-template-columns: repeat(3, 1fr);
+  border: 1.5px solid var(--rojo); border-radius: var(--radio);
+  background: var(--app-campo);
+  overflow: hidden;
+  transition: opacity .2s ease;
+}
+.roles.inerte { opacity: .38; }   /* sin dato todavia: se ve, no se toca */
+.rol {
+  padding: 13px 4px; display: grid; place-items: center;
+  border-right: 1.5px solid var(--rojo);
+  background: var(--app-campo); color: var(--app-tinta);
+  font-size: 12.5px; font-weight: 700;
+  letter-spacing: .07em; text-transform: uppercase;
+  transition: background .18s ease, color .18s ease;
+}
+.rol:last-child { border-right: 0; }
+.rol.activo { background: var(--rojo); color: #fff; }
+
+.rol-cabecera { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+.rol-cabecera .nota { font-size: 11px; color: var(--app-gris-cl); font-weight: 500; }
+
+/* ---------- Grupo segmentado ELEGIBLE (.segmentado/.segmento) ----------
+   Visualmente parecido a .roles, pero son elementos button reales: la persona
+   SI elige (p.ej. el tamano de hoja para un reconteo). Usar .roles
+   cuando el dato ya esta derivado y solo se muestra; usar .segmentado
+   cuando el usuario tiene que decidir entre opciones reales. */
+.segmentado {
+  display: grid; grid-template-columns: repeat(3, 1fr);
+  border: 1.5px solid var(--rojo); border-radius: var(--radio);
+  background: var(--app-campo); overflow: hidden;
+}
+.segmento {
+  padding: 11px 4px; display: grid; place-items: center;
+  border-right: 1.5px solid var(--rojo); border-left: 0; border-top: 0; border-bottom: 0;
+  background: var(--app-campo); color: var(--app-tinta);
+  font: inherit; font-size: 12.5px; font-weight: 700;
+  letter-spacing: .04em; cursor: pointer;
+  transition: background .16s ease, color .16s ease;
+}
+.segmento:last-child { border-right: 0; }
+.segmento:hover { background: var(--rojo-suave); }
+.segmento:focus-visible { outline: 2px solid var(--rojo); outline-offset: -2px; }
+.segmento.activo { background: var(--rojo); color: #fff; }
+
+/* ---------- Accion principal ---------- */
+.ingresar {
+  width: 100%; min-height: 56px;
+  display: flex; align-items: center; justify-content: center; gap: 12px;
+  background: var(--rojo); color: #fff;
+  border: 0; border-radius: 6px;
+  font: inherit; font-size: 17px; font-weight: 700; cursor: pointer;
+  transition: background .16s ease, opacity .16s ease;
+}
+.ingresar:hover:not(:disabled) { background: var(--rojo-hover); }
+.ingresar:focus-visible { outline: 3px solid rgba(216,32,24,.35); outline-offset: 2px; }
+.ingresar:disabled { background: #DCD6D2; color: #FBFAFA; cursor: not-allowed; }
+.ingresar svg { color: var(--dorado); }
+.ingresar:disabled svg { color: #FBFAFA; }
+
+.olvide {
+  align-self: flex-start; margin-top: 2px;
+  background: none; border: 0; padding: 0;
+  font: inherit; font-size: 13.5px; color: var(--rojo); cursor: pointer;
+}
+.olvide:hover { text-decoration: underline; }
+
+/* ---------- Pie de pantalla ----------
+   tagline + version agrupados, para que el gap del contenedor los separe
+   sin margenes negativos peleando con el gap de .pantalla. */
+.pie { display: flex; flex-direction: column; align-items: center; gap: 5px; }
+.version {
+  margin: 0;
+  font-size: 11.5px; font-weight: 500;
+  color: var(--app-gris-cl);
+  font-variant-numeric: tabular-nums; letter-spacing: .04em;
+}
+
+.tagline {
+  display: flex; align-items: center; justify-content: center; gap: 10px;
+  font-family: var(--fuente-marca); font-weight: 600;
+  font-size: 13.5px; color: var(--rojo);
+}
+
+/* ---------- Toast ---------- */
+.toast {
+  position: absolute; left: var(--pad-lateral); right: var(--pad-lateral); bottom: 22px;
+  display: flex; align-items: center; gap: 10px;
+  padding: 13px 15px; border-radius: var(--radio);
+  background: var(--app-tinta); color: #fff;
+  font-size: 13.5px; font-weight: 500;
+  box-shadow: 0 10px 30px rgba(28,25,23,.28);
+  opacity: 0; transform: translateY(8px);
+  transition: opacity .22s ease, transform .22s ease;
+  pointer-events: none;
+}
+.toast.visible { opacity: 1; transform: translateY(0); }
+.toast svg { color: var(--dorado); flex: none; }
+
+/* ---------- Panel de validacion (fuera del telefono) ---------- */
+.pruebas {
+  width: 380px; max-width: 100%;
+  background: var(--lienzo-alt);
+  border: 1px solid var(--lienzo-borde);
+  border-radius: 14px; padding: 16px 18px;
+  display: flex; flex-direction: column; gap: 11px;
+}
+.pruebas h3 {
+  margin: 0; font-size: 11px; font-weight: 600;
+  letter-spacing: .13em; text-transform: uppercase; color: var(--lienzo-gris);
+}
+.pruebas p { margin: 0; font-size: 13px; color: var(--lienzo-gris); line-height: 1.5; }
+.atajos { display: flex; flex-wrap: wrap; gap: 8px; }
+.atajo {
+  padding: 7px 13px;
+  background: transparent; color: var(--lienzo-tinta);
+  border: 1px solid var(--lienzo-borde); border-radius: 99px;
+  font: inherit; font-size: 12.5px; font-weight: 500; cursor: pointer;
+  transition: border-color .15s ease, color .15s ease;
+}
+.atajo:hover { border-color: var(--rojo); color: var(--rojo); }
+.atajo:focus-visible { outline: 2px solid var(--rojo); outline-offset: 2px; }
+
+@media (prefers-reduced-motion: reduce) {
+  * { transition: none !important; animation: none !important; }
+}
+@media (max-width: 440px) {
+  .lienzo { padding: 20px 12px 40px; }
+  .telefono { --pad-lateral: 18px; }
+  .pantalla { padding-bottom: 20px; }
+}
+
+/* ============ Pantalla 2: hojas de conteo ============
+   Colores de estado. Son semanticos, no de marca: el rojo Trujillo
+   sigue siendo la accion, no un estado. Todos los pares texto/fondo
+   estan verificados >= 4.5:1. */
+:root {
+  --ok:        #0A6B57;  --ok-suave:      #E7F4EF;   /* 5.71:1 */
+  --proceso:   #8A5A05;  --proceso-suave: #FDF3DC;   /* 5.37:1 */
+  --espera:    #6B6560;  --espera-suave:  #F2EFED;   /* 5.02:1 */
+  --falta:     #A23B2E;  --falta-suave:   #FBEAE7;   /* 6.56:1 / 5.63:1 */
+  --riel:      #EDE9E6;
+}
+
+/* La pantalla se desplaza dentro del telefono, con barra oculta */
+.pantalla.scroll {
+  height: 720px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+  padding-bottom: 92px;   /* deja lugar a la accion fija */
+  gap: 16px;
+}
+.pantalla.scroll::-webkit-scrollbar { width: 0; display: none; }
+
+/* ---------- Barra superior de contexto ---------- */
+.barra-app {
+  display: flex; align-items: flex-start; gap: 12px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid var(--app-borde);
+}
+.barra-app .rotulo {
+  margin: 0 0 3px; display: flex; align-items: center; gap: 6px;
+  font-size: 10.5px; font-weight: 700; letter-spacing: .11em;
+  text-transform: uppercase; color: var(--rojo);
+}
+.barra-app .contexto { flex: 1; min-width: 0; }
+.barra-app .sede {
+  margin: 0; font-size: 16px; font-weight: 700; color: var(--app-tinta);
+}
+.barra-app .cifras {
+  margin: 2px 0 0; font-size: 12px; color: var(--app-gris);
+  font-variant-numeric: tabular-nums;
+}
+.salir {
+  width: 38px; height: 38px; flex: none;
+  display: grid; place-items: center;
+  background: none; color: var(--app-gris);
+  border: 1px solid var(--app-borde); border-radius: 9px;
+  cursor: pointer; transition: background .14s ease, color .14s ease, border-color .14s ease;
+}
+.salir:hover { background: var(--rojo-suave); color: var(--rojo); border-color: var(--rojo); }
+.salir:focus-visible { outline: 2px solid var(--rojo); outline-offset: 2px; }
+
+/* ---------- Tarjeta ---------- */
+.tarjeta {
+  display: flex; flex-direction: column; gap: 13px;
+  padding: 15px;
+  background: var(--app-campo);
+  border: 1px solid var(--app-borde); border-radius: 13px;
+}
+.tarjeta-cabecera { display: flex; align-items: center; gap: 10px; }
+.tarjeta-cabecera h2 {
+  margin: 0; flex: 1; min-width: 0;
+  font-size: 14.5px; font-weight: 700; color: var(--app-tinta);
+}
+.tarjeta-cabecera .icono { color: var(--rojo); }
+
+/* ---------- Badges de estado ---------- */
+.badge {
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 5px 9px; border-radius: 99px;
+  font-size: 10.5px; font-weight: 700;
+  letter-spacing: .05em; text-transform: uppercase;
+  white-space: nowrap; font-variant-numeric: tabular-nums;
+  background: var(--espera-suave); color: var(--espera);
+}
+.badge.ok      { background: var(--ok-suave);      color: var(--ok); }
+.badge.proceso { background: var(--proceso-suave); color: var(--proceso); }
+.badge.falta   { background: var(--falta-suave);   color: var(--falta); }
+
+/* ---------- Bloque de reparto ---------- */
+.reparto {
+  display: flex; flex-direction: column; gap: 9px;
+  padding: 13px;
+  background: var(--rojo-suave);
+  border: 1px solid rgba(216,32,24,.22); border-radius: 11px;
+}
+.reparto-cabecera { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+.reparto-cabecera strong { font-size: 13.5px; color: var(--app-tinta); }
+.reparto-cabecera .ratio {
+  font-size: 11.5px; font-weight: 700; color: var(--rojo);
+  font-variant-numeric: tabular-nums; white-space: nowrap;
+}
+.reparto p { margin: 0; font-size: 12.5px; line-height: 1.45; color: var(--app-gris); }
+
+.accion {
+  width: 100%; min-height: 46px;
+  display: flex; align-items: center; justify-content: center; gap: 9px;
+  background: var(--rojo); color: #fff;
+  border: 0; border-radius: 8px;
+  font: inherit; font-size: 14.5px; font-weight: 700; cursor: pointer;
+  transition: background .16s ease;
+}
+.accion:hover:not(:disabled) { background: var(--rojo-hover); }
+.accion:focus-visible { outline: 3px solid rgba(216,32,24,.35); outline-offset: 2px; }
+.accion:disabled { background: #DCD6D2; color: #FBFAFA; cursor: not-allowed; }
+/* .accion tambien se usa como <a> (link a la siguiente pantalla del flujo) */
+.accion { text-decoration: none; }
+/* Accion secundaria dentro de una fila (p.ej. "Aprobar" en una validacion) */
+.accion-mini { width: auto; min-height: 38px; padding: 0 16px; font-size: 13px; }
+
+/* ---------- Encabezado de seccion ---------- */
+.seccion {
+  display: flex; align-items: baseline; justify-content: space-between; gap: 10px;
+}
+.seccion h2 {
+  margin: 0; font-size: 11px; font-weight: 600;
+  letter-spacing: .12em; text-transform: uppercase; color: var(--app-gris);
+}
+.seccion .total {
+  font-size: 11.5px; color: var(--app-gris-cl); font-variant-numeric: tabular-nums;
+}
+
+/* ---------- Chips de zona ---------- */
+.chips {
+  display: flex; gap: 7px;
+  overflow-x: auto; overscroll-behavior-x: contain;
+  scrollbar-width: none; -ms-overflow-style: none;
+  /* el margen negativo deja que los chips lleguen al borde al desplazar */
+  margin: 0 calc(var(--pad-lateral) * -1); padding: 2px var(--pad-lateral);
+}
+.chips::-webkit-scrollbar { height: 0; display: none; }
+.chip {
+  flex: none; padding: 8px 13px;
+  background: var(--app-campo); color: var(--app-tinta);
+  border: 1px solid var(--app-borde); border-radius: 99px;
+  font: inherit; font-size: 12.5px; font-weight: 500;
+  white-space: nowrap; cursor: pointer;
+  font-variant-numeric: tabular-nums;
+  transition: background .14s ease, border-color .14s ease, color .14s ease;
+}
+.chip:hover { border-color: var(--rojo); color: var(--rojo); }
+.chip:focus-visible { outline: 2px solid var(--rojo); outline-offset: 2px; }
+.chip[aria-pressed="true"] {
+  background: var(--rojo); border-color: var(--rojo); color: #fff; font-weight: 700;
+}
+
+/* ---------- Hoja de conteo ---------- */
+.hojas { display: flex; flex-direction: column; gap: 10px; }
+.hoja {
+  display: flex; flex-direction: column;
+  border: 1px solid var(--app-borde); border-radius: 12px;
+  background: var(--app-campo);
+  overflow: hidden;
+}
+/* El estado se lee por la franja lateral, no solo por el badge: en
+   una lista larga el ojo la encuentra sin leer. */
+.hoja.en-proceso { border-color: rgba(138,90,5,.42); }
+.hoja.contada    { border-color: rgba(10,107,87,.34); }
+
+.hoja-cuerpo { display: flex; gap: 11px; padding: 13px 14px 11px; }
+.hoja-codigo {
+  flex: none; width: 38px; height: 38px;
+  display: grid; place-items: center; border-radius: 9px;
+  background: var(--espera-suave); color: var(--espera);
+  font-size: 11.5px; font-weight: 700; letter-spacing: .02em;
+  font-variant-numeric: tabular-nums;
+}
+.hoja.contada .hoja-codigo    { background: var(--ok-suave);      color: var(--ok); }
+.hoja.en-proceso .hoja-codigo { background: var(--proceso-suave); color: var(--proceso); }
+
+.hoja-datos { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.hoja-titulo {
+  display: flex; align-items: flex-start; justify-content: space-between; gap: 9px;
+}
+.hoja-titulo h3 {
+  margin: 0; font-size: 14px; font-weight: 700; color: var(--app-tinta);
+  line-height: 1.3; text-wrap: balance;
+}
+.hoja-meta {
+  font-size: 11.5px; color: var(--app-gris); font-variant-numeric: tabular-nums;
+}
+
+.progreso {
+  height: 5px; margin-top: 6px; border-radius: 99px;
+  background: var(--riel); overflow: hidden;
+}
+.progreso span {
+  display: block; height: 100%; border-radius: 99px;
+  background: var(--espera); transition: width .35s ease;
+}
+.hoja.contada .progreso span    { background: var(--ok); }
+.hoja.en-proceso .progreso span { background: var(--proceso); }
+
+.hoja-pie {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  padding: 9px 14px;
+  border-top: 1px solid #F2EFED;
+  background: #FCFBFA;
+  font-size: 12px; color: var(--app-gris);
+}
+.hoja-pie .quien { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hoja-pie .quien strong { color: var(--app-tinta); font-weight: 600; }
+.hoja-pie .sin-asignar { color: var(--app-gris-cl); font-style: italic; }
+.hoja-pie .estado-sync { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; }
+.hoja-pie .estado-sync.ok { color: var(--ok); font-weight: 600; }
+.hoja-pie .abrir {
+  background: none; border: 0; padding: 0;
+  font: inherit; font-size: 12px; font-weight: 700; color: var(--rojo);
+  cursor: pointer; display: inline-flex; align-items: center; gap: 5px;
+  white-space: nowrap;
+}
+.hoja-pie .abrir:hover { text-decoration: underline; }
+.hoja-pie .abrir:focus-visible { outline: 2px solid var(--rojo); outline-offset: 2px; }
+
+/* ---------- Pie de la lista ---------- */
+.pie-lista {
+  display: flex; align-items: center; gap: 9px;
+  padding: 12px 14px; border-radius: 11px;
+  background: var(--espera-suave); color: var(--app-gris);
+  font-size: 12.5px; font-variant-numeric: tabular-nums;
+}
+.pie-lista .icono { color: var(--app-gris-cl); }
+.pie-lista strong { color: var(--app-tinta); font-weight: 700; }
+
+/* ---------- Accion fija sobre el borde inferior ---------- */
+.accion-fija {
+  position: absolute; left: 0; right: 0; bottom: 0; z-index: 20;
+  padding: 12px var(--pad-lateral) 20px;
+  background: linear-gradient(to top, var(--app-fondo) 68%, rgba(255,255,255,0));
+}
+.accion-fija .accion { min-height: 52px; font-size: 16px; }
+
+/* ---------- Tab bar inferior (navegacion principal por rol) ----------
+   Cuelga de .telefono con position:absolute, igual que .accion-fija, y
+   los dos pueden querer el mismo borde inferior. La regla que evita que
+   cada pantalla lo resuelva distinto:
+
+     - Si el boton de .accion-fija navega a una seccion PARALELA (algo
+       que ya es o deberia ser un tab) -> el tab bar lo REEMPLAZA. No
+       tiene sentido duplicar la misma navegacion en dos controles.
+     - Si el boton de .accion-fija confirma o cierra algo de ESTA
+       pantalla (guardar, enviar, finalizar) -> CONVIVEN, apilados: la
+       accion fija se apoya justo arriba del tab bar usando
+       --tabbar-alto, y el padding-bottom de .pantalla.scroll tiene que
+       crecer para no esconder el ultimo item detras de los dos.
+
+   Markup minimo (los botones se arman por JS a partir de una lista de
+   tabs por rol, ver home.html):
+     <nav class="tab-bar" aria-label="Navegacion principal">
+       <button class="tab activo" data-destino="/inicio">
+         <span class="tab-indicador" aria-hidden="true"></span>
+         <svg class="icono">...</svg>
+         <span class="tab-etiqueta">Inicio</span>
+       </button>
+       ...
+     </nav> */
+.tab-bar {
+  position: absolute; left: 0; right: 0; bottom: 0; z-index: 25;
+  display: flex;
+  min-height: var(--tabbar-alto);
+  background: var(--app-fondo);
+  border-top: 1px solid var(--app-borde);
+}
+.tab {
+  position: relative;
+  flex: 1; min-height: 58px;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px;
+  padding: 9px 4px 7px;
+  background: none; border: 0;
+  font: inherit; color: var(--app-gris); cursor: pointer;
+  transition: color .14s ease;
+}
+.tab:hover { color: var(--app-tinta); }
+.tab:active { background: var(--rojo-suave); }
+.tab:focus-visible { outline: 2px solid var(--rojo); outline-offset: -2px; }
+.tab-indicador {
+  position: absolute; top: 0; left: 50%; transform: translateX(-50%);
+  width: 26px; height: 3px; border-radius: 0 0 4px 4px;
+  background: var(--rojo);
+  opacity: 0; transition: opacity .14s ease;
+}
+.tab-etiqueta { font-size: 10.5px; font-weight: 600; }
+.tab.activo { color: var(--rojo); }
+.tab.activo .tab-indicador { opacity: 1; }
+.tab.activo .tab-etiqueta { font-weight: 700; }
+
+/* ============ Pantallas 4-7: ciclo de conteos, auditoria, liquidacion, lacrado ============ */
+
+/* ---------- Banda de sincronizacion (offline-first) ----------
+   Los equipos son WiFi de tienda, sin datos moviles: la WiFi es punto
+   unico de falla. Toda pantalla con datos sincronizados necesita este
+   estado visible, no solo texto suelto. Usado en 5 de las 7 pantallas. */
+.banda-sync {
+  display: flex; align-items: center; gap: 8px;
+  padding: 9px 12px; border-radius: 10px;
+  font-size: 11.5px; font-weight: 700;
+  background: var(--ok-suave); color: var(--ok);
+}
+.banda-sync .icono-sync { flex: none; }
+.banda-sync.pendiente { background: var(--proceso-suave); color: var(--proceso); }
+.banda-sync.offline   { background: var(--falta-suave);   color: var(--falta); }
+
+/* ---------- Resumen de cifras clave (tira de KPIs) ---------- */
+.resumen-global { display: flex; flex-direction: column; gap: 10px; }
+.resumen-dato { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+.resumen-etiqueta { font-size: 12.5px; color: var(--app-gris); }
+.resumen-dato strong { font-size: 16px; font-variant-numeric: tabular-nums; color: var(--app-tinta); }
+.resumen-dato strong.ok { color: var(--ok); }
+.resumen-dato strong.falta { color: var(--falta); }
+.resumen-pct { font-size: 11.5px; font-weight: 500; color: var(--app-gris); }
+
+/* ---------- Identidad de persona (nombre + subtitulo) ----------
+   Bloque reusable dentro de una fila de planilla o de validacion. */
+.persona-datos { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.persona-datos strong { font-size: 13.5px; color: var(--app-tinta); font-weight: 700; }
+.persona-datos span { font-size: 11.5px; color: var(--app-gris); }
+
+
+/* ==========================================================================
+   Controles nuevos de las pantallas del Administrador (9, 10 y 11).
+   Todo sale de los tokens ya validados: ningun color nuevo.
+   ========================================================================== */
+
+/* ---------- Entrada de texto ----------
+   El design system solo tenia controles de SELECCION (.control es un
+   boton). Estas tres pantallas son las primeras que piden tipeo libre
+   (nombre, DNI, direccion, credenciales), asi que .entrada replica el
+   mismo cuerpo visual del .control -- mismo alto, borde, radio e icono
+   gris -- pero con un <input> real adentro. Espeja CampoTexto.tsx. */
+.entrada {
+  display: flex; align-items: center; gap: 12px;
+  min-height: 54px; padding: 0 15px;
+  background: var(--app-campo);
+  border: 1px solid var(--app-borde); border-radius: var(--radio);
+}
+.entrada:focus-within { border-color: var(--rojo); box-shadow: 0 0 0 3px rgba(216,32,24,.14); }
+.entrada input {
+  flex: 1; min-width: 0;
+  border: 0; background: none; padding: 0;
+  font: inherit; font-size: 15px; color: var(--app-tinta);
+}
+.entrada input:focus { outline: none; }
+.entrada input::placeholder { color: var(--app-gris-cl); }
+/* Los que llevan un identificador tecnico largo (tenant, client id, URL)
+   no se leen palabra por palabra: se comparan de un vistazo. */
+.entrada input.tecnico { font-size: 13px; font-variant-numeric: tabular-nums; }
+
+/* ---------- Ficha de gestion (una cuenta / una tienda) ----------
+   Es .tarjeta con menos aire: estas listas son largas (30 cuentas) y el
+   padding de bloque de .tarjeta las estiraria a tres pantallas de scroll. */
+.gestion { display: flex; flex-direction: column; gap: 10px; }
+.ficha { gap: 10px; padding: 13px; }
+.ficha-cabecera { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
+.ficha-textos { flex: 1; min-width: 0; }
+.ficha-nombre { margin: 0; font-size: 13.5px; font-weight: 700; color: var(--app-tinta); }
+.ficha-meta { margin: 2px 0 0; font-size: 11.5px; color: var(--app-gris); }
+.ficha-badges { flex: none; display: flex; flex-direction: column; align-items: flex-end; gap: 6px; }
+.ficha-acciones { display: flex; gap: 8px; }
+.ficha-acciones .boton-sec { flex: 1; }
+
+/* ---------- Boton secundario (outline) ----------
+   Espeja Button variant="outline" de la app: borde neutro y tinta, NO
+   rojo. El rojo es la accion principal de la pantalla y hay una sola;
+   si "Deshabilitar" y "Resetear PIN" tambien fueran rojos, ninguna de
+   las tres se leeria como la principal. */
+.boton-sec {
+  display: inline-flex; align-items: center; justify-content: center; gap: 7px;
+  min-height: 40px; padding: 0 13px;
+  background: var(--app-campo);
+  border: 1px solid var(--app-borde); border-radius: var(--radio);
+  font: inherit; font-size: 13px; font-weight: 600; color: var(--app-tinta);
+  cursor: pointer;
+  transition: border-color .12s ease, background .12s ease;
+}
+.boton-sec:hover { border-color: #CFC7C1; background: #FAF8F7; }
+.boton-sec:focus-visible { outline: 2px solid var(--rojo); outline-offset: 2px; }
+.boton-sec:disabled { color: var(--app-gris-cl); cursor: not-allowed; }
+.boton-sec svg { color: var(--app-gris); flex: none; }
+.boton-sec:disabled svg { color: var(--app-gris-cl); }
+
+/* ---------- Badge sin relleno ----------
+   Cuarta variante de .badge (las otras tres son ok / proceso / falta).
+   Se usa para el rol "Conteo", el mas frecuente del padron: con relleno,
+   veinte fichas seguidas se convierten en una mancha de color y el badge
+   deja de senalar nada. */
+.badge.contorno { background: none; border: 1px solid var(--app-borde); color: var(--app-tinta); }
+
+/* ---------- Estado vacio ---------- */
+.vacio-estado {
+  display: flex; flex-direction: column; align-items: center; gap: 6px;
+  padding: 30px 20px; text-align: center;
+  background: var(--app-campo);
+  border: 1px dashed var(--app-borde); border-radius: 14px;
+}
+.vacio-estado svg { color: var(--app-gris-cl); }
+.vacio-estado strong { font-size: 13.5px; color: var(--app-tinta); }
+.vacio-estado span { font-size: 12.5px; color: var(--app-gris); }
+
+/* ---------- [hidden] sobre contenedores flex ----------
+   Mismo gotcha que .campo en hojas.html: el display propio le gana al
+   [hidden] nativo, asi que hay que declararlo elemento por elemento. */
+.campo[hidden], .tarjeta[hidden], .gestion[hidden], .seccion[hidden],
+.ficha-acciones[hidden], .vacio-estado[hidden], .entrada[hidden] { display: none; }
+
+/* ==========================================================================
+   Pantalla 12: historial de inventarios
+   ========================================================================== */
+
+/* ---------- Tarjeta de inventario ----------
+   La distincion LACRADO vs TODAVIA ABIERTO no puede depender del texto del
+   badge: en una lista que se escanea de un vistazo, el ojo lee la FORMA
+   antes que la palabra. Por eso el estado se comunica por cuatro vias que
+   dicen lo mismo:
+     1. borde PUNTEADO (algo que todavia se esta armando) vs SOLIDO
+     2. franja de sello con el folio -- solo un lacrado tiene folio
+     3. candado en la cabecera
+     4. el badge, que es la unica via textual
+   Es la misma regla que en hojas.html hace que una hoja contada se
+   distinga sin leer: badge + color + borde, nunca una sola senal. */
+.historial { display: flex; flex-direction: column; gap: 11px; }
+
+.inv {
+  display: flex; flex-direction: column;
+  background: var(--app-campo);
+  border: 1px solid var(--app-borde); border-radius: 13px;
+  overflow: hidden;
+}
+/* Todavia se puede tocar: el borde punteado lo dice sin palabras. */
+.inv.abierto { border-style: dashed; border-color: #C9C1BB; }
+/* Cerrado e inmutable: borde solido y firme, en el verde del cierre. */
+.inv.sellado { border-style: solid; border-color: rgba(10,107,87,.45); border-width: 1.5px; }
+
+.inv-cuerpo { display: flex; flex-direction: column; gap: 10px; padding: 13px 14px; }
+
+.inv-cabecera { display: flex; align-items: flex-start; gap: 11px; }
+/* El periodo es el identificador que la persona usa para hablar del
+   inventario ("el de agosto"), asi que va primero y grande. */
+.inv-periodo {
+  flex: none;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  min-width: 52px; padding: 6px 8px;
+  border-radius: 9px;
+  background: var(--espera-suave); color: var(--espera);
+}
+.inv.sellado .inv-periodo { background: var(--ok-suave); color: var(--ok); }
+.inv-mes { font-size: 13px; font-weight: 800; letter-spacing: .04em; text-transform: uppercase; }
+.inv-anio { font-size: 10.5px; font-weight: 600; font-variant-numeric: tabular-nums; }
+
+.inv-datos { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+.inv-titulo { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; }
+.inv-sede { margin: 0; font-size: 13.5px; font-weight: 700; color: var(--app-tinta); }
+.inv-candado { flex: none; color: var(--ok); }
+.inv-meta { margin: 0; font-size: 11.5px; color: var(--app-gris); }
+
+/* ---------- Cifras del resultado ---------- */
+.inv-cifras { display: grid; grid-template-columns: repeat(2, 1fr); gap: 7px 12px; }
+.inv-cifra { display: flex; flex-direction: column; gap: 1px; }
+.inv-cifra dt { font-size: 10.5px; color: var(--app-gris); }
+.inv-cifra dd {
+  margin: 0; font-size: 13.5px; font-weight: 700; color: var(--app-tinta);
+  font-variant-numeric: tabular-nums;
+}
+.inv-cifra dd.ok { color: var(--ok); }
+.inv-cifra dd.falta { color: var(--falta); }
+
+/* Sin resultado calculado todavia: se dice, no se muestra un cero que
+   parezca un dato ("0 faltantes" y "todavia no se calculo" no son lo
+   mismo, y confundirlos en un inventario es grave). */
+.inv-sin-datos { margin: 0; font-size: 12px; color: var(--app-gris-cl); font-style: italic; }
+
+/* ---------- Franja de sello ----------
+   Solo la tiene un lacrado. El folio ES el sello: un inventario que no
+   llego a lacrarse no tiene folio que mostrar. */
+.inv-sello {
+  display: flex; align-items: center; gap: 8px;
+  padding: 9px 14px;
+  background: var(--ok-suave);
+  border-top: 1px solid rgba(10,107,87,.2);
+}
+.inv-sello svg { flex: none; color: var(--ok); }
+.inv-folio {
+  flex: 1; min-width: 0;
+  font-size: 11.5px; font-weight: 700; color: var(--ok);
+  font-variant-numeric: tabular-nums;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+
+.inv-pie {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  padding: 9px 14px;
+  border-top: 1px solid var(--app-borde);
+  font-size: 11.5px; color: var(--app-gris);
+}
+.inv-abrir {
+  background: none; border: 0; padding: 0;
+  font: inherit; font-size: 12.5px; font-weight: 700; color: var(--rojo); cursor: pointer;
+}
+.inv-abrir:hover { text-decoration: underline; }
+.inv-abrir:focus-visible { outline: 2px solid var(--rojo); outline-offset: 2px; }
+
+/* ---------- Detalle ---------- */
+.volver {
+  display: inline-flex; align-items: center; gap: 6px;
+  background: none; border: 0; padding: 0;
+  font: inherit; font-size: 13px; font-weight: 600; color: var(--rojo); cursor: pointer;
+}
+.volver:hover { text-decoration: underline; }
+.volver:focus-visible { outline: 2px solid var(--rojo); outline-offset: 2px; }
+
+.dato-fila {
+  display: flex; align-items: baseline; justify-content: space-between; gap: 10px;
+  padding: 7px 0;
+  border-bottom: 1px solid var(--app-borde);
+}
+.dato-fila:last-child { border-bottom: 0; }
+.dato-fila dt { font-size: 12px; color: var(--app-gris); }
+.dato-fila dd {
+  margin: 0; font-size: 13px; font-weight: 700; color: var(--app-tinta);
+  font-variant-numeric: tabular-nums;
+}
+.dato-fila dd.ok { color: var(--ok); }
+.dato-fila dd.falta { color: var(--falta); }
+
+/* ---------- Firmas del lacrado ----------
+   Las DOS firmas, con nombre, rol congelado al firmar y fecha. Es el
+   control de dos personas hecho evidencia: sin esto, el historico diria
+   "lacrado" sin decir por quien, que es justo lo que un inventario
+   auditado no puede permitirse. */
+.firma {
+  display: flex; align-items: flex-start; gap: 9px;
+  padding: 10px; border-radius: 10px;
+  background: var(--ok-suave);
+}
+.firma + .firma { margin-top: 8px; }
+.firma svg { flex: none; margin-top: 1px; color: var(--ok); }
+.firma-datos { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.firma-nombre { font-size: 13px; font-weight: 700; color: var(--app-tinta); }
+.firma-meta { font-size: 11px; color: var(--app-gris); }
+.firma-nota { font-size: 11.5px; color: var(--app-gris); font-style: italic; }
+
+/* El hash completo, para poder cotejarlo contra el acta. Se parte en dos
+   lineas: 64 caracteres no entran en un telefono y cortarlos con puntos
+   suspensivos lo volveria inservible justamente para lo que sirve. */
+.hash-caja {
+  padding: 9px 10px; border-radius: 8px;
+  background: var(--espera-suave);
+  font-size: 10.5px; line-height: 1.5; color: var(--app-gris);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  word-break: break-all;
+}
+
+.lista-hojas { display: flex; flex-direction: column; gap: 7px; }
+.hoja-mini {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  padding: 9px 11px;
+  border: 1px solid var(--app-borde); border-radius: 10px;
+  font-size: 12px; color: var(--app-gris);
+}
+.hoja-mini strong { font-size: 12.5px; color: var(--app-tinta); }
+
+</style>
+
+<div class="lienzo">
+
+  <header class="cabecera">
+    <span class="eyebrow">Inventario de Autoservicio · Pantalla 12 · histórico y control</span>
+    <h1>Historial de inventarios</h1>
+    <p>El registro de todos los inventarios: en qué estado está cada uno, cómo cerró y quién lo firmó.</p>
+  </header>
+
+  <div class="telefono denso">
+    <div class="barra-estado">
+      <span>09:41</span>
+      <span class="senales">
+        <svg width="15" height="11" viewBox="0 0 15 11" fill="currentColor" aria-hidden="true"><rect x="0" y="7" width="2.5" height="4" rx="1"/><rect x="4" y="5" width="2.5" height="6" rx="1"/><rect x="8" y="2.5" width="2.5" height="8.5" rx="1"/><rect x="12" y="0" width="2.5" height="11" rx="1"/></svg>
+        <svg width="22" height="11" viewBox="0 0 22 11" fill="none" aria-hidden="true"><rect x="0.5" y="0.5" width="18" height="10" rx="2.5" stroke="currentColor"/><rect x="2" y="2" width="15" height="7" rx="1.2" fill="currentColor"/><path d="M20 4v3a1.8 1.8 0 0 0 0-3Z" fill="currentColor"/></svg>
+      </span>
+    </div>
+
+    <div class="pantalla scroll" id="pantalla">
+
+      <!-- ================= CONTENIDO DE LA PANTALLA ================= -->
+
+      <div class="barra-app">
+        <div class="contexto">
+          <p class="rotulo"><svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M13 3a9 9 0 1 0 8.5 12h-2.1A7 7 0 1 1 13 5v4l5-4.5L13 0v3Zm-1 5v5.4l4.3 2.5.8-1.3-3.6-2.1V8H12Z"/></svg>Historial</p>
+          <p class="sede" id="sede">Todas las sucursales</p>
+          <p class="cifras" id="cifras"></p>
+        </div>
+        <button type="button" class="salir" id="btn-salir" aria-label="Cerrar sesión"><svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4m7 14 5-5-5-5m5 5H9"/></svg></button>
+      </div>
+
+      <!-- ============ VISTA: LISTA ============ -->
+      <div id="vista-lista">
+        <div class="chips" id="chips-estado" role="group" aria-label="Filtrar por estado"></div>
+        <div class="historial" id="lista-inventarios"></div>
+        <div class="vacio-estado" id="sin-inventarios" hidden>
+          <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 8v4l3 2"/><circle cx="12" cy="12" r="9"/></svg>
+          <strong>Ningún inventario en este estado</strong>
+          <span>Probá con otro filtro.</span>
+        </div>
+      </div>
+
+      <!-- ============ VISTA: DETALLE ============ -->
+      <div id="vista-detalle" hidden>
+        <button type="button" class="volver" id="btn-volver">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m15 18-6-6 6-6"/></svg>
+          Volver al historial
+        </button>
+
+        <div class="tarjeta">
+          <div class="tarjeta-cabecera">
+            <h2 id="det-titulo">Período</h2>
+            <span class="badge" id="det-badge">Estado</span>
+          </div>
+          <p class="ayuda" id="det-meta"></p>
+        </div>
+
+        <div class="seccion"><h2>Resultado del ciclo</h2></div>
+        <div class="tarjeta">
+          <dl id="det-resultado" style="margin:0;"></dl>
+        </div>
+
+        <div class="seccion"><h2>Hojas de conteo</h2><span class="total" id="det-hojas-total"></span></div>
+        <div class="tarjeta">
+          <div class="lista-hojas" id="det-hojas"></div>
+        </div>
+
+        <!-- El bloque que solo existe si el inventario esta LACRADO. Que
+             aparezca o no es en si mismo la senal mas fuerte: un
+             inventario que todavia se puede tocar no tiene sello, ni
+             folio, ni firmas que mostrar. -->
+        <div id="det-bloque-lacrado" hidden>
+          <div class="seccion"><h2>Lacrado</h2></div>
+          <div class="tarjeta">
+            <div class="tarjeta-cabecera">
+              <svg class="icono" width="17" height="17" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 2a4 4 0 0 0-4 4v3H7a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-9a2 2 0 0 0-2-2h-1V6a4 4 0 0 0-4-4Zm-2 7V6a2 2 0 1 1 4 0v3h-4Z"/></svg>
+              <h2>Sello inmutable</h2>
+            </div>
+            <dl style="margin:0;">
+              <div class="dato-fila"><dt>Folio</dt><dd id="det-folio"></dd></div>
+              <div class="dato-fila"><dt>Lacrado el</dt><dd id="det-lacrado-en"></dd></div>
+              <div class="dato-fila"><dt>Ejecutado por</dt><dd id="det-lacrado-por"></dd></div>
+            </dl>
+            <p class="ayuda">Huella SHA-256 del contenido del cierre. Sirve para cotejar contra el acta: si el dato cambiara, el hash recalculado no coincidiría.</p>
+            <p class="hash-caja" id="det-hash"></p>
+          </div>
+
+          <div class="seccion"><h2>Doble validación</h2></div>
+          <div class="tarjeta">
+            <p class="ayuda">Las dos firmas que habilitaron el lacrado. El rol es el que la persona tenía <strong>al firmar</strong>: si después cambia de rol, la firma sigue diciendo con qué autoridad se dio.</p>
+            <div id="det-firmas"></div>
+          </div>
+
+          <div class="seccion"><h2>Registro en Dynamics</h2></div>
+          <div class="tarjeta">
+            <p class="ayuda" id="det-erp"></p>
+          </div>
+        </div>
+
+        <!-- Y el bloque equivalente cuando TODAVIA no esta lacrado. -->
+        <div class="tarjeta" id="det-sin-lacrado" hidden>
+          <div class="tarjeta-cabecera">
+            <h2>Todavía no está lacrado</h2>
+            <span class="badge" id="det-firmas-badge">0 / 2 firmado</span>
+          </div>
+          <p class="ayuda" id="det-sin-lacrado-texto"></p>
+        </div>
+      </div>
+
+      <!-- =========================================================== -->
+
+      <div class="toast" id="toast" role="status" aria-live="polite">
+        <svg width="19" height="19" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 2 4 5.5v6c0 5 3.4 9.4 8 10.5 4.6-1.1 8-5.5 8-10.5v-6L12 2Zm-1.2 13.4-3.2-3.2 1.4-1.4 1.8 1.8 4.6-4.6 1.4 1.4-6 6Z"/></svg>
+        <span id="toast-texto"></span>
+      </div>
+
+    </div>
+
+    <!-- Los modales cuelgan del TELEFONO, no de .pantalla ni de .campo -->
+
+    <!-- Tab bar: el historial NO es un tab. Un tab se gana el lugar si se
+         visita varias veces por jornada; el historico se mira de vez en
+         cuando (al cerrar el mes, o cuando alguien pregunta por un
+         periodo viejo). Entra como acceso del Inicio, y el tab activo
+         sigue siendo Inicio -- es de donde se llego. -->
+    <nav class="tab-bar" id="tab-bar" aria-label="Navegación principal"></nav>
+
+  </div>
+
+  <section class="pruebas">
+    <h3>Atajos para validar</h3>
+    <div class="sesion-maqueta">
+      <p class="aviso">Un inventario <strong>lacrado</strong> se distingue sin leer el badge: borde sólido verde (los abiertos van punteados), candado, y la franja del folio &mdash; que solo existe si hay sello. Abrí el detalle de uno lacrado para ver el hash y las dos firmas con quién y cuándo. Cambiá la sesión abajo: el Administrador ve las 4 sucursales, el Auditor solo la suya.</p>
+      <div class="atajos" id="atajos"></div>
+    </div>
+  </section>
+
+</div>
+
+<script>
+(function () {
+  'use strict';
+
+  var $ = function (id) { return document.getElementById(id); };
+  var toast = $('toast'), toastTexto = $('toast-texto');
+
+  var temporizador;
+  function mostrarToast(texto) {
+    toastTexto.textContent = texto;
+    toast.classList.add('visible');
+    clearTimeout(temporizador);
+    temporizador = setTimeout(function () { toast.classList.remove('visible'); }, 2800);
+  }
+
+  /* Datos REALES de GET /api/historial/inventarios y /:id, tomados del
+     backend vivo el 2026-09-04 (seed de historial: 2 lacrados, 1
+     liquidado, 1 con conteo cerrado y 2 en curso). No son inventados
+     para la maqueta. */
+  var INVENTARIOS = [
+    { id: 8005, sucursalId: 2, sede: 'Market Carhuaz', estado: 'en_curso', anio: 2026, mes: 9,
+      items: 3500, tamanoHoja: 50, cerradoEn: null, resultado: null, aprobaciones: 0, lacrado: null },
+    { id: 1, sucursalId: 1, sede: 'Market Central Luzuriaga', estado: 'en_curso', anio: 2026, mes: 9,
+      items: 8000, tamanoHoja: 50, cerradoEn: null, resultado: null, aprobaciones: 0, lacrado: null },
+    { id: 8003, sucursalId: 1, sede: 'Market Central Luzuriaga', estado: 'liquidado', anio: 2026, mes: 8,
+      items: 8000, tamanoHoja: 50, cerradoEn: '2026-08-28T18:00:00.000Z', aprobaciones: 0, lacrado: null,
+      resultado: { itemsTotales: 8000, itemsConDiferencia: 96, itemsCuadrados: 7904, porcentajeCuadrado: 98.8,
+                   montoFaltanteBruto: 2200, montoFaltanteNeto: 1650, cuotaBase: 150 } },
+    { id: 8002, sucursalId: 1, sede: 'Market Central Luzuriaga', estado: 'lacrado', anio: 2026, mes: 7,
+      items: 8000, tamanoHoja: 50, cerradoEn: '2026-07-30T17:00:00.000Z', aprobaciones: 2,
+      resultado: { itemsTotales: 8000, itemsConDiferencia: 168, itemsCuadrados: 7832, porcentajeCuadrado: 97.9,
+                   montoFaltanteBruto: 2410, montoFaltanteNeto: 1980, cuotaBase: 180 },
+      lacrado: { folio: 'INV-2026-07-LUZ-8000-3F2', hash: '3f2b81d0c95a47e6b0d128f4a7c6e3590b1d84f27ac3e6018d5b92f4c7a0e63d',
+                 lacradoEn: '2026-07-31T15:30:00.000Z', lacradoPor: 'Rosa Melgarejo',
+                 erp: { referencia: 'AJ-2026-07-0098', registradoEn: '2026-08-03T10:15:00.000Z', por: 'Gilmer Quispe' },
+                 firmas: [
+                   { nombre: 'Rosa Melgarejo', rol: 'auditor', en: '2026-07-31T09:20:00.000Z', nota: null },
+                   { nombre: 'Gilmer Quispe', rol: 'auditor', en: '2026-07-31T14:05:00.000Z', nota: 'Cotejado contra el reporte de negativos.' }
+                 ] },
+      hojas: [] },
+    { id: 8001, sucursalId: 1, sede: 'Market Central Luzuriaga', estado: 'lacrado', anio: 2026, mes: 6,
+      items: 8000, tamanoHoja: 50, cerradoEn: '2026-06-28T18:00:00.000Z', aprobaciones: 2,
+      resultado: { itemsTotales: 8000, itemsConDiferencia: 130, itemsCuadrados: 7870, porcentajeCuadrado: 98.4,
+                   montoFaltanteBruto: 1850, montoFaltanteNeto: 1390, cuotaBase: 126.36,
+                   unidadesFaltantes: 412, unidadesSobrantes: 55, itemsSegundoConteo: 650, itemsTercerConteo: 130 },
+      lacrado: { folio: 'INV-2026-06-LUZ-8000-06A', hash: '06af20c9f74126de8a809638d189035f0fe60e89fb8cc3aa8a2dea4ece4214f0',
+                 lacradoEn: '2026-06-29T16:00:00.000Z', lacradoPor: 'Gilmer Quispe',
+                 erp: { referencia: 'AJ-2026-06-0114', registradoEn: '2026-07-02T11:00:00.000Z', por: 'Gilmer Quispe' },
+                 firmas: [
+                   { nombre: 'Gilmer Quispe', rol: 'auditor', en: '2026-06-29T10:00:00.000Z', nota: null },
+                   { nombre: 'Rosa Melgarejo', rol: 'auditor', en: '2026-06-29T14:00:00.000Z', nota: 'Revisado contra el reporte de negativos de Jocelyn.' }
+                 ] },
+      hojas: [
+        { numero: '002', zona: 'A', gondola: '3', tamano: 50, estado: 'finalizada', asignado: 'Mar\u00eda Rojas', contados: 50 },
+        { numero: '003', zona: 'A', gondola: '4', tamano: 50, estado: 'finalizada', asignado: 'Elena Pr\u00edncipe', contados: 50 },
+        { numero: '004', zona: 'B', gondola: '1', tamano: 50, estado: 'finalizada', asignado: 'Walter Norabuena', contados: 50 }
+      ] },
+    { id: 8004, sucursalId: 1, sede: 'Market Central Luzuriaga', estado: 'conteo_cerrado', anio: 2026, mes: 5,
+      /* resultado null igual que el backend real: las cifras se calculan al
+         liquidar, no al cerrar el conteo (verificado con curl 2026-09-04). */
+      items: 8000, tamanoHoja: 50, cerradoEn: '2026-05-29T19:00:00.000Z', aprobaciones: 1, lacrado: null,
+      resultado: null }
+  ];
+
+  /* Los 5 estados del ciclo de vida (backend/README.md). El color sale de
+     la paleta semantica, NUNCA del rojo de marca: el rojo es la accion. */
+  var ESTADOS = {
+    en_curso:       { etiqueta: 'En curso',       badge: 'badge proceso', sellado: false },
+    conteo_cerrado: { etiqueta: 'Conteo cerrado', badge: 'badge',         sellado: false },
+    liquidado:      { etiqueta: 'Liquidado',      badge: 'badge',         sellado: false },
+    lacrado:        { etiqueta: 'Lacrado',        badge: 'badge ok',      sellado: true },
+    anulado:        { etiqueta: 'Anulado',        badge: 'badge falta',   sellado: false }
+  };
+  var ORDEN_FILTROS = ['todos', 'en_curso', 'conteo_cerrado', 'liquidado', 'lacrado'];
+  var MESES = ['ENE', 'FEB', 'MAR', 'ABR', 'MAY', 'JUN', 'JUL', 'AGO', 'SET', 'OCT', 'NOV', 'DIC'];
+
+  var SESIONES = {
+    administrador: { rol: 'administrador', nombre: 'Admin Sistema', sucursalId: null, sede: 'Todas las sucursales' },
+    auditor:       { rol: 'auditor',       nombre: 'Gilmer Quispe', sucursalId: 1,    sede: 'Market Central Luzuriaga' }
+  };
+  var TABS = {
+    administrador: [
+      { id: 'inicio', destino: 'home.html', etiqueta: 'Inicio' },
+      { id: 'usuarios', destino: 'usuarios.html', etiqueta: 'Usuarios' },
+      { id: 'tiendas', destino: 'tiendas.html', etiqueta: 'Tiendas' },
+      { id: 'config', destino: 'config.html', etiqueta: 'Config' }
+    ],
+    auditor: [
+      { id: 'inicio', destino: 'home.html', etiqueta: 'Inicio' },
+      { id: 'auditoria', destino: 'auditoria.html', etiqueta: 'Auditor\u00eda' },
+      { id: 'ciclo', destino: 'ciclo-conteos.html', etiqueta: 'Ciclo' },
+      { id: 'usuarios', destino: 'usuarios.html', etiqueta: 'Usuarios' }
+    ]
+  };
+  var ICONO_TAB = {
+    inicio: '<svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 3 2 12h3v9h14v-9h3Z"/></svg>',
+    usuarios: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></svg>',
+    tiendas: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m3 3 1.5 5h15L21 3M4.5 8v12h15V8M9 20v-6h6v6"/></svg>',
+    config: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.6 1.6 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.6 1.6 0 0 0-2.7 1.1v.3a2 2 0 1 1-4 0v-.2a1.6 1.6 0 0 0-2.8-1.1l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1A1.6 1.6 0 0 0 3.5 15H3a2 2 0 1 1 0-4h.2A1.6 1.6 0 0 0 4.3 8.2l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.6 1.6 0 0 0 2.7-1.1V4a2 2 0 1 1 4 0v.2a1.6 1.6 0 0 0 2.8 1.1l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.6 1.6 0 0 0 1.1 2.7h.3a2 2 0 1 1 0 4h-.2a1.6 1.6 0 0 0-1.2 1Z"/></svg>',
+    auditoria: '<svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M4 20V10h4v10H4Zm6 0V4h4v16h-4Zm6 0v-7h4v7h-4Z"/></svg>',
+    ciclo: '<svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="m12 2 10 5-10 5L2 7l10-5Zm0 8.8L4.6 7 12 3.2 19.4 7 12 10.8ZM2 12l10 5 10-5-1.9-.9L12 15l-8.1-3.9L2 12Zm0 5 10 5 10-5-1.9-.9L12 20l-8.1-3.9L2 17Z"/></svg>'
+  };
+
+  var CANDADO = '<svg class="inv-candado" width="14" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 2a4 4 0 0 0-4 4v3H7a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-9a2 2 0 0 0-2-2h-1V6a4 4 0 0 0-4-4Zm-2 7V6a2 2 0 1 1 4 0v3h-4Z"/></svg>';
+  var CHECK_FIRMA = '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg>';
+
+  var sesion = SESIONES.administrador;
+  var filtro = 'todos';
+  var detalleId = null;
+
+  /* Formato a mano, sin toLocaleString: en Hermes (el motor de RN) no esta
+     garantizado que la build traiga los datos ICU de es-PE, y cae en
+     formato ingles en silencio. La maqueta usa el MISMO formato que la
+     pantalla para que lo que valida el cliente sea lo que va a ver. */
+  function miles(n) { return String(Math.round(n)).replace(/\B(?=(\d{3})+(?!\d))/g, '.'); }
+  function pct(n) { return n.toFixed(1).replace('.', ','); }
+  function soles(n) { var p = Math.abs(n).toFixed(2).split('.'); return (n < 0 ? '-' : '') + 'S/ ' + miles(Number(p[0])) + ',' + p[1]; }
+  function dos(n) { return n < 10 ? '0' + n : String(n); }
+  function fecha(iso) {
+    var d = new Date(iso);
+    return dos(d.getDate()) + '/' + dos(d.getMonth() + 1) + '/' + d.getFullYear();
+  }
+  function fechaHora(iso) {
+    var d = new Date(iso);
+    return fecha(iso) + ' ' + dos(d.getHours()) + ':' + dos(d.getMinutes());
+  }
+
+  /* El Auditor queda recortado SIEMPRE a su sucursal -- misma regla que
+     aplica el backend (historial.permisos.ts), no un filtro de la vista. */
+  function visibles() {
+    return INVENTARIOS.filter(function (i) {
+      if (sesion.sucursalId !== null && i.sucursalId !== sesion.sucursalId) return false;
+      return filtro === 'todos' || i.estado === filtro;
+    });
+  }
+
+  /* Por que este inventario no tiene cifras. El backend devuelve resultado
+     null hasta que se liquida, asi que un conteo_cerrado llega sin numeros
+     igual que uno en_curso -- pero por motivos distintos, y decir "conteo en
+     marcha" sobre un conteo que YA cerro informa mal sobre el punto del
+     ciclo en el que esta el mes. */
+  function sinResultado(estado) {
+    if (estado === 'en_curso') return 'Conteo en marcha: los resultados se calculan al cerrar el ciclo.';
+    if (estado === 'conteo_cerrado') return 'Conteo cerrado. Las cifras se calculan al liquidar.';
+    if (estado === 'anulado') return 'Inventario anulado: no produjo resultados.';
+    return 'Sin resultados calculados.';
+  }
+
+  function buscar(id) {
+    for (var i = 0; i < INVENTARIOS.length; i++) if (INVENTARIOS[i].id === id) return INVENTARIOS[i];
+    return null;
+  }
+
+  function cifra(etiqueta, valor, clase) {
+    var d = document.createElement('div');
+    d.className = 'inv-cifra';
+    var dt = document.createElement('dt');
+    dt.textContent = etiqueta;
+    var dd = document.createElement('dd');
+    dd.textContent = valor;
+    if (clase) dd.className = clase;
+    d.appendChild(dt);
+    d.appendChild(dd);
+    return d;
+  }
+
+  function tarjetaInventario(inv) {
+    var est = ESTADOS[inv.estado];
+
+    var art = document.createElement('div');
+    art.className = 'inv ' + (est.sellado ? 'sellado' : 'abierto');
+
+    var cuerpo = document.createElement('div');
+    cuerpo.className = 'inv-cuerpo';
+
+    var cab = document.createElement('div');
+    cab.className = 'inv-cabecera';
+
+    var per = document.createElement('div');
+    per.className = 'inv-periodo';
+    per.innerHTML = '<span class="inv-mes">' + MESES[inv.mes - 1] + '</span><span class="inv-anio">' + inv.anio + '</span>';
+
+    var datos = document.createElement('div');
+    datos.className = 'inv-datos';
+    var titulo = document.createElement('div');
+    titulo.className = 'inv-titulo';
+    var sede = document.createElement('p');
+    sede.className = 'inv-sede';
+    sede.textContent = inv.sede;
+    titulo.appendChild(sede);
+    if (est.sellado) {
+      var cand = document.createElement('span');
+      cand.innerHTML = CANDADO;
+      titulo.appendChild(cand.firstChild);
+    }
+    var badge = document.createElement('span');
+    badge.className = est.badge;
+    badge.textContent = est.etiqueta;
+    titulo.appendChild(badge);
+
+    var meta = document.createElement('p');
+    meta.className = 'inv-meta';
+    meta.textContent = miles(inv.items) + ' \u00edtems \u00b7 hojas de ' + inv.tamanoHoja +
+      (inv.cerradoEn ? ' \u00b7 cerrado el ' + fecha(inv.cerradoEn) : ' \u00b7 sin cerrar');
+
+    datos.appendChild(titulo);
+    datos.appendChild(meta);
+    cab.appendChild(per);
+    cab.appendChild(datos);
+    cuerpo.appendChild(cab);
+
+    if (inv.resultado) {
+      var cifras = document.createElement('dl');
+      cifras.className = 'inv-cifras';
+      cifras.style.margin = '0';
+      var r = inv.resultado;
+      cifras.appendChild(cifra('\u00cdtems cuadrados', miles(r.itemsCuadrados) + ' (' + pct(r.porcentajeCuadrado) + '%)', 'ok'));
+      cifras.appendChild(cifra('Con diferencia', miles(r.itemsConDiferencia), 'falta'));
+      cifras.appendChild(cifra('Faltante bruto', soles(r.montoFaltanteBruto), null));
+      cifras.appendChild(cifra('Faltante neto',
+        r.montoFaltanteNeto === null ? 'Sin liquidar' : soles(r.montoFaltanteNeto),
+        r.montoFaltanteNeto === null ? null : 'falta'));
+      cuerpo.appendChild(cifras);
+    } else {
+      var sin = document.createElement('p');
+      sin.className = 'inv-sin-datos';
+      /* "Todavia no se calculo" y "cero" no son lo mismo: mostrar 0 aca
+         haria pensar que el mes cerro sin diferencias. */
+      sin.textContent = sinResultado(inv.estado);
+      cuerpo.appendChild(sin);
+    }
+
+    art.appendChild(cuerpo);
+
+    /* La franja del folio SOLO existe en un lacrado. Es la senal mas
+       honesta de todas: no hay folio hasta que hay sello. */
+    if (inv.lacrado) {
+      var sello = document.createElement('div');
+      sello.className = 'inv-sello';
+      sello.innerHTML = CANDADO.replace('class="inv-candado" width="14" height="14"', 'width="14" height="14"') +
+        '<span class="inv-folio">' + inv.lacrado.folio + '</span>';
+      art.appendChild(sello);
+    }
+
+    var pie = document.createElement('div');
+    pie.className = 'inv-pie';
+    var estadoFirmas = document.createElement('span');
+    estadoFirmas.textContent = inv.lacrado
+      ? 'Firmado por 2 auditores'
+      : inv.aprobaciones + ' / 2 firmas';
+    var abrir = document.createElement('button');
+    abrir.type = 'button';
+    abrir.className = 'inv-abrir';
+    abrir.textContent = 'Ver detalle';
+    abrir.addEventListener('click', function () { abrirDetalle(inv.id); });
+    pie.appendChild(estadoFirmas);
+    pie.appendChild(abrir);
+    art.appendChild(pie);
+
+    return art;
+  }
+
+  function pintarLista() {
+    var lista = visibles();
+    var cont = $('lista-inventarios');
+    cont.innerHTML = '';
+    lista.forEach(function (inv) { cont.appendChild(tarjetaInventario(inv)); });
+    cont.hidden = lista.length === 0;
+    $('sin-inventarios').hidden = lista.length !== 0;
+  }
+
+  function pintarChips() {
+    var cont = $('chips-estado');
+    cont.innerHTML = '';
+    ORDEN_FILTROS.forEach(function (clave) {
+      var propios = INVENTARIOS.filter(function (i) {
+        return sesion.sucursalId === null || i.sucursalId === sesion.sucursalId;
+      });
+      var n = clave === 'todos' ? propios.length : propios.filter(function (i) { return i.estado === clave; }).length;
+      var b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'chip';
+      b.setAttribute('aria-pressed', String(filtro === clave));
+      b.textContent = (clave === 'todos' ? 'Todos' : ESTADOS[clave].etiqueta) + ' (' + n + ')';
+      b.addEventListener('click', function () { filtro = clave; render(); });
+      cont.appendChild(b);
+    });
+  }
+
+  function filaDato(etiqueta, valor, clase) {
+    var d = document.createElement('div');
+    d.className = 'dato-fila';
+    var dt = document.createElement('dt');
+    dt.textContent = etiqueta;
+    var dd = document.createElement('dd');
+    dd.textContent = valor;
+    if (clase) dd.className = clase;
+    d.appendChild(dt);
+    d.appendChild(dd);
+    return d;
+  }
+
+  function pintarDetalle() {
+    var inv = buscar(detalleId);
+    if (!inv) return;
+    var est = ESTADOS[inv.estado];
+
+    $('det-titulo').textContent = MESES[inv.mes - 1] + ' ' + inv.anio + ' \u00b7 ' + inv.sede;
+    $('det-badge').className = est.badge;
+    $('det-badge').textContent = est.etiqueta;
+    $('det-meta').textContent = miles(inv.items) + ' \u00edtems \u00b7 hojas de ' + inv.tamanoHoja +
+      (inv.cerradoEn ? ' \u00b7 conteo cerrado el ' + fecha(inv.cerradoEn) : ' \u00b7 conteo todav\u00eda abierto');
+
+    var res = $('det-resultado');
+    res.innerHTML = '';
+    if (inv.resultado) {
+      var r = inv.resultado;
+      res.appendChild(filaDato('\u00cdtems totales', miles(r.itemsTotales)));
+      res.appendChild(filaDato('\u00cdtems cuadrados', miles(r.itemsCuadrados) + ' (' + pct(r.porcentajeCuadrado) + '%)', 'ok'));
+      res.appendChild(filaDato('\u00cdtems con diferencia', miles(r.itemsConDiferencia), 'falta'));
+      if (r.itemsSegundoConteo !== undefined) {
+        res.appendChild(filaDato('Fueron a 2\u00ba conteo', miles(r.itemsSegundoConteo)));
+        res.appendChild(filaDato('Fueron a 3\u00ba conteo', miles(r.itemsTercerConteo)));
+      }
+      if (r.unidadesFaltantes !== undefined) {
+        res.appendChild(filaDato('Unidades faltantes', miles(r.unidadesFaltantes), 'falta'));
+        res.appendChild(filaDato('Unidades sobrantes', miles(r.unidadesSobrantes)));
+      }
+      res.appendChild(filaDato('Faltante bruto', soles(r.montoFaltanteBruto)));
+      res.appendChild(filaDato('Faltante neto',
+        r.montoFaltanteNeto === null ? 'Sin liquidar todav\u00eda' : soles(r.montoFaltanteNeto),
+        r.montoFaltanteNeto === null ? null : 'falta'));
+      res.appendChild(filaDato('Cuota por colaborador',
+        r.cuotaBase === null ? 'Sin liquidar todav\u00eda' : soles(r.cuotaBase)));
+    } else {
+      var p = document.createElement('p');
+      p.className = 'inv-sin-datos';
+      p.textContent = sinResultado(inv.estado);
+      res.appendChild(p);
+    }
+
+    var hojas = inv.hojas || [];
+    $('det-hojas-total').textContent = hojas.length ? hojas.length + ' hojas' : '';
+    var contH = $('det-hojas');
+    contH.innerHTML = '';
+    if (hojas.length === 0) {
+      var vac = document.createElement('p');
+      vac.className = 'inv-sin-datos';
+      vac.textContent = 'Este inventario no tiene el detalle de hojas guardado.';
+      contH.appendChild(vac);
+    } else {
+      hojas.forEach(function (h) {
+        var d = document.createElement('div');
+        d.className = 'hoja-mini';
+        d.innerHTML = '<span><strong>Hoja #' + h.numero + '</strong> \u00b7 Zona ' + h.zona + ' \u00b7 G\u00f3ndola ' + h.gondola + '</span>' +
+          '<span>' + h.contados + '/' + h.tamano + ' \u00b7 ' + h.asignado + '</span>';
+        contH.appendChild(d);
+      });
+    }
+
+    $('det-bloque-lacrado').hidden = !inv.lacrado;
+    $('det-sin-lacrado').hidden = !!inv.lacrado;
+
+    if (inv.lacrado) {
+      var l = inv.lacrado;
+      $('det-folio').textContent = l.folio;
+      $('det-lacrado-en').textContent = fechaHora(l.lacradoEn);
+      $('det-lacrado-por').textContent = l.lacradoPor;
+      $('det-hash').textContent = l.hash;
+
+      var contF = $('det-firmas');
+      contF.innerHTML = '';
+      l.firmas.forEach(function (f) {
+        var d = document.createElement('div');
+        d.className = 'firma';
+        var datos = '<span class="firma-nombre">' + f.nombre + '</span>' +
+          '<span class="firma-meta">' + f.rol.charAt(0).toUpperCase() + f.rol.slice(1) + ' al firmar \u00b7 ' + fechaHora(f.en) + '</span>';
+        if (f.nota) datos += '<span class="firma-nota">\u201c' + f.nota + '\u201d</span>';
+        d.innerHTML = CHECK_FIRMA + '<div class="firma-datos">' + datos + '</div>';
+        contF.appendChild(d);
+      });
+
+      $('det-erp').textContent = l.erp
+        ? 'Registrado a mano en Dynamics por ' + l.erp.por + ' el ' + fecha(l.erp.registradoEn) + ' \u00b7 referencia ' + l.erp.referencia + '.'
+        : 'Todav\u00eda no se registr\u00f3 en Dynamics. El ajuste autom\u00e1tico es fase 2: por ahora lo carga TI a mano.';
+    } else {
+      $('det-firmas-badge').className = 'badge' + (inv.aprobaciones >= 2 ? ' ok' : '');
+      $('det-firmas-badge').textContent = inv.aprobaciones + ' / 2 firmado';
+      $('det-sin-lacrado-texto').textContent = inv.estado === 'en_curso'
+        ? 'El conteo sigue abierto: este inventario todav\u00eda se puede modificar. El lacrado llega al final del ciclo, con las dos firmas de auditor\u00eda.'
+        : 'Este inventario ya no se recuenta, pero todav\u00eda no est\u00e1 sellado: faltan ' + (2 - inv.aprobaciones) +
+          ' de las 2 firmas de auditor\u00eda. Hasta que se lacre, sigue siendo modificable.';
+    }
+  }
+
+  function abrirDetalle(id) {
+    detalleId = id;
+    pintarDetalle();
+    $('vista-lista').hidden = true;
+    $('vista-detalle').hidden = false;
+    $('pantalla').scrollTop = 0;
+  }
+
+  function volver() {
+    detalleId = null;
+    $('vista-detalle').hidden = true;
+    $('vista-lista').hidden = false;
+    $('pantalla').scrollTop = 0;
+  }
+
+  function pintarBarra() {
+    var lista = INVENTARIOS.filter(function (i) {
+      return sesion.sucursalId === null || i.sucursalId === sesion.sucursalId;
+    });
+    var lacrados = lista.filter(function (i) { return i.estado === 'lacrado'; }).length;
+    $('sede').textContent = sesion.sede;
+    $('cifras').textContent = lista.length + (lista.length === 1 ? ' inventario' : ' inventarios') +
+      ' \u00b7 ' + lacrados + (lacrados === 1 ? ' lacrado' : ' lacrados');
+  }
+
+  function pintarTabs() {
+    var cont = $('tab-bar');
+    cont.innerHTML = '';
+    TABS[sesion.rol].forEach(function (t) {
+      var b = document.createElement('button');
+      b.type = 'button';
+      /* Inicio queda activo: al historial se llega desde ahi, no es un tab
+         propio (ver el comentario del tab bar en el HTML). */
+      b.className = 'tab' + (t.id === 'inicio' ? ' activo' : '');
+      if (t.id === 'inicio') b.setAttribute('aria-current', 'page');
+      b.innerHTML = '<span class="tab-indicador" aria-hidden="true"></span>' + ICONO_TAB[t.id] +
+        '<span class="tab-etiqueta">' + t.etiqueta + '</span>';
+      b.addEventListener('click', function () {
+        mostrarToast('Ir\u00eda a "' + t.etiqueta + '" (' + t.destino + ').');
+      });
+      cont.appendChild(b);
+    });
+  }
+
+  function pintarAtajos() {
+    var cont = $('atajos');
+    cont.innerHTML = '';
+    [
+      { clave: 'administrador', etiqueta: 'Sesi\u00f3n: Admin Sistema (las 4 sucursales)' },
+      { clave: 'auditor', etiqueta: 'Sesi\u00f3n: Gilmer Quispe (Auditor \u00b7 solo Luzuriaga)' }
+    ].forEach(function (a) {
+      var b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'atajo';
+      b.textContent = a.etiqueta;
+      b.setAttribute('aria-pressed', String(sesion.rol === a.clave));
+      b.addEventListener('click', function () {
+        sesion = SESIONES[a.clave];
+        volver();
+        render();
+        mostrarToast('Sesi\u00f3n de ' + (a.clave === 'auditor' ? 'Auditor: solo su sucursal' : 'Administrador: las 4 sucursales') + '.');
+      });
+      cont.appendChild(b);
+    });
+
+    var lacrado = document.createElement('button');
+    lacrado.type = 'button';
+    lacrado.className = 'atajo';
+    lacrado.textContent = 'Abrir el detalle de un lacrado';
+    lacrado.addEventListener('click', function () { abrirDetalle(8001); });
+    cont.appendChild(lacrado);
+  }
+
+  function render() {
+    pintarBarra();
+    pintarChips();
+    pintarLista();
+    pintarTabs();
+    pintarAtajos();
+    if (detalleId !== null) pintarDetalle();
+  }
+
+  $('btn-volver').addEventListener('click', volver);
+  $('btn-salir').addEventListener('click', function () {
+    mostrarToast('Cerrar\u00eda la sesi\u00f3n y volver\u00eda al login.');
+  });
+  document.addEventListener('keydown', function (e) {
+    if (e.key === 'Escape' && detalleId !== null) volver();
+  });
+
+  render();
+})();
+</script>

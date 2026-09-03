@@ -38,6 +38,6 @@ export { ChipsFiltro } from './ChipsFiltro';
 export type { ChipsFiltroProps, OpcionChip } from './ChipsFiltro';
 export { TarjetaItemAuditoria } from './TarjetaItemAuditoria';
 export type { TarjetaItemAuditoriaProps } from './TarjetaItemAuditoria';
-export { formatoMiles, formatoPct, formatoMoneda } from './formato';
+export { formatoMiles, formatoPct, formatoMoneda, formatoFecha, formatoFechaHora, MESES_CORTOS } from './formato';
 export { CampoTexto } from './CampoTexto';
 export type { CampoTextoProps } from './CampoTexto';

@@ -4,30 +4,12 @@ import { useEffect, useState, type JSX } from 'react';
 import { ActivityIndicator, Alert, Modal, StyleSheet, Text, View } from 'react-native';
 
 import { PantallaConTabs } from '../../components/navegacion/PantallaConTabs';
-import { BandaSync, Badge, BarraApp, Button, formatoMiles } from '../../components/ui';
+import { BandaSync, Badge, BarraApp, Button, formatoFechaHora, formatoMiles } from '../../components/ui';
 import { repositorioInventario, repositorioLacrado, repositorioSesion } from '../../lib/contenedor';
 import type { Colaborador } from '../../lib/dominio/tipos';
 import type { EstadoLacrado } from '../../lib/puertos/repositorios';
 import { useSesion } from '../../lib/sesion-contexto';
 import { colors, fonts, spacing } from '../../lib/theme';
-
-/**
- * "2026-09-03T21:08:00.000Z" -> "03/09 21:08".
- *
- * A mano, sin `toLocaleString`, por el mismo motivo por el que
- * components/ui/formato.ts no usa `Intl`: en Hermes no está garantizado
- * que la build traiga los datos ICU de es-PE, y si no los trae cae en
- * formato inglés en silencio. Vive acá y no en formato.ts porque hasta
- * ahora ninguna otra pantalla necesitó mostrar una hora.
- */
-function fechaHoraCorta(iso: string): string {
-  const d = new Date(iso);
-  const dd = String(d.getDate()).padStart(2, '0');
-  const mm = String(d.getMonth() + 1).padStart(2, '0');
-  const hh = String(d.getHours()).padStart(2, '0');
-  const mi = String(d.getMinutes()).padStart(2, '0');
-  return `${dd}/${mm} ${hh}:${mi}`;
-}
 
 /**
  * Lacrado digital (mobile/design/lacrado.html) — acceso del Auditor, el
@@ -235,7 +217,7 @@ export default function LacradoScreen(): JSX.Element {
                   <View style={styles.personaDatos}>
                     <Text style={styles.personaNombre}>{auditor.nombre}</Text>
                     <Text style={styles.personaSub}>
-                      {aprobacion ? `Firmó el ${fechaHoraCorta(aprobacion.fecha)}` : 'Auditor'}
+                      {aprobacion ? `Firmó el ${formatoFechaHora(aprobacion.fecha)}` : 'Auditor'}
                       {esMiFila ? ' · sesión actual' : ''}
                     </Text>
                   </View>

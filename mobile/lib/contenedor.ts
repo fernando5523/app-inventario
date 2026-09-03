@@ -12,6 +12,7 @@ import type {
   RepositorioCatalogo,
   RepositorioConfig,
   RepositorioConfigDynamics,
+  RepositorioHistorial,
   RepositorioHojas,
   RepositorioInventario,
   RepositorioLacrado,
@@ -36,6 +37,7 @@ import { usuariosMemoria } from './adaptadores/usuarios-memoria';
 
 import { catalogoApi } from './adaptadores/catalogo-api';
 import { configApi } from './adaptadores/config-api';
+import { historialApi } from './adaptadores/historial-api';
 import { hojasApi } from './adaptadores/hojas-api';
 import { auditoriaApi } from './adaptadores/auditoria-api';
 import { inventarioApi } from './adaptadores/inventario-api';
@@ -285,3 +287,16 @@ export const repositorioConfigDynamics: RepositorioConfigDynamics = elegir(
   configDynamicsMemoria,
   configDynamicsApiPendiente,
 );
+
+/**
+ * ── HISTÓRICO: solo HTTP, sin variante en memoria ──
+ *
+ * No hay `historial-memoria.ts` y es deliberado: el histórico es el registro
+ * de lo que YA pasó, y un mock que invente inventarios cerrados con sus
+ * firmas es exactamente el dato que nadie debería poder fabricar. Sin
+ * backend, la pantalla avisa que no pudo cargar — nunca muestra un histórico
+ * de mentira, que frente al cliente sería peor que una pantalla vacía.
+ *
+ * Por eso tampoco pasa por `elegir()`: no hay a qué caer.
+ */
+export const repositorioHistorial: RepositorioHistorial = historialApi;

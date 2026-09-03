@@ -20,6 +20,12 @@ export const ACCESOS_POR_ROL: Record<Rol, DefinicionAcceso[]> = {
     { titulo: 'Usuarios', sub: 'Cuentas de todas las sucursales', ruta: '/administrador/usuarios' },
     { titulo: 'Tiendas', sub: 'Alta y estado de las sucursales', ruta: '/administrador/tiendas' },
     { titulo: 'Configuración', sub: 'Parámetros del sistema', ruta: '/administrador/config' },
+    // Acceso y NO tab, a propósito: un tab se gana el lugar si se visita
+    // varias veces por jornada, y el histórico se mira de vez en cuando —
+    // al cerrar el mes, o cuando alguien pregunta por un período viejo.
+    // Además el Administrador ya tiene 4 tabs; un quinto los deja tan
+    // angostos que "Historial" no entra sin cortarse.
+    { titulo: 'Historial de inventarios', sub: 'Todos los períodos y sus cierres', ruta: '/administrador/historial' },
   ],
   coordinador: [
     { titulo: 'Gestión de hojas', sub: 'Crear y asignar las hojas de conteo', ruta: '/coordinador/hojas' },
@@ -32,5 +38,6 @@ export const ACCESOS_POR_ROL: Record<Rol, DefinicionAcceso[]> = {
     { titulo: 'Ciclo de conteos', sub: 'Embudo de discrepancias entre las 3 pasadas', ruta: '/auditor/ciclo' },
     { titulo: 'Aprobación y lacrado', sub: 'Firma y cierre del inventario auditado', ruta: '/auditor/lacrado' },
     { titulo: 'Usuarios de mi sucursal', sub: 'Crear y habilitar cuentas', ruta: '/auditor/usuarios' },
+    { titulo: 'Historial de inventarios', sub: 'Cierres de mi sucursal, período por período', ruta: '/auditor/historial' },
   ],
 };

@@ -22,6 +22,11 @@ export const colors = {
   procesoSuave: '#FDF3DC',
   espera: '#6B6560',
   esperaSuave: '#F2EFED',
+  // Cuarto estado semántico del design system (.claude/skills/trujillo-ui):
+  // faltantes y diferencias. Contraste verificado 6.56:1 / 5.63:1. Estaba en
+  // controles.css desde la pantalla 4 pero nunca se había portado al theme.
+  falta: '#A23B2E',
+  faltaSuave: '#FBEAE7',
 
   /** Fondo del modal (PIN, confirmaciones): rgba(28,25,23,.42) en la maqueta. */
   overlay: 'rgba(28, 25, 23, 0.42)',

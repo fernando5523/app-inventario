@@ -1,0 +1,205 @@
+/**
+ * Tests del adaptador de histórico contra la forma REAL del servidor.
+ *
+ * Los cuerpos de abajo no son inventados: son la respuesta que devolvió
+ * `GET /api/historial/inventarios` y `/:id` contra http://localhost:3000 el
+ * 2026-09-04, con la base sembrada (`npm run prisma:seed-historial`).
+ * Copiarlos acá los congela como contrato: si el backend cambia la forma,
+ * estos tests rompen antes que la pantalla.
+ *
+ * Lo que se prueba son las DOS traducciones que justifican que exista un
+ * adaptador — aplanar el sello a `folio` y normalizar los montos que no
+ * vinieron — no que `fetch` funcione.
+ */
+
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+vi.mock('react-native', () => ({ Platform: { OS: 'android' } }));
+vi.mock('expo-constants', () => ({ default: { expoConfig: { extra: {} } } }));
+vi.mock('expo-sqlite', () => ({ openDatabaseAsync: async () => ({}) }));
+
+import { recordarToken } from './_http';
+import { historialApi } from './historial-api';
+
+function json(cuerpo: unknown, estado = 200): Response {
+  return {
+    ok: estado >= 200 && estado < 300,
+    status: estado,
+    json: async () => cuerpo,
+    text: async () => JSON.stringify(cuerpo),
+  } as unknown as Response;
+}
+
+/** Un lacrado tal como lo manda el servidor: el sello viene ENTERO en el listado. */
+const LACRADO_DTO = {
+  id: 8002,
+  sucursalId: 1,
+  sucursalNombre: 'Market Central Luzuriaga',
+  estado: 'lacrado',
+  periodo: '2026-07',
+  periodoAnio: 2026,
+  periodoMes: 7,
+  tamanoHoja: 50,
+  snapshotItems: 8000,
+  cerradoEn: '2026-07-28T18:00:00.000Z',
+  abierto: false,
+  resultado: {
+    itemsTotales: 8000,
+    itemsConDiferencia: 168,
+    itemsCuadrados: 7832,
+    porcentajeCuadrado: 97.9,
+    montoFaltanteBruto: 2410,
+    montoFaltanteNeto: 1550,
+    cuotaBase: 140.91,
+  },
+  lacrado: {
+    folio: 'INV-2026-07-LUZ-8000-844',
+    hash: '844f71b9e2fd10930826375a0876b40264baf36e38d2a1299d0dc9f745fdeab1',
+    lacradoEn: '2026-07-29T16:00:00.000Z',
+    lacradoPor: { id: 103, nombre: 'Gilmer Quispe' },
+    registradoEnErp: false,
+  },
+  aprobaciones: 2,
+};
+
+/** Un conteo cerrado: `resultado: null`. Las cifras se calculan al liquidar. */
+const SIN_RESULTADO_DTO = {
+  ...LACRADO_DTO,
+  id: 8004,
+  estado: 'conteo_cerrado',
+  periodo: '2026-05',
+  periodoMes: 5,
+  resultado: null,
+  lacrado: null,
+  aprobaciones: 1,
+};
+
+beforeEach(() => {
+  recordarToken('token-de-prueba');
+});
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
+
+describe('historialApi.listar', () => {
+  it('aplana el sello a `folio`: la lista necesita saber SI hay sello, no el hash', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => json({ total: 1, inventarios: [LACRADO_DTO] })));
+
+    const { total, inventarios } = await historialApi.listar();
+
+    expect(total).toBe(1);
+    expect(inventarios[0].folio).toBe('INV-2026-07-LUZ-8000-844');
+    // El hash y el registro ERP NO se arrastran a una pantalla que no los
+    // muestra: el puerto expone `folio: string | null` y nada más.
+    expect(inventarios[0]).not.toHaveProperty('lacrado');
+    expect(inventarios[0]).not.toHaveProperty('hash');
+  });
+
+  it('folio null cuando no hay sello — es la señal de "todavía se puede tocar"', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => json({ total: 1, inventarios: [SIN_RESULTADO_DTO] })));
+
+    const { inventarios } = await historialApi.listar();
+    expect(inventarios[0].folio).toBeNull();
+  });
+
+  it('deja `resultado` en null sin inventar ceros', async () => {
+    // "Cero de faltante" y "todavía no se calculó" son cosas distintas, y
+    // confundirlas en un inventario es grave: diría que el mes cerró sin
+    // diferencias cuando en realidad nadie lo liquidó todavía.
+    vi.stubGlobal('fetch', vi.fn(async () => json({ total: 1, inventarios: [SIN_RESULTADO_DTO] })));
+
+    const { inventarios } = await historialApi.listar();
+    expect(inventarios[0].resultado).toBeNull();
+  });
+
+  it('normaliza a null los montos que el servidor OMITE cuando no está liquidado', async () => {
+    const sinLiquidar = {
+      ...LACRADO_DTO,
+      estado: 'conteo_cerrado',
+      lacrado: null,
+      // El servidor no manda estas dos claves hasta que hay liquidación.
+      resultado: {
+        itemsTotales: 8000,
+        itemsConDiferencia: 210,
+        itemsCuadrados: 7790,
+        porcentajeCuadrado: 97.4,
+        montoFaltanteBruto: 2890,
+      },
+    };
+    vi.stubGlobal('fetch', vi.fn(async () => json({ total: 1, inventarios: [sinLiquidar] })));
+
+    const { inventarios } = await historialApi.listar();
+    // Ausente y null son lo mismo (todavía no se calculó); cero NO lo es.
+    expect(inventarios[0].resultado?.montoFaltanteNeto).toBeNull();
+    expect(inventarios[0].resultado?.cuotaBase).toBeNull();
+    expect(inventarios[0].resultado?.montoFaltanteBruto).toBe(2890);
+  });
+
+  it('arma la query solo con los filtros presentes', async () => {
+    const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => json({ total: 0, inventarios: [] }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await historialApi.listar({ sucursalId: 1, estado: 'lacrado' });
+
+    const url = String(fetchMock.mock.calls[0][0]);
+    expect(url).toContain('sucursalId=1');
+    expect(url).toContain('estado=lacrado');
+    expect(url).not.toContain('limite=');
+    expect(url).not.toContain('undefined');
+  });
+});
+
+describe('historialApi.detalle', () => {
+  it('unifica `sucursal: {id, nombre}` a la forma plana del listado', async () => {
+    // El detalle manda un objeto anidado y el listado dos campos planos. Una
+    // sola manera de leer la sucursal en toda la app: la del listado.
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () =>
+        json({
+          ...LACRADO_DTO,
+          sucursal: { id: 1, nombre: 'Market Central Luzuriaga' },
+          cerradoPor: { id: 103, nombre: 'Gilmer Quispe' },
+          hojas: [],
+          diferencias: 6,
+          liquidaciones: 11,
+          aprobaciones: [
+            { aprobadorId: 103, aprobadorNombre: 'Gilmer Quispe', rolAlAprobar: 'auditor', aprobadoEn: '2026-06-29T10:00:00.000Z', nota: null },
+            { aprobadorId: 106, aprobadorNombre: 'Rosa Melgarejo', rolAlAprobar: 'auditor', aprobadoEn: '2026-06-29T14:00:00.000Z', nota: 'Revisado.' },
+          ],
+        }),
+      ),
+    );
+
+    const d = await historialApi.detalle(8002);
+
+    expect(d.sucursalId).toBe(1);
+    expect(d.sucursalNombre).toBe('Market Central Luzuriaga');
+    // Las DOS firmas, con el rol congelado al firmar.
+    expect(d.aprobaciones).toHaveLength(2);
+    expect(d.aprobaciones.map((a) => a.aprobadorId)).toEqual([103, 106]);
+    expect(d.aprobaciones[0].rolAlAprobar).toBe('auditor');
+    expect(d.lacrado?.folio).toBe('INV-2026-07-LUZ-8000-844');
+  });
+
+  it('nunca deja pasar un `aprobaciones` que no sea array — la pantalla hace .map() sobre eso', async () => {
+    // El seed de histórico no guarda hojas para los inventarios viejos
+    // (verificado: el 8001 devuelve `hojas: []`). La pantalla lo dice, no
+    // se cae.
+    vi.stubGlobal(
+      'fetch',
+      // OJO con `aprobaciones`: acá llega como NÚMERO porque el fixture sale
+      // del listado. El adaptador tiene que resistirlo — ver Array.isArray
+      // en historial-api.ts.
+      vi.fn(async () =>
+        json({ ...SIN_RESULTADO_DTO, sucursal: { id: 1, nombre: 'Market Central Luzuriaga' }, cerradoPor: null, diferencias: 0, liquidaciones: 0, lacrado: null }),
+      ),
+    );
+
+    const d = await historialApi.detalle(8004);
+    expect(d.hojas).toEqual([]);
+    expect(d.aprobaciones).toEqual([]);
+    expect(d.lacrado).toBeNull();
+  });
+});
