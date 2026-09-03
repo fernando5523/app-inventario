@@ -30,6 +30,7 @@ import {
   type ResultadoVerificacion,
 } from './historial.lacrado';
 import {
+  APROBACIONES_REQUERIDAS,
   resolverSucursalConsultable,
   validarAccesoAInventario,
   validarPuedeAprobar,
@@ -667,11 +668,19 @@ export interface LacradoDto {
  */
 export async function lacrar(actor: ColaboradorAutenticado, id: number): Promise<LacradoDto> {
   const inv = await traerInventarioOFallar(actor, id, INCLUDE_SELLO);
-  const yaLacrado = (await prisma.lacradoInventario.count({ where: { inventarioId: id } })) > 0;
+  const [yaLacrado, sinSincronizar] = await Promise.all([
+    prisma.lacradoInventario.count({ where: { inventarioId: id } }).then((n) => n > 0),
+    contarHojasSinSincronizar(id),
+  ]);
 
   validarPuedeLacrar(
     actor,
-    { sucursalId: inv.sucursalId, estado: inv.estado as EstadoInventario, yaLacrado },
+    {
+      sucursalId: inv.sucursalId,
+      estado: inv.estado as EstadoInventario,
+      yaLacrado,
+      todoSincronizado: sinSincronizar === 0,
+    },
     inv.aprobaciones,
   );
 
@@ -736,6 +745,68 @@ export async function lacrar(actor: ColaboradorAutenticado, id: number): Promise
       rol: a.rolAlAprobar,
       aprobadoEn: a.aprobadoEn.toISOString(),
     })),
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Estado del lacrado -- lo que consume la pantalla 7
+// ---------------------------------------------------------------------------
+
+/**
+ * Hojas cuyo conteo todavia no llego al servidor. Cero es la condicion para
+ * poder lacrar: sellar un inventario con conteos sin subir es firmar un
+ * resultado incompleto, y como el sello es inmutable esos conteos ya no
+ * entran nunca (ver historial.permisos.ts#validarPuedeLacrar).
+ */
+async function contarHojasSinSincronizar(inventarioId: number): Promise<number> {
+  return prisma.hojaConteo.count({
+    where: { inventarioId, sync: { not: 'sincronizado' } },
+  });
+}
+
+/**
+ * Espeja exactamente `EstadoLacrado` de
+ * mobile/lib/puertos/repositorios.ts. La pantalla 7 dibuja las dos filas de
+ * aprobacion, la banda de sincronizacion y el boton de lacrar a partir de
+ * esto y nada mas -- por eso viaja `aprobacionesRequeridas` en vez de
+ * hardcodear un 2 del lado del front: el dia que sean tres, la pantalla se
+ * entera sola.
+ */
+export interface EstadoLacradoDto {
+  inventarioId: number;
+  aprobaciones: Array<{ colaboradorId: number; nombre: string; fecha: string }>;
+  aprobacionesRequeridas: number;
+  todoSincronizado: boolean;
+  lacrado: boolean;
+  hash: string | null;
+  lacradoEn: string | null;
+  registradoManualmenteEnDynamics: boolean;
+}
+
+export async function estadoLacrado(actor: ColaboradorAutenticado, id: number): Promise<EstadoLacradoDto> {
+  const inv = await traerInventarioOFallar(actor, id, {
+    aprobaciones: {
+      include: { aprobador: { select: { id: true, nombre: true } } },
+      orderBy: { aprobadoEn: 'asc' },
+    },
+    lacrado: { include: { registroErp: { select: { id: true } } } },
+  });
+
+  const sinSincronizar = await contarHojasSinSincronizar(id);
+
+  return {
+    inventarioId: id,
+    aprobaciones: inv.aprobaciones.map((a) => ({
+      colaboradorId: a.aprobadorId,
+      nombre: a.aprobador.nombre,
+      fecha: a.aprobadoEn.toISOString(),
+    })),
+    aprobacionesRequeridas: APROBACIONES_REQUERIDAS,
+    todoSincronizado: sinSincronizar === 0,
+    lacrado: inv.lacrado !== null,
+    hash: inv.lacrado?.hash ?? null,
+    lacradoEn: inv.lacrado?.lacradoEn.toISOString() ?? null,
+    registradoManualmenteEnDynamics: inv.lacrado?.registroErp !== null && inv.lacrado?.registroErp !== undefined,
   };
 }
 

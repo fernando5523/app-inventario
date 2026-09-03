@@ -168,7 +168,7 @@ describe('validarPuedeAprobar', () => {
 });
 
 describe('validarPuedeLacrar', () => {
-  const listo = { sucursalId: 1, estado: 'liquidado' as EstadoInventario, yaLacrado: false };
+  const listo = { sucursalId: 1, estado: 'liquidado' as EstadoInventario, yaLacrado: false, todoSincronizado: true };
   const dosFirmas = [{ aprobadorId: 12 }, { aprobadorId: 30 }];
 
   it('con dos firmas de personas distintas se puede lacrar', () => {
@@ -208,6 +208,27 @@ describe('validarPuedeLacrar', () => {
 
   it('un contador no lacra', () => {
     expect(() => validarPuedeLacrar(contador, listo, dosFirmas)).toThrow(Prohibido);
+  });
+
+  it('NO SE LACRA con hojas todavia sin sincronizar', () => {
+    // "No se puede lacrar con datos que no llegaron a Dynamics" -- el sello
+    // es inmutable, asi que un conteo que no subio a tiempo ya no entra nunca.
+    expect(() => validarPuedeLacrar(gilmer, { ...listo, todoSincronizado: false }, dosFirmas)).toThrow(Conflicto);
+  });
+
+  it('el mensaje de sincronizacion dice que se puede reintentar, no que fallo algo', () => {
+    expect(() => validarPuedeLacrar(gilmer, { ...listo, todoSincronizado: false }, dosFirmas)).toThrow(
+      /volvé a intentar/i,
+    );
+  });
+
+  it('la falta de aprobaciones se reporta ANTES que la sincronizacion', () => {
+    // Prioridad deliberada: la sincronizacion se resuelve sola esperando la
+    // WiFi; las firmas no. Primero se le dice a la persona lo que SI tiene
+    // que ir a hacer.
+    expect(() =>
+      validarPuedeLacrar(gilmer, { ...listo, todoSincronizado: false }, [{ aprobadorId: 12 }]),
+    ).toThrow(/Faltan aprobaciones/);
   });
 });
 

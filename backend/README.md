@@ -1073,6 +1073,199 @@ npm run verificar:api   # flujo completo contra el backend vivo en :3000
 
 `verificar:api` prueba el conteo ciego (403 para rol `conteo`), el recorte por sucursal, los derivados calculados, la verificación del sello, y el control de dos personas completo: una firma por sesión, el 409 cuando la misma persona intenta dar la segunda, el 409 al lacrar con una sola, y el 400 cuando el body intenta declarar `aprobadorId`.
 
+---
+
+### Liquidación — `/api/liquidacion` (requiere sesión + rol `administrador`, `auditor` o `coordinador`)
+
+La pantalla 6: faltante neto, cuota base, multas de asistencia y la planilla de descuentos. Espeja `RepositorioLiquidacion` del puerto del front.
+
+**El `coordinador` SÍ entra acá**, al revés que en `/api/auditoria`. No es una inconsistencia: la matriz de auditoría contiene `stockErp` —el número que los 3 conteos cruzados existen para no conocer— y la liquidación no. Es plata y nómina; nada de eso le dice a nadie cuánto stock espera el ERP de un artículo, así que no hay conteo ciego que romper. Por eso el mockup le da al coordinador la Pantalla 6 y no la 5, y por eso el puerto dice textual *"solo lo usa el Coordinador (cierre de fin de mes, pantalla 6)"*.
+
+El rol `conteo` no entra: el descuento de sus compañeros no es asunto de quien cuenta. Cada persona ve el suyo en el recibo, no la planilla de los once.
+
+> **Por qué existe aparte de `GET /api/historial/inventarios/:id/liquidacion`**: ese endpoint pide un `inventarioId` y sirve para mirar un mes cerrado del archivo. La pantalla 6 no sabe ningún `inventarioId` — sabe en qué tienda está parada y pregunta "cómo quedó el último cierre de acá". Son dos preguntas distintas sobre los mismos datos.
+
+#### `GET /api/liquidacion/sucursales/:sucursalId`
+
+La liquidación del **último ciclo cerrado** de esa sucursal.
+
+Respuesta `200`:
+```json
+{
+  "periodo": "Agosto 2026",
+  "faltanteBruto": 2200,
+  "negativosDelMes": 380,
+  "faltanteEmpresa": 170,
+  "faltanteNeto": 1650,
+  "cuotaBase": 150,
+  "multaInasistencia": 20,
+  "bonoAsistencia": 7.5,
+  "totalFaltas": 3,
+  "planilla": [
+    { "colaboradorId": 108, "nombre": "Carla Depaz", "rol": "conteo", "asistio": true, "monto": 142.5 },
+    { "colaboradorId": 107, "nombre": "Luis Shuan", "rol": "conteo", "asistio": false, "monto": 170 }
+  ]
+}
+```
+
+**Devuelve `200` con body `null`** —no `404`— cuando esa tienda todavía no tiene ningún inventario con el conteo cerrado. El puerto declara `Promise<Liquidacion | null>` y "todavía no hay nada que liquidar" es una respuesta válida, no un error: un 404 obligaría a la pantalla a tratar un estado normal como una falla. Y una planilla de ceros sería peor todavía — se lee como "no se descuenta nada", que es una afirmación muy distinta.
+
+`monto` se **calcula** (`cuota + multa − bono`), no es una columna: misma regla que deja a `Conteo` sin columna `total`. `nombre` es el congelado al liquidar — lo que decía el recibo de sueldo de ese mes, no el nombre actual.
+
+Un inventario `en_curso` nunca se liquida: las cantidades todavía pueden cambiar en el 2do o 3er conteo.
+
+Errores: `403` rol sin acceso, o sucursal ajena.
+
+#### `GET /api/liquidacion/sucursales/:sucursalId/conciliacion`
+
+El detalle de "de dónde sale este número", para cuando Contabilidad pregunte por qué el total descontado no da exactamente igual al faltante neto.
+
+Respuesta `200`:
+```json
+{
+  "periodo": "Agosto 2026",
+  "faltanteNeto": 1650,
+  "sumaPlanilla": 1650,
+  "diferenciaPorRedondeo": 0,
+  "colaboradores": 11,
+  "asistieron": 8,
+  "faltaron": 3
+}
+```
+
+`diferenciaPorRedondeo` son los centavos que deja el redondeo de la cuota (1390 ÷ 11 = 126.36 × 11 = 1389.96, sobran 4). Se expone en vez de esconderse. **Pendiente de definir con el cliente**: hoy queda a favor del personal.
+
+Va aparte y no dentro de `Liquidacion` porque esa forma espeja el puerto del front y no se le pueden agregar campos sin romperlo.
+
+---
+
+### Estado del lacrado — `GET /api/historial/inventarios/:id/lacrado/estado`
+
+Requiere sesión + rol `administrador` o `auditor`. Es lo único que la pantalla 7 necesita para dibujarse entera: las dos filas de firma, la banda de sincronización y el botón. Espeja `EstadoLacrado` del puerto del front.
+
+Respuesta `200`:
+```json
+{
+  "inventarioId": 8001,
+  "aprobaciones": [
+    { "colaboradorId": 103, "nombre": "Gilmer Quispe", "fecha": "2026-06-29T10:00:00.000Z" },
+    { "colaboradorId": 106, "nombre": "Rosa Melgarejo", "fecha": "2026-06-29T14:00:00.000Z" }
+  ],
+  "aprobacionesRequeridas": 2,
+  "todoSincronizado": true,
+  "lacrado": true,
+  "hash": "06af20c9f741...",
+  "lacradoEn": "2026-06-29T16:00:00.000Z",
+  "registradoManualmenteEnDynamics": true
+}
+```
+
+`aprobacionesRequeridas` viaja en la respuesta en vez de estar hardcodeado en el front: el día que sean tres, la pantalla se entera sola.
+
+**`todoSincronizado`** es nuevo y trae una regla que el lacrado no tenía: **no se lacra con hojas sin sincronizar**. El puerto lo dice textual — *"no se puede lacrar con datos que no llegaron a Dynamics"*. Sellar un inventario al que le faltan conteos por subir es firmar un resultado incompleto, y como el sello es inmutable, esos conteos ya no entran nunca. `POST .../lacrado` ahora responde `409` en ese caso.
+
+El orden de los chequeos al lacrar es deliberado: primero las aprobaciones, después la sincronización. La sincronización se resuelve sola esperando la WiFi de la tienda; las firmas no. Primero se le dice a la persona lo que **sí** tiene que ir a hacer.
+
+Los tres endpoints de escritura (`POST .../aprobaciones`, `POST .../lacrado`, `POST .../lacrado/registro-erp`) ya estaban documentados más arriba, con la regla que los gobierna: **quien firma sale del token, nunca del body**.
+
+---
+
+### Credenciales de Dynamics — `/api/config-dynamics` (requiere sesión + rol `administrador`)
+
+Espeja `RepositorioConfigDynamics`. **Solo `administrador`, sin excepciones — ni siquiera el auditor.** Son las llaves de la integración con el ERP de la empresa: quien las cambia puede apuntar todo el sistema a otro Dynamics.
+
+#### La regla que gobierna este módulo entero
+
+**El `clientSecret` entra, se cifra y se guarda. NUNCA sale.** No hay un solo endpoint que lo devuelva, ni siquiera enmascarado: la única forma de que un secreto no aparezca en un log, un cache o una captura de pantalla es que la respuesta no lo tenga. Lo único que se dice de él es `secretoConfigurado: true | false`.
+
+Además se guarda **cifrado** con AES-256-GCM (`config-dynamics.cifrado.ts`), y eso resuelve un problema distinto del anterior: que la API no lo devuelva evita que se filtre por HTTP, pero no evita que quede en claro en una columna de Postgres — donde lo lee cualquier `SELECT *`, cualquier backup copiado a un disco compartido y cualquier dump que alguien mande por mail para "revisar un problema". Un backup viaja a muchos más lugares que una respuesta HTTP.
+
+GCM y no CBC porque trae autenticación: un secreto manipulado en la base **falla** al descifrar, en vez de devolver bytes cualquiera que después se le mandan a Azure AD como si fueran válidos.
+
+> **Lo que esto no protege, dicho de frente**: la clave sale de una variable de entorno del mismo servidor. Quien tiene acceso al proceso tiene las dos mitades. No es defensa contra un servidor comprometido — es defensa contra la ruta por la que estas cosas se filtran de verdad, que es un dump de base de datos dando vueltas.
+
+**Paso manual pendiente** (igual que el del `.env`): para poder guardar un secreto hace falta `APP_CIFRADO_CLAVE` en `backend/.env`. Se genera con:
+
+```bash
+openssl rand -hex 32
+```
+
+Sin esa variable, `PUT` **rechaza** el secreto con `503` en vez de guardarlo en claro — un secreto que no se puede proteger no se guarda. Pero sí deja guardar `tenantId`/`clientId`/`urlBase`, que no son secretos, así que la pantalla no queda muerta.
+
+#### Precedencia sobre el `.env`
+
+Si hay una fila en `config_dynamics` **con secreto**, gana sobre las `D365_*` del entorno; si no, se cae al `.env`. Ese orden y no el inverso porque la base es lo que una persona puede cambiar desde la pantalla, y el `.env` solo lo toca alguien con acceso al servidor. Si el entorno ganara, cargar las credenciales por pantalla no tendría ningún efecto y nadie entendería por qué.
+
+> **Para quien mantiene el módulo `d365`**: `config-dynamics.service.ts#credencialesEfectivas()` ya implementa esa precedencia y devuelve el secreto descifrado, listo para pedir el token. Hoy `d365-auth.service.ts` sigue leyendo `d365Config` (el `.env`) directo, así que las credenciales cargadas por pantalla todavía no lo alcanzan. Adoptarlo es cambiar esa lectura por un `await credencialesEfectivas()`. No se tocó desde acá.
+
+#### `GET /api/config-dynamics`
+
+Respuesta `200`:
+```json
+{
+  "tenantId": "11111111-2222-3333-4444-555555555555",
+  "clientId": "66666666-7777-8888-9999-000000000000",
+  "urlBase": "https://market-trujillo.operations.dynamics.com",
+  "secretoConfigurado": true,
+  "origen": "entorno",
+  "puedeGuardarSecreto": false,
+  "actualizadoEn": null
+}
+```
+
+- `secretoConfigurado` — lo único que se dice del secreto.
+- `origen` — `base` | `entorno` | `ninguno`: de dónde salen las credenciales que se están usando hoy.
+- `puedeGuardarSecreto` — `false` si falta `APP_CIFRADO_CLAVE`. Se informa para que la pantalla explique por qué el campo está bloqueado, en vez de dejar que el guardado falle recién al apretar el botón.
+
+Sin fila propia, refleja lo que hay en el entorno: así la pantalla muestra la configuración real y no un formulario vacío que haga pensar que Dynamics no está configurado cuando sí lo está.
+
+#### `PUT /api/config-dynamics`
+
+Body:
+```json
+{
+  "tenantId": "11111111-...",
+  "clientId": "66666666-...",
+  "urlBase": "https://market-trujillo.operations.dynamics.com",
+  "dataAreaId": "trv",
+  "clientSecret": "Abc8Q~..."
+}
+```
+
+- `clientSecret` es **opcional a propósito**: sin él se actualizan los otros campos y el secreto ya guardado queda intacto. Es lo que permite corregir un tenant mal tipeado sin obligar a nadie a ir a buscar el secreto entero a Azure de nuevo — y sin ese detalle, la gente termina pegando el secreto en un chat para tenerlo a mano.
+- `urlBase` **exige `https://`** (un secreto no viaja en claro) y se le saca la barra final.
+- `dataAreaId` opcional; vacío = se usa el del entorno.
+- El schema es `.strict()`: un campo mal escrito (`client_secret` en vez de `clientSecret`) da **`400`**, no se ignora en silencio. Con un secreto, "se ignoró y no te avisamos" es la peor respuesta posible — la pantalla diría que guardó y Azure seguiría rechazando.
+
+Respuesta `200`: el mismo shape del `GET`. **Nunca incluye el secreto**, ni el que acaba de recibir.
+
+Errores: `400` forma inválida · `403` no es administrador · `503` vino un `clientSecret` y falta `APP_CIFRADO_CLAVE`.
+
+Cada guardado escribe en `RegistroAuditoria` con `accion: "config_dynamics.actualizada"`. El secreto **nunca** viaja al log, ni cifrado: solo queda registrado que se cambió y una huella enmascarada (`Ab******re (48 caracteres)`) para poder confirmar "cargué el que empieza con ab" — mismo criterio que el reseteo de PIN.
+
+#### `POST /api/config-dynamics/probar`
+
+Prueba las credenciales **ya guardadas** contra Azure AD. Pide un token y nada más: no trae los 8.000 ítems del catálogo. La pregunta que responde es "estas credenciales sirven", y para eso alcanza con que Azure conteste — bajar el catálogo entero para averiguarlo son varios minutos de la WiFi de la tienda para una respuesta de sí/no.
+
+Sin body. Respuesta **siempre `200`**:
+```json
+{ "ok": true, "mensaje": "Conexión correcta con Azure AD (credenciales tomadas de: entorno)." }
+```
+```json
+{ "ok": false, "mensaje": "Azure AD rechazó las credenciales (HTTP 401). AADSTS7000215: Invalid client secret provided..." }
+```
+
+Que Azure rechace un secreto **no es un error del servidor**: es exactamente el resultado que esta prueba viene a averiguar, y la pantalla tiene que poder mostrarlo sin un `catch`. El mensaje incluye el código `AADSTS` de Azure (acotado a 300 caracteres) porque es lo que distingue un tenant inexistente de un secreto vencido de una app sin permisos.
+
+### Verificación de estos tres
+
+```bash
+node scripts/verificar-puertos-pendientes-api.mjs   # backend en :3000
+BASE_URL=http://localhost:3001 node scripts/verificar-puertos-pendientes-api.mjs   # otro puerto
+```
+
+Verifica, entre otras cosas, que el secreto no aparece en **ninguna** respuesta (ni en el `PUT` que lo recibe, ni en el `GET`, ni en el mensaje de la prueba), que el `409` de sincronización funciona, y que el body con `aprobadorId` sigue dando `400`.
+
 ## Desarrollo
 
 ```bash

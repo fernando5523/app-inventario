@@ -58,6 +58,17 @@ historialRouter.get(
   controller.obtenerLiquidacion,
 );
 
+/**
+ * Estado de la doble validacion y del sello: es lo unico que la pantalla 7
+ * necesita para dibujarse entera (las dos filas de firma, la banda de
+ * sincronizacion y el boton). Espeja EstadoLacrado del puerto del front.
+ */
+historialRouter.get(
+  '/inventarios/:id/lacrado/estado',
+  validar(parametrosInventarioSchema, 'params'),
+  controller.estadoLacrado,
+);
+
 /** Recalcula el hash y lo compara con el sellado -- ver historial.lacrado.ts. */
 historialRouter.get(
   '/inventarios/:id/lacrado/verificacion',

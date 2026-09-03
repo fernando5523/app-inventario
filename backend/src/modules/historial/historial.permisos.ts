@@ -184,7 +184,19 @@ export function validarPuedeAprobar(
  */
 export function validarPuedeLacrar(
   actor: ColaboradorAutenticado,
-  inventario: { sucursalId: number; estado: EstadoInventario; yaLacrado: boolean },
+  inventario: {
+    sucursalId: number;
+    estado: EstadoInventario;
+    yaLacrado: boolean;
+    /**
+     * false = quedan hojas sin sincronizar. El puerto del front lo dice
+     * textual: "no se puede lacrar con datos que no llegaron a Dynamics".
+     * Sellar un inventario al que todavia le faltan conteos por subir es
+     * firmar un resultado incompleto -- y como el lacrado es inmutable, esos
+     * conteos ya no entran nunca.
+     */
+    todoSincronizado: boolean;
+  },
   aprobaciones: AprobacionExistente[],
 ): void {
   validarAccesoAInventario(actor, inventario);
@@ -208,6 +220,15 @@ export function validarPuedeLacrar(
   if (aprobadoresDistintos.size < APROBACIONES_REQUERIDAS) {
     throw new Conflicto(
       `Faltan aprobaciones: el lacrado exige ${APROBACIONES_REQUERIDAS} de personas distintas y hay ${aprobadoresDistintos.size}.`,
+    );
+  }
+
+  // Ultimo chequeo, y va al final a proposito: es el que mas probablemente
+  // se resuelva solo esperando la WiFi de la tienda, asi que primero se le
+  // dice a la persona lo que SI tiene que arreglar.
+  if (!inventario.todoSincronizado) {
+    throw new Conflicto(
+      'Quedan hojas sin sincronizar: no se puede lacrar con conteos que todavia no llegaron al servidor. Esperá a que termine la sincronizacion y volvé a intentar.',
     );
   }
 }

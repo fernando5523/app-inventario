@@ -157,6 +157,7 @@ model Colaborador {
   registrosEnErp          RegistroErpInventario[]  @relation("RegistradoEnErpPor")
   aprobacionesDeCierre    AprobacionCierre[]       @relation("AprobadorCierre")
   liquidaciones           LiquidacionColaborador[] @relation("ColaboradorLiquidado")
+  configsDynamics         ConfigDynamics[]         @relation("ConfigDynamicsActualizadaPor")
 
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
@@ -846,4 +847,48 @@ model LiquidacionColaborador {
 
   @@unique([inventarioId, colaboradorId])
   @@map("liquidaciones_colaborador")
+}
+
+/// Credenciales de la integracion con Dynamics, cargadas desde la pantalla
+/// de Configuracion del Administrador (RepositorioConfigDynamics).
+///
+/// FILA UNICA: `id` siempre vale 1. No es un descuido -- la integracion con
+/// el ERP es una sola para todo el sistema, igual que el administrador no
+/// pertenece a ninguna sucursal. Se modela como tabla y no como mas filas de
+/// `Configuracion` porque el secreto necesita un tratamiento que las otras
+/// configs no tienen: se cifra al guardar y NUNCA se devuelve por la API.
+///
+/// PRECEDENCIA sobre las variables de entorno D365_*: si hay una fila aca,
+/// gana; si no, se cae a `.env`. Asi el sistema sigue andando exactamente
+/// igual que antes hasta que alguien cargue las credenciales por pantalla,
+/// y despues deja de depender de un archivo que solo una persona puede tocar.
+model ConfigDynamics {
+  /// Siempre 1 -- ver el comentario del modelo.
+  id Int @id @default(1)
+
+  tenantId String @map("tenant_id")
+  clientId String @map("client_id")
+  urlBase  String @map("url_base")
+  /// "trv" para Market Trujillo. Vacio = se usa el del entorno.
+  dataAreaId String @default("") @map("data_area_id")
+
+  /// El secreto CIFRADO (AES-256-GCM), nunca en claro y nunca devuelto por
+  /// la API -- ver config-dynamics.cifrado.ts. NULL = todavia no se cargo
+  /// ninguno, que es distinto de "hay uno vacio".
+  ///
+  /// Se guarda como `iv:tagDeAutenticacion:textoCifrado` en hexadecimal. El
+  /// tag es lo que hace que un secreto manipulado en la base falle al
+  /// descifrar en vez de devolver basura silenciosamente.
+  clientSecretCifrado String? @map("client_secret_cifrado")
+
+  /// Quien la cargo por ultima vez y cuando: cambiar las credenciales del
+  /// ERP es una accion de administracion y tiene que dejar rastro (ademas
+  /// del RegistroAuditoria, que guarda el detalle sin el secreto).
+  actualizadoPorId Int?         @map("actualizado_por_id")
+  actualizadoPor   Colaborador? @relation("ConfigDynamicsActualizadaPor", fields: [actualizadoPorId], references: [id])
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("config_dynamics")
 }

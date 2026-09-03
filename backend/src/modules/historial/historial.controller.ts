@@ -38,6 +38,12 @@ export const obtenerLiquidacion = asyncHandler(async (req: RequestAutenticado, r
   res.json(await service.obtenerLiquidacion(req.colaborador!, id));
 });
 
+/** Lo que consume la pantalla 7 -- espeja EstadoLacrado del puerto del front. */
+export const estadoLacrado = asyncHandler(async (req: RequestAutenticado, res: Response) => {
+  const { id } = req.params as unknown as ParametrosInventario;
+  res.json(await service.estadoLacrado(req.colaborador!, id));
+});
+
 export const verificarSello = asyncHandler(async (req: RequestAutenticado, res: Response) => {
   const { id } = req.params as unknown as ParametrosInventario;
   res.json(await service.verificarSello(req.colaborador!, id));
