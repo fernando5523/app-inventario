@@ -107,6 +107,15 @@ repo git que frenara o permitiera revertir el resultado.
    da a cualquier agente un `git status`/`git diff` antes de tocar algo — y,
    sobre todo, una forma real de recuperar lo que se pierda (esta vez hubo
    suerte con el lockfile; la próxima podría no ser recuperable).
+
+   **Hecho — 2026-09-03.** `git init` corrido en la raíz del proyecto
+   (`D:\Documentos\monorepo\app-inventario`, no en `mobile/`), con `.gitignore`
+   raíz (node_modules/, `*.apk`, `mobile/android/`, `mobile/.expo/`, `.env*`) y
+   un commit inicial con todo el trabajo hasta acá. Desde ahora, `expo prebuild
+   --clean` con un working tree sucio SÍ avisa y pide confirmar antes de
+   borrar nada — la protección de `maybeBailOnGitStatusAsync` (ver más abajo)
+   ya tiene un repo git contra el cual funcionar. Seguí commiteando seguido:
+   la protección solo cubre lo que ya está commiteado.
 2. **No correr `expo prebuild` (con o sin `--clean`) mientras otro agente esté
    editando archivos en `mobile/`.** Esta sección del README ya decía que
    `prebuild` "solo si `android/` no existe o cambió `app.config.ts`" — si

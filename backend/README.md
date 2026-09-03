@@ -21,6 +21,17 @@ Después de eso, `npm run dev` levanta el servidor con datos reales.
 
 **Nota de coordinación**: la migración la corre una sola persona/agente por vez — dos migraciones simultáneas contra el mismo schema lo rompen. Si hay otro agente esperando para migrar, avisale cuando termines.
 
+**`backend/.env.example` quedó FUERA del repo git, a propósito.** No por lo
+que dice — ningún agente (incluido este) tiene permiso para leer archivos
+`.env*`, así que nadie pudo confirmar que solo tuviera placeholders y no un
+valor real filtrado por error. Con eso sin poder verificarse, la asimetría
+del error manda: si se versiona y resulta que tenía la credencial real,
+queda en la historia de git para siempre y la credencial se considera
+comprometida; si no se versiona y resultaba estar limpio, no se pierde
+nada — lo agrega mañana cualquiera que sí pueda leerlo. Antes de agregarlo
+al repo, una persona (no un agente) tiene que abrirlo y confirmar que no
+tiene nada real.
+
 ---
 
 ## Arquitectura
