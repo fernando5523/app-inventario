@@ -90,14 +90,19 @@ export interface RepositorioAuditoria {
 }
 
 /**
- * Cuántos ítems del catálogo ya llegaron, de un total conocido — el paso
- * 1 real son 8.000 ítems por OData paginado desde Azure sobre la WiFi de
- * la tienda, minutos, no milisegundos. Sin esto, una pantalla que solo
- * sabe "cargando sí/no" hace que el Coordinador crea que se colgó.
+ * Cuántos ítems del catálogo ya llegaron — el paso 1 real son ~8.000
+ * ítems por OData paginado desde Azure sobre la WiFi de la tienda,
+ * minutos, no milisegundos. Sin esto, una pantalla que solo sabe
+ * "cargando sí/no" hace que el Coordinador crea que se colgó.
+ *
+ * `total` es `number | null`: Dynamics puede no contestar cuántos ítems
+ * hay hasta la primera página — no se inventa un total para poder
+ * dibujar una barra completa antes de tiempo, una barra que miente es
+ * peor que un spinner honesto.
  */
 export interface AvanceSnapshot {
   traidos: number;
-  total: number;
+  total: number | null;
 }
 
 /**

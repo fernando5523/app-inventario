@@ -125,7 +125,17 @@ export interface Sucursal {
 
 export interface Sesion {
   colaborador: Colaborador;
-  sucursal: Sucursal;
+  /**
+   * `null` únicamente para `rol: 'administrador'` — es del sistema, no de
+   * una tienda (mismo contrato que `SesionDto` del backend, ver
+   * backend/README.md#El-administrador-no-pertenece-a-ninguna-sucursal).
+   * Coordinador/Conteo/Auditor SIEMPRE tienen una sucursal real: en esas
+   * pantallas (rutas aisladas por rol, `RolTabsLayout` nunca monta un
+   * grupo con la sesión de otro rol) `sesion.sucursal!` es seguro — es el
+   * mismo criterio que ya usa `sesion!` en toda la app para invariantes
+   * que la arquitectura garantiza y el tipo no puede expresar solo.
+   */
+  sucursal: Sucursal | null;
   token: string;
   expiraEn: string;        // ISO 8601
 }

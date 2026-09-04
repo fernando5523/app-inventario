@@ -109,7 +109,7 @@ export function CicloScreen({ rol }: CicloScreenProps): JSX.Element {
   useEffect(() => {
     if (!sesion) return;
     let vigente = true;
-    repositorioInventario.activo(sesion.sucursal.id).then((activo) => {
+    repositorioInventario.activo(sesion.sucursal!.id).then((activo) => {
       if (!vigente) return;
       setItems(activo?.items ?? null);
       setCargando(false);
@@ -145,7 +145,7 @@ export function CicloScreen({ rol }: CicloScreenProps): JSX.Element {
     <PantallaConTabs scrollable contentStyle={styles.contenido}>
       <BarraApp
         rotulo={rol === 'auditor' ? 'Auditoría · Ciclo de conteos' : 'Gestión masiva'}
-        sede={sesion.sucursal.nombre}
+        sede={sesion.sucursal!.nombre}
         cifras={items ? `${nf.format(items)} ítems · 3 pasadas de cierre` : undefined}
         onSalir={salir}
       />

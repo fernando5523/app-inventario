@@ -26,7 +26,7 @@ export default function MisHojasScreen(): JSX.Element {
 
   const cargar = useCallback(async () => {
     if (!sesion) return;
-    const activo = await repositorioInventario.activo(sesion.sucursal.id);
+    const activo = await repositorioInventario.activo(sesion.sucursal!.id);
     if (!activo) {
       setHojas([]);
       setCargando(false);
@@ -75,7 +75,7 @@ export default function MisHojasScreen(): JSX.Element {
       <View style={styles.cabeceraHoja}>
         <BarraApp
           rotulo="Mis hojas · 1er conteo"
-          sede={sesion.sucursal.nombre}
+          sede={sesion.sucursal!.nombre}
           cifras={`${hojas.length} hojas · ${totalItemsBloque} ítems · ${enProceso} en proceso`}
           onSalir={salir}
           sinBorde

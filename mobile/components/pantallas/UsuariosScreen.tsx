@@ -71,7 +71,11 @@ export function UsuariosScreen({ rol }: UsuariosScreenProps): JSX.Element {
 
   const cargar = useCallback(async () => {
     if (!sesion) return;
-    const sucursalId = rol === 'auditor' ? sesion.sucursal.id : undefined;
+    // `!`, no `?.`: si sucursal fuera null para un auditor (no debería
+    // pasar nunca), un `?.` degradaría en silencio a `undefined` → listar
+    // TODAS las cuentas — una fuga de privacidad, no un detalle visual.
+    // Mejor que truene acá a que un auditor vea cuentas de otra sucursal.
+    const sucursalId = rol === 'auditor' ? sesion.sucursal!.id : undefined;
     const [listaUsuarios, listaTiendas] = await Promise.all([repositorioUsuarios.listar(sucursalId), repositorioTiendas.listar()]);
     setUsuarios(listaUsuarios);
     setTiendas(listaTiendas);
@@ -121,7 +125,9 @@ export function UsuariosScreen({ rol }: UsuariosScreenProps): JSX.Element {
           nombre: nombre.trim(),
           dni: dni.trim(),
           rol: rolNuevo,
-          sucursalId: rolNuevo === 'administrador' ? undefined : requiereSucursal ? sucursalNueva!.id : sesion!.sucursal.id,
+          // El último caso (ni admin nuevo, ni requiereSucursal) solo se
+          // da con rol === 'auditor' creando para SU propia sucursal.
+          sucursalId: rolNuevo === 'administrador' ? undefined : requiereSucursal ? sucursalNueva!.id : sesion!.sucursal!.id,
           pin,
         },
         rol,
@@ -148,7 +154,7 @@ export function UsuariosScreen({ rol }: UsuariosScreenProps): JSX.Element {
     <PantallaConTabs scrollable contentStyle={styles.contenido}>
       <BarraApp
         rotulo="Usuarios"
-        sede={rol === 'auditor' ? sesion.sucursal.nombre : undefined}
+        sede={rol === 'auditor' ? sesion.sucursal!.nombre : undefined}
         cifras={`${usuarios.length} cuenta${usuarios.length === 1 ? '' : 's'} · ${usuarios.filter((u) => u.activo).length} habilitadas`}
       />
 

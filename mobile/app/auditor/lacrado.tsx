@@ -46,8 +46,8 @@ export default function LacradoScreen(): JSX.Element {
 
     async function cargar(): Promise<void> {
       const [activo, colaboradores] = await Promise.all([
-        repositorioInventario.activo(sesion!.sucursal.id),
-        repositorioSesion.colaboradores(sesion!.sucursal.id),
+        repositorioInventario.activo(sesion!.sucursal!.id),
+        repositorioSesion.colaboradores(sesion!.sucursal!.id),
       ]);
       if (!vigente) return;
 
@@ -134,7 +134,7 @@ export default function LacradoScreen(): JSX.Element {
     <PantallaConTabs scrollable contentStyle={styles.contenido}>
       <BarraApp
         rotulo="Auditoría · Lacrado digital"
-        sede={sesion.sucursal.nombre}
+        sede={sesion.sucursal!.nombre}
         cifras={items ? `${nf.format(items)} ítems auditados` : undefined}
         onSalir={salir}
       />
@@ -247,7 +247,7 @@ export default function LacradoScreen(): JSX.Element {
           <View style={styles.modalCaja}>
             <Text style={styles.modalTitulo}>Confirmar lacrado</Text>
             <Text style={styles.modalTexto}>
-              Se va a lacrar el inventario de <Text style={styles.negrita}>{sesion.sucursal.nombre}</Text>
+              Se va a lacrar el inventario de <Text style={styles.negrita}>{sesion.sucursal!.nombre}</Text>
               {items ? ` (${nf.format(items)} ítems)` : ''}. A partir de este momento el inventario del mes queda{' '}
               <Text style={styles.negrita}>congelado de forma inmutable</Text>: no hay forma de deshacerlo ni de
               editar los conteos. Cualquier ajuste posterior entra en el período siguiente.

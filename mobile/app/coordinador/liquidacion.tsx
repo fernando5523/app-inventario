@@ -41,7 +41,7 @@ export default function LiquidacionScreen(): JSX.Element {
   useEffect(() => {
     if (!sesion) return;
     let vigente = true;
-    repositorioLiquidacion.deSucursal(sesion.sucursal.id).then((resultado) => {
+    repositorioLiquidacion.deSucursal(sesion.sucursal!.id).then((resultado) => {
       if (!vigente) return;
       setLiquidacion(resultado);
       setCargando(false);
@@ -66,7 +66,7 @@ export default function LiquidacionScreen(): JSX.Element {
     <PantallaConTabs scrollable contentStyle={styles.contenido}>
       <BarraApp
         rotulo="Gestión masiva"
-        sede={`Liquidación · ${sesion.sucursal.nombre}`}
+        sede={`Liquidación · ${sesion.sucursal!.nombre}`}
         cifras={liquidacion ? `${liquidacion.periodo} · ${liquidacion.planilla.length} colaboradores` : undefined}
         onSalir={salir}
       />

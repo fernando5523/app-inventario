@@ -55,7 +55,7 @@ export default function AuditoriaScreen(): JSX.Element {
       let vigente = true;
 
       async function cargar(): Promise<void> {
-        const activo = await repositorioInventario.activo(sesion!.sucursal.id);
+        const activo = await repositorioInventario.activo(sesion!.sucursal!.id);
         if (!vigente) return;
         if (!activo) {
           setCargando(false);
@@ -114,7 +114,7 @@ export default function AuditoriaScreen(): JSX.Element {
     <PantallaConTabs scrollable contentStyle={styles.contenido}>
       <BarraApp
         rotulo="Auditoría · Panel de auditoría"
-        sede={sesion.sucursal.nombre}
+        sede={sesion.sucursal!.nombre}
         cifras={cargando ? undefined : `${items.length} ítems auditados · ${conDiferencia} con diferencia`}
         onSalir={salir}
       />

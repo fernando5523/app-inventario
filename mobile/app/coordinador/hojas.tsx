@@ -124,8 +124,8 @@ export default function HojasScreen(): JSX.Element {
 
     async function cargar(): Promise<void> {
       const [activo, colaboradores] = await Promise.all([
-        repositorioInventario.activo(sesion!.sucursal.id),
-        repositorioSesion.colaboradores(sesion!.sucursal.id),
+        repositorioInventario.activo(sesion!.sucursal!.id),
+        repositorioSesion.colaboradores(sesion!.sucursal!.id),
       ]);
       if (!vigente) return;
 
@@ -229,7 +229,7 @@ export default function HojasScreen(): JSX.Element {
     const controlador = new AbortController();
     controladorSnapshotRef.current = controlador;
     try {
-      const resultado = await repositorioInventario.traerSnapshot(sesion!.sucursal.id, {
+      const resultado = await repositorioInventario.traerSnapshot(sesion!.sucursal!.id, {
         onAvance: setAvanceSnapshot,
         signal: controlador.signal,
       });
@@ -285,7 +285,7 @@ export default function HojasScreen(): JSX.Element {
 
   return (
     <PantallaConTabs scrollable contentStyle={styles.contenido}>
-      <BarraApp rotulo="Gestión masiva" sede={sesion.sucursal.nombre} cifras={cifras} onSalir={salir} />
+      <BarraApp rotulo="Gestión masiva" sede={sesion.sucursal!.nombre} cifras={cifras} onSalir={salir} />
 
       {cargandoInicial ? (
         <ActivityIndicator color={colors.rojo} style={styles.cargandoInicial} />
@@ -307,8 +307,16 @@ export default function HojasScreen(): JSX.Element {
             {trayendoSnapshot ? (
               <>
                 <AvanceFila
-                  texto={avanceSnapshot ? `${nf.format(avanceSnapshot.traidos)} de ${nf.format(avanceSnapshot.total)} ítems` : 'Conectando con Dynamics…'}
-                  porcentaje={avanceSnapshot ? (avanceSnapshot.traidos / avanceSnapshot.total) * 100 : 0}
+                  texto={
+                    !avanceSnapshot
+                      ? 'Conectando con Dynamics…'
+                      : avanceSnapshot.total !== null
+                        ? `${nf.format(avanceSnapshot.traidos)} de ${nf.format(avanceSnapshot.total)} ítems`
+                        : `${nf.format(avanceSnapshot.traidos)} ítems traídos…`
+                  }
+                  // Sin total todavía (Dynamics no lo contestó aún): barra al
+                  // mínimo visible en vez de en 0, para que no parezca trabada.
+                  porcentaje={avanceSnapshot?.total ? (avanceSnapshot.traidos / avanceSnapshot.total) * 100 : avanceSnapshot ? 4 : 0}
                 />
                 <Button label="Cancelar" variant="outline" size="sm" onPress={cancelarSnapshot} />
               </>

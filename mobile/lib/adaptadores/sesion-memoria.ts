@@ -22,20 +22,6 @@ const SUCURSALES: Sucursal[] = [
 ];
 
 /**
- * El Administrador es del SISTEMA, no de una tienda — mismo modelo que el
- * backend (`Colaborador.sucursalId` nullable solo para este rol, ver
- * prisma/schema.prisma y sesion.service.ts#SesionDto). `Sesion.sucursal`
- * en el dominio del front sigue siendo NO opcional a propósito (lo leen
- * ~20 lugares de las pantallas de Coordinador/Conteo/Auditor sin chequeo
- * de null, y para esos 3 roles sí es siempre real) — así que en vez de
- * volver nullable un campo que hoy es seguro en todos lados salvo acá, el
- * Administrador recibe esta sucursal "de sistema", explícita en su
- * nombre, que ninguna pantalla de Administrador llega a mostrar (Barra­App
- * omite `sede` para ese rol en InicioScreen.tsx/UsuariosScreen.tsx).
- */
-const SUCURSAL_SISTEMA: Sucursal = { id: 0, nombre: 'Todas las sucursales', colaboradores: 1 };
-
-/**
  * Mismo id/nombre/dni que backend/prisma/seed.ts#ADMINISTRADOR — misma
  * persona vista desde las dos fuentes (mobile en memoria y el seed real
  * del backend), no dos administradores inventados por separado. El DNI
@@ -90,9 +76,11 @@ const COLABORADORES: Record<number, Colaborador[]> = {
 const LARGO_PIN = 6;
 const DURACION_SESION_MS = 12 * 60 * 60 * 1000; // 12 horas
 
-function buscarColaborador(colaboradorId: number): { colaborador: Colaborador; sucursal: Sucursal } | null {
+function buscarColaborador(colaboradorId: number): { colaborador: Colaborador; sucursal: Sucursal | null } | null {
   const administrador = ADMINISTRADORES.find((a) => a.id === colaboradorId);
-  if (administrador) return { colaborador: administrador, sucursal: SUCURSAL_SISTEMA };
+  // sucursal: null de verdad (no una "sucursal de sistema" inventada) —
+  // mismo contrato que sesion.service.ts#SesionDto del backend.
+  if (administrador) return { colaborador: administrador, sucursal: null };
   for (const sucursal of SUCURSALES) {
     const colaborador = COLABORADORES[sucursal.id]?.find((c) => c.id === colaboradorId);
     if (colaborador) return { colaborador, sucursal };

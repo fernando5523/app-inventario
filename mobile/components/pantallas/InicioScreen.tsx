@@ -93,7 +93,9 @@ export function InicioScreen(): JSX.Element {
           return;
         }
 
-        const activo = await repositorioInventario.activo(sesion!.sucursal.id);
+        // Ya se descartó 'administrador' arriba (return temprano): acá el
+        // rol siempre tiene sucursal real.
+        const activo = await repositorioInventario.activo(sesion!.sucursal!.id);
         if (!vigente) return;
 
         if (!activo) {
@@ -247,7 +249,7 @@ export function InicioScreen(): JSX.Element {
   return (
     <PantallaConTabs scrollable contentStyle={styles.contenido}>
       {/* Sin `sede`: el Administrador no pertenece a una sola sucursal. */}
-      <BarraApp rotulo="Inicio" sede={rol === 'administrador' ? undefined : sesion.sucursal.nombre} cifras={cifras} onSalir={salir} />
+      <BarraApp rotulo="Inicio" sede={rol === 'administrador' ? undefined : sesion.sucursal!.nombre} cifras={cifras} onSalir={salir} />
 
       <BandaSync estado={sync.estado} mensaje={sync.mensaje} />
 

@@ -65,7 +65,7 @@ export default function ContarScreen(): JSX.Element {
     let vigente = true;
 
     async function iniciar(): Promise<void> {
-      const activo = await repositorioInventario.activo(sesion!.sucursal.id);
+      const activo = await repositorioInventario.activo(sesion!.sucursal!.id);
       if (!vigente) return;
       if (!activo) {
         setCargando(false);
