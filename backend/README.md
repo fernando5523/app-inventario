@@ -359,6 +359,18 @@ Cualquier rol autenticado. `{ "configurado": true | false }` — si `false`, fal
 #### `GET /api/d365/almacenes`
 Rol **`administrador`** unicamente. Lista los almacenes de Dynamics (entidad `Warehouses`) para que el Administrador **elija uno** al dar de alta una tienda.
 
+**Viene FILTRADO por `ALMACENES_INVENTARIO`** (ver `d365.almacenes-inventario.ts`): el tenant tiene **70 almacenes** y solo **10** se inventarían. El resto son de **Tránsito** (mercadería en viaje) y **Cuarentena** (mercadería bloqueada), que no se cuentan — y sus nombres se parecen tanto a los de tienda que elegir el equivocado era cuestión de tiempo: *"ALMACÉN CUARENTENA MARKET LUZURIAGA"* contra *"ALMACÉN DISPONIBLE MARKET LUZURIAGA"*. Ese error no se avisa: se evita no ofreciéndolo.
+
+`?todos=1` saltea el filtro, para dar de alta una tienda cuyo almacén todavía no está habilitado.
+
+> **Por qué es una lista y no una regla sobre el código.** La nomenclatura parece sistemática (2ª letra = tipo: `D`isponible / `T`ránsito / `C`uarentena; 1ª = canal: `M`arket / `A`mayorista / `P`roducción), y tienta escribir `/^MD\d{2}/`. **Está mal, y hay contraejemplo**: `MD07_CEN` (ALMACÉN DISPONIBLE MARKET CENTER) cumple el patrón y el cliente lo excluyó explícitamente. Un patrón habría metido una tienda que nadie cuenta, y el faltante habría aparecido como un descuadre a fin de mes. **Cuál almacén se inventaría es una decisión de negocio, no una propiedad del código.**
+>
+> Se buscó primero en `app_inventarioautomatico`, donde se creía que estaba este filtro: **no existe**. Ese proyecto lo resuelve con el operador escribiendo los códigos a mano (`--warehouses MD11_CENT,AD04_TCE`).
+
+**Alta automática**: al asociar un almacén a una tienda (`POST`/`PATCH /api/tiendas`), si no estaba habilitado **queda habilitado**, con registro en auditoría. Es lo que resuelve "cuando abre una tienda nueva" sin una pantalla aparte — la lista de almacenes de inventario y la lista de tiendas dadas de alta son, en la práctica, la misma cosa. Desasociar **no** lo saca: otra tienda puede estar usándolo.
+
+**Sin configuración se muestran los 70, no cero.** Un selector vacío parecería que Dynamics no responde, y dejaría al Administrador sin poder dar de alta ninguna tienda sin ningún mensaje que lo explique.
+
 Respuesta `200`, ordenada por codigo:
 ```json
 [
@@ -410,9 +422,70 @@ Respuesta `200`:
 
 > **Ya se puede afinar**: `Inventario` ahora tiene estado y el campo `abierto` (ver la sección de Histórico). El snapshot debería buscar `{ sucursalId, abierto: true }` en vez de la fila más reciente — si no, una sucursal que ya cerró su mes no puede abrir el siguiente. Además, `prisma.inventario.create` puede fallar ahora con `P2002` sobre `(sucursal_id, abierto)` si la sucursal ya tiene uno en curso: conviene traducirlo a un 409 legible. Queda anotado para quien mantiene este módulo, no se tocó desde el módulo de historial.
 
-El catálogo mapeado (con barcode y empaque de cada ítem) se guarda en `CatalogoItem`, colgado del `Inventario` — es el catálogo crudo del snapshot, antes de partirse en hojas. Todavía no hay un endpoint para leerlo (el paso 2, "crear hojas", que consumiría esto, no está construido en este backend); queda ahí esperando ese módulo.
+El catálogo mapeado (con barcode, empaque y **categoría** de cada ítem) se guarda en `CatalogoItem`, colgado del `Inventario` — es el catálogo crudo del snapshot, antes de partirse en hojas. Lo consume el paso 2 (`POST /api/inventarios/:id/hojas`, ver más abajo), que lo ordena por categoría y lo materializa en `HojaConteo` + `Producto`.
 
 Errores: `400` `sucursalId` inválido, o `modo="real"` sin credenciales configuradas · `502` Dynamics respondió con error o no se pudo autenticar.
+
+---
+
+### Inventarios — `/api/inventarios` (requiere sesión + rol `coordinador` o `administrador`)
+
+Los **pasos 2 y 3 del wizard del Coordinador**. El paso 1 (traer el catálogo) vive en `/api/d365/snapshot`, donde está la integración con el ERP.
+
+> **Estos tres endpoints no existían.** El wizard corría contra el adaptador **en memoria** del móvil: el Coordinador creaba hojas, las repartía, cerraba la app y no quedaba nada. `mobile/lib/adaptadores/inventario-api.ts` tenía las rutas escritas y marcadas como *"Adivinadas: el backend todavía no tiene módulo de hojas/inventario"*. Este módulo es ese módulo, y `contenedor.ts` ya apunta a HTTP.
+
+**Solo Coordinador y Administrador.** No es un detalle de permisos: quien reparte las hojas decide **quién cuenta qué**, y un Contador que pudiera repartirse las suyas elegiría las góndolas fáciles. El Auditor tampoco — audita lo que otros contaron, no arma el lote.
+
+#### `POST /api/inventarios/:inventarioId/hojas`
+
+Parte el catálogo en hojas del tamaño elegido — **todas de una**, no una por una. Body: `{ "tamano": 20 | 30 | 50 }` (`z.literal`, no un rango: 37 no es "un tamaño raro pero aceptable", es un error).
+
+Respuesta `201` con el arreglo completo de `HojaDto`.
+
+**El orden es lo que hace útil a la hoja.** Los ítems se agrupan por `categoria` (ver `dominio/lote.ts#ordenarParaContar`), no por código: el código de ítem de Dynamics no sigue el recorrido físico de la tienda, así que ordenando por código el operario arranca con un shampoo, sigue con una gaseosa y después una lata de atún — cruza el local en cada renglón, y con 31 hojas cruza la tienda 31 veces. Los que el ERP no clasificó van **al final, juntos, nunca afuera**: un producto que está en la góndola se cuenta igual.
+
+Cada hoja se rotula con su categoría dominante (`zona`). Una hoja de 50 puede cruzar el límite entre dos categorías; se rotula con la que más aporta, porque el rótulo existe para que el operario sepa **dónde pararse**.
+
+**Es DESTRUCTIVO a propósito**: borra las hojas previas del inventario y las rehace. El Coordinador tiene que poder equivocarse de tamaño — es una decisión que se toma antes de empezar. **Pero se niega con `409` si ya hay conteos cargados**: rehacer borraría trabajo hecho. Ese es el límite entre "todavía estoy armando" y "ya arrancamos".
+
+**El conteo ciego es estructural acá.** Crear hojas es copiar `CatalogoItem` → `Producto` **dejando atrás** `stockErp`, `precioVenta` y `esEmpresa`. No es una omisión que haya que recordar: es el motivo por el que son dos tablas. Hay un test que se pone rojo si alguien los copia "para tenerlos a mano".
+
+Errores: `400` sin ítems en el inventario (falta el paso 1) o tamaño inválido · `404` inventario inexistente **o de otra sucursal** (404 y no 403: no se confirma que exista) · `409` inventario cerrado, o ya hay conteos.
+
+#### `POST /api/inventarios/:inventarioId/hojas/asignar`
+
+Reparte entre los presentes las hojas **sin asignar**. Body: `{ "colaboradorIds": [10, 20, 30] }`. Respuesta `200` con todas las hojas.
+
+**Sin asignar y no todas**: si el Coordinador reparte, llega alguien más tarde y vuelve a repartir, quien ya empezó a contar no puede quedarse sin sus hojas a mitad de camino.
+
+**EL ORDEN DEL ARREGLO ES EL ORDEN DE REPARTO** — el primero se lleva el primer bloque. Con las hojas ordenadas por categoría, ese bloque es el primer tramo del recorrido, así que el Coordinador decide quién arranca por dónde. Prisma devuelve las filas en el orden que quiere, así que el service las reordena según el arreglo; un `orderBy: { id: 'asc' }` daba un reparto válido pero **no el pedido**, y nadie se enteraba.
+
+El reparto es en **bloques contiguos** (`dominio/lote.ts#repartir`): cada persona camina un tramo, no salta de punta a punta. Si hay menos hojas que personas, las que sobran quedan sin hojas — no se parte una hoja a medias entre dos, que es como se cuenta dos veces lo mismo y nada de lo otro.
+
+Los ids tienen que existir, estar activos y ser **de esa tienda**: sin esa verificación se le asigna una hoja a alguien de otra sucursal, que después la ve en "Mis hojas" y cuenta góndolas que no son las suyas.
+
+Errores: `400` lista vacía o alguien que no es de la tienda · `409` no quedan hojas sin asignar.
+
+#### `GET /api/sucursales/:sucursalId/inventarios/activo`
+
+El inventario en curso de una sucursal. **Los 4 roles** — Contador y Auditor necesitan saber si hay uno abierto para mostrar la pantalla correcta; lo que no pueden es crear ni repartir.
+
+Respuesta `200` con `{ inventarioId, items, tomadoEn, tamanoHoja, totalHojas }`, o **`null` con 200** si no hay ninguno en curso — no `404`: "esta sucursal todavía no tiene inventario" es el estado normal del día 1 del mes, no un error.
+
+`tamanoHoja` es `null` mientras no haya hojas. La columna `Inventario.tamanoHoja` tiene `@default(50)`, así que devolverla siempre diría "hojas de 50" cuando no hay ninguna.
+
+"En curso" es `estado: en_curso`, no "el último": un inventario cerrado no puede seguir apareciendo como activo o el Coordinador reabriría por error el del mes pasado.
+
+#### Verificarlo
+
+```bash
+npm run verificar:wizard          # los 4 pasos por HTTP, con modo "ejemplo"
+npm run verificar:wizard -- --dejar   # deja el inventario para revisarlo
+```
+
+Corre el flujo completo como lo haría el teléfono y chequea lo que importa: que no se pierda ningún ítem, que el conteo ciego se respete, y que cada persona tenga un tramo contiguo. **Borra el inventario de prueba al final** — corre contra la base del cliente, que tiene datos reales.
+
+Para limpiar a mano: `npx tsx scripts/borrar-inventario.ts <id>`, que se niega si el inventario tiene conteos cargados (eso ya no es una prueba, es trabajo de alguien).
 
 ---
 
@@ -1266,11 +1339,29 @@ openssl rand -hex 32
 
 Sin esa variable, `PUT` **rechaza** el secreto con `503` en vez de guardarlo en claro — un secreto que no se puede proteger no se guarda. Pero sí deja guardar `tenantId`/`clientId`/`urlBase`, que no son secretos, así que la pantalla no queda muerta.
 
+#### Cargarlas desde el servidor — `npm run config:dynamics`
+
+La vía recomendada para la carga INICIAL. Toma las `D365_*` que ya están en `backend/.env`, las cifra y las guarda en la base, por el mismo service que usa la pantalla del móvil (mismo cifrado, misma validación, mismo registro de auditoría):
+
+```bash
+cd backend
+npm run config:dynamics            # carga
+npm run config:dynamics -- --estado  # solo muestra qué hay hoy, no toca nada
+```
+
+Verifica de ida y vuelta: después de guardar vuelve a leer de la base y **descifra**, porque que el guardado no tire excepción no prueba que lo guardado se pueda recuperar. El `client_secret` no se imprime nunca — solo una huella enmascarada (`zN******48 (34 caracteres)`), que alcanza para confirmar "cargué el que empieza con zN" y no sirve para nada más.
+
+**Por qué existe, si hay una pantalla**: un `client_secret` de Azure son 40+ caracteres sin sentido, y tipearlos en el teclado de un teléfono produce un error que después se diagnostica como "la integración no anda" — Azure responde `401` sin decir cuál de los cuatro campos está mal. La pantalla del móvil quedó de **solo lectura**: muestra el origen y permite probar la conexión, que es el diagnóstico que el Administrador sí necesita en la mano.
+
+**Después de cargar hay que reiniciar el backend**: `d365Config` lee `process.env` una sola vez al importarse.
+
 #### Precedencia sobre el `.env`
 
 Si hay una fila en `config_dynamics` **con secreto**, gana sobre las `D365_*` del entorno; si no, se cae al `.env`. Ese orden y no el inverso porque la base es lo que una persona puede cambiar desde la pantalla, y el `.env` solo lo toca alguien con acceso al servidor. Si el entorno ganara, cargar las credenciales por pantalla no tendría ningún efecto y nadie entendería por qué.
 
-> **Para quien mantiene el módulo `d365`**: `config-dynamics.service.ts#credencialesEfectivas()` ya implementa esa precedencia y devuelve el secreto descifrado, listo para pedir el token. Hoy `d365-auth.service.ts` sigue leyendo `d365Config` (el `.env`) directo, así que las credenciales cargadas por pantalla todavía no lo alcanzan. Adoptarlo es cambiar esa lectura por un `await credencialesEfectivas()`. No se tocó desde acá.
+> **El módulo `d365` usa esta precedencia de verdad** (verificado: `GET /api/d365/almacenes` trae los 70 almacenes reales con las credenciales de la base). Ningún archivo de `src/modules/d365/` importa ya `d365Config`: el token, la baseUrl de OData y el `dataAreaId` salen todos de `d365AuthService`, que las pide a `credencialesEfectivas()` y las cachea 60 segundos.
+>
+> Hubo un tiempo en que **no** era así, y vale la pena decir cómo se veía: `d365-auth.service.ts` leía el `.env` directo mientras la pantalla mostraba las de la base y la prueba de conexión respondía `origen: base`. Todo verde, y nada de lo que se cargaba tenía efecto sobre el traído del catálogo. Lo cubren dos suites: `config-dynamics.precedencia.test.ts` (la función decide bien) y `d365-auth.credenciales.test.ts` (el auth service la usa) — la primera sola pasaba igual durante el bug.
 
 #### `GET /api/config-dynamics`
 
@@ -1381,7 +1472,33 @@ Escribe en `RegistroAuditoria` con `accion: "colaborador.pin_cambiado_por_si_mis
 | `coordinador`, `conteo` | No resetean a nadie | — |
 | **Cualquiera** | Cambiar **el suyo**, sabiendo el actual | `POST /api/sesion/cambiar-pin` |
 
-> **Los PIN del seed son predecibles a propósito** y eso no cambia: sirven para probar. `prisma/seed.ts` los genera como el id con ceros. Lo que existe ahora es el camino para rotarlos, verificado contra la base.
+> **Los PIN del seed ya no se derivan del id** (cambiado 2026-09-04). `prisma/seed.ts` los siembra fijos por rol (`PIN_DEV_POR_ROL`) y los imprime al terminar, así que hay que leer el repo o la consola para conocerlos — la app pública ya no los revela. Sirven igual para probar. Esto tapa solo la base de desarrollo; el endurecimiento de producción sigue pendiente, ver la sección siguiente.
+
+---
+
+### PIN de producción — pendiente
+
+> **Estado**: diagnóstico hecho y medido el 2026-09-04. **Nada de esto está implementado todavía** — se posterga a propósito para no romper el flujo mientras se prueba conteo/auditoría/liquidación contra el catálogo real. Quien lo tome no necesita volver a investigar: la evidencia y el plan están acá.
+
+**El agujero, en una frase**: la lista de colaboradores es pública (la pantalla de login la necesita antes de que nadie se autentique) y el PIN que sembraba el seed era el id del colaborador con ceros. Cruzando las dos cosas, cualquiera con la app deducía el PIN de todos —incluido el administrador— sin leer una línea de código.
+
+**Evidencia medida** (contra la base viva, `http://localhost:3000`):
+
+- **Lista pública**: `GET /api/sesion/sucursales/:id/colaboradores` y `GET /api/sesion/administradores` responden `200` **sin token**, con id + nombre + DNI + rol. Solo `/ingresar` y `/cambiar-pin` llevan middleware de sesión.
+- **PIN derivable**: probado un intento por colaborador con `pin = String(id).padStart(6,'0')`. En la base viva de ese día, **1 de 6** entró: `Admin Sistema` (id 1000, PIN `001000`), rol **administrador** — el peor caso. Los otros 5 ya tenían PIN propio (habían sido reseteados a mano). El riesgo real no era ese 1: era el seed, que dejaba a **los 30** derivables cada vez que se corría. Eso es lo que se corrigió (arriba).
+- **Limitador** (`sesion.routes.ts#limitadorIngreso`): 8 intentos / 15 min, `key = colaboradorId ?? ip`. Verificado: el 9.º intento devuelve `429`. Es **por colaborador, no por IP** (bien: la WiFi de tienda es compartida). Dos costados: (1) permite un **DoS de cuenta** trivial — 8 intentos fallidos con el id de alguien lo dejan sin entrar 15 min; (2) comparte el cupo con `cambiar-pin` y usa MemoryStore (no se comparte entre instancias). Con PIN aleatorio, 8/15 min ≈ 768 intentos/día → ~28 % de acierto **en un año**; con PIN derivable, se acierta al primer intento y el limitador es irrelevante.
+- **Dónde NO se valida el PIN**: `esPinPredecible`/`esPinTrivial` (`sesion.pin.ts`) solo se aplican en `cambiar-pin` propio (`sesion.service.ts`). **`POST /api/usuarios` (crear) y `POST /api/usuarios/:id/resetear-pin` no las aplican**: hoy un admin puede fijar `000022` o `123456` y el backend lo acepta (`usuarios.service.ts:67,133` hashean directo).
+
+**Plan, por orden de prioridad y costo:**
+
+| | Qué | Cambios | Qué rompe | Costo |
+|---|---|---|---|---|
+| **A** | Bloquear PINs predecibles/triviales también al **crear** y **resetear** | Reusar `esPinPredecible`/`esPinTrivial` en `usuarios.service.ts` crear y `resetearPin` (~10 líneas) | Nada del flujo; solo rechaza PINs malos que hoy pasan | **Bajo** (½ día) |
+| **B** | **Forzar cambio de PIN en el primer ingreso** | Columna `debeCambiarPin Boolean @default(true)` en `Colaborador` + migración; `ingresar()` devuelve el flag; `crear`/`resetearPin` lo ponen en `true`, `cambiar-pin` en `false`; el login intercala el cambio antes del token útil (toca front) | El login gana un paso obligatorio; hay que sembrar el flag en los usuarios existentes | **Medio-alto** (2-3 días, front incluido) |
+| **C** | Reset/alta genera PIN **aleatorio**, se muestra **una sola vez** | `resetearPin`/`crear` sin `pin` en el body: el server genera 6 dígitos (evitando predecible/trivial), hashea, y devuelve el valor una vez; la UI de Usuarios lo muestra en un modal "anotalo". Combina natural con B (entra como temporal) | El admin ya no teclea el PIN; cambia la UI de Usuarios | **Medio** (1-2 días) |
+| **D** | Endurecer el limitador | Bajar `limit`, backoff incremental, separar la key de `cambiar-pin` de la de `ingresar` (que un ataque no bloquee el cambio legítimo), evaluar el DoS de cuenta | Poco; calibrar para no molestar el uso normal | **Bajo** (½ día) |
+
+**Recomendación**: A + B como base (tapan el agujero de raíz), C encima para que un reset no deje el PIN en dos manos, D como ajuste fino. A y B rompen pruebas en curso, así que se implementan cuando el flujo esté validado, no antes.
 
 ---
 

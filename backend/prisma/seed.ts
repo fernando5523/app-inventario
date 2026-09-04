@@ -37,6 +37,7 @@
 
 import { PrismaClient } from '@prisma/client';
 import argon2 from 'argon2';
+import { CONFIGURACIONES } from './configuraciones';
 
 const prisma = new PrismaClient();
 
@@ -117,36 +118,40 @@ const COLABORADORES = {
  */
 const ADMINISTRADOR = { id: 1000, nombre: 'Admin Sistema', dni: '00000001', rol: 'administrador' } as const;
 
-/**
- * Defaults sugeridos, no reglas duras -- el auditor los puede cambiar
- * desde /api/config (ver backend/README.md). UMBRAL_MEDIA_UNIDAD_PAQUETE
- * = 0.5 es la "mitad" que menciona Oscar en la reunion (docs/pantallas.md,
- * pregunta 1): 0.5 = mitad exacta del paquete.
- */
-const CONFIGURACIONES = [
-  {
-    clave: 'TAMANO_HOJA_DEFECTO',
-    valor: '50',
-    tipo: 'entero' as const,
-    descripcion: 'Cantidad de items por hoja que se preselecciona al crear hojas de conteo (20, 30 o 50).',
-  },
-  {
-    clave: 'CANTIDAD_CONTEOS_CICLO',
-    valor: '3',
-    tipo: 'entero' as const,
-    descripcion: 'Cantidad de pasadas de conteo del ciclo antes de pasar a auditoria (hoy: 3).',
-  },
-  {
-    clave: 'UMBRAL_MEDIA_UNIDAD_PAQUETE',
-    valor: '0.5',
-    tipo: 'decimal' as const,
-    descripcion:
-      'Fraccion del paquete (0-1) a partir de la cual un faltante/sobrante se descuenta por paquete completo en vez de por unidad suelta. Default sugerido, el auditor lo ajusta caso por caso (docs/pantallas.md, pregunta 1).',
-  },
-];
 
-function pinDevPlaceholder(colaboradorId: number): string {
-  return String(colaboradorId).padStart(6, '0');
+/**
+ * PIN de desarrollo, FIJO POR ROL -- nunca derivable del id.
+ *
+ * El generador anterior (`id.padStart(6,'0')`, "000102") era un agujero de
+ * seguridad real: la pantalla de login lista a todas las personas con su
+ * nombre y la lista de colaboradores es publica (GET
+ * /api/sesion/sucursales/:id/colaboradores, sin token), asi que cualquiera
+ * que abriera la app deducia el PIN de todos SIN leer una linea de codigo
+ * -- incluido el del administrador. Medido el 2026-09-04: el Admin Sistema
+ * entraba con "001000". Ver "PIN de produccion -- pendiente" en el README.
+ *
+ * Estos PINs cortan ESE ataque: no salen del id, hay que leer el repo para
+ * conocerlos. Es lo aceptable para una base de DESARROLLO -- la defensa de
+ * produccion (obligar a cambiarlo en el primer ingreso) es otra tarea (plan
+ * B del README), a proposito no incluida aca para no tocar el login mientras
+ * se prueba el flujo.
+ *
+ * Fijos y no aleatorios a proposito: se re-corre el seed seguido y dos PINs
+ * distintos en cada corrida dejarian sin entrar a quien este probando. No
+ * son triviales ni secuencias (no los rechaza sesion.pin.ts#esPinTrivial),
+ * asi que sirven de PIN "de verdad" para el flujo de dev.
+ */
+const PIN_DEV_POR_ROL: Record<string, string> = {
+  coordinador: '724193',
+  conteo: '518274',
+  auditor: '306581',
+  administrador: '947260',
+};
+
+function pinDevPorRol(rol: string): string {
+  const pin = PIN_DEV_POR_ROL[rol];
+  if (!pin) throw new Error(`No hay PIN de desarrollo definido para el rol "${rol}".`);
+  return pin;
 }
 
 async function main() {
@@ -169,7 +174,7 @@ async function main() {
 
   for (const [sucursalId, colaboradores] of Object.entries(COLABORADORES)) {
     for (const c of colaboradores) {
-      const pinHash = await argon2.hash(pinDevPlaceholder(c.id));
+      const pinHash = await argon2.hash(pinDevPorRol(c.rol));
       await prisma.colaborador.upsert({
         where: { id: c.id },
         update: { nombre: c.nombre, dni: c.dni, rol: c.rol, pinHash, sucursalId: Number(sucursalId) },
@@ -185,7 +190,7 @@ async function main() {
     }
   }
 
-  const pinAdmin = await argon2.hash(pinDevPlaceholder(ADMINISTRADOR.id));
+  const pinAdmin = await argon2.hash(pinDevPorRol(ADMINISTRADOR.rol));
   await prisma.colaborador.upsert({
     where: { id: ADMINISTRADOR.id },
     update: { nombre: ADMINISTRADOR.nombre, dni: ADMINISTRADOR.dni, rol: ADMINISTRADOR.rol, sucursalId: null },
@@ -211,6 +216,12 @@ async function main() {
   }
 
   console.log('Seed OK: 4 sucursales (con almacen de Dynamics), 29 colaboradores + 1 administrador, 3 configuraciones.');
+  // PINs de desarrollo, para que quien siembre sepa entrar. Ya NO se derivan
+  // del id (ver PIN_DEV_POR_ROL): esta es la unica forma de conocerlos.
+  console.log('PINs de desarrollo (fijos por rol, NO derivables del id):');
+  for (const [rol, pin] of Object.entries(PIN_DEV_POR_ROL)) {
+    console.log(`  ${rol.padEnd(13)} ${pin}`);
+  }
 }
 
 main()
