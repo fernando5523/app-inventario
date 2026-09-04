@@ -126,6 +126,15 @@ export interface D365ResponsableItem {
   TRU_InventoryManagerPE: string;
 }
 
+/**
+ * Un almacen de Dynamics (entidad `Warehouses`). Es lo que el Administrador
+ * ELIGE al dar de alta una tienda -- ver `almacenes` en backend/README.md.
+ */
+export interface D365Almacen {
+  WarehouseId: string;
+  WarehouseName?: string;
+}
+
 /** Stock por almacen -- `WarehousesOnHandV2` del tenant real. */
 export interface D365StockAlmacen {
   ItemNumber: string;

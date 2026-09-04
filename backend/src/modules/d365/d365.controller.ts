@@ -13,3 +13,11 @@ export const snapshot = asyncHandler(async (req: RequestAutenticado, res: Respon
   const { sucursalId, modo, tipo, almacen } = req.body as CrearSnapshotInput;
   res.json(await catalogoService.crearSnapshot(sucursalId, modo, tipo, almacen));
 });
+
+/**
+ * Lista de almacenes de Dynamics. Solo Administrador: es dato de
+ * configuracion del sistema, igual que /api/tiendas.
+ */
+export const almacenes = asyncHandler(async (_req: RequestAutenticado, res: Response) => {
+  res.json(await catalogoService.listarAlmacenes());
+});

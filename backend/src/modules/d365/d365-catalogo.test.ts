@@ -174,3 +174,12 @@ describe('obtenerCatalogoEjemplo', () => {
     ]);
   });
 });
+
+describe('el factor sale del MISMO simbolo que da el nombre', () => {
+  it('numero en InventoryUnitSymbol y PurchaseUnitSymbol vacio', () => {
+    // Caso real (item 100018): antes devolvia {Emp.12, factor 1} -- el
+    // nombre decia 12 y la cuenta usaba 1.
+    const soloInventory: D365ReleasedProduct = { ItemNumber: '100018', InventoryUnitSymbol: 'Emp.12' };
+    expect(elegirEmpaques([], soloInventory)).toEqual([{ nombre: 'Emp.12', factor: 12 }]);
+  });
+});

@@ -356,6 +356,20 @@ Integración de **solo lectura** con D365 Finance & Operations (OAuth2 `client_c
 #### `GET /api/d365/estado`
 Cualquier rol autenticado. `{ "configurado": true | false }` — si `false`, faltan una o más `D365_*` en el entorno (ver `.env.example`).
 
+#### `GET /api/d365/almacenes`
+Rol **`administrador`** unicamente. Lista los almacenes de Dynamics (entidad `Warehouses`) para que el Administrador **elija uno** al dar de alta una tienda.
+
+Respuesta `200`, ordenada por codigo:
+```json
+[
+  { "codigo": "AD04_TCE", "nombre": "ALMACEN DISPONIBLE TERRANOVA CENTER" },
+  { "codigo": "MD11_CENT", "nombre": "ALMACEN DISPONIBLE MARKET CENTENARIO" }
+]
+```
+Medido contra el tenant real: **70 almacenes**.
+
+**Por que un endpoint y no un campo de texto:** un codigo mal tipeado no falla — trae el stock de OTRA tienda. La auditoria compara contra numeros que parecen validos y nadie se entera hasta que no cuadra a fin de mes. Si la lista sale del ERP, el error deja de ser posible.
+
 #### `POST /api/d365/snapshot`
 Rol `administrador` o `coordinador` — es el paso 1 del wizard del Coordinador (`mobile/lib/puertos/repositorios.ts#RepositorioInventario.traerSnapshot`).
 

@@ -24,13 +24,16 @@ export const crearSnapshotSchema = z.object({
    */
   tipo: z.enum(['mensual', 'anual']).optional().default('mensual'),
   /**
-   * Codigo de almacen de Dynamics (`WarehouseId`, ej. "MD11_CENT") del que se
-   * trae el stock. Sin esto NO se consulta stock y `stockErp` queda en null
-   * -- que es la verdad: no sabemos.
+   * OVERRIDE del almacen, y solo eso: el camino normal es NO mandarlo.
    *
-   * Va como parametro y no sale de la sucursal porque `Sucursal` todavia no
-   * tiene columna de almacen (hace falta una migracion, ver README). Cuando
-   * la tenga, este parametro pasa a ser el override y el default sale de ahi.
+   * El almacen ahora vive en la sucursal (`Sucursal.almacenId`), por
+   * decision del cliente -- "al crear el sitio, se debe asociar el almacen".
+   * Mandarlo aca sirve para probar otro almacen sin reconfigurar la tienda;
+   * si no viene, sale de la sucursal, que es de donde tiene que salir.
+   *
+   * Un almacen que se tipea en cada llamada es un almacen que alguna vez se
+   * va a tipear mal, y traer el stock de OTRA tienda no falla: devuelve
+   * numeros que parecen validos y nadie se entera hasta fin de mes.
    */
   almacen: z.string().trim().min(1).max(30).optional(),
 });

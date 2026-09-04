@@ -8,6 +8,7 @@
  */
 
 import { d365Config } from '../../config/d365.config';
+import { mensajeSinAlmacen } from '../tiendas/tiendas.almacen';
 import { factorDesdeSimbolo } from '../../dominio/empaque';
 import { prisma } from '../../config/database';
 import { ErrorHttp } from '../../shared/errores';
@@ -17,6 +18,7 @@ import type {
   D365ProductBarcode,
   D365ReleasedProduct,
   D365ResponsableItem,
+  D365Almacen,
   D365StockAlmacen,
   D365UnitConversion,
   EmpaqueDto,
@@ -93,7 +95,11 @@ export function elegirEmpaques(conversionesDelProducto: D365UnitConversion[], pr
    */
   if (factoresPorUnidad.size === 0) {
     const simbolo = producto.PurchaseUnitSymbol || producto.InventoryUnitSymbol || 'UND';
-    const factor = factorDesdeSimbolo(producto.PurchaseUnitSymbol);
+    // Se parsea EL MISMO simbolo que se usa de nombre. Mirar solo
+    // `PurchaseUnitSymbol` daba un empaque llamado "Emp.12" con factor 1
+    // cuando el numero venia en `InventoryUnitSymbol` -- visto en datos
+    // reales (item 100018): el nombre decia 12 y la cuenta usaba 1.
+    const factor = factorDesdeSimbolo(simbolo);
     return [{ nombre: simbolo, factor }];
   }
 
@@ -343,6 +349,37 @@ async function obtenerCatalogoReal(tipo: TipoInventario, almacen?: string): Prom
 }
 
 // ---------------------------------------------------------------------------
+// Almacenes -- para ELEGIR, no para tipear
+// ---------------------------------------------------------------------------
+
+export interface AlmacenDto {
+  codigo: string;
+  nombre: string;
+}
+
+/**
+ * Lista los almacenes de Dynamics para que el Administrador elija uno al dar
+ * de alta una tienda.
+ *
+ * POR QUE UN ENDPOINT Y NO UN CAMPO DE TEXTO: un codigo mal tipeado no falla
+ * -- trae el stock de OTRA tienda. La auditoria compara contra numeros que
+ * parecen validos y nadie se entera hasta que no cuadra a fin de mes. Si la
+ * lista sale del ERP, el error deja de ser posible.
+ *
+ * Se ordena por codigo: la lista se lee, no se busca.
+ */
+export async function listarAlmacenes(): Promise<AlmacenDto[]> {
+  const almacenes = await d365EntityService.obtenerTodos<D365Almacen>('Warehouses', {
+    $select: 'WarehouseId,WarehouseName',
+  });
+
+  return almacenes
+    .filter((a) => a.WarehouseId)
+    .map((a) => ({ codigo: a.WarehouseId, nombre: a.WarehouseName || a.WarehouseId }))
+    .sort((a, b) => a.codigo.localeCompare(b.codigo));
+}
+
+// ---------------------------------------------------------------------------
 // Snapshot (paso 1 del Coordinador) -- ver
 // mobile/lib/puertos/repositorios.ts#RepositorioInventario.traerSnapshot
 // ---------------------------------------------------------------------------
@@ -364,15 +401,44 @@ export async function crearSnapshot(
   sucursalId: number,
   modo: ModoCatalogo,
   tipo: TipoInventario = 'mensual',
-  almacen?: string,
+  almacenOverride?: string,
 ): Promise<SnapshotDto> {
-  const existente = await prisma.inventario.findFirst({ where: { sucursalId }, orderBy: { id: 'desc' } });
-  if (existente) {
+  const sucursal = await prisma.sucursal.findUnique({
+    where: { id: sucursalId },
+    select: { id: true, nombre: true, almacenId: true },
+  });
+  if (sucursal === null) throw new ErrorHttp(404, `No existe la sucursal ${sucursalId}.`);
+
+  // IDEMPOTENTE sobre el inventario EN CURSO, no sobre "la fila mas
+  // reciente". La diferencia importa desde que existe `tipo`: buscar
+  // cualquier fila hacia que un mensual ya cerrado impidiera abrir el anual
+  // -- y con `abierto` en el schema, "en curso" ya se puede preguntar bien.
+  const enCurso = await prisma.inventario.findFirst({ where: { sucursalId, abierto: true } });
+  if (enCurso) {
     return {
-      inventarioId: existente.id,
-      items: existente.snapshotItems ?? 0,
-      tomadoEn: (existente.snapshotTomadoEn ?? existente.createdAt).toISOString(),
+      inventarioId: enCurso.id,
+      items: enCurso.snapshotItems ?? 0,
+      tomadoEn: (enCurso.snapshotTomadoEn ?? enCurso.createdAt).toISOString(),
     };
+  }
+
+  /**
+   * EL ALMACEN SALE DE LA SUCURSAL, no de un parametro suelto.
+   *
+   * Decision del cliente: "al crear el sitio, se debe asociar el almacen".
+   * El parametro `almacenOverride` queda como excepcion explicita (probar
+   * otro almacen sin reconfigurar la tienda), pero el camino normal es que
+   * nadie lo mande y el dato salga de donde vive.
+   *
+   * Que sea la sucursal y no un parametro es lo que hace imposible el error
+   * caro: un almacen tipeado en cada llamada es un almacen que alguna vez se
+   * va a tipear mal, y traer el stock de otra tienda no falla -- devuelve
+   * numeros que parecen validos.
+   */
+  const almacen = almacenOverride ?? sucursal.almacenId ?? undefined;
+
+  if (modo === 'real' && almacen === undefined) {
+    throw new ErrorHttp(400, mensajeSinAlmacen(sucursal.nombre));
   }
 
   if (modo === 'real' && !d365Config.isConfigured()) {
@@ -386,7 +452,10 @@ export async function crearSnapshot(
   const tomadoEn = new Date();
 
   const inventario = await prisma.inventario.create({
-    data: { sucursalId, snapshotItems: catalogo.length, snapshotTomadoEn: tomadoEn },
+    // `tipo` se guarda en el inventario: es lo que define QUE universo se
+    // conto, y sin el nadie puede saber despues si esos 6.297 items eran
+    // "solo responsabilidad del empleado" o un anual incompleto.
+    data: { sucursalId, tipo, snapshotItems: catalogo.length, snapshotTomadoEn: tomadoEn },
   });
 
   if (catalogo.length > 0) {
