@@ -5,7 +5,7 @@ import { ActivityIndicator, Alert, Modal, StyleSheet, Text, View } from 'react-n
 
 import { PantallaConTabs } from '../../components/navegacion/PantallaConTabs';
 import { BandaSync, Badge, BarraApp, Button, formatoFechaHora, formatoMiles } from '../../components/ui';
-import { repositorioInventario, repositorioLacrado, repositorioSesion } from '../../lib/contenedor';
+import { repositorioHistorial, repositorioLacrado, repositorioSesion } from '../../lib/contenedor';
 import type { Colaborador } from '../../lib/dominio/tipos';
 import type { EstadoLacrado } from '../../lib/puertos/repositorios';
 import { useSesion } from '../../lib/sesion-contexto';
@@ -30,6 +30,7 @@ export default function LacradoScreen(): JSX.Element {
   const [cargando, setCargando] = useState(true);
   const [inventarioId, setInventarioId] = useState<number | null>(null);
   const [items, setItems] = useState<number | null>(null);
+  const [periodo, setPeriodo] = useState<string | null>(null);
   const [auditores, setAuditores] = useState<Colaborador[]>([]);
   const [estado, setEstado] = useState<EstadoLacrado | null>(null);
 
@@ -43,18 +44,34 @@ export default function LacradoScreen(): JSX.Element {
     let vigente = true;
 
     async function cargar(): Promise<void> {
-      const [activo, colaboradores] = await Promise.all([
-        repositorioInventario.activo(sesion!.sucursal!.id),
+      const [pagina, colaboradores] = await Promise.all([
+        repositorioHistorial.listar({ sucursalId: sesion!.sucursal!.id }),
         repositorioSesion.colaboradores(sesion!.sucursal!.id),
       ]);
       if (!vigente) return;
 
       setAuditores(colaboradores.filter((c) => c.rol === 'auditor'));
 
-      if (activo) {
-        setInventarioId(activo.inventarioId);
-        setItems(activo.items);
-        const estadoLacrado = await repositorioLacrado.estado(activo.inventarioId);
+      /**
+       * El inventario A LACRAR sale del historial, no de
+       * `repositorioInventario.activo()`, y la diferencia no es de plomería:
+       * `activo()` devuelve el inventario ABIERTO, que es exactamente el
+       * único que NO se puede lacrar — todavía se están contando las
+       * cantidades. El backend lo rechaza (409: el estado tiene que ser
+       * `conteo_cerrado` o `liquidado`), así que la pantalla apuntaba al
+       * inventario equivocado y solo se enteraba al apretar el botón.
+       *
+       * Se toma el más reciente que ya cerró el conteo y todavía no está
+       * lacrado; el listado viene ordenado del más nuevo al más viejo. Un
+       * inventario ya lacrado no vuelve acá: se mira desde el Historial.
+       */
+      const pendiente = pagina.inventarios.find((i) => i.estado === 'conteo_cerrado' || i.estado === 'liquidado');
+
+      if (pendiente) {
+        setInventarioId(pendiente.id);
+        setItems(pendiente.snapshotItems);
+        setPeriodo(pendiente.periodo);
+        const estadoLacrado = await repositorioLacrado.estado(pendiente.id);
         if (vigente) setEstado(estadoLacrado);
       }
       if (vigente) setCargando(false);
@@ -173,14 +190,17 @@ export default function LacradoScreen(): JSX.Element {
         // acá es la misma inconsistencia que la auditoría marcó entre
         // Inicio/Auditoría/Lacrado: tres pantallas, tres cifras distintas
         // para lo que suena a la misma cosa.
-        cifras={items ? `${formatoMiles(items)} ítems del inventario` : undefined}
+        cifras={items ? `${periodo ? `${periodo} · ` : ''}${formatoMiles(items)} ítems del inventario` : undefined}
         onSalir={salir}
       />
 
       {cargando ? (
         <ActivityIndicator color={colors.rojo} style={styles.cargando} />
       ) : !inventarioId ? (
-        <Text style={styles.tarjetaTexto}>Todavía no hay un inventario en curso para esta sucursal.</Text>
+        <Text style={styles.tarjetaTexto}>
+          No hay ningún inventario listo para lacrar en esta sucursal. El lacrado llega cuando el conteo del ciclo ya
+          cerró: mientras las cantidades todavía se pueden recontar, no hay nada que sellar.
+        </Text>
       ) : (
         <>
           <BandaSync

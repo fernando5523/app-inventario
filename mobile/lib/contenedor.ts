@@ -20,6 +20,7 @@ import type {
   RepositorioSesion,
   RepositorioTiendas,
   RepositorioUsuarios,
+  Sincronizador,
 } from './puertos/repositorios';
 
 import { auditoriaMemoria } from './adaptadores/auditoria-memoria';
@@ -32,6 +33,7 @@ import { inventarioMemoria } from './adaptadores/inventario-memoria';
 import { lacradoMemoria } from './adaptadores/lacrado-memoria';
 import { liquidacionMemoria } from './adaptadores/liquidacion-memoria';
 import { sesionMemoria } from './adaptadores/sesion-memoria';
+import { sincronizadorReal } from './adaptadores/sincronizador';
 import { tiendasMemoria } from './adaptadores/tiendas-memoria';
 import { usuariosMemoria } from './adaptadores/usuarios-memoria';
 
@@ -39,6 +41,8 @@ import { catalogoApi } from './adaptadores/catalogo-api';
 import { configApi } from './adaptadores/config-api';
 import { historialApi } from './adaptadores/historial-api';
 import { hojasApi } from './adaptadores/hojas-api';
+import { lacradoApi } from './adaptadores/lacrado-api';
+import { liquidacionApi } from './adaptadores/liquidacion-api';
 import { auditoriaApi } from './adaptadores/auditoria-api';
 import { inventarioApi } from './adaptadores/inventario-api';
 import { sesionApi } from './adaptadores/sesion-api';
@@ -134,8 +138,6 @@ function elegir<T>(puerto: PuertoConectable, memoria: T, api: T): T {
  * `auditoria`). El nombre dice lo que son: cuando exista el endpoint, se
  * reemplaza esta linea por el adaptador HTTP de verdad.
  */
-const liquidacionApiPendiente = liquidacionMemoria;
-const lacradoApiPendiente = lacradoMemoria;
 const configDynamicsApiPendiente = configDynamicsMemoria;
 
 // ---------------------------------------------------------------------------
@@ -231,36 +233,34 @@ export const repositorioInventario: RepositorioInventario = elegirHttp('inventar
 export const repositorioAuditoria: RepositorioAuditoria = elegir('auditoria', auditoriaMemoria, auditoriaApi);
 
 /**
- * ── LIQUIDACIÓN: falta cerrar el contrato ──
+ * ── LIQUIDACIÓN: contra el backend real ──
  *
- * `GET /api/historial/inventarios/:id/liquidacion` EXISTE, pero no alcanza
- * todavia por dos razones concretas, no por pereza:
+ * `GET /api/liquidacion/sucursales/:sucursalId` existe desde el commit
+ * 21c34c5 y se verificó con curl el 2026-09-04: devuelve los 9 campos de
+ * `Liquidacion` con la forma exacta del puerto, y `200` con body `null`
+ * cuando la sucursal todavía no cerró ningún ciclo.
  *
- *  1. La llave no coincide: el endpoint es por `inventarioId`, el puerto es
- *     `deSucursal(sucursalId)`. Se puede puentear resolviendo primero el
- *     inventario del mes, pero eso es una decision de contrato, no una
- *     traduccion mecanica.
- *  2. Hoy devuelve `resumen: null` y `planilla: []` porque no hay ningun
- *     ciclo cerrado. Sin un solo caso con datos no se puede verificar el
- *     mapeo de los 9 campos de `Liquidacion` — y escribir un adaptador
- *     contra una forma que nunca vi es exactamente como se cuelan los bugs
- *     que aparecen recien en produccion.
+ * Es un endpoint DISTINTO de `GET /api/historial/inventarios/:id/liquidacion`
+ * y las dos rutas tienen razón de existir: aquella pide un `inventarioId` y
+ * sirve para mirar un mes del archivo; esta responde "cómo quedó el último
+ * cierre de ESTA tienda", que es lo único que la pantalla 6 sabe preguntar.
  */
-export const repositorioLiquidacion: RepositorioLiquidacion = elegir('liquidacion', liquidacionMemoria, liquidacionApiPendiente);
+export const repositorioLiquidacion: RepositorioLiquidacion = elegir('liquidacion', liquidacionMemoria, liquidacionApi);
 
 /**
- * ── LACRADO: falta el GET de estado ──
+ * ── LACRADO: contra el backend real ──
  *
- * Las ESCRITURAS existen (`POST .../aprobaciones`, `POST .../lacrado`,
- * `POST .../lacrado/registro-erp`). Lo que falta es la LECTURA que el puerto
- * pide primero: `estado(inventarioId)` → `EstadoLacrado`.
+ * El GET que faltaba ya existe: `GET .../lacrado/estado` devuelve
+ * `EstadoLacrado` entero, incluidos `aprobacionesRequeridas` (que viaja en la
+ * respuesta en vez de estar clavado acá: el día que sean tres, la pantalla se
+ * entera sola) y `todoSincronizado`, el que decide si el botón de lacrar se
+ * habilita — no se lacra con hojas que todavía no llegaron al servidor.
  *
- * `GET /api/historial/inventarios/:id` trae `aprobaciones` y `lacrado`, pero
- * no `aprobacionesRequeridas` ni `todoSincronizado` — y `todoSincronizado` es
- * el que decide si el boton de lacrar se puede habilitar: no se puede lacrar
- * con hojas que todavia no llegaron al servidor.
+ * La regla del control de dos personas la sostiene el servidor, verificado
+ * contra la base real: quien firma sale del TOKEN, la misma persona no puede
+ * completar el par (409) y mandar un `aprobadorId` en el body es 400.
  */
-export const repositorioLacrado: RepositorioLacrado = elegir('lacrado', lacradoMemoria, lacradoApiPendiente);
+export const repositorioLacrado: RepositorioLacrado = elegir('lacrado', lacradoMemoria, lacradoApi);
 
 /**
  * ── CREDENCIALES DE DYNAMICS: en memoria, y por ahora está bien ──
@@ -300,3 +300,18 @@ export const repositorioConfigDynamics: RepositorioConfigDynamics = elegir(
  * Por eso tampoco pasa por `elegir()`: no hay a qué caer.
  */
 export const repositorioHistorial: RepositorioHistorial = historialApi;
+
+/**
+ * ── SINCRONIZADOR: el disparador de la cola de hojas ──
+ *
+ * No pasa por `elegir()`: no hay una variante "en memoria" que tenga
+ * sentido — siempre vacía la MISMA cola SQLite (`hojas-sqlite.ts`) contra
+ * la MISMA red real (`hojasApi`), pase lo que pase con la bandera de los
+ * demás puertos. `iniciarSincronizador()` se llama UNA vez desde
+ * app/_layout.tsx (ver ese archivo) para arrancar los disparadores
+ * automáticos (red + primer plano); las pantallas solo importan
+ * `sincronizador` para leer `estado()`/`suscribir()` y para el botón
+ * manual de la banda de sincronización.
+ */
+export const sincronizador: Sincronizador = sincronizadorReal;
+export { iniciarSincronizador } from './adaptadores/sincronizador';

@@ -281,6 +281,20 @@ export const hojasSqlite: RepositorioHojas = {
 /** Lo que hace falta para mandar UN item — nunca el conteo entero: `hoja` es de solo lectura, no se decide nada de negocio acá. */
 export type EnviarItemCola = (item: ItemCola, hoja: HojaConteo) => Promise<ResultadoEnvio>;
 
+export interface EstadoColaCruda {
+  /** Todo lo que sigue en `cola_sync`, sea cual sea su sub-estado (pendiente/enviando/error). */
+  pendientes: number;
+  /** Cuántos de esos quedaron en `error` -- no se van a resolver solos reintentando. */
+  enError: number;
+}
+
+/** Lo que necesita `sincronizador.ts` para armar `EstadoCola` (puertos/repositorios.ts) -- cuenta TODA la cola, no una hoja sola. */
+export async function estadoDeLaCola(): Promise<EstadoColaCruda> {
+  const db = await obtenerDb();
+  const filas = await db.getAllAsync<{ estado: string }>('SELECT estado FROM cola_sync');
+  return { pendientes: filas.length, enError: filas.filter((f) => f.estado === 'error').length };
+}
+
 /**
  * Recorre la cola en orden y trata de mandar cada item con `enviar`
  * (inyectado: hoy no hay un endpoint de hojas confirmado contra el
