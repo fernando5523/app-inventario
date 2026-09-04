@@ -22,6 +22,12 @@ import type {
 
 export type ModoCatalogo = 'real' | 'ejemplo';
 
+/**
+ * Los dos universos del inventario (ver d365.schema.ts para la decision del
+ * cliente). No es una preferencia de configuracion: cambia QUE se cuenta.
+ */
+export type TipoInventario = 'mensual' | 'anual';
+
 // ---------------------------------------------------------------------------
 // Mapeo (puro, sin red ni DB -- ver d365-catalogo.test.ts)
 // ---------------------------------------------------------------------------
@@ -201,6 +207,7 @@ export function mapearCatalogo(
   barcodes: D365ProductBarcode[],
   conversiones: D365UnitConversion[],
   responsables: D365ResponsableItem[] = [],
+  tipo: TipoInventario = 'mensual',
 ): CatalogoItemDto[] {
   const barcodesPorItem = agruparBarcodesPorItem(barcodes);
   const conversionesPorItem = agruparConversionesPorProducto(conversiones);
@@ -225,6 +232,13 @@ export function mapearCatalogo(
     ),
   );
 
+  /**
+   * ANUAL: se cuenta TODO, empresa incluida. El `esEmpresa` de cada item
+   * queda mapeado igual -- la auditoria necesita saber de quien es cada
+   * faltante aunque los cuente a todos.
+   */
+  if (tipo === 'anual') return listos;
+
   if (responsablePorItem.size === 0) return listos;
   return listos.filter((_, i) => seCuenta(responsablePorItem.get(productos[i]!.ItemNumber)));
 }
@@ -242,7 +256,7 @@ export function obtenerCatalogoEjemplo(): CatalogoItemDto[] {
  * (confirmado contra el tenant real), asi que se trae completa y se
  * agrupa localmente por ProductNumber en vez de filtrar por item.
  */
-async function obtenerCatalogoReal(): Promise<CatalogoItemDto[]> {
+async function obtenerCatalogoReal(tipo: TipoInventario): Promise<CatalogoItemDto[]> {
   const filtroCompania = d365Config.dataAreaId ? `dataAreaId eq '${d365Config.dataAreaId}'` : undefined;
 
   const [productos, barcodes, conversiones, responsables] = await Promise.all([
@@ -267,7 +281,7 @@ async function obtenerCatalogoReal(): Promise<CatalogoItemDto[]> {
       .catch(() => [] as D365ResponsableItem[]),
   ]);
 
-  return mapearCatalogo(productos, barcodes, conversiones, responsables);
+  return mapearCatalogo(productos, barcodes, conversiones, responsables, tipo);
 }
 
 // ---------------------------------------------------------------------------
@@ -288,7 +302,11 @@ export interface SnapshotDto {
  * inventario/hojas en este backend, "ya tiene un inventario" se resuelve
  * como "existe al menos una fila", no "esta en curso sin cerrar".
  */
-export async function crearSnapshot(sucursalId: number, modo: ModoCatalogo): Promise<SnapshotDto> {
+export async function crearSnapshot(
+  sucursalId: number,
+  modo: ModoCatalogo,
+  tipo: TipoInventario = 'mensual',
+): Promise<SnapshotDto> {
   const existente = await prisma.inventario.findFirst({ where: { sucursalId }, orderBy: { id: 'desc' } });
   if (existente) {
     return {
@@ -305,7 +323,7 @@ export async function crearSnapshot(sucursalId: number, modo: ModoCatalogo): Pro
     );
   }
 
-  const catalogo = modo === 'ejemplo' ? obtenerCatalogoEjemplo() : await obtenerCatalogoReal();
+  const catalogo = modo === 'ejemplo' ? obtenerCatalogoEjemplo() : await obtenerCatalogoReal(tipo);
   const tomadoEn = new Date();
 
   const inventario = await prisma.inventario.create({

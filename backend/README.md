@@ -363,6 +363,15 @@ Body:
 ```json
 { "sucursalId": 1, "modo": "real" }
 ```
+- `tipo` es opcional, default `"mensual"`. **Define QUE UNIVERSO se cuenta**, no es una preferencia:
+  - `"mensual"` → SOLO productos de responsabilidad del **empleado**. Los que asume la empresa quedan fuera. Medido contra el tenant real: **6.297 items**.
+  - `"anual"` → **todo** el catalogo activo, empresa incluida ("en el anual ya cuentan todo"). Medido: **11.835 items** (6.732 del empleado + 5.103 de la empresa).
+
+  El default es el mensual porque es el que se hace todos los meses; el anual hay que pedirlo explicito. Que alguien cuente 11.835 items creyendo que cuenta 6.297 es una jornada perdida.
+
+  El filtro sale de `TRU_InventoryManagerPEEntities` (entidad CUSTOM del tenant): `ModuleType eq 'Invent'`, campo `TRU_InventoryManagerPE` con valores `Employee`/`Company`/`None`. Los `None` y los que no tienen fila NO se cuentan en el mensual: sin responsable asignado no hay a quien liquidarle una diferencia.
+
+  ⚠️ **El tipo NO se persiste todavia**: `Inventario` no tiene columna para el. Ver la nota de limitaciones abajo.
 - `modo` es opcional, default `"real"`. `"ejemplo"` nunca toca red ni exige credenciales: devuelve siempre los mismos 4 productos ya validados en `mobile/design/conteo.html` (Aceite Vegetal Primor, Cerveza Cusqueña, Leche Evaporada, Fideos Canuto), cada uno con sus empaques — el Aceite trae dos (Emp.12 y Emp.6) para poder probar de verdad la pantalla con más de un empaque por producto. Nunca se sustituye `"real"` por datos de ejemplo en silencio — si no hay credenciales y se pide `"real"`, es un `400`, no un fallback automático.
 
 Respuesta `200`:

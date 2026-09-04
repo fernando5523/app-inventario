@@ -74,6 +74,25 @@ describe('mapearCatalogo: el filtro sobre el catalogo completo', () => {
     expect(catalogo[0]!.esEmpresa).toBe(false);
   });
 
+  it('ANUAL cuenta TODO, empresa incluida', () => {
+    // Decision del cliente: "en el inventario anual ya cuentan todo".
+    const catalogo = mapearCatalogo(productos, [], [], RESPONSABLES, 'anual');
+    expect(catalogo.map((c) => c.codigo)).toEqual(['A1', 'A2', 'A3', 'SIN_FILA']);
+  });
+
+  it('y en el ANUAL sigue marcando de quien es cada item', () => {
+    // Contarlos a todos no borra la distincion: la auditoria necesita saber
+    // de quien es cada faltante.
+    const catalogo = mapearCatalogo([prod('A2')], [], [], RESPONSABLES, 'anual');
+    expect(catalogo[0]!.esEmpresa).toBe(true);
+  });
+
+  it('el default es MENSUAL: el anual hay que pedirlo explicito', () => {
+    // Que alguien cuente 11.835 items creyendo que cuenta 6.297 es una
+    // jornada perdida.
+    expect(mapearCatalogo(productos, [], [], RESPONSABLES)).toHaveLength(1);
+  });
+
   it('si la entidad de responsables no responde, NO filtra nada', () => {
     // Un catalogo de mas es revisable; un snapshot vacio por un error de
     // red deja al Coordinador sin poder arrancar el inventario.
