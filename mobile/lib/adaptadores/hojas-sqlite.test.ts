@@ -97,6 +97,14 @@ vi.mock('./_sqlite', () => ({
   obtenerDb: () => obtenerDbDeTest(),
 }));
 
+// sesion-api.ts importa react-native (Platform, vía _http.ts) — no carga
+// bajo vitest por la misma razón que expo-sqlite (sintaxis Flow). Ningún
+// test de este archivo llama a `mias()`, así que alcanza con un stub: lo
+// que importa acá es no arrastrar el módulo real al grafo de imports.
+vi.mock('./sesion-api', () => ({
+  sesionApi: { sesionActiva: async () => null },
+}));
+
 // Import DESPUÉS del vi.mock (vitest lo hoistea igual, pero así queda
 // explícito el orden real: hojas-sqlite.ts se carga con `_sqlite.ts` ya
 // reemplazado, nunca llega a tocar `expo-sqlite`).

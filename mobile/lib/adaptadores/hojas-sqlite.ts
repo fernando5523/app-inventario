@@ -34,6 +34,7 @@
 import { buscarHojaPorId, finalizarDominio, obtenerInventario, puedeEditar } from './_compartido';
 import { obtenerDb } from './_sqlite';
 import { aplicarResultadoEnvio, ordenarCola, estadoSyncDeHoja, type ItemCola, type ResultadoEnvio } from './sqlite-cola';
+import { sesionApi } from './sesion-api';
 import { sesionMemoria } from './sesion-memoria';
 import type { Conteo, EstadoHoja, EstadoSync, HojaConteo, LineaEmpaque, Producto } from '../dominio/tipos';
 import type { RepositorioHojas } from '../puertos/repositorios';
@@ -186,7 +187,12 @@ export const hojasSqlite: RepositorioHojas = {
     const inventario = await obtenerInventario(inventarioId);
     if (!inventario) return [];
 
-    const sesion = await sesionMemoria.sesionActiva();
+    // El login por defecto pasa por sesionApi (HTTP), que guarda la sesión
+    // activa en su propia tabla SQLite — no en el estado en memoria de
+    // sesionMemoria. Probar ahí primero y caer a sesionMemoria cubre el
+    // modo debug (EXPO_PUBLIC_PUERTOS_MEMORIA=sesion) sin volver a perder
+    // de vista quién está logueado cuando la sesión sí vino por HTTP.
+    const sesion = (await sesionApi.sesionActiva()) ?? (await sesionMemoria.sesionActiva());
     if (!sesion) return [];
 
     const propias = inventario.hojas.filter((hoja) => hoja.asignados.includes(sesion.colaborador.nombre));
