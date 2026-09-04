@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   agruparBarcodesPorItem,
   agruparConversionesPorProducto,
-  elegirEmpaque,
+  elegirEmpaques,
   mapearProducto,
   obtenerCatalogoEjemplo,
 } from './d365-catalogo.service';
@@ -59,18 +59,18 @@ describe('mapearProducto (forma real: barcode siempre de unidad suelta)', () => 
     expect(mapearProducto(producto, [], []).codigoBarras).toBe('110605');
   });
 
-  it('empaque.codigoBarras NUNCA se llena: no hay barcode especifico por empaque en este tenant', () => {
+  it('empaques[].codigoBarras NUNCA se llena: no hay barcode especifico por empaque en este tenant', () => {
     const conFactor: D365UnitConversion = { ProductNumber: '110605', FromUnitSymbol: 'Emp.12', ToUnitSymbol: 'U', Factor: 12 };
     const resultado = mapearProducto(producto, [barcodeReal], [conFactor]);
-    expect(resultado.empaque.codigoBarras).toBeUndefined();
+    expect(resultado.empaques.every((e) => e.codigoBarras === undefined)).toBe(true);
   });
 });
 
-describe('elegirEmpaque (el factor vive en ProductSpecificUnitOfMeasureConversions, no en el barcode)', () => {
+describe('elegirEmpaques (el factor vive en ProductSpecificUnitOfMeasureConversions, no en el barcode)', () => {
   it('una fila con Factor=1 (equivalencia U/U.) NO cuenta como empaque', () => {
     const soloIdentidad: D365UnitConversion[] = [{ ProductNumber: '110605', FromUnitSymbol: 'U', ToUnitSymbol: 'U.', Factor: 1 }];
-    const resultado = elegirEmpaque(soloIdentidad, producto);
-    expect(resultado).toEqual({ nombre: 'U.', factor: 1 });
+    const resultado = elegirEmpaques(soloIdentidad, producto);
+    expect(resultado).toEqual([{ nombre: 'U.', factor: 1 }]);
   });
 
   it('una fila con Factor != 1 es el empaque real (caso confirmado contra datos reales: Emp.12 = 12)', () => {
@@ -79,30 +79,33 @@ describe('elegirEmpaque (el factor vive en ProductSpecificUnitOfMeasureConversio
       { ProductNumber: '110605', FromUnitSymbol: 'Emp.12', ToUnitSymbol: 'U', Factor: 12 },
       { ProductNumber: '110605', FromUnitSymbol: 'Emp.12', ToUnitSymbol: 'U.', Factor: 12 },
     ];
-    const resultado = elegirEmpaque(conversiones, producto);
-    expect(resultado).toEqual({ nombre: 'Emp.12', factor: 12 });
+    const resultado = elegirEmpaques(conversiones, producto);
+    expect(resultado).toEqual([{ nombre: 'Emp.12', factor: 12 }]);
   });
 
-  it('con DOS empaques alternos distintos (nuestro dominio admite uno solo), se queda con el de mayor factor', () => {
+  it('con DOS empaques alternos distintos, devuelve los DOS ordenados de mayor a menor factor', () => {
     const conversiones: D365UnitConversion[] = [
       { ProductNumber: '110605', FromUnitSymbol: 'Emp.6', ToUnitSymbol: 'U', Factor: 6 },
       { ProductNumber: '110605', FromUnitSymbol: 'Emp.12', ToUnitSymbol: 'U', Factor: 12 },
     ];
-    const resultado = elegirEmpaque(conversiones, producto);
-    expect(resultado).toEqual({ nombre: 'Emp.12', factor: 12 });
+    const resultado = elegirEmpaques(conversiones, producto);
+    expect(resultado).toEqual([
+      { nombre: 'Emp.12', factor: 12 },
+      { nombre: 'Emp.6', factor: 6 },
+    ]);
   });
 
   it('sin ninguna conversion, cae a la unidad de inventario con factor 1', () => {
-    expect(elegirEmpaque([], producto)).toEqual({ nombre: 'U.', factor: 1 });
+    expect(elegirEmpaques([], producto)).toEqual([{ nombre: 'U.', factor: 1 }]);
   });
 
   it('sin conversion NI unidad de inventario, cae a PurchaseUnitSymbol', () => {
     const sinInventoryUnit: D365ReleasedProduct = { ItemNumber: '1', PurchaseUnitSymbol: 'Emp.6' };
-    expect(elegirEmpaque([], sinInventoryUnit)).toEqual({ nombre: 'Emp.6', factor: 1 });
+    expect(elegirEmpaques([], sinInventoryUnit)).toEqual([{ nombre: 'Emp.6', factor: 1 }]);
   });
 
   it('sin nada de nada, cae a "UND"', () => {
-    expect(elegirEmpaque([], { ItemNumber: '1' })).toEqual({ nombre: 'UND', factor: 1 });
+    expect(elegirEmpaques([], { ItemNumber: '1' })).toEqual([{ nombre: 'UND', factor: 1 }]);
   });
 });
 
@@ -135,18 +138,27 @@ describe('obtenerCatalogoEjemplo', () => {
     expect(catalogo.map((p) => p.descripcion)).toContain('Aceite Vegetal Primor 1L');
   });
 
-  it('cada item de ejemplo tiene codigo de barras y empaque con factor > 1', () => {
+  it('cada item de ejemplo tiene codigo de barras y al menos un empaque con factor > 1', () => {
     const catalogo = obtenerCatalogoEjemplo();
     for (const item of catalogo) {
       expect(item.codigoBarras).toBeTruthy();
-      expect(item.empaque.factor).toBeGreaterThan(1);
+      expect(item.empaques.length).toBeGreaterThan(0);
+      expect(item.empaques[0]!.factor).toBeGreaterThan(1);
     }
   });
 
-  it('el empaque de ejemplo nunca trae codigoBarras propio (misma limitacion que el tenant real)', () => {
+  it('ningun empaque de ejemplo trae codigoBarras propio (misma limitacion que el tenant real)', () => {
     const catalogo = obtenerCatalogoEjemplo();
     for (const item of catalogo) {
-      expect(item.empaque.codigoBarras).toBeUndefined();
+      expect(item.empaques.every((e) => e.codigoBarras === undefined)).toBe(true);
     }
+  });
+
+  it('el Aceite (0051) trae DOS empaques alternos, para probar el caso de verdad', () => {
+    const aceite = obtenerCatalogoEjemplo().find((p) => p.descripcion === 'Aceite Vegetal Primor 1L');
+    expect(aceite?.empaques).toEqual([
+      { nombre: 'Emp.12', factor: 12 },
+      { nombre: 'Emp.6', factor: 6 },
+    ]);
   });
 });

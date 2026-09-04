@@ -5,6 +5,17 @@
 
 import { SolicitudInvalida } from '../../shared/errores';
 
+/** Una linea del conteo o del catalogo -- misma forma de los dos lados. */
+interface LineaEmpaque {
+  empaqueNombre: string;
+  cantidad: number;
+}
+
+interface EmpaqueDisponible {
+  nombre: string;
+  factor: number;
+}
+
 /**
  * EL TOTAL SE CALCULA, NUNCA SE GUARDA.
  *
@@ -15,10 +26,21 @@ import { SolicitudInvalida } from '../../shared/errores';
  * saber cual de los dos era el bueno.
  *
  * Espeja mobile/lib/dominio/empaque.ts#totalUnidades: la misma cuenta de los
- * dos lados del puente, para que el telefono y el servidor nunca discutan.
+ * dos lados del puente, para que el telefono y el servidor nunca discutan
+ * -- incluida la regla de tirar si una linea referencia un empaque que el
+ * producto no tiene: es el corazon del inventario, no puede fallar en
+ * silencio.
  */
-export function totalUnidades(conteo: { empaques: number; sueltas: number }, empaqueFactor: number): number {
-  return conteo.empaques * empaqueFactor + conteo.sueltas;
+export function totalUnidades(conteo: { empaques: LineaEmpaque[]; sueltas: number }, empaquesDisponibles: EmpaqueDisponible[]): number {
+  const factorPorNombre = new Map(empaquesDisponibles.map((e) => [e.nombre, e.factor] as const));
+  const totalEmpaques = conteo.empaques.reduce((acumulado, linea) => {
+    const factor = factorPorNombre.get(linea.empaqueNombre);
+    if (factor === undefined) {
+      throw new SolicitudInvalida(`El producto no tiene un empaque llamado "${linea.empaqueNombre}".`);
+    }
+    return acumulado + linea.cantidad * factor;
+  }, 0);
+  return totalEmpaques + conteo.sueltas;
 }
 
 /**
@@ -36,11 +58,15 @@ export function estadoTrasContar(estadoActual: 'pendiente' | 'en_proceso' | 'fin
 /**
  * Un empaque nunca trae menos de 1 unidad. Un factor 0 o negativo haria que
  * `totalUnidades` diera 0 o un numero negativo para un conteo real, y ese
- * numero termina en la liquidacion de alguien.
+ * numero termina en la liquidacion de alguien. Valida TODOS los empaques
+ * del producto (no solo los que vinieron en el conteo): un factor corrupto
+ * en un empaque que hoy no se uso puede usarse en la proxima correccion.
  */
-export function validarFactor(empaqueFactor: number): void {
-  if (!Number.isInteger(empaqueFactor) || empaqueFactor < 1) {
-    throw new SolicitudInvalida('El empaque del producto tiene un factor invalido: no se puede calcular el total.');
+export function validarFactores(empaquesDelProducto: EmpaqueDisponible[]): void {
+  for (const empaque of empaquesDelProducto) {
+    if (!Number.isInteger(empaque.factor) || empaque.factor < 1) {
+      throw new SolicitudInvalida(`El empaque "${empaque.nombre}" tiene un factor invalido: no se puede calcular el total.`);
+    }
   }
 }
 

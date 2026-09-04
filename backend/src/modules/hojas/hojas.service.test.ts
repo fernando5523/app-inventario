@@ -30,7 +30,7 @@ import { finalizar, guardarConteo } from './hojas.service';
 const CONTADOR: ColaboradorAutenticado = { colaboradorId: 10, sucursalId: 1, rol: 'conteo' };
 
 const CONTEO = {
-  empaques: 2,
+  empaques: [{ empaqueNombre: 'Plancha', cantidad: 2 }],
   sueltas: 5,
   confirmadoPorEscaner: true,
   contadoEn: new Date('2026-09-03T10:00:00.000Z'),
@@ -48,7 +48,7 @@ function hoja(estado: 'pendiente' | 'en_proceso' | 'finalizada') {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  prismaMock.producto.findFirst.mockResolvedValue({ id: 51, empaqueFactor: 24 });
+  prismaMock.producto.findFirst.mockResolvedValue({ id: 51, empaques: [{ nombre: 'Plancha', factor: 24 }] });
   prismaMock.conteo.upsert.mockResolvedValue({ productoId: 51, ...CONTEO });
   prismaMock.$transaction.mockImplementation(async (ops: unknown[]) => Promise.all(ops));
 });
@@ -128,7 +128,7 @@ describe('una hoja finalizada es inmutable', () => {
 });
 
 describe('el total se calcula, nunca se guarda', () => {
-  it('devuelve empaques x factor + sueltas', async () => {
+  it('devuelve la suma de cada linea (cantidad x factor) mas las sueltas', async () => {
     prismaMock.hojaConteo.findUnique.mockResolvedValue(hoja('en_proceso'));
 
     const { conteo, total } = await guardarConteo(CONTADOR, 7, 51, CONTEO);
@@ -137,5 +137,37 @@ describe('el total se calcula, nunca se guarda', () => {
     // Y no se persiste: lo que se manda a la base son las PARTES.
     expect(prismaMock.conteo.upsert.mock.calls[0]![0].create).not.toHaveProperty('total');
     expect(conteo).not.toHaveProperty('total');
+  });
+
+  it('reemplaza la lista de lineas ENTERA en cada guardado (deleteMany + create, no un merge)', async () => {
+    prismaMock.hojaConteo.findUnique.mockResolvedValue(hoja('en_proceso'));
+
+    await guardarConteo(CONTADOR, 7, 51, CONTEO);
+
+    const update = prismaMock.conteo.upsert.mock.calls[0]![0].update;
+    expect(update.empaques).toEqual({ deleteMany: {}, create: [{ empaqueNombre: 'Plancha', cantidad: 2 }] });
+  });
+});
+
+describe('una linea no puede referenciar un empaque que el producto no tiene', () => {
+  it('rechaza con 400 (SolicitudInvalida), no con 500', async () => {
+    prismaMock.hojaConteo.findUnique.mockResolvedValue(hoja('en_proceso'));
+    prismaMock.producto.findFirst.mockResolvedValue({ id: 51, empaques: [{ nombre: 'Caja', factor: 12 }] });
+
+    const conteoConEmpaqueInexistente = { ...CONTEO, empaques: [{ empaqueNombre: 'Fardo', cantidad: 1 }] };
+    const error = await guardarConteo(CONTADOR, 7, 51, conteoConEmpaqueInexistente).catch((e) => e);
+
+    expect(error.status).toBe(400);
+  });
+
+  it('y no escribe NADA cuando rechaza', async () => {
+    prismaMock.hojaConteo.findUnique.mockResolvedValue(hoja('en_proceso'));
+    prismaMock.producto.findFirst.mockResolvedValue({ id: 51, empaques: [{ nombre: 'Caja', factor: 12 }] });
+
+    const conteoConEmpaqueInexistente = { ...CONTEO, empaques: [{ empaqueNombre: 'Fardo', cantidad: 1 }] };
+    await guardarConteo(CONTADOR, 7, 51, conteoConEmpaqueInexistente).catch(() => undefined);
+
+    expect(prismaMock.conteo.upsert).not.toHaveBeenCalled();
+    expect(prismaMock.$transaction).not.toHaveBeenCalled();
   });
 });

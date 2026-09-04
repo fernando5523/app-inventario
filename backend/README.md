@@ -305,14 +305,14 @@ Integración de **solo lectura** con D365 Finance & Operations (OAuth2 `client_c
 
 **HALLAZGO IMPORTANTE — el código de barras nunca identifica el empaque.** En una muestra real de 100+ productos, **el 100% de los barcodes de `ProductBarcodesV2` tienen `ProductQuantity: 0` y `IsDefaultDisplayedBarcode: "No"`** — nunca `1`, nunca `"Yes"`, nunca una cantidad mayor a 1. Es decir: todo barcode identifica la unidad suelta del producto, nunca "esto es una caja de 12". **Consecuencia real para el escáner: puede confirmar QUÉ producto es, pero nunca en qué empaque viene** — eso lo tiene que elegir a mano el operario. No es un bug de nuestro mapeo: es así como está cargado el dato en Dynamics hoy, y otro proyecto de integración contra el mismo tenant (`app-barcode`, `app007-validacion_productos`) se topa con la misma limitación sin resolverla.
 
-**Dónde vive de verdad el factor de empaque** (`d365-catalogo.service.ts#elegirEmpaque`): en `ProductSpecificUnitOfMeasureConversions`, filtrada por `ProductNumber`. Cada fila tiene `FromUnitSymbol`, `ToUnitSymbol` y un `Factor` numérico real — confirmado contra datos reales: `{ProductNumber: '110605', FromUnitSymbol: 'Emp.12', ToUnitSymbol: 'U', Factor: 12}`. Una fila con `Factor: 1` es solo la equivalencia entre `"U"` y `"U."` (misma unidad, dos grafías) y no cuenta como empaque; el resto (`Factor != 1`) son empaques alternos de verdad. **La tabla admite varias filas por producto** (varios empaques simultáneos, ej. Caja y Pack) — en la muestra real que se probó (100 productos) ninguno mostró dos a la vez, pero el mecanismo lo soporta.
+**Dónde vive de verdad el factor de empaque** (`d365-catalogo.service.ts#elegirEmpaques`): en `ProductSpecificUnitOfMeasureConversions`, filtrada por `ProductNumber`. Cada fila tiene `FromUnitSymbol`, `ToUnitSymbol` y un `Factor` numérico real — confirmado contra datos reales: `{ProductNumber: '110605', FromUnitSymbol: 'Emp.12', ToUnitSymbol: 'U', Factor: 12}`. Una fila con `Factor: 1` es solo la equivalencia entre `"U"` y `"U."` (misma unidad, dos grafías) y no cuenta como empaque; el resto (`Factor != 1`) son empaques alternos de verdad. **La tabla admite varias filas por producto** (varios empaques simultáneos, ej. Caja y Pack) — en la muestra real que se probó (100 productos) ninguno mostró dos a la vez, pero el mecanismo lo soporta, y desde que el cliente decidió que `Producto` admite varios `Empaque` (ver más abajo), ya no se descarta ninguno.
 
 **Mapeo a nuestro dominio:**
 - `codigoBarras` (unidad suelta) = el barcode marcado `IsDefaultDisplayedBarcode="Yes"` si existe, si no el primero que haya (`ProductQuantity` no sirve de desempate acá: siempre es 0). Sin ningún barcode, se usa el `ItemNumber` como último recurso (nunca queda vacío).
 - `descripcion` = `ProductBarcodesV2.ProductDescription` del barcode elegido (nombre legible), si no `SearchName` de `ReleasedProductsV2`, si no el `ItemNumber`.
-- `empaque` = la fila de `ProductSpecificUnitOfMeasureConversions` con mayor `Factor` (excluyendo las de `Factor: 1`). Sin ninguna, factor `1` con la unidad de inventario/compra de D365.
-- `empaque.codigoBarras` **nunca se llena** — no existe un barcode específico por empaque en este tenant (ver el hallazgo de arriba).
-- **Limitación documentada**: nuestro `Producto` modela un solo `Empaque` por ítem. Si D365 trae más de uno para el mismo producto, se toma el de mayor factor (el más grande, ej. Caja antes que Pack) y el resto se descarta — pendiente de decidir si el dominio pasa a admitir varios.
+- `empaques` = TODAS las filas de `ProductSpecificUnitOfMeasureConversions` con `Factor != 1`, ordenadas de mayor a menor factor (`[0]` = el más grande, ej. Caja antes que Pack — es el que se ofrece primero en el modal del front). Sin ninguna, un único empaque con factor `1` y la unidad de inventario/compra de D365.
+- `empaques[].codigoBarras` **nunca se llena** — no existe un barcode específico por empaque en este tenant (ver el hallazgo de arriba). Es opcional de verdad, no solo en el tipo: este mapeo no lo inventa.
+- **Ya no hay límite de uno**: `Producto` (antes un solo `Empaque` embebido en columnas planas) ahora modela una lista — decisión del cliente, sept. 2026. Si D365 trae más de un empaque alterno para el mismo producto, se guardan todos.
 
 **Paginación**: `d365-entity.service.ts` primero pide `$count`, arma los lotes con `calcularPaginas(total, tamanoLote)` (500 por defecto) y trae cada lote con `$skip`/`$top` — con 8.000 ítems no es opcional. El token OAuth2 se cachea en memoria y se renueva solo si vence en menos de 5 minutos; si Dynamics responde `401` con el token cacheado, se pide uno nuevo una sola vez y se reintenta.
 
@@ -326,7 +326,7 @@ Body:
 ```json
 { "sucursalId": 1, "modo": "real" }
 ```
-- `modo` es opcional, default `"real"`. `"ejemplo"` nunca toca red ni exige credenciales: devuelve siempre los mismos 4 productos ya validados en `mobile/design/conteo.html` (Aceite Vegetal Primor, Cerveza Cusqueña, Leche Evaporada, Fideos Canuto), cada uno con su empaque. Nunca se sustituye `"real"` por datos de ejemplo en silencio — si no hay credenciales y se pide `"real"`, es un `400`, no un fallback automático.
+- `modo` es opcional, default `"real"`. `"ejemplo"` nunca toca red ni exige credenciales: devuelve siempre los mismos 4 productos ya validados en `mobile/design/conteo.html` (Aceite Vegetal Primor, Cerveza Cusqueña, Leche Evaporada, Fideos Canuto), cada uno con sus empaques — el Aceite trae dos (Emp.12 y Emp.6) para poder probar de verdad la pantalla con más de un empaque por producto. Nunca se sustituye `"real"` por datos de ejemplo en silencio — si no hay credenciales y se pide `"real"`, es un `400`, no un fallback automático.
 
 Respuesta `200`:
 ```json
@@ -392,13 +392,14 @@ Respuesta `200`:
 [{
   "id": 51, "codigo": "0051", "codigoBarras": "7750123051",
   "descripcion": "Aceite Vegetal Primor 1L",
-  "empaque": { "nombre": "Caja", "factor": 12, "codigoBarras": "17750123051" },
+  "empaques": [{ "nombre": "Caja", "factor": 12 }, { "nombre": "Pack", "factor": 6 }],
   "ubicacion": "Góndola A2 · Nivel 3"
 }]
 ```
+`empaques` es siempre una lista con al menos un elemento — `[0]` es el que se ofrece primero al abrir el modal. `codigoBarras` de un empaque se omite cuando no hay (va a faltar casi siempre, ver el hallazgo de D365 más arriba).
 
 #### `GET /api/hojas/:id/productos/barras/:codigo`
-`RepositorioCatalogo.porCodigoBarras`. Matchea contra el código de la **unidad suelta** y también contra el del **empaque** (la caja de 12 puede traer código propio): escanear la caja resuelve al mismo producto.
+`RepositorioCatalogo.porCodigoBarras`. Matchea contra el código de la **unidad suelta** y también contra el de **cualquiera de los empaques** del producto (un empaque puede traer código propio, aunque en la práctica casi nunca): escanear la caja resuelve al mismo producto.
 
 Respuesta `200`: un producto, mismo shape que arriba.
 
@@ -409,16 +410,20 @@ Guarda o corrige el conteo de un producto.
 
 Body:
 ```json
-{ "empaques": 2, "sueltas": 5, "confirmadoPorEscaner": true, "contadoEn": "2026-09-03T10:00:00.000Z" }
+{ "empaques": [{ "empaqueNombre": "Caja", "cantidad": 2 }, { "empaqueNombre": "Pack", "cantidad": 3 }],
+  "sueltas": 5, "confirmadoPorEscaner": true, "contadoEn": "2026-09-03T10:00:00.000Z" }
 ```
+- `empaques` es una **lista** de líneas, no un entero: el operario puede cargar varias (ej. "2 cajas + 3 packs + 5 sueltas" para el mismo producto). Puede venir vacía (solo sueltas). No puede repetir el mismo `empaqueNombre` dos veces — `400` si lo hace.
+- Cada `empaqueNombre` tiene que existir entre los empaques DEL producto — si no, `400` (no `500`: es un dato inválido del cliente, no un error del servidor).
 - `confirmadoPorEscaner` opcional, default `false`.
 - `contadoEn` es la hora **del teléfono**, no la del servidor: la cola offline manda esto recién cuando vuelve el WiFi, y la diferencia puede ser de horas.
-- **No se acepta `total`.** Si viene, se ignora. El total se calcula (`empaques × factor + sueltas`); guardarlo junto a sus partes garantiza que algún día no coincidan, y ése es el número que se audita contra el ERP.
+- **No se acepta `total`.** Si viene, se ignora. El total se calcula (suma de `cantidad × factor` de cada línea, más `sueltas`); guardarlo junto a sus partes garantiza que algún día no coincidan, y ése es el número que se audita contra el ERP.
+- Cada guardado reemplaza la lista de líneas **entera** — no la mezcla con la que ya había. Corregir "me equivoqué, era 1 caja no 2" no puede dejar líneas viejas huérfanas.
 
 Respuesta `200`:
 ```json
-{ "conteo": { "productoId": 51, "empaques": 2, "sueltas": 5, "confirmadoPorEscaner": true, "contadoEn": "..." },
-  "total": 53, "estadoHoja": "en-proceso" }
+{ "conteo": { "productoId": 51, "empaques": [{ "empaqueNombre": "Caja", "cantidad": 2 }, { "empaqueNombre": "Pack", "cantidad": 3 }], "sueltas": 5, "confirmadoPorEscaner": true, "contadoEn": "..." },
+  "total": 47, "estadoHoja": "en-proceso" }
 ```
 `total` viene calculado, para que la app no tenga que repetir la cuenta.
 

@@ -331,9 +331,10 @@ model Inventario {
 /// como Producto. Cuando exista un modulo de hojas real en este backend,
 /// "crear hojas" (paso 2 del Coordinador) lee de aca para poblar cada
 /// HojaConteo.productos; hasta entonces es solo el destino del snapshot.
-/// Mismas columnas que Producto (mismo Empaque embebido, ver ese
+/// Misma forma que Producto (mismo Empaque relacionado, ver ese
 /// comentario) para no tener dos formas distintas de guardar "un producto
-/// con su empaque" en el mismo schema.
+/// con sus empaques" en el mismo schema -- si algun dia difieren, la mitad
+/// del dato se pierde justo al copiar de aca a Producto.
 model CatalogoItem {
   id           Int        @id @default(autoincrement())
   inventarioId Int        @map("inventario_id")
@@ -345,15 +346,37 @@ model CatalogoItem {
   codigoBarras String @map("codigo_barras")
   descripcion  String
 
-  empaqueNombre       String  @map("empaque_nombre")
-  empaqueFactor       Int     @map("empaque_factor")
-  empaqueCodigoBarras String? @map("empaque_codigo_barras")
+  /// SIEMPRE al menos uno (ver Producto.empaques). D365 (Market Trujillo)
+  /// puede traer mas de un empaque alterno para el mismo producto en
+  /// ProductSpecificUnitOfMeasureConversions -- antes se descartaban todos
+  /// menos el de mayor factor, ahora se guardan todos.
+  empaques EmpaqueCatalogo[]
 
   createdAt DateTime @default(now()) @map("created_at")
 
   @@unique([inventarioId, codigo])
   @@index([inventarioId, codigoBarras])
   @@map("catalogo_items")
+}
+
+/// Un empaque del catalogo crudo de Dynamics -- ver el comentario largo de
+/// Empaque (abajo, el de Producto) para el criterio de diseno completo:
+/// mismo motivo (value object sin id en el dominio, tabla propia solo
+/// porque Postgres necesita filas para una lista), mismo nombre de campos.
+model EmpaqueCatalogo {
+  id             Int          @id @default(autoincrement())
+  catalogoItemId Int          @map("catalogo_item_id")
+  catalogoItem   CatalogoItem @relation(fields: [catalogoItemId], references: [id], onDelete: Cascade)
+
+  nombre String
+  factor Int
+  /// Casi siempre vacio -- ver el comentario largo en Empaque.codigoBarras.
+  codigoBarras String? @map("codigo_barras")
+  /// Orden de oferta (0 = primero). Ver Empaque.orden.
+  orden Int @default(0)
+
+  @@unique([catalogoItemId, nombre])
+  @@map("empaques_catalogo")
 }
 
 /// tipos.ts#HojaConteo. `numeroConteo` es la ronda (1, 2 o 3): el schema
@@ -391,9 +414,9 @@ model HojaConteo {
   @@map("hojas_conteo")
 }
 
-/// tipos.ts#Producto + Empaque embebido. Empaque no tiene id propio en el
-/// dominio (es un value object), asi que se aplana en columnas propias en vez
-/// de crear una tabla separada sin razon (ver regla de corte de puertos).
+/// tipos.ts#Producto. Un producto tiene VARIOS Empaque (decision del
+/// cliente: un mismo item puede venir en Caja x12 Y Pack x6) -- antes era
+/// un Empaque embebido en columnas planas, un solo empaque por producto.
 model Producto {
   id           Int    @id @default(autoincrement())
   hojaId       Int    @map("hoja_id")
@@ -405,23 +428,57 @@ model Producto {
   descripcion  String
   ubicacion    String?
 
-  /// -- Empaque (tipos.ts#Empaque) --
-  empaqueNombre       String  @map("empaque_nombre")       // "Caja", "Pack", "Plancha", "Fardo"
-  empaqueFactor       Int     @map("empaque_factor")       // 12, 6, 24, 20
-  /// codigo de barras PROPIO del empaque (puede diferir del de la unidad suelta).
-  empaqueCodigoBarras String? @map("empaque_codigo_barras")
-
-  conteos Conteo[]
+  /// SIEMPRE al menos uno (tipos.ts#Producto.empaques, "[0] = el que se
+  /// ofrece primero al abrir el modal") -- lo exige la capa de aplicacion,
+  /// no un CHECK de Postgres (mismo criterio que Colaborador.sucursalId).
+  empaques Empaque[]
+  conteos  Conteo[]
 
   @@unique([hojaId, codigo])
   @@index([hojaId, codigoBarras])
   @@map("productos")
 }
 
-/// tipos.ts#Conteo. El total NUNCA se guarda -- se calcula desde empaques y
-/// sueltas (empaque.factor * empaques + sueltas). Guardar un total junto a
-/// sus partes es garantizar que algun dia no coincidan (comentario textual
-/// de tipos.ts): por eso este modelo no tiene columna `total`.
+/// tipos.ts#Empaque. Sigue siendo un value object en el dominio del front
+/// (no tiene id propio, tipos.ts lo dice explicito) -- pero ahora es una
+/// LISTA por producto, y una lista necesita filas propias en Postgres: el
+/// `id` de esta tabla es tecnico e interno, nunca sale en los DTOs (ver
+/// hojas.service.ts#EmpaqueDto, que no tiene id).
+///
+/// La unidad SUELTA no es una fila de esta tabla -- sigue viviendo en
+/// Producto.codigoBarras/EmpaqueCatalogo aparte, mismo criterio que
+/// mobile/lib/dominio/tipos.ts: mezclar "empaque cerrado" y "unidad suelta"
+/// en la misma lista es como se cuelan los bugs de conteo.
+model Empaque {
+  id         Int      @id @default(autoincrement())
+  productoId Int      @map("producto_id")
+  producto   Producto @relation(fields: [productoId], references: [id], onDelete: Cascade)
+
+  nombre String // "Caja", "Pack", "Plancha", "Fardo"
+  factor Int    // 12, 6, 24, 20
+  /// Casi siempre vacio: el ERP real (Dynamics, tenant de Market Trujillo)
+  /// SOLO trae codigos de barra de la unidad suelta -- ningun empaque tiene
+  /// uno propio en la muestra real (ver d365.types.ts#D365ProductBarcode).
+  /// Opcional de verdad, no solo en el tipo: el mapeo de catalogo nunca lo
+  /// inventa (d365-catalogo.service.ts#mapearProducto).
+  codigoBarras String? @map("codigo_barras")
+  /// Orden de oferta en el modal: 0 = el que se ofrece primero (ver el
+  /// comentario de Producto.empaques mas arriba). Sin esta columna, Postgres
+  /// no garantiza ningun orden estable entre las filas de un mismo producto.
+  orden Int @default(0)
+
+  /// Los nombres no se repiten dentro del listado de un producto -- mismo
+  /// criterio que LineaConteo.empaqueNombre (abajo), identificado por
+  /// nombre y no por este id porque el dominio del front tampoco lo tiene.
+  @@unique([productoId, nombre])
+  @@map("empaques")
+}
+
+/// tipos.ts#Conteo. El total NUNCA se guarda -- se calcula desde las lineas
+/// de empaques y las sueltas (ver hojas.calculos.ts#totalUnidades).
+/// Guardar un total junto a sus partes es garantizar que algun dia no
+/// coincidan (comentario textual de tipos.ts): por eso este modelo no tiene
+/// columna `total`.
 model Conteo {
   id     Int        @id @default(autoincrement())
   hojaId Int        @map("hoja_id")
@@ -430,7 +487,9 @@ model Conteo {
   productoId Int      @map("producto_id")
   producto   Producto @relation(fields: [productoId], references: [id])
 
-  empaques Int
+  /// El operario puede cargar varias lineas para el mismo producto (ej. "2
+  /// cajas + 3 packs + 5 sueltas") -- antes era un entero, un solo empaque.
+  empaques LineaConteo[]
   sueltas  Int
   /// Marcado por el escaner: el fisico coincide con lo que dice la linea.
   confirmadoPorEscaner Boolean  @default(false) @map("confirmado_por_escaner")
@@ -438,6 +497,26 @@ model Conteo {
 
   @@unique([hojaId, productoId])
   @@map("conteos")
+}
+
+/// tipos.ts#LineaEmpaque. Identificada por NOMBRE, no por FK a Empaque.id
+/// -- mismo criterio que el dominio del front (Empaque es un value object
+/// sin id) y que mobile/lib/adaptadores/hojas-sqlite.ts (la cola offline
+/// tambien guarda sus lineas por nombre). Que el nombre exista de verdad
+/// entre los empaques DEL producto lo valida la capa de aplicacion
+/// (hojas.calculos.ts#totalUnidades), igual que en el dominio del front.
+model LineaConteo {
+  id       Int    @id @default(autoincrement())
+  conteoId Int    @map("conteo_id")
+  conteo   Conteo @relation(fields: [conteoId], references: [id], onDelete: Cascade)
+
+  empaqueNombre String @map("empaque_nombre")
+  cantidad      Int
+
+  /// Una sola linea por empaque dentro de un mismo conteo -- no dos filas
+  /// "Caja" para el mismo producto.
+  @@unique([conteoId, empaqueNombre])
+  @@map("lineas_conteo")
 }
 
 // ---------------------------------------------------------------------------

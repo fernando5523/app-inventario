@@ -32,7 +32,7 @@ describe('listarHojasQuerySchema', () => {
 });
 
 describe('guardarConteoSchema', () => {
-  const base = { empaques: 2, sueltas: 5, contadoEn: '2026-09-03T10:00:00.000Z' };
+  const base = { empaques: [{ empaqueNombre: 'Caja', cantidad: 2 }], sueltas: 5, contadoEn: '2026-09-03T10:00:00.000Z' };
 
   it('acepta un conteo valido y deja confirmadoPorEscaner en false', () => {
     const c = guardarConteoSchema.parse(base);
@@ -40,22 +40,57 @@ describe('guardarConteoSchema', () => {
     expect(c.contadoEn).toBeInstanceOf(Date);
   });
 
-  it('acepta cero empaques: "conte 0 cajas y 5 sueltas" es un conteo real', () => {
-    expect(() => guardarConteoSchema.parse({ ...base, empaques: 0 })).not.toThrow();
+  it('acepta varias lineas de empaques: "2 cajas + 3 packs"', () => {
+    const c = guardarConteoSchema.parse({
+      ...base,
+      empaques: [
+        { empaqueNombre: 'Caja', cantidad: 2 },
+        { empaqueNombre: 'Pack', cantidad: 3 },
+      ],
+    });
+    expect(c.empaques).toHaveLength(2);
   });
 
-  it.each(['empaques', 'sueltas'])('rechaza %s negativo', (campo) => {
-    expect(() => guardarConteoSchema.parse({ ...base, [campo]: -1 })).toThrow();
+  it('acepta la lista de empaques vacia: solo sueltas, sin empaques cerrados', () => {
+    expect(() => guardarConteoSchema.parse({ ...base, empaques: [] })).not.toThrow();
   });
 
-  it.each(['empaques', 'sueltas'])('rechaza %s decimal: no hay media caja contada', (campo) => {
-    expect(() => guardarConteoSchema.parse({ ...base, [campo]: 1.5 })).toThrow();
+  it('acepta una linea en cero: "conte 0 cajas y 5 sueltas" es un conteo real', () => {
+    expect(() => guardarConteoSchema.parse({ ...base, empaques: [{ empaqueNombre: 'Caja', cantidad: 0 }] })).not.toThrow();
+  });
+
+  it('rechaza dos lineas con el mismo nombre de empaque', () => {
+    expect(() =>
+      guardarConteoSchema.parse({
+        ...base,
+        empaques: [
+          { empaqueNombre: 'Caja', cantidad: 2 },
+          { empaqueNombre: 'Caja', cantidad: 3 },
+        ],
+      }),
+    ).toThrow();
+  });
+
+  it('rechaza sueltas negativo', () => {
+    expect(() => guardarConteoSchema.parse({ ...base, sueltas: -1 })).toThrow();
+  });
+
+  it('rechaza la cantidad de una linea negativa', () => {
+    expect(() => guardarConteoSchema.parse({ ...base, empaques: [{ empaqueNombre: 'Caja', cantidad: -1 }] })).toThrow();
+  });
+
+  it('rechaza sueltas decimal: no hay media caja contada', () => {
+    expect(() => guardarConteoSchema.parse({ ...base, sueltas: 1.5 })).toThrow();
+  });
+
+  it('rechaza la cantidad de una linea decimal', () => {
+    expect(() => guardarConteoSchema.parse({ ...base, empaques: [{ empaqueNombre: 'Caja', cantidad: 1.5 }] })).toThrow();
   });
 
   it('IGNORA un total mandado por el cliente', () => {
-    // El total se calcula (empaques x factor + sueltas). Aceptarlo del
-    // cliente seria guardar un total al lado de sus partes y garantizar que
-    // algun dia no coincidan -- y ese es EL numero que se audita.
+    // El total se calcula (ver hojas.calculos.ts#totalUnidades). Aceptarlo
+    // del cliente seria guardar un total al lado de sus partes y garantizar
+    // que algun dia no coincidan -- y ese es EL numero que se audita.
     const c = guardarConteoSchema.parse({ ...base, total: 999 });
     expect(c).not.toHaveProperty('total');
   });

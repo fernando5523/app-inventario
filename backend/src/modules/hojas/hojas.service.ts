@@ -7,7 +7,7 @@
 import { prisma } from '../../config/database';
 import { Conflicto, NoEncontrado } from '../../shared/errores';
 import type { ColaboradorAutenticado } from '../../shared/tipos';
-import { estadoParaElFront, estadoTrasContar, validarFactor } from './hojas.calculos';
+import { estadoParaElFront, estadoTrasContar, totalUnidades, validarFactores } from './hojas.calculos';
 import { validarAlcance, validarEscrituraDeHoja, validarLecturaDeHoja } from './hojas.permisos';
 import type { GuardarConteoInput, ListarHojasQuery } from './hojas.schema';
 
@@ -32,21 +32,22 @@ export interface ProductoDto {
   descripcion: string;
   /**
    * SIEMPRE al menos uno (`mobile/lib/dominio/tipos.ts#Producto.empaques`).
-   *
-   * Hoy la base guarda UN empaque por producto en columnas planas
-   * (prisma/schema.prisma#Producto), asi que este array trae exactamente un
-   * elemento. Se sirve como array igual, y no como objeto suelto, porque el
-   * dominio del front ya modela varios: cuando el schema crezca a N empaques
-   * cambia el MAPEO de aca abajo y no la forma de la respuesta, que es lo
-   * que rompe pantallas.
+   * `[0]` = el que se ofrece primero al abrir el modal (Empaque.orden).
    */
   empaques: EmpaqueDto[];
   ubicacion?: string;
 }
 
+/** tipos.ts#LineaEmpaque. */
+export interface LineaEmpaqueDto {
+  empaqueNombre: string;
+  cantidad: number;
+}
+
 export interface ConteoDto {
   productoId: number;
-  empaques: number;
+  /** Varias lineas por producto (tipos.ts#Conteo.empaques): "2 cajas + 3 packs". */
+  empaques: LineaEmpaqueDto[];
   sueltas: number;
   confirmadoPorEscaner: boolean;
   contadoEn: string;
@@ -79,40 +80,36 @@ function aProductoDto(p: {
   codigoBarras: string;
   descripcion: string;
   ubicacion: string | null;
-  empaqueNombre: string;
-  empaqueFactor: number;
-  empaqueCodigoBarras: string | null;
+  empaques: { nombre: string; factor: number; codigoBarras: string | null }[];
 }): ProductoDto {
   return {
     id: p.id,
     codigo: p.codigo,
     codigoBarras: p.codigoBarras,
     descripcion: p.descripcion,
-    // `codigoBarras` del empaque se OMITE cuando no hay, nunca se manda null:
-    // el tipo del front lo declara opcional. Y va a faltar casi siempre --
-    // los codigos que devuelve Dynamics son todos de unidad suelta, ninguno
-    // identifica un empaque (verificado con el catalogo real).
-    empaques: [
-      {
-        nombre: p.empaqueNombre,
-        factor: p.empaqueFactor,
-        ...(p.empaqueCodigoBarras === null ? {} : { codigoBarras: p.empaqueCodigoBarras }),
-      },
-    ],
+    // `codigoBarras` de cada empaque se OMITE cuando no hay, nunca se manda
+    // null: el tipo del front lo declara opcional. Y va a faltar casi
+    // siempre -- los codigos que devuelve Dynamics son todos de unidad
+    // suelta, ninguno identifica un empaque (verificado con el catalogo real).
+    empaques: p.empaques.map((e) => ({
+      nombre: e.nombre,
+      factor: e.factor,
+      ...(e.codigoBarras === null ? {} : { codigoBarras: e.codigoBarras }),
+    })),
     ...(p.ubicacion === null ? {} : { ubicacion: p.ubicacion }),
   };
 }
 
 function aConteoDto(c: {
   productoId: number;
-  empaques: number;
+  empaques: { empaqueNombre: string; cantidad: number }[];
   sueltas: number;
   confirmadoPorEscaner: boolean;
   contadoEn: Date;
 }): ConteoDto {
   return {
     productoId: c.productoId,
-    empaques: c.empaques,
+    empaques: c.empaques.map((l) => ({ empaqueNombre: l.empaqueNombre, cantidad: l.cantidad })),
     sueltas: c.sueltas,
     confirmadoPorEscaner: c.confirmadoPorEscaner,
     contadoEn: c.contadoEn.toISOString(),
@@ -156,8 +153,11 @@ function aHojaDto(h: HojaCompleta): HojaDto {
 const INCLUIR_TODO = {
   asignadoA: { select: { nombre: true } },
   asignadoA2: { select: { nombre: true } },
-  productos: { orderBy: { codigo: 'asc' } },
-  conteos: true,
+  // `orden: 'asc'` en ambas relaciones: Postgres no garantiza ningun orden
+  // estable entre filas sin un ORDER BY explicito, y `[0]` importa (es el
+  // empaque que se ofrece primero al abrir el modal).
+  productos: { orderBy: { codigo: 'asc' }, include: { empaques: { orderBy: { orden: 'asc' } } } },
+  conteos: { include: { empaques: true } },
 } as const;
 
 // ---------------------------------------------------------------------------
@@ -246,7 +246,8 @@ export async function productoPorCodigoBarras(
   await hojaParaLeer(actor, hojaId);
 
   const producto = await prisma.producto.findFirst({
-    where: { hojaId, OR: [{ codigoBarras: codigo }, { empaqueCodigoBarras: codigo }] },
+    where: { hojaId, OR: [{ codigoBarras: codigo }, { empaques: { some: { codigoBarras: codigo } } }] },
+    include: { empaques: { orderBy: { orden: 'asc' } } },
   });
   if (!producto) throw new NoEncontrado('Ese codigo no pertenece a esta hoja.');
 
@@ -319,31 +320,42 @@ export async function guardarConteo(
 
   const producto = await prisma.producto.findFirst({
     where: { id: productoId, hojaId },
-    select: { id: true, empaqueFactor: true },
+    select: { id: true, empaques: { select: { nombre: true, factor: true } } },
   });
   // El producto tiene que ser DE ESTA HOJA: sin el `hojaId` en el where, se
   // podria escribir un conteo de la hoja A usando un producto de la hoja B.
   if (!producto) throw new NoEncontrado('Ese producto no pertenece a esta hoja.');
 
-  validarFactor(producto.empaqueFactor);
+  validarFactores(producto.empaques);
+  // Se calcula ANTES de escribir nada: si una linea referencia un empaque
+  // que el producto no tiene, `totalUnidades` tira y no se persiste un
+  // conteo a medio validar (ver el comentario de esa funcion).
+  const total = totalUnidades(input, producto.empaques);
 
-  const datos = {
-    empaques: input.empaques,
+  const datosComunes = {
     sueltas: input.sueltas,
     confirmadoPorEscaner: input.confirmadoPorEscaner,
     contadoEn: input.contadoEn,
   };
+  const lineas = input.empaques.map((l) => ({ empaqueNombre: l.empaqueNombre, cantidad: l.cantidad }));
 
   /**
    * Transaccion: el conteo y el cambio de estado de la hoja son un solo
    * hecho. Si se guardara el conteo y fallara el estado, la hoja quedaria
    * "pendiente" con items contados -- y el avance que ve el operario mentiria.
+   *
+   * `deleteMany` + `create` en el update: cada guardado reemplaza la lista
+   * de lineas ENTERA, no la mezcla con la anterior -- mismo criterio que
+   * ModalConteo.tsx, que siempre manda el estado completo del borrador, no
+   * un delta. Corregir "me equivoque, era 1 caja no 2" no puede dejar
+   * lineas viejas huerfanas.
    */
   const [conteo] = await prisma.$transaction([
     prisma.conteo.upsert({
       where: { hojaId_productoId: { hojaId, productoId } },
-      create: { hojaId, productoId, ...datos },
-      update: datos,
+      create: { hojaId, productoId, ...datosComunes, empaques: { create: lineas } },
+      update: { ...datosComunes, empaques: { deleteMany: {}, create: lineas } },
+      include: { empaques: true },
     }),
     prisma.hojaConteo.update({
       where: { id: hojaId },
@@ -353,7 +365,7 @@ export async function guardarConteo(
 
   return {
     conteo: aConteoDto(conteo),
-    total: producto.empaqueFactor * conteo.empaques + conteo.sueltas,
+    total,
     estadoHoja: estadoParaElFront(estadoTrasContar(hoja.estado)),
   };
 }

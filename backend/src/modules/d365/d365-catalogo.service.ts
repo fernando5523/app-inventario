@@ -41,21 +41,22 @@ export function agruparConversionesPorProducto(conversiones: D365UnitConversion[
 }
 
 /**
- * El empaque de un producto sale de ProductSpecificUnitOfMeasureConversions,
- * NO de ProductBarcodesV2.ProductQuantity (que en este tenant siempre es 0
- * -- ver el comentario largo en d365.types.ts#D365ProductBarcode). Una fila
- * con Factor=1 es solo la equivalencia entre "U" y "U." (misma unidad,
- * distinta grafia) y no cuenta como empaque; el resto (Factor != 1) son
- * empaques alternos de verdad, ej. `{FromUnitSymbol:'Emp.12', Factor:12}`.
+ * El/los empaque/s de un producto salen de
+ * ProductSpecificUnitOfMeasureConversions, NO de
+ * ProductBarcodesV2.ProductQuantity (que en este tenant siempre es 0 -- ver
+ * el comentario largo en d365.types.ts#D365ProductBarcode). Una fila con
+ * Factor=1 es solo la equivalencia entre "U" y "U." (misma unidad, distinta
+ * grafia) y no cuenta como empaque; el resto (Factor != 1) son empaques
+ * alternos de verdad, ej. `{FromUnitSymbol:'Emp.12', Factor:12}`.
  *
- * Nuestro dominio modela un Empaque por producto (no una lista, a
- * diferencia de otros proyectos D365 de referencia que vimos con varios
- * simultaneos) -- si D365 trae mas de un empaque alterno para el mismo
- * producto, nos quedamos con el de mayor factor (el "mas grande", ej. Caja
- * antes que Pack) y el resto se descarta. Esta limitacion queda
- * documentada en el README para cuando se decida soportar varios.
+ * Nuestro dominio ahora modela VARIOS Empaque por producto (decision del
+ * cliente: un mismo item puede venir en Caja x12 Y Pack x6) -- antes se
+ * descartaban todos menos el de mayor factor. Se devuelven ordenados de
+ * mayor a menor factor: el mas grande (ej. Caja antes que Pack) queda
+ * primero, mismo criterio que ya usaba el desempate viejo, ahora aplicado
+ * al orden de oferta en vez de a un descarte.
  */
-export function elegirEmpaque(conversionesDelProducto: D365UnitConversion[], producto: D365ReleasedProduct): EmpaqueDto {
+export function elegirEmpaques(conversionesDelProducto: D365UnitConversion[], producto: D365ReleasedProduct): EmpaqueDto[] {
   const factoresPorUnidad = new Map<string, number>();
   for (const conversion of conversionesDelProducto) {
     if (conversion.Factor && conversion.Factor !== 1) {
@@ -64,11 +65,10 @@ export function elegirEmpaque(conversionesDelProducto: D365UnitConversion[], pro
   }
 
   if (factoresPorUnidad.size === 0) {
-    return { nombre: producto.InventoryUnitSymbol || producto.PurchaseUnitSymbol || 'UND', factor: 1 };
+    return [{ nombre: producto.InventoryUnitSymbol || producto.PurchaseUnitSymbol || 'UND', factor: 1 }];
   }
 
-  const [nombre, factor] = [...factoresPorUnidad.entries()].sort((a, b) => b[1] - a[1])[0]!;
-  return { nombre, factor };
+  return [...factoresPorUnidad.entries()].sort((a, b) => b[1] - a[1]).map(([nombre, factor]) => ({ nombre, factor }));
 }
 
 /**
@@ -79,9 +79,9 @@ export function elegirEmpaque(conversionesDelProducto: D365UnitConversion[], pro
  *     sirve de desempate en este tenant: siempre es 0).
  *   - descripcion = ProductBarcodesV2.ProductDescription (nombre legible de
  *     verdad) y si no hay barcode, SearchName de ReleasedProductsV2.
- *   - empaque.codigoBarras NUNCA se llena: no existe un barcode especifico
- *     por empaque en este tenant (ver D365ProductBarcode) -- queda siempre
- *     undefined, a proposito.
+ *   - cada empaque.codigoBarras NUNCA se llena: no existe un barcode
+ *     especifico por empaque en este tenant (ver D365ProductBarcode) --
+ *     queda siempre undefined, a proposito.
  */
 export function mapearProducto(
   producto: D365ReleasedProduct,
@@ -98,7 +98,7 @@ export function mapearProducto(
     // recurso -- nunca se deja vacio, el escaner necesita algo para matchear.
     codigoBarras: suelto?.Barcode || producto.ItemNumber,
     descripcion,
-    empaque: elegirEmpaque(conversionesDelItem, producto),
+    empaques: elegirEmpaques(conversionesDelItem, producto),
   };
 }
 
@@ -108,6 +108,12 @@ export function mapearProducto(
 // datos nuevos, se reusa lo que el cliente ya valido en la maqueta. Forma
 // alineada a como responde el tenant real (barcode SIEMPRE de unidad
 // suelta, factor en una conversion aparte).
+//
+// El Aceite (0051) suma un segundo empaque alterno (Emp.6, "Pack") para que
+// el modo "ejemplo" pueda probar de verdad la pantalla con mas de un
+// empaque por producto -- mismo criterio que
+// mobile/lib/adaptadores/_compartido.ts#BASE_PRODUCTOS, que ya tiene ese
+// producto con ['caja', 'pack'].
 // ---------------------------------------------------------------------------
 
 const PRODUCTOS_EJEMPLO: D365ReleasedProduct[] = [
@@ -127,6 +133,9 @@ const BARCODES_EJEMPLO: D365ProductBarcode[] = [
 const CONVERSIONES_EJEMPLO: D365UnitConversion[] = [
   { ProductNumber: '0051', FromUnitSymbol: 'U', ToUnitSymbol: 'U.', Factor: 1 },
   { ProductNumber: '0051', FromUnitSymbol: 'Emp.12', ToUnitSymbol: 'U', Factor: 12 },
+  // Segundo empaque alterno del mismo producto -- ver el comentario de la
+  // seccion de arriba.
+  { ProductNumber: '0051', FromUnitSymbol: 'Emp.6', ToUnitSymbol: 'U', Factor: 6 },
   { ProductNumber: '0052', FromUnitSymbol: 'U', ToUnitSymbol: 'U.', Factor: 1 },
   { ProductNumber: '0052', FromUnitSymbol: 'Emp.6', ToUnitSymbol: 'U', Factor: 6 },
   { ProductNumber: '0053', FromUnitSymbol: 'U', ToUnitSymbol: 'U.', Factor: 1 },
@@ -223,19 +232,31 @@ export async function crearSnapshot(sucursalId: number, modo: ModoCatalogo): Pro
   });
 
   if (catalogo.length > 0) {
-    await prisma.catalogoItem.createMany({
-      // `exactOptionalPropertyTypes` no deja `empaqueCodigoBarras: undefined`
-      // explicito -- se omite la clave entera cuando no vino.
-      data: catalogo.map((item) => ({
-        inventarioId: inventario.id,
-        codigo: item.codigo,
-        codigoBarras: item.codigoBarras,
-        descripcion: item.descripcion,
-        empaqueNombre: item.empaque.nombre,
-        empaqueFactor: item.empaque.factor,
-        ...(item.empaque.codigoBarras !== undefined ? { empaqueCodigoBarras: item.empaque.codigoBarras } : {}),
-      })),
-    });
+    // `createMany` no acepta escrituras anidadas (cada item ahora trae una
+    // LISTA de empaques, no columnas planas) -- por eso es un create por
+    // item envuelto en $transaction, y no un solo createMany masivo.
+    await prisma.$transaction(
+      catalogo.map((item) =>
+        prisma.catalogoItem.create({
+          data: {
+            inventarioId: inventario.id,
+            codigo: item.codigo,
+            codigoBarras: item.codigoBarras,
+            descripcion: item.descripcion,
+            empaques: {
+              // `exactOptionalPropertyTypes` no deja `codigoBarras: undefined`
+              // explicito -- se omite la clave entera cuando no vino.
+              create: item.empaques.map((empaque, orden) => ({
+                nombre: empaque.nombre,
+                factor: empaque.factor,
+                orden,
+                ...(empaque.codigoBarras !== undefined ? { codigoBarras: empaque.codigoBarras } : {}),
+              })),
+            },
+          },
+        }),
+      ),
+    );
   }
 
   return { inventarioId: inventario.id, items: catalogo.length, tomadoEn: tomadoEn.toISOString() };

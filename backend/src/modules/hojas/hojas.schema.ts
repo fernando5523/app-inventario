@@ -48,18 +48,38 @@ export const parametrosBarrasSchema = z.object({
 export type ParametrosBarras = z.infer<typeof parametrosBarrasSchema>;
 
 /**
+ * Una linea del conteo (tipos.ts#LineaEmpaque): "2 Cajas", "3 Packs". Que
+ * `empaqueNombre` exista de verdad entre los empaques DEL producto no se
+ * valida aca -- zod valida FORMA, no contra el catalogo (mismo criterio que
+ * el resto del modulo); lo valida hojas.calculos.ts#totalUnidades, que es
+ * quien tiene el producto a mano.
+ */
+export const lineaEmpaqueSchema = z.object({
+  empaqueNombre: z.string().trim().min(1),
+  /** 0 es valido: una linea a 0 es como no cargarla, pero no es un error de forma. */
+  cantidad: z.number().int().min(0),
+});
+
+/**
  * El cuerpo de un conteo. NO tiene `total`, y su ausencia es una decision:
- * el total se calcula (empaques * factor + sueltas, ver hojas.calculos.ts).
- * Aceptarlo del cliente seria guardar un total al lado de sus partes y
- * garantizar que algun dia no coincidan -- y ese es EL numero que se audita
- * contra el ERP.
+ * el total se calcula (ver hojas.calculos.ts#totalUnidades). Aceptarlo del
+ * cliente seria guardar un total al lado de sus partes y garantizar que
+ * algun dia no coincidan -- y ese es EL numero que se audita contra el ERP.
  *
  * Tampoco tiene `productoId`: viaja en la URL, que es la identidad del
  * recurso. Si viniera en los dos lados habria que decidir cual gana.
+ *
+ * `empaques` es una LISTA (antes un entero: un solo empaque por producto).
+ * El operario puede cargar "2 cajas + 3 packs + 5 sueltas" para el mismo
+ * producto -- ver mobile/lib/dominio/tipos.ts#Conteo.empaques, misma forma.
  */
 export const guardarConteoSchema = z.object({
-  /** Empaques cerrados. 0 es valido: "conte 0 cajas y 5 sueltas". */
-  empaques: z.number().int().min(0),
+  empaques: z
+    .array(lineaEmpaqueSchema)
+    .default([])
+    .refine((lineas) => new Set(lineas.map((l) => l.empaqueNombre)).size === lineas.length, {
+      message: 'No se puede repetir el mismo empaque dos veces en el mismo conteo.',
+    }),
   sueltas: z.number().int().min(0),
   confirmadoPorEscaner: z.boolean().default(false),
   /**

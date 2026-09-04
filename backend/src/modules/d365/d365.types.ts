@@ -116,5 +116,6 @@ export interface CatalogoItemDto {
   /** Codigo de barras de la unidad SUELTA. */
   codigoBarras: string;
   descripcion: string;
-  empaque: EmpaqueDto;
+  /** Siempre al menos uno. `[0]` = el de mayor factor (ver elegirEmpaques). */
+  empaques: EmpaqueDto[];
 }
