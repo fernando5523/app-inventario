@@ -37,6 +37,7 @@ import { usuariosMemoria } from './adaptadores/usuarios-memoria';
 import { catalogoApi } from './adaptadores/catalogo-api';
 import { configApi } from './adaptadores/config-api';
 import { hojasApi } from './adaptadores/hojas-api';
+import { auditoriaApi } from './adaptadores/auditoria-api';
 import { inventarioApi } from './adaptadores/inventario-api';
 import { sesionApi } from './adaptadores/sesion-api';
 import { tiendasApi } from './adaptadores/tiendas-api';
@@ -69,7 +70,11 @@ type PuertoConectable =
   | 'inventario'
   | 'usuarios'
   | 'tiendas'
-  | 'config';
+  | 'config'
+  | 'auditoria'
+  | 'liquidacion'
+  | 'lacrado'
+  | 'config-dynamics';
 
 function leerConfiguracion(): string {
   // `require` en vez de `import` para no arrastrar expo-constants al grafo de
@@ -118,6 +123,19 @@ function elegir<T>(puerto: PuertoConectable, memoria: T, api: T): T {
   return TODO_A_MEMORIA || aMemoria.has(puerto) ? memoria : api;
 }
 
+/**
+ * Placeholders EXPLICITOS para los puertos cuyo endpoint todavia no existe.
+ *
+ * Apuntan al adaptador en memoria a proposito: asi `elegir()` compila y todos
+ * los repositorios pasan por el selector, que es lo que evita que un puerto
+ * quede clavado y nadie lo conecte el dia que aparece su endpoint (le paso a
+ * `auditoria`). El nombre dice lo que son: cuando exista el endpoint, se
+ * reemplaza esta linea por el adaptador HTTP de verdad.
+ */
+const liquidacionApiPendiente = liquidacionMemoria;
+const lacradoApiPendiente = lacradoMemoria;
+const configDynamicsApiPendiente = configDynamicsMemoria;
+
 // ---------------------------------------------------------------------------
 // Los puertos
 // ---------------------------------------------------------------------------
@@ -150,10 +168,14 @@ export const repositorioConfig: RepositorioConfig = elegir('config', configMemor
  * (hojas-sqlite.ts#procesarColaDeSincronizacion). `hojasApi` NO se enchufa
  * acá: lo usa la cola, no la pantalla.
  *
- * Escape hatch a la versión pura en memoria (debug): `EXPO_PUBLIC_HOJAS_MEMORIA=1`.
+ * Igual pasa por el selector, como todos: que la razon de negocio sea fuerte
+ * no justifica clavarlo. `EXPO_PUBLIC_PUERTOS_HTTP=hojas` fuerza HTTP puro
+ * (util para probar el endpoint sin la cola de por medio, NUNCA en la
+ * tienda), y `EXPO_PUBLIC_HOJAS_MEMORIA=1` elige cual es el lado local:
+ * memoria en vez de SQLite, para depurar.
  */
-export const repositorioHojas: RepositorioHojas =
-  entorno?.EXPO_PUBLIC_HOJAS_MEMORIA === '1' ? hojasMemoria : hojasSqlite;
+const hojasLocal: RepositorioHojas = entorno?.EXPO_PUBLIC_HOJAS_MEMORIA === '1' ? hojasMemoria : hojasSqlite;
+export const repositorioHojas: RepositorioHojas = elegirHttp('hojas', hojasLocal, hojasApi);
 
 /**
  * ── CATÁLOGO: pasa por el selector, pero por DEFECTO local ──
@@ -178,37 +200,65 @@ export const repositorioHojas: RepositorioHojas =
 export const repositorioCatalogo: RepositorioCatalogo = elegirHttp('catalogo', catalogoMemoria, catalogoApi);
 
 /**
- * ── INVENTARIO: en memoria, y NO es olvido ──
+ * ── INVENTARIO: por el selector, pero resuelve a memoria ──
  *
- * De los 4 métodos del puerto, el backend hoy solo tiene uno:
- *   traerSnapshot → POST /api/d365/snapshot   ✅ probado, devuelve un
- *                                                inventario real de Postgres
- *   crearHojas    → 404, no existe el módulo
- *   asignarHojas  → 404, no existe el módulo
- *   activo        → 404, no existe el módulo
+ * Estuvo clavado y no debio estarlo: la razon de negocio no cambia que TIENE
+ * que poder cambiarse por configuracion (ver la nota de `elegir` arriba).
  *
- * Enchufar `inventarioApi` haría que el paso 1 del Coordinador cree un
- * inventario REAL en Postgres y que los pasos 2 y 3 fallen contra él. Peor
- * que memoria pura: quedaría un inventario a medio armar en la base, y la
- * pantalla mostraría un wizard que arranca y no termina.
+ * De los 4 metodos del puerto, el backend hoy tiene UNO:
+ *   traerSnapshot → POST /api/d365/snapshot   ✅ probado contra Postgres
+ *   crearHojas    → 404, `/api/inventarios` no esta montado
+ *   asignarHojas  → 404
+ *   activo        → 404
  *
- * Cuando exista el módulo de inventario (crear/asignar hojas), esta línea
- * pasa a `elegir('inventario', inventarioMemoria, inventarioApi)` y nada más
- * cambia — el adaptador HTTP ya está escrito y su snapshot ya está probado.
+ * Enchufarlo haria que el paso 1 del Coordinador cree un inventario REAL y
+ * que los pasos 2 y 3 fallen contra el: quedaria un inventario a medio armar
+ * en la base y un wizard que arranca y no termina. Por eso el default sigue
+ * siendo memoria — pero ahora se puede forzar con
+ * `EXPO_PUBLIC_PUERTOS_HTTP=inventario` para probar el snapshot solo.
  */
-export const repositorioInventario: RepositorioInventario = inventarioMemoria;
+export const repositorioInventario: RepositorioInventario = elegirHttp('inventario', inventarioMemoria, inventarioApi);
 
 /**
- * ── SIN ENDPOINT: auditoría, liquidación y lacrado del lado del conteo ──
+ * ── AUDITORÍA: CONECTADA ──
  *
- * `/api/auditoria` no existe (404 verificado). La matriz ERP vs los 3
- * conteos depende de comparar contra Dynamics, que es fase 2. Liquidación y
- * lacrado tienen módulo `historial` en el backend, pero sus puertos todavía
- * no se cablearon acá.
+ * `GET /api/auditoria/inventarios/:id/matriz` existe y esta probado contra el
+ * backend real: devuelve los campos de `ItemAuditoria` tal cual. Era la
+ * ultima pantalla con datos inventados.
  */
-export const repositorioAuditoria: RepositorioAuditoria = auditoriaMemoria;
-export const repositorioLiquidacion: RepositorioLiquidacion = liquidacionMemoria;
-export const repositorioLacrado: RepositorioLacrado = lacradoMemoria;
+export const repositorioAuditoria: RepositorioAuditoria = elegir('auditoria', auditoriaMemoria, auditoriaApi);
+
+/**
+ * ── LIQUIDACIÓN: falta cerrar el contrato ──
+ *
+ * `GET /api/historial/inventarios/:id/liquidacion` EXISTE, pero no alcanza
+ * todavia por dos razones concretas, no por pereza:
+ *
+ *  1. La llave no coincide: el endpoint es por `inventarioId`, el puerto es
+ *     `deSucursal(sucursalId)`. Se puede puentear resolviendo primero el
+ *     inventario del mes, pero eso es una decision de contrato, no una
+ *     traduccion mecanica.
+ *  2. Hoy devuelve `resumen: null` y `planilla: []` porque no hay ningun
+ *     ciclo cerrado. Sin un solo caso con datos no se puede verificar el
+ *     mapeo de los 9 campos de `Liquidacion` — y escribir un adaptador
+ *     contra una forma que nunca vi es exactamente como se cuelan los bugs
+ *     que aparecen recien en produccion.
+ */
+export const repositorioLiquidacion: RepositorioLiquidacion = elegir('liquidacion', liquidacionMemoria, liquidacionApiPendiente);
+
+/**
+ * ── LACRADO: falta el GET de estado ──
+ *
+ * Las ESCRITURAS existen (`POST .../aprobaciones`, `POST .../lacrado`,
+ * `POST .../lacrado/registro-erp`). Lo que falta es la LECTURA que el puerto
+ * pide primero: `estado(inventarioId)` → `EstadoLacrado`.
+ *
+ * `GET /api/historial/inventarios/:id` trae `aprobaciones` y `lacrado`, pero
+ * no `aprobacionesRequeridas` ni `todoSincronizado` — y `todoSincronizado` es
+ * el que decide si el boton de lacrar se puede habilitar: no se puede lacrar
+ * con hojas que todavia no llegaron al servidor.
+ */
+export const repositorioLacrado: RepositorioLacrado = elegir('lacrado', lacradoMemoria, lacradoApiPendiente);
 
 /**
  * ── CREDENCIALES DE DYNAMICS: en memoria, y por ahora está bien ──
@@ -223,4 +273,15 @@ export const repositorioLacrado: RepositorioLacrado = lacradoMemoria;
  * adaptador concreto es una pantalla que hay que editar para cambiar de
  * implementación, que es justo lo que este archivo existe para evitar.
  */
-export const repositorioConfigDynamics: RepositorioConfigDynamics = configDynamicsMemoria;
+/**
+ * ── CONFIG-DYNAMICS: sin endpoint ──
+ *
+ * `/api/d365` expone solo `GET /estado` (`{configurado}`) y `POST /snapshot`.
+ * El puerto pide `obtener`, `guardar` y `probarConexion`: no hay donde
+ * GUARDAR credenciales ni donde probarlas sin bajar los 8.000 items.
+ */
+export const repositorioConfigDynamics: RepositorioConfigDynamics = elegir(
+  'config-dynamics',
+  configDynamicsMemoria,
+  configDynamicsApiPendiente,
+);
