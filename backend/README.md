@@ -487,6 +487,196 @@ Errores: `403` no asignada a vos · `404` no existe.
 
 ---
 
+---
+
+### Auditoría — `/api/auditoria` (requiere sesión + rol `administrador`, `auditor` o `coordinador`)
+
+La matriz que compara el ERP contra los 3 conteos (Pantalla 5). Es donde se decide si el inventario cuadra, y lo que alimenta la liquidación y el lacrado.
+
+#### Quién entra, y por qué no es una configuración de permisos
+
+| Rol | Acceso |
+|---|---|
+| `auditor` | **Cualquier inventario de su sucursal**, en curso o cerrado. Auditar mientras se cuenta es literalmente su trabajo: la 3ra ronda es suya. |
+| `administrador` | Todo, cualquier sucursal. Es del sistema, no de una tienda. |
+| `coordinador` | **Solo inventarios ya cerrados** (`conteo_cerrado`, `liquidado`, `lacrado`). Nunca el que está en curso. |
+| `conteo` | **Nunca. En ningún estado.** |
+
+**El rol `conteo` no entra jamás.** La matriz contiene `stockErp`, que es exactamente el número que los 3 conteos cruzados existen para no conocer. Un contador que lo ve deja de contar lo que hay y pasa a confirmar lo que el sistema espera. Abrirle esta pantalla no sería un permiso de más: vaciaría de sentido las tres pasadas, las 160 hojas y el mes de trabajo de once personas.
+
+**El coordinador: la decisión y su razón.** Las dos fuentes parecían chocar — en la reunión Gilmer dice que el coordinador no ve resultados, y el mockup le da acceso a liquidación. No chocan: hablan de **pantallas distintas**. El mockup le abre la Pantalla 6 (liquidación: plata y nómina), no la Pantalla 5 (la matriz ERP vs conteos). Solo una de las dos contiene el stock del ERP.
+
+Lo que decide es el conteo ciego, y el coordinador es el caso más sensible de todos: es quien asigna las hojas y quien habla con los once contadores durante la jornada. Si ve el stock del ERP con el ciclo abierto, le alcanza con decir *"fijate que ahí tendrían que ser 120"* para que el inventario cuadre sin haberse contado. Contamina más que un contador mirando su propia hoja, porque llega a todos.
+
+Pero esa razón **se termina cuando el ciclo se cierra**: un inventario con el conteo cerrado ya no se puede contaminar — las cantidades están fijas y no hay nadie contando. Ahí el coordinador tiene motivos legítimos para mirar, porque es quien va a explicarle al equipo por qué su tienda quedó con faltante.
+
+De ahí la regla, que honra a las dos fuentes en vez de elegir una: Gilmer hablaba del inventario en curso (era de lo que se hablaba en esa reunión) y el mockup le da visibilidad del cierre. La regla vive en `auditoria.permisos.ts#validarAccesoALaMatriz`, no en las rutas, porque depende del **inventario** y no solo del rol.
+
+Todos los roles quedan además recortados a su propia sucursal (salvo el administrador, que no tiene ninguna).
+
+#### De dónde sale cada columna
+
+| Columna | Origen |
+|---|---|
+| `stockErp`, `precioVenta`, `esEmpresa` | `CatalogoItem` — el snapshot de Dynamics tomado al abrir el mes. **No se relee de Dynamics al auditar**: el inventario se compara contra la foto del arranque, no contra lo que el ERP diga hoy. |
+| `conteo1` / `conteo2` / `conteo3` | Los `Conteo` de las hojas **finalizadas** de cada ronda. Una hoja a medio contar no entra: un conteo parcial leído como definitivo reporta faltantes que no existen. |
+| `zona`, `productoId` | El `Producto` de la ronda 1, que es la que cubre el catálogo entero. |
+
+El puente entre las tres rondas es el **código** del ítem, no el id: el mismo artículo se materializa como un `Producto` distinto en cada hoja de cada ronda.
+
+> **Por qué esos tres campos viven en `CatalogoItem` y no en `Producto`**: esa distinción *es* el conteo ciego. `Producto` es lo que ve la persona que cuenta — por eso no tiene stock ni precio, y no puede tenerlos nunca. `CatalogoItem` es el snapshot crudo del ERP, que solo consumen el backend y esta pantalla. Si esas columnas estuvieran en `Producto`, cualquier endpoint de conteo podría filtrarlas a un contador sin que nadie lo note.
+
+#### Cómo se lee un ítem
+
+- **`conteoFinal`** — la ronda **más avanzada que exista**, no siempre `conteo3`. Los ~7.350 ítems que cuadran en la primera pasada nunca tienen 3ra ronda; leer `conteo3` a secas daría `null` para casi todo el inventario.
+- **`diferenciaUnidades`** — `conteoFinal − stockErp`. Negativo = faltante, positivo = sobrante. Un ítem que **nadie contó** da `0`, no "menos todo el stock": que no se haya contado no es lo mismo que haberlo contado en cero, y lo segundo inventaría un faltante por cada ítem al que no se llegó.
+- **`diferenciaValor`** — valorizado a **precio de venta**, nunca de compra (así lo definió el cliente en la reunión).
+- **`veredicto`** — `cuadrado` si no hay diferencia; `empresa` si hay diferencia y la categoría la asume gerencia (las cervezas, por seguimiento de robo: el faltante existe pero no se descuenta a nómina); `falta` para el resto, **sobrantes incluidos** — la maqueta valida solo esos tres buckets, no hay un cuarto para sobrantes.
+
+Todo esto espeja `mobile/lib/dominio/auditoria.ts` función por función. La cuenta que decide si el inventario cuadra tiene que dar igual en el teléfono y en el servidor: si difieren, el Auditor ve un número en la pantalla y otro en el cierre, y no hay forma de saber cuál era el bueno.
+
+---
+
+#### `GET /api/auditoria/inventarios`
+
+Qué inventarios puede auditar quien pregunta. Devuelve **también** los que no puede abrir todavía, marcados con `puedeVerMatriz: false` y el motivo — un coordinador que no ve la matriz del mes en curso necesita entender por qué, no encontrarse una lista vacía.
+
+Query: `sucursalId` (opcional; solo el administrador puede filtrar por otra tienda).
+
+Respuesta `200`:
+```json
+{
+  "inventarios": [
+    {
+      "id": 8004,
+      "sucursalId": 1,
+      "sucursalNombre": "Market Central Luzuriaga",
+      "estado": "conteo_cerrado",
+      "periodo": "2026-05",
+      "snapshotItems": 15,
+      "hojas": 8,
+      "puedeVerMatriz": true,
+      "motivo": null
+    },
+    {
+      "id": 1,
+      "estado": "en_curso",
+      "periodo": "2026-09",
+      "puedeVerMatriz": false,
+      "motivo": "La auditoria de un inventario en curso es solo del auditor (conteo ciego). Vas a poder verla cuando el conteo cierre."
+    }
+  ]
+}
+```
+
+Los inventarios `anulado` no aparecen: no producen resultado que auditar.
+
+#### `GET /api/auditoria/inventarios/:inventarioId/resumen`
+
+Solo el encabezado, sin traer las filas. Lo usa la pantalla al entrar.
+
+Respuesta `200`:
+```json
+{
+  "inventarioId": 8004,
+  "estado": "conteo_cerrado",
+  "resumen": {
+    "items": 15,
+    "cuadrados": 10,
+    "conFalta": 3,
+    "deEmpresa": 2,
+    "porcentajeCuadrado": 66.7,
+    "unidadesFaltantes": 112,
+    "unidadesSobrantes": 12,
+    "valorFaltante": 781.4,
+    "valorSobrante": 73.2,
+    "valorFaltanteDescontable": 355.5,
+    "sinContar": 1
+  },
+  "embudo": {
+    "itemsTotales": 15,
+    "itemsSegundoConteo": 7,
+    "itemsTercerConteo": 5,
+    "itemsConDiferencia": 5
+  },
+  "zonas": ["A", "B", "C", "D", "E"]
+}
+```
+
+`valorFaltanteDescontable` es el faltante que **sí** va a nómina: el total menos lo que absorbe la empresa. Es el número que entra a la liquidación (Pantalla 6) como faltante bruto — separarlo acá evita que alguien reste las cervezas dos veces.
+
+`embudo` tiene la misma forma que consume `ResultadoInventario`, así que cerrar el conteo puede alimentarse de acá sin recalcular nada.
+
+#### `GET /api/auditoria/inventarios/:inventarioId/matriz`
+
+La matriz completa, paginada.
+
+Query: `filtro` (`todos` | `cuadrados` | `faltante` | `empresa`, default `todos`), `busqueda` (código o descripción, sin distinguir mayúsculas), `zona`, `limite` (1-500, default 100), `desplazamiento` (default 0).
+
+Respuesta `200`:
+```json
+{
+  "inventarioId": 8004,
+  "estado": "conteo_cerrado",
+  "resumen": { "items": 15, "cuadrados": 10, "...": "..." },
+  "embudo": { "itemsTotales": 15, "...": "..." },
+  "filtro": "todos",
+  "total": 15,
+  "limite": 100,
+  "desplazamiento": 0,
+  "matriz": [
+    {
+      "productoId": 42,
+      "codigo": "IT-1008",
+      "descripcion": "Detergente Bolívar 780g",
+      "zona": "D",
+      "precioVenta": 9.3,
+      "stockErp": 180,
+      "conteo1": 150,
+      "conteo2": 158,
+      "conteo3": 156,
+      "esEmpresa": false,
+      "conteoFinal": 156,
+      "diferenciaUnidades": -24,
+      "diferenciaValor": -223.2,
+      "veredicto": "falta"
+    }
+  ]
+}
+```
+
+**`resumen` y `embudo` se calculan siempre sobre el inventario COMPLETO**, nunca sobre el filtro ni sobre la página. El encabezado tiene que decir "7.870 de 8.000 cuadrados" siempre, no "98 de 100 en esta página" — un resumen que cambia al pasar de página no es un resumen.
+
+El techo de 500 en `limite` no es un número al azar: el inventario real son 8.000 ítems, y devolverlos enteros en un JSON es como se cuelga la pantalla del Auditor en el celular de la tienda.
+
+`productoId` es `0` cuando el ítem está en el catálogo del ERP pero ninguna hoja finalizada lo incluye todavía. Se devuelve igual, con los tres conteos en `null`: un ítem que nadie contó es información, no algo que esconder.
+
+Errores: `401` sin token · `403` rol sin acceso, otra sucursal, o coordinador sobre un inventario en curso · `404` el inventario no existe.
+
+---
+
+### Datos de demo de la auditoría
+
+```bash
+npm run prisma:seed-auditoria     # matriz completa + un inventario en curso
+npx tsx prisma/limpiar-auditoria-demo.ts   # borra solo los ids 8004-8005
+```
+
+| Inventario | Estado | Para qué |
+|---|---|---|
+| **8004** · Luzuriaga · 2026-05 | `conteo_cerrado` | La matriz completa: 15 ítems, 8 hojas (una por zona en la ronda 1), embudo 15 → 7 → 5. Están los cuatro casos: ítems que cuadran en la 1ra pasada, dos que se corrigen en la 2da, faltantes confirmados en la 3ra, un sobrante, dos cervezas de empresa con faltante, una cerveza de empresa que cuadra, y uno que nadie contó. |
+| **8005** · Carhuaz · mes en curso | `en_curso` | Existe para ver la otra mitad de la regla: el coordinador de Carhuaz **no** puede abrir su matriz, el auditor y el administrador sí. |
+
+Los conteos se cargan como los carga el operario ("2 cajas + 3 sueltas"), no como un total plano, así el seed ejercita el cálculo real de `totalUnidades` en vez de esquivarlo.
+
+### Verificación contra la API
+
+```bash
+node scripts/verificar-auditoria-api.mjs   # requiere el backend corriendo en :3000
+```
+
+Prueba, con sesiones reales de cada rol: que `conteo` recibe 403 en cualquier estado, que el coordinador ve el cerrado pero no el en curso, que el auditor de otra sucursal no entra, que los cuatro filtros particionan el total sin solaparse, que el resumen no cambia al filtrar ni al paginar, y que cada caso de la matriz (cuadra en la 1ra, se corrige en la 2da, faltante en la 3ra, sobrante, empresa, sin contar) da el veredicto correcto.
+
 ### Histórico — `/api/historial` (requiere sesión + rol `administrador` o `auditor`)
 
 Es el registro de todos los inventarios: en qué estado está cada uno, cómo cerró, quién lo firmó y qué se le descontó a cada persona. Responde la pregunta del cliente: *"falta el registro de todos los inventarios, dónde llevaremos el control y el histórico"*.

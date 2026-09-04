@@ -352,6 +352,42 @@ model CatalogoItem {
   /// menos el de mayor factor, ahora se guardan todos.
   empaques EmpaqueCatalogo[]
 
+  // -------------------------------------------------------------------------
+  // Datos del ERP que alimentan la AUDITORIA (tipos.ts#ItemAuditoria).
+  //
+  // Viven aca y NO en `Producto`, y esa distincion es el conteo ciego
+  // entero: `Producto` es lo que ve la persona que cuenta -- por eso no
+  // tiene stock ni precio, y no puede tenerlos nunca. `CatalogoItem` es el
+  // snapshot crudo de Dynamics, que solo consumen el backend y la pantalla
+  // del Auditor DESPUES de cerrado el ciclo de 3 conteos.
+  //
+  // Si estas tres columnas estuvieran en `Producto`, cualquier endpoint de
+  // conteo podria filtrarlas a un contador sin que nadie lo note, y los 3
+  // conteos cruzados dejarian de servir para lo unico que existen.
+  // -------------------------------------------------------------------------
+
+  /// Stock que dice el ERP al momento del snapshot. Es el numero CONTRA el
+  /// que se compara -- nunca se recalcula ni se actualiza despues: el
+  /// inventario audita contra la foto que se saco al abrir el mes, no
+  /// contra lo que Dynamics diga hoy.
+  /// Nullable porque el snapshot puede venir de una entidad de D365 que no
+  /// expone stock: la matriz se arma igual, marcando el item como no
+  /// auditable, en vez de inventar un 0 que se leeria como "falta todo".
+  stockErp Int? @map("stock_erp")
+
+  /// Precio de VENTA, no de compra: asi lo definio el cliente en la reunion
+  /// para valorizar diferencias (ver mobile/lib/dominio/auditoria.ts).
+  /// Decimal, nunca Float -- misma razon que en ResultadoInventario.
+  precioVenta Decimal? @map("precio_venta") @db.Decimal(12, 4)
+
+  /// true = la categoria la asume la EMPRESA por orden de gerencia (las
+  /// cervezas del ejemplo del cliente, por seguimiento de robo): el faltante
+  /// existe y se reporta, pero no se descuenta a nomina.
+  /// Es un dato configurado caso por caso en Dynamics, no algo que el
+  /// dominio pueda calcular solo (tipos.ts#ItemAuditoria.esEmpresa) -- por
+  /// eso es una columna del snapshot y no una regla en codigo.
+  esEmpresa Boolean @default(false) @map("es_empresa")
+
   createdAt DateTime @default(now()) @map("created_at")
 
   @@unique([inventarioId, codigo])

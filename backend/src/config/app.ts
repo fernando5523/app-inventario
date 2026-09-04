@@ -2,6 +2,7 @@ import cors from 'cors';
 import express, { type Express } from 'express';
 import helmet from 'helmet';
 import { errorMiddleware } from '../middleware/error.middleware';
+import { auditoriaRouter } from '../modules/auditoria';
 import { configRouter } from '../modules/config';
 import { hojasRouter } from '../modules/hojas';
 import { d365Router } from '../modules/d365';
@@ -26,6 +27,7 @@ export function crearApp(): Express {
   app.use('/api/hojas', hojasRouter);
   app.use('/api/d365', d365Router);
   app.use('/api/historial', historialRouter);
+  app.use('/api/auditoria', auditoriaRouter);
 
   // Siempre al final: error.middleware.ts traduce lo que tiren las capas anteriores.
   app.use(errorMiddleware);
