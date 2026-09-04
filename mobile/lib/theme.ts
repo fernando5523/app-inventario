@@ -15,6 +15,9 @@ export const colors = {
   grisClaro: '#9A938D',
   borde: '#E3DEDA',
   blanco: '#FFFFFF',
+  /** Superficie neutra para controles secundarios (opciones de un speed
+   *  dial, riel de un switch): --riel en controles.css, 14.49:1 con tinta. */
+  riel: '#EDE9E6',
 
   ok: '#0A6B57',
   okSuave: '#E7F4EF',
