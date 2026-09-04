@@ -17,6 +17,8 @@
     "prisma:seed-historial": "tsx prisma/seed-historial.ts",
     "prisma:seed-auditoria": "tsx prisma/seed-auditoria.ts",
     "prisma:limpiar-historial": "tsx prisma/limpiar-historial-demo.ts",
+    "db:reset-demo": "tsx prisma/reset-demo.ts",
+    "verificar:flujo": "node scripts/verificar-flujo-de-carga.mjs",
     "verificar:db": "node scripts/verificar-restricciones-db.mjs",
     "verificar:api": "node scripts/verificar-historial-api.mjs"
   },

@@ -1544,6 +1544,84 @@ node scripts/verificar-almacen-y-tipo.mjs   # backend en :3000
 
 Prueba el almacén contra la lista real del ERP (incluido el rechazo de un código mal tipeado y la normalización de mayúsculas), el snapshot tomando el almacén de la sucursal, y las dos restricciones **escribiendo directo en Postgres** — porque una regla que solo vive en un `if` la saltea cualquiera que escriba en la tabla.
 
+---
+
+## ⚠️ Reset para poblar con datos reales — `npm run db:reset-demo`
+
+> **ESTE SCRIPT BORRA TODOS LOS DATOS DE LA BASE. No hay deshacer.**
+> Existe para un momento puntual: cuando el cliente empieza a cargar datos reales y hay que sacar del medio todo lo de demo. Si lo corrés con datos de producción adentro, se pierden.
+
+Pedido textual del cliente: *"ahora sí necesito probar todo el flujo con datos reales. Solo dejar los usuarios administradores para acceder y empezar a poblar la app"*.
+
+### Cómo se corre
+
+Hacen falta **las dos cosas**, a propósito:
+
+```bash
+RESET_DEMO=SI_BORRAR_TODO npm run db:reset-demo -- --si-estoy-seguro
+```
+
+Sin las dos, el script se niega y explica qué falta. Se piden dos y no una porque **un flag solo se copia y se pega de un README sin leerlo**, y **una variable de entorno sola se queda pegada en la terminal** y se dispara con el comando siguiente. Las dos juntas exigen escribir dos cosas distintas, en el mismo momento, a propósito.
+
+Además se niega a correr si no hay ninguna cuenta de administrador, o si todas están deshabilitadas: borrar todo en ese estado dejaría a todos afuera de la app **sin forma de arreglarlo desde el teléfono**.
+
+### Qué borra
+
+Sucursales, colaboradores (menos administradores), inventarios, hojas, conteos, productos, catálogo, empaques, resultados, diferencias, liquidaciones, aprobaciones, lacrados, registros de ERP, sesiones y el log de auditoría.
+
+El orden respeta las foreign keys — hijos antes que padres — y **no se confía en el `ON DELETE CASCADE`**: la mayoría de las FK son `RESTRICT`, y depender de que Postgres arrastre las dependencias hace que el día que alguien cambie una regla el script falle a mitad de camino, con media base borrada.
+
+Para borrar los sellos hay que desactivar el trigger `lacrado_inmutable`. Se hace en un `try`/`finally`: **si el borrado falla a mitad, la tabla no puede quedar sin su protección**. Verificado después de correrlo: los dos triggers quedan en `O` (habilitado) y siguen rechazando un `UPDATE` sobre un sello.
+
+### Qué deja, y por qué
+
+**Todas las cuentas con `rol = administrador`** — no solo una. El cliente escribió "los usuarios administradores", en plural, y hoy hay tres. La asimetría del error manda: si sobra un administrador, se deshabilita desde la app en dos toques; si falta, **nadie puede entrar** y no hay forma de arreglarlo desde el teléfono. De los dos errores posibles, uno es reversible y el otro no.
+
+**Las 3 configuraciones del sistema** (`TAMANO_HOJA_DEFECTO`, `CANTIDAD_CONTEOS_CICLO`, `UMBRAL_MEDIA_UNIDAD_PAQUETE`). Son **parámetros**, no datos de demo: definen cómo se comporta el sistema, no qué pasó en una tienda. Borrarlas dejaría al primer inventario sin tamaño de hoja por defecto y sin saber cuántas rondas tiene el ciclo.
+
+**Las credenciales de Dynamics** (`config_dynamics`), si las hay. Son configuración real, y recargarlas exige ir a buscar el secreto a Azure. Su `actualizado_por_id` puede apuntar a un colaborador que desaparece, pero esa FK es `SET NULL`: no rompe nada.
+
+### Es idempotente
+
+Correrlo dos veces no falla ni deja la base en un estado raro: la segunda corrida solo borra lo que se haya generado en el medio (sesiones, log de auditoría) y reporta el resto en cero. Verificado.
+
+### Cómo quedó la base tras correrlo
+
+De **80.364 filas a 6**:
+
+| Tabla | Filas |
+|---|---|
+| `colaboradores` | **3** (los administradores) |
+| `configuraciones` | **3** (los parámetros del sistema) |
+| todas las demás | 0 |
+
+---
+
+## El flujo de carga desde la app — `npm run verificar:flujo`
+
+Con la base vacía, esto es lo que el cliente hace desde el teléfono. Está **verificado por HTTP, paso por paso**, con la base ya reseteada:
+
+```bash
+node scripts/verificar-flujo-de-carga.mjs        # backend en :3000
+node scripts/verificar-flujo-de-carga.mjs --dejar # deja la tienda de prueba creada
+```
+
+| Paso | Endpoint | Estado |
+|---|---|---|
+| 1. El administrador entra | `GET /api/sesion/administradores` → `POST /api/sesion/ingresar` | ✅ |
+| 2. Elige el almacén de la lista del ERP | `GET /api/d365/almacenes` (70 almacenes) | ✅ |
+| 3. Crea la tienda con ese almacén | `POST /api/tiendas` | ✅ |
+| 4. Crea los usuarios de la tienda | `POST /api/usuarios` × N | ✅ |
+| 5. La tienda y su gente aparecen en el login | `GET /api/sesion/sucursales` · `.../colaboradores` | ✅ |
+| 6. El coordinador entra | `POST /api/sesion/ingresar` | ✅ |
+| 7. Arranca el inventario | `POST /api/d365/snapshot` | ✅ |
+
+El administrador se lista por un camino aparte (`GET /api/sesion/administradores`) porque **no tiene sucursal**: no aparece en `/sucursales/:id/colaboradores`. Sin ese endpoint, la app no tendría cómo ofrecerlo en el selector de login y el cliente quedaría afuera con la base recién vaciada.
+
+La prueba también verifica que se creen **dos auditores**: sin dos personas distintas, el inventario no se puede lacrar (control de dos personas).
+
+Por defecto la prueba borra la tienda que creó. Con `--dejar` la conserva, útil para inspeccionarla a mano.
+
 ## Desarrollo
 
 ```bash
