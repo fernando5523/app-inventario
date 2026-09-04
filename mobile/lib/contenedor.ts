@@ -24,6 +24,7 @@ import { auditoriaMemoria } from './adaptadores/auditoria-memoria';
 import { catalogoMemoria } from './adaptadores/catalogo-memoria';
 import { configMemoria } from './adaptadores/config-memoria';
 import { hojasMemoria } from './adaptadores/hojas-memoria';
+import { hojasSqlite } from './adaptadores/hojas-sqlite';
 import { inventarioMemoria } from './adaptadores/inventario-memoria';
 import { lacradoMemoria } from './adaptadores/lacrado-memoria';
 import { liquidacionMemoria } from './adaptadores/liquidacion-memoria';
@@ -128,8 +129,23 @@ export const repositorioConfig: RepositorioConfig = elegir('config', configMemor
  * ⚠️ El backend no tiene módulos de hojas, catálogo ni inventario: esas
  * rutas están DEDUCIDAS de la convención de los otros cuatro. Encenderlas
  * hoy da 404, no datos. Ver la cabecera de hojas-api.ts.
+ *
+ * `hojas` además tiene una tercera variante que las demás no tienen,
+ * sqlite (ver la tarea de persistencia offline, 2026-09-03): los conteos
+ * NO pueden vivir solo en RAM — un operario en el fondo del depósito,
+ * sin señal, pierde 40 ítems contados si la app se cierra. `elegir()`
+ * sigue siendo memoria/api; acá se decide aparte cuál de las dos es el
+ * lado "memoria" que le llega, porque hay una tercera opción.
+ *
+ * DEFAULT: sqlite. Es lo que el negocio necesita — un conteo que no
+ * sobrevive un cierre de la app no es un detalle técnico, es la promesa
+ * que la banda de sincronización ("guardado en el equipo") le hace al
+ * operario y hoy no cumplía. Escape hatch a la versión pura en memoria
+ * (debug, o si sqlite da problemas puntuales en un dispositivo):
+ * `EXPO_PUBLIC_HOJAS_MEMORIA=1`.
  */
-export const repositorioHojas: RepositorioHojas = elegir('hojas', hojasMemoria, hojasApi);
+const hojasLocal: RepositorioHojas = entorno?.EXPO_PUBLIC_HOJAS_MEMORIA === '1' ? hojasMemoria : hojasSqlite;
+export const repositorioHojas: RepositorioHojas = elegir('hojas', hojasLocal, hojasApi);
 export const repositorioCatalogo: RepositorioCatalogo = elegir('catalogo', catalogoMemoria, catalogoApi);
 export const repositorioInventario: RepositorioInventario = elegir('inventario', inventarioMemoria, inventarioApi);
 
