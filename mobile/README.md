@@ -117,6 +117,53 @@ HTTPS.
 dominio con HTTPS de verdad, hay que borrar el plugin y su referencia en
 `app.config.ts` — no dejarlo "por las dudas".
 
+### APK para un TELEFONO FISICO (el caso que fallo)
+
+Un APK compilado sin `EXPO_PUBLIC_API_URL` **no funciona en un telefono real**:
+queda apuntando a `10.0.2.2`, que es un alias del EMULADOR hacia su maquina y
+en un telefono no lleva a ningun lado. La app abre, loguea contra nada y no
+muestra datos -- sin decir por que.
+
+Son TRES cosas que tienen que coincidir, y las tres se resuelven con la misma
+variable:
+
+```bash
+# 1. Averiguar la IP de ESTA maquina en la red (Windows)
+ipconfig | findstr IPv4
+
+# 2. Compilar el APK con esa IP. La variable hace DOS cosas a la vez:
+#    - define a donde apunta la app (lib/adaptadores/_http.ts)
+#    - agrega esa IP a la excepcion de cleartext de Android
+#      (plugins/withNetworkSecurityConfigDev.js)
+cd mobile
+EXPO_PUBLIC_API_URL=http://10.5.21.144:3000 npx expo prebuild --platform android --clean
+cd android
+EXPO_PUBLIC_API_URL=http://10.5.21.144:3000 ./gradlew assembleRelease
+```
+
+> La variable va en **los dos** comandos: `prebuild` la usa para generar
+> `network_security_config.xml`, y `gradlew` para que Metro la inlinee en el
+> bundle. Si falta en el primero, Android bloquea la conexion; si falta en el
+> segundo, la app apunta al emulador. Los dos fallan igual de callados.
+
+**3. El backend tiene que escuchar en la red**, no solo en localhost. Ya lo
+hace por default (`HOST=0.0.0.0`, ver `backend/src/index.ts`). Para verificar
+desde otra maquina de la red:
+
+```bash
+curl http://10.5.21.144:3000/salud    # tiene que devolver {"ok":true}
+```
+
+**Firewall**: en esta maquina los tres perfiles estan DESACTIVADOS, asi que el
+puerto 3000 ya es alcanzable. Si en otra maquina estuviera activo, la regla
+es (ejecutar como Administrador, **no** es algo que corra el proyecto):
+
+```powershell
+netsh advfirewall firewall add rule name="app-inventario backend 3000" dir=in action=allow protocol=TCP localport=3000
+```
+
+El telefono tiene que estar en la **misma red WiFi** que la maquina.
+
 ### Volver a memoria sin backend
 
 Para demostrar la app sin levantar nada, `EXPO_PUBLIC_PUERTOS_MEMORIA`

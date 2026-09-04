@@ -71,8 +71,13 @@ export function urlBase(): string {
   if (!avisoUrlEmitido) {
     avisoUrlEmitido = true;
     console.warn(
-      `[http] Sin EXPO_PUBLIC_API_URL ni extra.apiUrl: usando ${URL_DESARROLLO}. ` +
-        'En un dispositivo físico esto NO va a resolver — configurá la IP del servidor.',
+      [
+        `[http] Sin EXPO_PUBLIC_API_URL ni extra.apiUrl: usando ${URL_DESARROLLO}.`,
+        '  Eso es el alias del EMULADOR hacia su máquina. En un TELÉFONO FÍSICO no lleva',
+        '  a ningún lado: la app abre y queda sin datos, sin decir por qué.',
+        '  Al compilar el APK: EXPO_PUBLIC_API_URL=http://<IP-de-la-máquina>:3000',
+        '  (ver mobile/README.md, "APK para un TELEFONO FISICO").',
+      ].join('\n'),
     );
   }
   return URL_DESARROLLO;
