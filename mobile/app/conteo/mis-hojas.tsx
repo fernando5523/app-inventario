@@ -1,11 +1,12 @@
 import { router, useFocusEffect } from 'expo-router';
-import { useCallback, useState, type JSX } from 'react';
+import { useCallback, useEffect, useState, type JSX } from 'react';
 import { ActivityIndicator, Alert, StyleSheet, Text, View } from 'react-native';
 
 import { AvanceFila, BandaSync, BarraApp, TarjetaHoja, sincronizacionDeHojas } from '../../components/ui';
 import { PantallaConTabs } from '../../components/navegacion/PantallaConTabs';
-import { repositorioHojas, repositorioInventario } from '../../lib/contenedor';
+import { repositorioHojas, repositorioInventario, sincronizador } from '../../lib/contenedor';
 import type { HojaConteo } from '../../lib/dominio/tipos';
+import type { EstadoCola } from '../../lib/puertos/repositorios';
 import { useSesion } from '../../lib/sesion-contexto';
 import { colors, fonts } from '../../lib/theme';
 
@@ -23,6 +24,8 @@ export default function MisHojasScreen(): JSX.Element {
   const { sesion, cerrar } = useSesion();
   const [cargando, setCargando] = useState(true);
   const [hojas, setHojas] = useState<HojaConteo[]>([]);
+  const [estadoCola, setEstadoCola] = useState<EstadoCola>(sincronizador.estado());
+  useEffect(() => sincronizador.suscribir(setEstadoCola), []);
 
   const cargar = useCallback(async () => {
     if (!sesion) return;
@@ -68,7 +71,7 @@ export default function MisHojasScreen(): JSX.Element {
   const enProceso = hojas.filter((h) => h.estado === 'en-proceso').length;
   const finalizadas = hojas.filter((h) => h.estado === 'finalizada').length;
   const pendientes = hojas.filter((h) => h.estado === 'pendiente').length;
-  const sync = sincronizacionDeHojas(hojas);
+  const sync = sincronizacionDeHojas(hojas, estadoCola);
 
   return (
     <PantallaConTabs scrollable contentStyle={styles.contenido}>
@@ -86,7 +89,7 @@ export default function MisHojasScreen(): JSX.Element {
         />
       </View>
 
-      <BandaSync estado={sync.estado} mensaje={sync.mensaje} />
+      <BandaSync estado={sync.estado} mensaje={sync.mensaje} onSincronizar={() => sincronizador.sincronizar()} />
 
       {cargando ? (
         <ActivityIndicator color={colors.rojo} style={styles.cargando} />

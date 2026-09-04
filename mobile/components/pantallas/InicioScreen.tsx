@@ -1,8 +1,8 @@
 import { router, useFocusEffect } from 'expo-router';
-import { useCallback, useState, type JSX } from 'react';
+import { useCallback, useEffect, useState, type JSX } from 'react';
 import { ActivityIndicator, StyleSheet, Text, View } from 'react-native';
 
-import { repositorioHojas, repositorioInventario } from '../../lib/contenedor';
+import { repositorioHojas, repositorioInventario, sincronizador } from '../../lib/contenedor';
 // TEMPORAL: no van en lib/contenedor.ts a propósito — esta tarea no lo
 // toca (lo cambia el agente de integración cuando enchufe el HTTP real).
 // La pantalla solo conoce el tipo del puerto (RepositorioUsuarios /
@@ -12,6 +12,7 @@ import { tiendasMemoria as repositorioTiendas } from '../../lib/adaptadores/tien
 import { usuariosMemoria as repositorioUsuarios } from '../../lib/adaptadores/usuarios-memoria';
 import { avanceConjunto, estadoConjunto } from '../../lib/dominio/hoja';
 import type { HojaConteo, Rol } from '../../lib/dominio/tipos';
+import type { EstadoCola } from '../../lib/puertos/repositorios';
 import { useSesion } from '../../lib/sesion-contexto';
 import { colors, fonts, fontSize, spacing } from '../../lib/theme';
 import { ACCESOS_POR_ROL } from '../navegacion/accesos';
@@ -76,6 +77,8 @@ export function InicioScreen(): JSX.Element {
   const [hojasRonda1, setHojasRonda1] = useState<HojaConteo[] | null>(null);
   const [misHojas, setMisHojas] = useState<HojaConteo[] | null>(null);
   const [estadoSistema, setEstadoSistema] = useState<EstadoSistema | null>(null);
+  const [estadoCola, setEstadoCola] = useState<EstadoCola>(sincronizador.estado());
+  useEffect(() => sincronizador.suscribir(setEstadoCola), []);
 
   // useFocusEffect, no useEffect: los tabs quedan montados una vez
   // visitados (React Navigation) — sin esto, volver a Inicio después de
@@ -184,7 +187,7 @@ export function InicioScreen(): JSX.Element {
         },
         { etiqueta: 'Contando ahora', valor: String(contando), pct: 'colaboradores' },
       ];
-      sync = sincronizacionDeHojas(hojasRonda1);
+      sync = sincronizacionDeHojas(hojasRonda1, estadoCola);
     }
   } else if (rol === 'conteo') {
     tituloEstado = 'Tu avance';
@@ -205,7 +208,7 @@ export function InicioScreen(): JSX.Element {
             { etiqueta: 'Tus hojas sin empezar', valor: String(pendientes), pct: `de ${misHojas.length}` },
           ]
         : [{ etiqueta: 'Hojas asignadas', valor: String(misHojas.length), pct: pendientes === misHojas.length ? 'todas pendientes' : '' }];
-      sync = sincronizacionDeHojas(misHojas);
+      sync = sincronizacionDeHojas(misHojas, estadoCola);
     }
   } else if (rol === 'auditor') {
     tituloEstado = 'Estado de la auditoría';
@@ -267,7 +270,11 @@ export function InicioScreen(): JSX.Element {
       {/* Sin `sede`: el Administrador no pertenece a una sola sucursal. */}
       <BarraApp rotulo="Inicio" sede={rol === 'administrador' ? undefined : sesion.sucursal!.nombre} cifras={cifras} onSalir={salir} />
 
-      <BandaSync estado={sync.estado} mensaje={sync.mensaje} />
+      <BandaSync
+        estado={sync.estado}
+        mensaje={sync.mensaje}
+        onSincronizar={rol === 'coordinador' || rol === 'conteo' ? () => sincronizador.sincronizar() : undefined}
+      />
 
       <View style={styles.saludo}>
         <Text style={styles.saludoNombre}>Hola, {primerNombre}</Text>

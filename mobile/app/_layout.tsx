@@ -12,6 +12,7 @@ import {
 } from '@expo-google-fonts/figtree';
 import { Baloo2_700Bold } from '@expo-google-fonts/baloo-2';
 
+import { iniciarSincronizador } from '../lib/contenedor';
 import { SesionProvider } from '../lib/sesion-contexto';
 import { colors } from '../lib/theme';
 
@@ -34,6 +35,12 @@ export default function RootLayout() {
       SplashScreen.hideAsync();
     }
   }, [fontsLoaded, fontError]);
+
+  // Arranca UNA sola vez, para toda la app: los disparadores automáticos
+  // de sincronización (reconexión de red + primer plano). Ver
+  // lib/adaptadores/sincronizador.ts para el resto de los disparadores
+  // (al finalizar una hoja, manual desde la banda).
+  useEffect(() => iniciarSincronizador(), []);
 
   if (!fontsLoaded && !fontError) {
     return null;

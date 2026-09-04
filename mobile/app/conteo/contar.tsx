@@ -15,9 +15,10 @@ import {
   type RechazoEscaneo,
 } from '../../components/ui';
 import { PantallaConTabs } from '../../components/navegacion/PantallaConTabs';
-import { repositorioCatalogo, repositorioHojas, repositorioInventario } from '../../lib/contenedor';
+import { repositorioCatalogo, repositorioHojas, repositorioInventario, sincronizador } from '../../lib/contenedor';
 import { avance, puedeEditar, puedeFinalizar } from '../../lib/dominio/hoja';
 import type { Conteo, Empaque, HojaConteo, Producto } from '../../lib/dominio/tipos';
+import type { EstadoCola } from '../../lib/puertos/repositorios';
 import { useSesion } from '../../lib/sesion-contexto';
 import { colors, fonts, fontSize, radius } from '../../lib/theme';
 
@@ -83,6 +84,13 @@ export default function ContarScreen(): JSX.Element {
   }
   const [modalFinalizarVisible, setModalFinalizarVisible] = useState(false);
   const [finalizando, setFinalizando] = useState(false);
+
+  // El estado REAL de la cola de sincronización (pendientes/última
+  // sync/error) — se suscribe una vez y se desuscribe al desmontar, así
+  // la banda de esta pantalla se actualiza sola cuando el sincronizador
+  // termina una pasada, sin que esta pantalla tenga que pedirlo.
+  const [estadoCola, setEstadoCola] = useState<EstadoCola>(sincronizador.estado());
+  useEffect(() => sincronizador.suscribir(setEstadoCola), []);
 
   // Carga inicial: si no vino un número de hoja por parámetro (se entró
   // por el tab "Contar", no desde Mis hojas), se busca la hoja en proceso
@@ -274,6 +282,11 @@ export default function ContarScreen(): JSX.Element {
       const finalizada = await repositorioHojas.finalizar(hoja!.id);
       setHoja(finalizada);
       setModalFinalizarVisible(false);
+      // Fire-and-forget a propósito: el operario ya vio la hoja
+      // finalizada, no tiene que esperar a que salga del teléfono. Es el
+      // momento en que el dato importa MÁS (la hoja se congela), por eso
+      // se dispara acá y no se espera al próximo trigger automático.
+      void sincronizador.sincronizar();
     } catch (error) {
       Alert.alert('No se pudo finalizar', error instanceof Error ? error.message : 'Intentá de nuevo.');
     } finally {
@@ -287,7 +300,7 @@ export default function ContarScreen(): JSX.Element {
       ? `Quedan ${faltantes} de ${hoja.tamano} ítems sin contar. Si finalizás ahora, esos ítems quedan vacíos.`
       : `Los ${hoja.tamano} ítems de esta hoja están contados.`;
 
-  const sync = sincronizacionDeHojas([hoja]);
+  const sync = sincronizacionDeHojas([hoja], estadoCola);
 
   return (
     // Los tres overlays (ModalConteo, ModalEscaner, confirmación de
@@ -302,7 +315,7 @@ export default function ContarScreen(): JSX.Element {
         <AvanceFila texto={`${contados} / ${hoja.tamano} Productos`} porcentaje={porcentaje} />
       </View>
 
-      <BandaSync estado={sync.estado} mensaje={sync.mensaje} />
+      <BandaSync estado={sync.estado} mensaje={sync.mensaje} onSincronizar={() => sincronizador.sincronizar()} />
 
       <View style={styles.buscadorFila}>
         <View style={styles.buscador}>
