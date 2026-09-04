@@ -13,7 +13,11 @@
     "prisma:generate": "prisma generate",
     "prisma:validate": "prisma validate",
     "prisma:migrate": "prisma migrate dev",
-    "prisma:seed": "tsx prisma/seed.ts"
+    "prisma:seed": "tsx prisma/seed.ts",
+    "prisma:seed-historial": "tsx prisma/seed-historial.ts",
+    "prisma:limpiar-historial": "tsx prisma/limpiar-historial-demo.ts",
+    "verificar:db": "node scripts/verificar-restricciones-db.mjs",
+    "verificar:api": "node scripts/verificar-historial-api.mjs"
   },
   "prisma": {
     "seed": "tsx prisma/seed.ts"

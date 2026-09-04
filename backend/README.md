@@ -335,6 +335,8 @@ Respuesta `200`:
 
 **Idempotente**: si la sucursal ya tiene un `Inventario`, se devuelve ese mismo (mismo `inventarioId`/`items`/`tomadoEn`) en vez de crear uno nuevo ni volver a golpear Dynamics — mismo contrato que el puerto del front. *Simplificación documentada*: como todavía no existe en este backend un módulo de hojas/inventario, "ya tiene un inventario" se resuelve como "existe al menos una fila para esa sucursal", no "hay uno en curso sin cerrar" — cuando exista ese módulo, esta regla se va a tener que afinar.
 
+> **Ya se puede afinar**: `Inventario` ahora tiene estado y el campo `abierto` (ver la sección de Histórico). El snapshot debería buscar `{ sucursalId, abierto: true }` en vez de la fila más reciente — si no, una sucursal que ya cerró su mes no puede abrir el siguiente. Además, `prisma.inventario.create` puede fallar ahora con `P2002` sobre `(sucursal_id, abierto)` si la sucursal ya tiene uno en curso: conviene traducirlo a un 409 legible. Queda anotado para quien mantiene este módulo, no se tocó desde el módulo de historial.
+
 El catálogo mapeado (con barcode y empaque de cada ítem) se guarda en `CatalogoItem`, colgado del `Inventario` — es el catálogo crudo del snapshot, antes de partirse en hojas. Todavía no hay un endpoint para leerlo (el paso 2, "crear hojas", que consumiría esto, no está construido en este backend); queda ahí esperando ese módulo.
 
 Errores: `400` `sucursalId` inválido, o `modo="real"` sin credenciales configuradas · `502` Dynamics respondió con error o no se pudo autenticar.
@@ -440,6 +442,404 @@ Sin body. Respuesta `200`: la hoja completa, ya `"finalizada"`.
 Errores: `403` no asignada a vos · `404` no existe.
 
 ---
+
+---
+
+### Histórico — `/api/historial` (requiere sesión + rol `administrador` o `auditor`)
+
+Es el registro de todos los inventarios: en qué estado está cada uno, cómo cerró, quién lo firmó y qué se le descontó a cada persona. Responde la pregunta del cliente: *"falta el registro de todos los inventarios, dónde llevaremos el control y el histórico"*.
+
+**`coordinador` y `conteo` NO tienen acceso** (403). No es una omisión: es la misma regla de conteo ciego que sostiene todo el sistema — quien cuenta no puede ver el resultado del mes pasado ni el faltante ya detectado, porque entonces deja de contar a ciegas y pasa a confirmar un número que vio antes. Ellos ven lo suyo del inventario en curso, nada más.
+
+Un `auditor` queda recortado **siempre** a su propia sucursal: si manda `sucursalId` de otra tienda, el filtro se ignora (no falla) y el detalle de un inventario ajeno responde `403`. Un `administrador` no tiene recorte.
+
+#### Ciclo de vida de un inventario
+
+```
+en_curso ──▶ conteo_cerrado ──▶ liquidado ──▶ lacrado
+    │                                            (INMUTABLE)
+    └──▶ anulado
+```
+
+| Estado | Qué significa |
+|---|---|
+| `en_curso` | Snapshot tomado, las 3 rondas de conteo todavía se pueden tocar. Es el único estado que acepta escrituras de conteo. |
+| `conteo_cerrado` | La 3ra ronda quedó fija (cierre de Gilmer): las cantidades ya no se recuentan. |
+| `liquidado` | La planilla de descuentos está calculada. Falta la firma. |
+| `lacrado` | Cerrado e inmutable. Cualquier ajuste entra en el período siguiente. |
+| `anulado` | Se abandonó sin llegar a lacrar (ej. snapshot equivocado). No produce histórico contable, pero libera la sucursal. |
+
+#### Dos reglas que sostiene la base de datos, no el código
+
+**1. Una sucursal no puede tener dos inventarios abiertos a la vez.**
+
+`Inventario.abierto` es un `Boolean?` con solo dos valores legales: `true` (abierto) y `NULL` (cerrado) — **nunca `false`**. Junto con `@@unique([sucursalId, abierto])` alcanza, porque Postgres considera cada `NULL` distinto de todos los demás en un índice único: dos filas `(sucursal 1, true)` chocan, pero N filas `(sucursal 1, NULL)` conviven. Es el índice único parcial clásico, expresado con lo que Prisma sabe declarar. Cerrar un inventario es `abierto: null`, jamás `abierto: false` (eso volvería a bloquear la sucursal).
+
+Hay una segunda restricción independiente: `@@unique([sucursalId, periodoAnio, periodoMes])` — no hay dos "agosto 2026" de Luzuriaga, ni siquiera entre inventarios ya cerrados.
+
+**2. Un inventario lacrado es inmutable.**
+
+En cuatro niveles, de arriba hacia abajo:
+
+- **Estructura**: `LacradoInventario` es 1:1 con `Inventario` (`inventarioId @unique`) y **no tiene `updatedAt`**, a diferencia de todos los demás modelos escribibles del schema. La ausencia es deliberada: no hay campo donde registrar una modificación porque no debe existir ninguna.
+- **Aplicación**: `historial.permisos.ts#verificarNoLacrado` corta cualquier escritura sobre un inventario lacrado (409).
+- **Base de datos**: la migración `20260904020954_lacrado_inmutable` instala un trigger `BEFORE UPDATE OR DELETE` en `lacrados_inventario` que lanza excepción, y otro `BEFORE UPDATE` en `aprobaciones_cierre` (si se pudiera reescribir el `aprobador_id` de una firma, el control de dos personas se podría falsificar hacia atrás). El `INSERT` sigue permitido: es como nace un sello.
+- **Verificable**: `hash` + `contenido` permiten recalcular la huella sobre el estado actual y compararla — `GET .../lacrado/verificacion`. Aunque alguien con acceso al servidor deshabilite el trigger, la verificación lo delata.
+
+> El registro manual en Dynamics vive en su **propia tabla** (`RegistroErpInventario`, 1:1 con el lacrado) justamente por esto: si estuviera en `lacrados_inventario` haría falta un `UPDATE` sobre la fila del sello, y una tabla "inmutable salvo estas tres columnas" no es inmutable, es una tabla con una puerta.
+
+#### El lacrado: folio y hash
+
+- **`folio`** — `INV-2026-08-LUZ-8000-0AA`. El identificador legible que se cita en un acta o un mail (formato ya validado en `mobile/design/lacrado.html`). El sufijo son 3 caracteres del hash: un dígito verificador a ojo, no un control criptográfico.
+- **`hash`** — SHA-256 hexadecimal de `contenido` serializado en forma **canónica** (claves ordenadas, sin espacios). Sin canonicalización, el mismo dato daría hashes distintos según el orden en que Prisma devuelva las columnas y la verificación daría falsos positivos.
+- **`contenido`** — el JSON exacto que entró al hash: totales del inventario, detalle de diferencias, planilla de liquidación y aprobaciones. Sin él, el hash sería un número mágico irreproducible dentro de dos años.
+
+Qué **no** entra al hash: nada volátil ni ajeno al cierre (`updatedAt`, el registro en el ERP, el nombre actual de un colaborador). Una alarma que suena sola termina ignorándose.
+
+---
+
+#### `GET /api/historial/inventarios`
+
+Query (todos opcionales): `sucursalId`, `estado` (uno de los 5), `periodoAnio`, `periodoMes`, `limite` (1-100, default 24), `desplazamiento` (default 0).
+
+Respuesta `200`:
+```json
+{
+  "total": 3,
+  "limite": 24,
+  "desplazamiento": 0,
+  "inventarios": [
+    {
+      "id": 8003,
+      "sucursalId": 1,
+      "sucursalNombre": "Market Central Luzuriaga",
+      "estado": "liquidado",
+      "periodo": "2026-08",
+      "periodoAnio": 2026,
+      "periodoMes": 8,
+      "tamanoHoja": 50,
+      "snapshotItems": 8000,
+      "abiertoEn": "2026-08-01T09:00:00.000Z",
+      "cerradoEn": "2026-08-28T18:00:00.000Z",
+      "abierto": false,
+      "resultado": {
+        "itemsTotales": 8000,
+        "itemsConDiferencia": 96,
+        "itemsCuadrados": 7904,
+        "porcentajeCuadrado": 98.8,
+        "montoFaltanteBruto": 2200,
+        "montoFaltanteNeto": 1650,
+        "cuotaBase": 150
+      },
+      "lacrado": null,
+      "aprobaciones": 0
+    }
+  ]
+}
+```
+
+Ordenado del más reciente al más viejo. `itemsCuadrados`, `porcentajeCuadrado`, `montoFaltanteNeto` y `cuotaBase` **se calculan**, no son columnas — misma regla que deja a `Conteo` sin columna `total`.
+
+#### `GET /api/historial/inventarios/:id`
+
+Detalle completo: resultado con el embudo de los 3 conteos, resumen de liquidación, **hojas** (con asignados y avance), conteo de diferencias, **aprobaciones con identidad** y **lacrado**.
+
+Respuesta `200` (recortada):
+```json
+{
+  "id": 8001,
+  "sucursal": { "id": 1, "nombre": "Market Central Luzuriaga" },
+  "estado": "lacrado",
+  "periodo": "2026-06",
+  "tamanoHoja": 50,
+  "abierto": false,
+  "cerradoPor": { "id": 103, "nombre": "Gilmer Quispe" },
+  "resultado": {
+    "itemsTotales": 8000, "itemsConDiferencia": 130,
+    "itemsSegundoConteo": 650, "itemsTercerConteo": 130,
+    "unidadesFaltantes": 412, "unidadesSobrantes": 55,
+    "montoFaltanteBruto": 1850, "montoNegativos": 310, "montoFaltanteEmpresa": 150,
+    "colaboradoresAlcanzados": 11, "colaboradoresAsistieron": 8, "multaInasistencia": 20,
+    "itemsCuadrados": 7870, "porcentajeCuadrado": 98.4,
+    "resueltosEnSegundo": 520, "resueltosEnTercero": 0,
+    "montoFaltanteNeto": 1390, "cuotaBase": 126.36,
+    "faltantes": 3, "fondoMultas": 60, "bonoAsistencia": 7.5,
+    "residuoCentavos": 0.04
+  },
+  "hojas": [{ "id": 1, "numeroConteo": 1, "numero": "002", "zona": "A", "gondola": "3",
+              "tamano": 50, "estado": "finalizada", "sync": "sincronizado",
+              "asignados": [{ "id": 102, "nombre": "María Rojas" }],
+              "productos": 50, "contados": 50 }],
+  "diferencias": 6,
+  "liquidaciones": 11,
+  "aprobaciones": [
+    { "aprobadorId": 103, "aprobadorNombre": "Gilmer Quispe", "rolAlAprobar": "auditor",
+      "aprobadoEn": "2026-06-29T10:00:00.000Z", "nota": null },
+    { "aprobadorId": 106, "aprobadorNombre": "Rosa Melgarejo", "rolAlAprobar": "auditor",
+      "aprobadoEn": "2026-06-29T14:00:00.000Z", "nota": "Revisado contra el reporte de negativos de Jocelyn." }
+  ],
+  "lacrado": {
+    "folio": "INV-2026-06-LUZ-8000-06A",
+    "hash": "06af20c9f741...",
+    "hashAlgoritmo": "sha256",
+    "lacradoEn": "2026-06-29T16:00:00.000Z",
+    "lacradoPor": { "id": 103, "nombre": "Gilmer Quispe" },
+    "registroErp": { "referencia": "AJ-2026-06-0114", "registradoEn": "2026-07-02T11:00:00.000Z",
+                     "registradoPor": { "id": 103, "nombre": "Gilmer Quispe" } }
+  }
+}
+```
+
+`rolAlAprobar` es el rol **congelado al firmar**, no el actual del colaborador: si mañana esa persona cambia de rol, la firma tiene que seguir diciendo con qué autoridad se dio.
+
+`residuoCentavos` son los centavos que deja el redondeo de la cuota (1390 ÷ 11 = 126.36 × 11 = 1389.96, sobran 4). Se expone en vez de esconderse. **Pendiente de definir con el cliente**: hoy el residuo queda a favor del personal.
+
+Errores: `403` inventario de otra sucursal · `404` no existe.
+
+#### `GET /api/historial/inventarios/:id/diferencias`
+
+Paginado **siempre**: son hasta 8.000 ítems y devolverlos enteros en un JSON es como el sistema se cae el día que alguien abre un mes malo desde el celular.
+
+Query: `tipo` (`faltante` | `sobrante`), `resueltoEnConteo` (1-3), `limite` (1-500, default 100), `desplazamiento`.
+
+Respuesta `200`:
+```json
+{
+  "total": 5, "limite": 100, "desplazamiento": 0,
+  "diferencias": [
+    { "codigo": "IT-1002", "descripcion": "Cerveza Cusqueña Dorada 620ml",
+      "stockSistema": 240, "conteoFinal": 215, "diferencia": -25, "tipo": "faltante",
+      "resueltoEnConteo": 3, "costoUnitario": 6.5, "montoDiferencia": -162.5 }
+  ]
+}
+```
+Ordenado por diferencia ascendente: los faltantes más grandes primero.
+
+#### `GET /api/historial/inventarios/:id/liquidacion`
+
+La planilla de la Pantalla 6, una fila por colaborador.
+
+Respuesta `200` (recortada):
+```json
+{
+  "inventarioId": 8001,
+  "periodo": "2026-06",
+  "resumen": { "montoFaltanteNeto": 1390, "cuotaBase": 126.36, "faltantes": 3,
+               "fondoMultas": 60, "bonoAsistencia": 7.5, "residuoCentavos": 0.04 },
+  "planilla": [
+    { "colaboradorId": 108, "nombre": "Carla Depaz", "nombreActual": "Carla Depaz",
+      "dni": "4483", "rol": "conteo", "asistio": true,
+      "cuotaBase": 126.36, "multaInasistencia": 0, "bonoAsistencia": 7.5,
+      "totalDescuento": 118.86 },
+    { "colaboradorId": 107, "nombre": "Luis Shuan", "asistio": false,
+      "cuotaBase": 126.36, "multaInasistencia": 20, "bonoAsistencia": 0,
+      "totalDescuento": 146.36 }
+  ]
+}
+```
+
+`nombre` es el **congelado al liquidar** (lo que decía el recibo); `nombreActual` va al lado para identificar a la persona si se renombró después. `totalDescuento` se calcula (`cuota + multa − bono`), no es una columna.
+
+#### `GET /api/historial/inventarios/:id/lacrado/verificacion`
+
+Recalcula el hash sobre el estado **actual** del inventario y lo compara con el sellado. Es lo que convierte la inmutabilidad de una promesa en un control comprobable.
+
+Respuesta `200`:
+```json
+{
+  "inventarioId": 8001,
+  "folio": "INV-2026-06-LUZ-8000-06A",
+  "lacradoEn": "2026-06-29T16:00:00.000Z",
+  "verificadoEn": "2026-09-04T02:20:00.000Z",
+  "intacto": true,
+  "hashGuardado": "06af20c9f741...",
+  "hashRecalculado": "06af20c9f741...",
+  "seccionesAlteradas": [],
+  "versionDistinta": false
+}
+```
+
+`seccionesAlteradas` dice **dónde** mirar (`diferencias`, `liquidaciones`, `resultado`, `aprobaciones`…). Un booleano solo dice "algo cambió"; esto es la diferencia entre una alarma útil y una que se ignora.
+
+Errores: `409` el inventario todavía no está lacrado.
+
+#### `GET /api/historial/items/:codigo`
+
+El histórico de un artículo a través de todos los inventarios cerrados — *"este producto, cuántas veces dio diferencia este año"*. Un ítem que da faltante todos los meses no es un error de conteo: es merma sistemática o robo, y la única forma de verlo es mirar la serie, no un mes.
+
+`:codigo` es el `ItemNumber` de Dynamics — la única identidad estable del artículo entre períodos (por eso `DiferenciaItem` guarda el código como texto y no una FK a `Producto`, que cuelga de una hoja de **un** inventario).
+
+Query: `sucursalId`, `desdeAnio`, `hastaAnio`.
+
+Respuesta `200`:
+```json
+{
+  "codigo": "IT-1001",
+  "descripcion": "Aceite Vegetal Primor 900ml",
+  "resumen": {
+    "veces": 3, "vecesFaltante": 3, "vecesSobrante": 0,
+    "unidadesFaltantes": 66, "unidadesSobrantes": 0,
+    "montoAcumulado": -587.4,
+    "peorPeriodo": { "anio": 2026, "mes": 7, "diferencia": -29 }
+  },
+  "apariciones": [
+    { "inventarioId": 8001, "sucursalNombre": "Market Central Luzuriaga",
+      "periodo": "2026-06", "estadoInventario": "lacrado",
+      "stockSistema": 120, "conteoFinal": 98, "diferencia": -22,
+      "resueltoEnConteo": 3, "montoDiferencia": -195.8 }
+  ]
+}
+```
+
+Solo cuenta inventarios que llegaron a cerrar: uno en curso todavía puede resolver esa diferencia en el 2do o 3er conteo.
+
+#### `GET /api/historial/comparativo`
+
+Serie mes a mes con la variación contra el período anterior.
+
+Query: `sucursalId`, `desdeAnio`, `hastaAnio` (400 si `desdeAnio > hastaAnio`).
+
+Respuesta `200`:
+```json
+{
+  "sucursalId": 1,
+  "periodos": 3,
+  "serie": [
+    { "periodo": "2026-06", "periodoAnio": 2026, "periodoMes": 6,
+      "itemsTotales": 8000, "itemsConDiferencia": 130, "montoFaltanteNeto": 1390,
+      "porcentajeCuadrado": 98.4, "variacionFaltantePct": null,
+      "inventarioId": 8001, "sucursalNombre": "Market Central Luzuriaga",
+      "folio": "INV-2026-06-LUZ-8000-06A" },
+    { "periodo": "2026-07", "montoFaltanteNeto": 1550, "variacionFaltantePct": 11.5, "folio": "INV-2026-07-LUZ-8000-844" }
+  ]
+}
+```
+
+`variacionFaltantePct` es `null` en el primer punto: no hay contra qué comparar, y devolver `0` ahí sería afirmar "no cambió", que es una mentira distinta.
+
+---
+
+### El control de dos personas — aprobación y lacrado
+
+El cierre del mes exige **dos aprobaciones de dos personas distintas** (Gilmer y Michell en la reunión; los dos auditores en `mobile/design/lacrado.html`).
+
+**Quien aprueba sale SIEMPRE del token, nunca del body.** Es la misma regla que ya gobierna el rol en todo el proyecto: lo que manda el cliente no define quién es. Una doble validación que una sola persona puede completar no es un control, es un botón doble.
+
+> ⚠️ **La app móvil tiene que cambiar.** Hoy muestra los dos botones "Aprobar" a la vez en la misma pantalla, y un auditor puede tocar el de la fila del otro. Con este backend eso ya no funciona: cada firma se registra contra el colaborador de la sesión que la envía. **En la práctica hacen falta dos sesiones — dos dispositivos, o un logout/login — para lacrar.** Es correcto: es exactamente el punto de un control de dos personas. La pantalla debería mostrar un solo botón "Aprobar como <el usuario logueado>" y el estado de la otra firma como información, no como acción.
+
+Quién puede firmar: `administrador` y `auditor`. **Pendiente de confirmar con el cliente**: la Decisión 1 de `docs/pantallas.md` aclara que Michell es *coordinador*, lo que haría la doble validación auditor + coordinador; la maqueta ya validada muestra dos auditores. Se tomó la lectura restrictiva porque el costo de los dos errores no es simétrico: si sobra un rol, alguien que no corresponde cierra el mes de forma irreversible; si falta, se agrega en una línea.
+
+#### `POST /api/historial/inventarios/:id/aprobaciones`
+
+Registra la firma **del colaborador de la sesión**.
+
+Body:
+```json
+{ "nota": "Revisado contra el reporte de Jocelyn." }
+```
+`nota` es opcional y es **el único campo aceptado**. El schema es `.strict()`: un body con `aprobadorId`, `colaboradorId` o `rolAlAprobar` responde **`400`**, no se ignora en silencio — quien intenta firmar por otro tiene que enterarse, y si la app vieja todavía manda ese campo, el 400 es la señal que necesita para corregirse.
+
+Respuesta `201`:
+```json
+{
+  "inventarioId": 8003,
+  "aprobadorId": 103,
+  "aprobadorNombre": "Gilmer Quispe",
+  "rolAlAprobar": "auditor",
+  "aprobadoEn": "2026-09-04T02:19:00.000Z",
+  "nota": null,
+  "aprobacionesTotales": 1,
+  "listoParaLacrar": false
+}
+```
+
+Errores:
+- `400` — el body trae un campo de identidad (ver arriba).
+- `403` — rol sin permiso, o inventario de otra sucursal.
+- `409` — **ya aprobaste este inventario** (la segunda firma la tiene que dar otra persona, desde su propia sesión); el inventario está `en_curso`, `lacrado` o `anulado`; o ya tiene las dos firmas.
+
+La base lo sostiene además con `@@unique([inventarioId, aprobadorId])`: la regla de "tienen que ser dos personas distintas" sale gratis de esa restricción, no de un `if`.
+
+#### `POST /api/historial/inventarios/:id/lacrado`
+
+Cierra el mes. **Es la operación más irreversible del sistema.**
+
+Body: `{}` — no acepta ningún campo (`.strict()`). El contenido a sellar lo arma el backend leyendo el inventario; aceptarlo del cliente sería dejar que el sellado declare lo que quiere haber sellado.
+
+En una sola transacción: se crea el sello, el inventario pasa a `lacrado` y se libera la sucursal (`abierto: null`) para el inventario del mes siguiente. Si fueran operaciones sueltas y fallara la del medio, quedaría un sello sin inventario cerrado — o peor, una sucursal bloqueada con un inventario ya firmado.
+
+Respuesta `201`:
+```json
+{
+  "inventarioId": 8003,
+  "folio": "INV-2026-08-LUZ-8000-0AA",
+  "hash": "0aa84d76e3ea...",
+  "hashAlgoritmo": "sha256",
+  "lacradoEn": "2026-09-04T02:19:05.000Z",
+  "lacradoPor": { "id": 103, "nombre": "Gilmer Quispe" },
+  "aprobadoPor": [
+    { "id": 103, "nombre": "Gilmer Quispe", "rol": "auditor", "aprobadoEn": "..." },
+    { "id": 106, "nombre": "Rosa Melgarejo", "rol": "auditor", "aprobadoEn": "..." }
+  ]
+}
+```
+
+Errores: `403` rol o sucursal · `409` ya está lacrado, faltan aprobaciones (*"el lacrado exige 2 de personas distintas y hay 1"*), o el estado no es `conteo_cerrado`/`liquidado`.
+
+#### `POST /api/historial/inventarios/:id/lacrado/registro-erp`
+
+Constancia de que TI cargó el ajuste **a mano** en Dynamics. El backend **no escribe al ERP**: el ajuste automático es fase 2, decisión del cliente (`docs/pantallas.md`, Decisión 5). Este endpoint solo deja registro de que alguien lo hizo.
+
+Body: `{ "referencia": "AJ-2026-08-0221" }` — el número de asiento o diario del ERP, opcional.
+
+Respuesta `201`:
+```json
+{
+  "inventarioId": 8003,
+  "folio": "INV-2026-08-LUZ-8000-0AA",
+  "referencia": "AJ-2026-08-0221",
+  "registradoEn": "2026-09-04T02:19:06.000Z",
+  "registradoPor": { "id": 103, "nombre": "Gilmer Quispe" }
+}
+```
+
+Errores: `409` el inventario no está lacrado, o ya figura como registrado.
+
+---
+
+### Datos de demo del histórico
+
+`npm run prisma:seed` siembra el **padrón** (tiendas y personas reales). El histórico es aparte, porque son datos de ejemplo de un proceso que todavía no corrió nunca:
+
+```bash
+npm run prisma:seed-historial     # 2 inventarios lacrados + 1 esperando firmas
+npm run prisma:limpiar-historial  # borra solo los ids 8001-8003, para re-sembrar
+```
+
+Deja en Market Central Luzuriaga:
+
+| Período | Estado | Datos |
+|---|---|---|
+| 2026-06 | `lacrado` + registrado en ERP | Los números del mockup del cliente: 8.000 ítems, 130 con diferencia, S/1850 − 310 − 150 = **1390 neto**, cuota **126.36**, 3 faltas. Folio `INV-2026-06-LUZ-8000-06A`. |
+| 2026-07 | `lacrado`, **sin** registrar en ERP | S/2050 − 340 − 160. Tamaño de hoja 30 (es configurable y cambia entre inventarios). Muestra el caso real "lacrado pero pendiente de registro manual". |
+| 2026-08 | `liquidado`, **0 / 2 firmas** | Los números de `mobile/design/liquidacion.html`: S/2200 − 380 − 170 = **1650**, cuota **150** exacta. Es el que deja ver la pantalla de lacrado en su estado interesante, con el botón bloqueado. |
+
+Los mismos códigos de artículo se repiten en los tres períodos a propósito: sin repetición no hay histórico por artículo que mirar.
+
+El hash de los sellos de demo se calcula con **las mismas funciones** que usa el endpoint real, así que `GET .../lacrado/verificacion` sobre ellos da `intacto: true` de verdad y la pantalla se puede validar de punta a punta.
+
+### Verificación contra la base real
+
+Los dos scripts que se usaron para verificar todo esto quedan en el repo — sin ellos nadie puede repetir la comprobación:
+
+```bash
+npm run verificar:db    # restricciones contra Postgres (transacción + rollback: no deja filas)
+npm run verificar:api   # flujo completo contra el backend vivo en :3000
+```
+
+`verificar:db` prueba, escribiendo **directo en la base** (no por la API), que Postgres rechaza: un segundo inventario abierto en la misma sucursal, dos inventarios del mismo período, la misma persona firmando dos veces, un segundo lacrado sobre el mismo inventario, y el `UPDATE`/`DELETE` sobre un sello o una firma. Una regla que solo vive en un `if` la saltea cualquiera que escriba directo en la tabla.
+
+`verificar:api` prueba el conteo ciego (403 para rol `conteo`), el recorte por sucursal, los derivados calculados, la verificación del sello, y el control de dos personas completo: una firma por sesión, el 409 cuando la misma persona intenta dar la segunda, el 409 al lacrar con una sola, y el 400 cuando el body intenta declarar `aprobadorId`.
 
 ## Desarrollo
 

@@ -63,6 +63,36 @@ enum EstadoSync {
   @@map("estado_sync")
 }
 
+/// Ciclo de vida del inventario mensual de una sucursal. El orden importa y
+/// no se puede saltear -- cada transicion es una accion distinta con su
+/// propio responsable (docs/pantallas.md, Pantallas 4/6/7):
+///
+///   en_curso       Snapshot tomado, hojas en juego, las 3 rondas de conteo
+///                  todavia se pueden tocar. Es el unico estado en el que
+///                  el inventario acepta escrituras de conteo.
+///   conteo_cerrado La 3ra ronda quedo fija (cierre de Gilmer): las
+///                  cantidades ya no se recuentan, se liquidan.
+///   liquidado      La planilla de descuentos esta calculada y confirmada
+///                  (Pantalla 6). Falta la firma.
+///   lacrado        CERRADO E INMUTABLE (Pantalla 7). Ver LacradoInventario:
+///                  a partir de aca nada modifica este inventario, y
+///                  cualquier ajuste entra en el periodo siguiente -- es
+///                  literalmente lo que pidio el cliente en la reunion.
+///   anulado        Salida lateral: se abandono sin llegar a lacrar (por
+///                  ejemplo, snapshot equivocado). NO produce historico
+///                  contable, pero libera la sucursal para abrir otro --
+///                  sin esto, un inventario abierto por error la bloquearia
+///                  para siempre por el @@unique([sucursalId, abierto]).
+enum EstadoInventario {
+  en_curso
+  conteo_cerrado
+  liquidado
+  lacrado
+  anulado
+
+  @@map("estado_inventario")
+}
+
 // ---------------------------------------------------------------------------
 // Sesion / padron
 // ---------------------------------------------------------------------------
@@ -118,6 +148,15 @@ model Colaborador {
   asignadoComoSecundario  HojaConteo[]        @relation("AsignadoA2")
   sesiones                SesionToken[]
   accionesDeAuditoria     RegistroAuditoria[] @relation("ActorAuditoria")
+
+  /// Rastro en el historico de inventarios. Es OTRA razon por la que las
+  /// cuentas se deshabilitan y nunca se borran (ver Colaborador.activo):
+  /// un lacrado sin identidad de quien firmo no sirve como control.
+  inventariosCerrados     Inventario[]             @relation("InventarioCerradoPor")
+  lacradosEjecutados      LacradoInventario[]      @relation("LacradoPor")
+  registrosEnErp          RegistroErpInventario[]  @relation("RegistradoEnErpPor")
+  aprobacionesDeCierre    AprobacionCierre[]       @relation("AprobadorCierre")
+  liquidaciones           LiquidacionColaborador[] @relation("ColaboradorLiquidado")
 
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
@@ -196,19 +235,94 @@ model SesionToken {
 // ---------------------------------------------------------------------------
 
 /// Referenciado por HojaConteo.inventarioId en tipos.ts. Agrupa las hojas de
-/// una corrida de conteo en una sucursal y guarda el snapshot de Dynamics
-/// (RepositorioInventario.traerSnapshot).
+/// una corrida de conteo en una sucursal, guarda el snapshot de Dynamics
+/// (RepositorioInventario.traerSnapshot) y es la UNIDAD DEL HISTORICO: un
+/// inventario = el cierre mensual de una sucursal (docs/pantallas.md,
+/// Pantallas 4/6/7). Todo lo que el negocio llama "el inventario de agosto
+/// de Luzuriaga" es una fila de esta tabla y lo que le cuelga.
+///
+/// CICLO DE VIDA (ver EstadoInventario): en_curso -> conteo_cerrado ->
+/// liquidado -> lacrado. `anulado` es la unica salida lateral y existe para
+/// que un inventario abierto por error no deje la sucursal bloqueada para
+/// siempre (ver el @@unique de `abierto` mas abajo).
 model Inventario {
   id               Int            @id @default(autoincrement())
   sucursalId       Int            @map("sucursal_id")
   sucursal         Sucursal       @relation(fields: [sucursalId], references: [id])
+
+  /// Ver EstadoInventario. Nace `en_curso` para no romper a quien crea un
+  /// inventario sin declararlo (d365-catalogo.service.ts#crearSnapshot): un
+  /// snapshot recien tomado ES un inventario en curso, no hay otro estado
+  /// posible al nacer.
+  estado           EstadoInventario @default(en_curso)
+
+  /// Periodo mensual al que pertenece este inventario ("Agosto 2026" en la
+  /// maqueta). Se guarda como anio+mes y NO como un DateTime porque el
+  /// periodo es un mes calendario entero, no un instante: guardarlo como
+  /// fecha obliga a elegir un dia arbitrario y a pelear con la zona horaria
+  /// cada vez que alguien pregunta "de que mes es esto".
+  ///
+  /// El default lo calcula Postgres (mes en curso al insertar) por dos
+  /// razones: es el valor correcto del negocio -- el snapshot se toma
+  /// cuando arranca el inventario del mes -- y deja que el snapshot de
+  /// d365 siga creando filas sin declarar periodo. Cuando exista el modulo
+  /// de inventario real, ese modulo lo pasa explicito.
+  periodoAnio      Int            @default(dbgenerated("EXTRACT(YEAR FROM now())::int")) @map("periodo_anio")
+  periodoMes       Int            @default(dbgenerated("EXTRACT(MONTH FROM now())::int")) @map("periodo_mes")
+
+  /// 20 | 30 | 50 -- el tamano de hoja es CONFIGURABLE y cambia entre
+  /// inventarios (docs/pantallas.md, Decision del Cliente 4). Se copia aca
+  /// desde Configuracion.TAMANO_HOJA_DEFECTO al abrir el inventario, y no
+  /// se lee de la config al consultarlo: dentro de seis meses la config va
+  /// a valer otra cosa y el historico tiene que seguir diciendo con cuantos
+  /// items por hoja se conto ESE mes.
+  tamanoHoja       Int            @default(50) @map("tamano_hoja")
+
   snapshotItems    Int?           @map("snapshot_items")
   snapshotTomadoEn DateTime?      @map("snapshot_tomado_en")
+
+  /// Apertura y cierre del CONTEO (no del lacrado: eso vive en
+  /// LacradoInventario.lacradoEn). `cerradoEn`/`cerradoPor` se llenan
+  /// cuando la 3ra ronda queda fija y las cantidades pasan a liquidacion.
+  abiertoEn        DateTime       @default(now()) @map("abierto_en")
+  cerradoEn        DateTime?      @map("cerrado_en")
+  cerradoPorId     Int?           @map("cerrado_por_id")
+  cerradoPor       Colaborador?   @relation("InventarioCerradoPor", fields: [cerradoPorId], references: [id])
+
+  /// EL CANDADO DE "UN SOLO INVENTARIO ABIERTO POR SUCURSAL", en la base y
+  /// no en un `if` que alguien puede olvidar.
+  ///
+  /// Solo tiene DOS valores legales: `true` (abierto) y NULL (cerrado).
+  /// Nunca `false`. Junto con @@unique([sucursalId, abierto]) alcanza,
+  /// porque Postgres considera cada NULL distinto de todos los demas en un
+  /// indice unico: dos filas (sucursal 1, true) chocan, pero N filas
+  /// (sucursal 1, NULL) conviven sin problema. Es el indice unico parcial
+  /// clasico, expresado con lo que Prisma sabe declarar.
+  ///
+  /// Por eso CERRAR un inventario es `abierto: null`, jamas
+  /// `abierto: false` -- eso volveria a bloquear la sucursal. Lo escribe
+  /// siempre el service, nunca el cliente.
+  abierto          Boolean?       @default(true)
+
   hojas            HojaConteo[]
   catalogo         CatalogoItem[]
+  /// 1:1 -- un inventario se lacra UNA sola vez y no se re-lacra.
+  lacrado          LacradoInventario?
+  resultado        ResultadoInventario?
+  diferencias      DiferenciaItem[]
+  aprobaciones     AprobacionCierre[]
+  liquidaciones    LiquidacionColaborador[]
 
   createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
 
+  /// El inventario es MENSUAL por sucursal: no hay dos "agosto 2026" de
+  /// Luzuriaga. Restriccion independiente de la de arriba -- esta impide
+  /// duplicar un periodo (incluso entre inventarios ya cerrados), la de
+  /// `abierto` impide tener dos en curso a la vez.
+  @@unique([sucursalId, periodoAnio, periodoMes])
+  @@unique([sucursalId, abierto])
+  @@index([sucursalId, estado])
   @@map("inventarios")
 }
 
@@ -324,4 +438,297 @@ model Conteo {
 
   @@unique([hojaId, productoId])
   @@map("conteos")
+}
+
+// ---------------------------------------------------------------------------
+// Historico: cierre, lacrado y resultados
+//
+// Todo lo de esta seccion existe para una sola pregunta del cliente: "donde
+// llevaremos el control y el historico de los inventarios". La respuesta es
+// Inventario (arriba) + estas cinco tablas.
+//
+// Regla transversal, heredada del comentario de Conteo: NINGUN total
+// derivable se guarda junto a sus partes. `itemsCuadrados`, el faltante neto
+// y el descuento total de cada colaborador se CALCULAN (ver
+// modules/historial/historial.calculos.ts). Guardar un total al lado de sus
+// sumandos es garantizar que algun dia no coincidan.
+// ---------------------------------------------------------------------------
+
+/// EL SELLO DEL MES. Es lo que Oscar describe en la reunion como "cierras,
+/// firmas, sellas y lacras" (docs/pantallas.md, Pantalla 7) y lo que la
+/// maqueta mobile/design/lacrado.html muestra como "Hash ID".
+///
+/// INMUTABILIDAD -- como la sostiene este modelo, en tres niveles:
+///
+///  1. Relacion 1:1 con Inventario (`inventarioId @unique`): un inventario
+///     se lacra UNA vez. No hay forma de tener dos sellos del mismo mes ni
+///     de "re-lacrar" con otro contenido.
+///  2. Esta tabla NO tiene `updatedAt`, a diferencia de todos los demas
+///     modelos escribibles del schema. La ausencia es deliberada: no hay
+///     campo donde registrar una modificacion porque no debe existir
+///     ninguna. Un lacrado se inserta y nunca se toca.
+///  3. `hash` + `contenido`: el sello es VERIFICABLE, no una promesa. Se
+///     puede recalcular el hash sobre el estado actual del inventario y
+///     compararlo con el guardado (endpoint GET .../lacrado/verificacion).
+///     Si alguien altero una hoja despues del cierre, los hashes difieren y
+///     el sistema lo dice. Una regla de inmutabilidad que no se puede
+///     comprobar no es un control, es un cartel.
+///
+/// Falta el cuarto nivel, que Prisma no sabe declarar y va a mano en la
+/// migracion: revocar UPDATE/DELETE sobre `lacrados_inventario` (o un
+/// trigger BEFORE UPDATE que lance excepcion). Queda anotado en el README
+/// como paso de la migracion, no se finge que el schema ya lo cubre.
+model LacradoInventario {
+  id           Int        @id @default(autoincrement())
+  /// @unique = 1:1: un inventario se lacra una sola vez.
+  inventarioId Int        @unique @map("inventario_id")
+  inventario   Inventario @relation(fields: [inventarioId], references: [id])
+
+  /// Folio legible que ve la gente: "INV-2026-08-LUZ-8000-K99"
+  /// (mobile/design/lacrado.html). Es el identificador que se cita en un
+  /// mail o en un acta -- nadie dicta 64 caracteres hexadecimales por
+  /// telefono. No reemplaza al hash: el folio identifica, el hash sella.
+  folio        String     @unique
+
+  /// SHA-256 en hexadecimal (64 chars) de `contenido`, serializado en forma
+  /// canonica (claves ordenadas, sin espacios) -- si no es canonico, dos
+  /// serializaciones del mismo dato dan hashes distintos y la verificacion
+  /// no sirve para nada.
+  hash          String    @unique
+  /// Versionado a proposito: el dia que se cambie de algoritmo, los
+  /// lacrados viejos siguen siendo verificables porque cada fila dice con
+  /// que se calculo el suyo.
+  hashAlgoritmo String    @default("sha256") @map("hash_algoritmo")
+  /// QUE se hasheo, exactamente. Sin esto, el hash es un numero magico que
+  /// nadie puede recomputar dentro de dos anios: el sello tiene que
+  /// arrastrar su propio insumo. Incluye los totales del inventario, el
+  /// resumen de diferencias, la planilla de liquidacion y las aprobaciones.
+  contenido     Json
+
+  lacradoEn     DateTime  @default(now()) @map("lacrado_en")
+  /// Quien apreto el boton. Distinto de las aprobaciones: aprobar es
+  /// validar el resultado, lacrar es ejecutar el cierre.
+  lacradoPorId  Int         @map("lacrado_por_id")
+  lacradoPor    Colaborador @relation("LacradoPor", fields: [lacradoPorId], references: [id])
+
+  /// El registro manual en Dynamics NO vive en esta tabla, aunque la maqueta
+  /// lo muestre en la pantalla de al lado: es un hecho POSTERIOR al sello y
+  /// meterlo aca obligaria a hacer UPDATE sobre la fila del lacrado, que es
+  /// justo lo que esta tabla no debe aceptar nunca. Vive en
+  /// RegistroErpInventario, 1:1 -- asi `lacrados_inventario` queda
+  /// append-only de verdad y la migracion puede revocarle el UPDATE sin
+  /// romper ninguna funcionalidad.
+  registroErp RegistroErpInventario?
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@map("lacrados_inventario")
+}
+
+/// Constancia de que TI cargo el ajuste a mano en Dynamics.
+///
+/// Tabla aparte del lacrado por dos razones, y la segunda es la que manda:
+///  1. Son dos hechos distintos en dos momentos distintos -- la maqueta los
+///     muestra como dos tarjetas separadas, y un inventario puede quedar
+///     lacrado y sin registrar en el ERP por dias.
+///  2. Deja que `lacrados_inventario` sea append-only sin excepciones. Una
+///     tabla "inmutable salvo estas tres columnas" no es inmutable: es una
+///     tabla con una puerta, y las puertas se usan.
+///
+/// El envio automatico a Dynamics es FASE 2 (docs/pantallas.md, Decision 5):
+/// este backend NO escribe al ERP, solo deja constancia de que alguien lo
+/// hizo. Por eso `referencia` es texto libre -- es el numero de asiento o
+/// diario que TI copia del ERP, no algo que el sistema genere.
+model RegistroErpInventario {
+  id        Int               @id @default(autoincrement())
+  lacradoId Int               @unique @map("lacrado_id")
+  lacrado   LacradoInventario @relation(fields: [lacradoId], references: [id])
+
+  /// Numero de asiento/diario del ERP, para poder rastrearlo despues.
+  referencia   String?
+  registradoEn DateTime    @default(now()) @map("registrado_en")
+  registradoPorId Int      @map("registrado_por_id")
+  registradoPor Colaborador @relation("RegistradoEnErpPor", fields: [registradoPorId], references: [id])
+
+  @@map("registros_erp_inventario")
+}
+
+/// Las DOS aprobaciones que habilitan el lacrado (Gilmer y Michell en la
+/// reunion; Gilmer Quispe y Rosa Melgarejo en la maqueta).
+///
+/// Cuelga de Inventario y NO de LacradoInventario, aunque el sello sea el
+/// producto final: las aprobaciones ocurren ANTES de lacrar -- se van
+/// juntando de a una y el boton de lacrar recien se habilita cuando hay dos
+/// (mobile/design/lacrado.html). Colgarlas del lacrado obligaria a crear el
+/// sello antes de tener las firmas que lo justifican, que es exactamente al
+/// reves de como funciona el control.
+model AprobacionCierre {
+  id           Int        @id @default(autoincrement())
+  inventarioId Int        @map("inventario_id")
+  inventario   Inventario @relation(fields: [inventarioId], references: [id])
+
+  aprobadorId  Int         @map("aprobador_id")
+  aprobador    Colaborador @relation("AprobadorCierre", fields: [aprobadorId], references: [id])
+  /// Rol CONGELADO al momento de firmar. Si manana esa persona cambia de
+  /// rol o se deshabilita, la firma tiene que seguir diciendo con que
+  /// autoridad se dio -- leerlo de Colaborador.rol reescribiria el pasado.
+  rolAlAprobar Rol         @map("rol_al_aprobar")
+  aprobadoEn   DateTime    @default(now()) @map("aprobado_en")
+  /// Observacion opcional de quien aprueba ("aprobado con reserva por X").
+  nota         String?
+
+  /// Nadie firma dos veces: dos aprobaciones de la misma persona no son
+  /// una doble validacion. La regla de "tienen que ser DOS personas
+  /// distintas" sale gratis de esta restriccion.
+  @@unique([inventarioId, aprobadorId])
+  @@map("aprobaciones_cierre")
+}
+
+/// Resumen del inventario, 1:1: es la fila que responde "como fue el
+/// inventario de agosto" sin recorrer 8.000 conteos. Se escribe al cerrar
+/// el conteo y ya no cambia.
+///
+/// Que NO esta aca, a proposito (regla de "ningun total derivable"):
+///   - itemsCuadrados    = itemsTotales - itemsConDiferencia
+///   - montoFaltanteNeto = bruto - negativos - empresa
+///   - cuotaBase         = neto / colaboradoresAlcanzados
+///   - bonoAsistencia    = fondo de multas / asistentes
+/// Todos se calculan en historial.calculos.ts, que se testea sin base.
+model ResultadoInventario {
+  id           Int        @id @default(autoincrement())
+  inventarioId Int        @unique @map("inventario_id")
+  inventario   Inventario @relation(fields: [inventarioId], references: [id])
+
+  /// -- Embudo de los 3 conteos (docs/pantallas.md, Pantalla 4) --
+  /// Universo contado en la 1ra ronda (8.000 en el ejemplo del cliente).
+  itemsTotales       Int @map("items_totales")
+  /// Los que quedaron con diferencia DESPUES de la 3ra ronda (130 en el
+  /// ejemplo). Los cuadrados se derivan restando.
+  itemsConDiferencia Int @map("items_con_diferencia")
+  /// Cuantos entraron a cada reconteo -- es el embudo que dibuja la
+  /// Pantalla 4 y lo que permite comparar "cuanto mejoro el 2do conteo
+  /// respecto de agosto" entre periodos.
+  itemsSegundoConteo Int @map("items_segundo_conteo")
+  itemsTercerConteo  Int @map("items_tercer_conteo")
+
+  /// -- Unidades (no plata): faltante y sobrante en cantidad fisica --
+  unidadesFaltantes Int @map("unidades_faltantes")
+  unidadesSobrantes Int @map("unidades_sobrantes")
+
+  /// -- Plata (Pantalla 6) -- Decimal, NUNCA Float: la plata en coma
+  /// flotante es como se pierden centavos que despues nadie sabe explicar.
+  montoFaltanteBruto   Decimal @default(0) @map("monto_faltante_bruto")   @db.Decimal(12, 2)
+  /// Ajustes de entradas/salidas del mes que reporta Jocelyn, a favor del
+  /// personal (docs/pantallas.md, Pantalla 6).
+  montoNegativos       Decimal @default(0) @map("monto_negativos")        @db.Decimal(12, 2)
+  /// Faltante que absorbe la empresa y no se descuenta (las cervezas del
+  /// ejemplo del cliente).
+  montoFaltanteEmpresa Decimal @default(0) @map("monto_faltante_empresa") @db.Decimal(12, 2)
+
+  /// -- Reparto (Pantalla 6) --
+  /// Entre CUANTA gente se divide el neto: todo el personal habilitado de
+  /// la tienda (11 en el ejemplo), no solo quienes asistieron a contar.
+  colaboradoresAlcanzados Int @map("colaboradores_alcanzados")
+  /// De esos, cuantos asistieron. La diferencia son las faltas que pagan
+  /// multa y alimentan el fondo que se redistribuye.
+  colaboradoresAsistieron Int @map("colaboradores_asistieron")
+  /// Monto de la multa por inasistencia VIGENTE en este inventario (S/20
+  /// hoy). Congelado igual que tamanoHoja: si manana la multa sube, el
+  /// historico tiene que seguir liquidando agosto con la de agosto.
+  multaInasistencia Decimal @default(20) @map("multa_inasistencia") @db.Decimal(12, 2)
+
+  calculadoEn DateTime @default(now()) @map("calculado_en")
+
+  @@map("resultados_inventario")
+}
+
+/// Una fila por item que NO cuadro. Es la mitad del historico que el cliente
+/// pidio: "este producto, cuantas veces dio diferencia este ano".
+///
+/// Guarda `codigo` y `descripcion` como TEXTO en vez de una FK a Producto, y
+/// no es desprolijidad: Producto cuelga de HojaConteo, que cuelga de UN
+/// inventario. Cruzar el mismo articulo entre agosto y septiembre por FK es
+/// imposible -- son filas distintas de Producto. El ItemNumber de Dynamics
+/// es la unica identidad estable del articulo a traves de los meses, asi que
+/// el historico se indexa por el. La `descripcion` viaja copiada por la
+/// misma razon que `tamanoHoja`: si el articulo se renombra en Dynamics, el
+/// inventario de agosto tiene que seguir diciendo como se llamaba en agosto.
+model DiferenciaItem {
+  id           Int        @id @default(autoincrement())
+  inventarioId Int        @map("inventario_id")
+  inventario   Inventario @relation(fields: [inventarioId], references: [id])
+
+  /// ItemNumber de Dynamics -- la identidad estable entre periodos.
+  codigo      String
+  descripcion String
+
+  /// Lo que decia el ERP contra lo que fijo el 3er conteo.
+  stockSistema Int @map("stock_sistema")
+  conteoFinal  Int @map("conteo_final")
+  /// conteoFinal - stockSistema. Negativo = faltante, positivo = sobrante.
+  /// Este SI se guarda aunque sea derivable de las dos columnas de al lado:
+  /// es la columna por la que se filtra y se ordena el historico ("los 20
+  /// peores faltantes del ano"), y calcularlo con una expresion en cada
+  /// query impide usar un indice.
+  diferencia   Int
+
+  /// En que ronda quedo resuelto (1, 2 o 3). Permite responder "cuantos se
+  /// arreglaron solos en el 2do conteo" sin recorrer las hojas.
+  resueltoEnConteo Int @map("resuelto_en_conteo")
+
+  /// Costo unitario al momento del inventario. 4 decimales porque un costo
+  /// unitario de almacen no es un precio de gondola: se redondea al
+  /// multiplicar, no antes. Nullable: si el snapshot no trajo costo, la
+  /// diferencia en unidades sigue siendo valida aunque no se pueda valorizar.
+  costoUnitario   Decimal? @map("costo_unitario")   @db.Decimal(12, 4)
+  montoDiferencia Decimal? @map("monto_diferencia") @db.Decimal(12, 2)
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  /// Un item aparece una sola vez por inventario: la diferencia es el
+  /// resultado FINAL del ciclo de 3 conteos, no una fila por ronda.
+  @@unique([inventarioId, codigo])
+  /// El indice que hace barata la pregunta del cliente: el historico de UN
+  /// articulo a traves de todos los inventarios.
+  @@index([codigo])
+  @@index([inventarioId, diferencia])
+  @@map("diferencias_item")
+}
+
+/// La planilla de descuentos de la Pantalla 6, una fila por colaborador.
+///
+/// Se persiste (en vez de recalcularse al vuelo desde el resultado) porque
+/// es lo que la persona firma y lo que se le descuenta del sueldo: si el
+/// padron cambia -- alguien se va, entra otro, se deshabilita una cuenta --
+/// recalcular la planilla de agosto en noviembre daria otro numero, y el
+/// recibo de sueldo de agosto ya se emitio. El historico guarda lo que
+/// PASO, no lo que hoy daria la cuenta.
+model LiquidacionColaborador {
+  id           Int        @id @default(autoincrement())
+  inventarioId Int        @map("inventario_id")
+  inventario   Inventario @relation(fields: [inventarioId], references: [id])
+
+  colaboradorId Int         @map("colaborador_id")
+  colaborador   Colaborador @relation("ColaboradorLiquidado", fields: [colaboradorId], references: [id])
+  /// Nombre y rol congelados al momento de liquidar, misma razon que
+  /// AprobacionCierre.rolAlAprobar y DiferenciaItem.descripcion.
+  nombreAlLiquidar String @map("nombre_al_liquidar")
+  rolAlLiquidar    Rol    @map("rol_al_liquidar")
+
+  /// Asistio al inventario. False = multa (Pantalla 6).
+  asistio Boolean
+
+  /// Las PARTES del descuento. El total (cuota + multa - bono) no se
+  /// guarda: se calcula en historial.calculos.ts, misma regla que el
+  /// `total` ausente de Conteo.
+  cuotaBase         Decimal @map("cuota_base") @db.Decimal(12, 2)
+  multaInasistencia Decimal @default(0) @map("multa_inasistencia") @db.Decimal(12, 2)
+  /// Redistribucion del fondo de multas entre quienes SI asistieron: les
+  /// baja la cuota (docs/pantallas.md, Pantalla 6).
+  bonoAsistencia    Decimal @default(0) @map("bono_asistencia")    @db.Decimal(12, 2)
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@unique([inventarioId, colaboradorId])
+  @@map("liquidaciones_colaborador")
 }
