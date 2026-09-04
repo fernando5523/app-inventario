@@ -819,6 +819,23 @@ body {
   transform: translateY(0) scale(1);
   pointer-events: auto;
 }
+/* SOBRE QUIEN se va a actuar. Con el menu abierto las opciones tapan media
+   pantalla y la ficha resaltada puede quedar fuera de vista -- y "Eliminar
+   cuenta" es irreversible. El NOMBRE es lo que evita borrar la cuenta
+   equivocada. Ver .claude/skills/trujillo-ui/SKILL.md. */
+.speed-dial-contexto {
+  background: var(--rojo-suave);
+  border: 1px solid var(--rojo);
+  color: var(--rojo);
+  padding: 6px 12px;
+  border-radius: 99px;
+  font-size: 12.5px;
+  font-weight: 700;
+  max-width: 240px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .speed-dial-fila {
   display: flex;
   align-items: center;
@@ -1086,6 +1103,7 @@ body {
     <!-- Speed Dial flotante de acciones para la cuenta seleccionada -->
     <div class="speed-dial-contenedor" id="speed-dial" hidden>
       <div class="speed-dial-acciones" id="speed-dial-acciones">
+        <span class="speed-dial-contexto" id="speed-dial-nombre"></span>
         <button type="button" class="speed-dial-fila" id="btn-globo-editar" aria-label="Editar cuenta">
           <span class="speed-dial-etiqueta">Editar cuenta</span>
           <span class="speed-dial-btn">
@@ -1627,6 +1645,9 @@ body {
       $('btn-fab-principal').setAttribute('aria-expanded', 'false');
       $('icono-fab-principal').innerHTML = '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><circle cx="19" cy="11" r="2"/><path d="M19 8v1"/><path d="M19 13v1"/></svg>';
     }
+    /* El NOMBRE, no "usuario seleccionado": el nombre es lo que evita el error. */
+    $('speed-dial-nombre').textContent = seleccionado.nombre;
+    $('btn-fab-principal').setAttribute('aria-label', 'Acciones de ' + seleccionado.nombre);
     $('txt-globo-activo').textContent = seleccionado.activo ? 'Deshabilitar' : 'Habilitar';
     $('btn-globo-activo').setAttribute('aria-label', seleccionado.activo ? 'Deshabilitar cuenta' : 'Habilitar cuenta');
     $('icono-globo-activo').innerHTML = seleccionado.activo ? ICONO_USER_X : ICONO_USER_CHECK;

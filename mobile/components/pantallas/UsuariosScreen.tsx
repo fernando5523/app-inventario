@@ -429,6 +429,17 @@ export function UsuariosScreen({ rol }: UsuariosScreenProps): JSX.Element {
               },
             ]}
           >
+            {/* SOBRE QUIEN se va a actuar. Con el menu abierto las opciones
+                tapan media pantalla y la tarjeta resaltada puede quedar
+                fuera de vista — y "Eliminar cuenta" es irreversible. El
+                NOMBRE es lo que evita borrar la cuenta equivocada, asi que
+                va al lado del boton que se toca, no solo en la lista. */}
+            <View style={styles.speedDialEncabezado}>
+              <Text style={styles.speedDialEncabezadoTexto} numberOfLines={1}>
+                {seleccionadoActual.nombre}
+              </Text>
+            </View>
+
             {/* 1. Editar cuenta */}
             <Pressable
               style={styles.speedDialFila}
@@ -689,6 +700,18 @@ const styles = StyleSheet.create({
     alignItems: 'flex-end',
     gap: 12,
   },
+  // Pill de contexto. Rojo suave para separarla de las acciones (pills
+  // blancas) sin gritar mas que ellas ni competir con el FAB.
+  speedDialEncabezado: {
+    backgroundColor: colors.rojoSuave,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: radius.full,
+    borderWidth: 1,
+    borderColor: colors.rojo,
+    maxWidth: 240,
+  },
+  speedDialEncabezadoTexto: { fontSize: 12.5, color: colors.rojo, fontFamily: fonts.bold },
   speedDialFila: {
     flexDirection: 'row',
     alignItems: 'center',
