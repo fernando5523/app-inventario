@@ -330,6 +330,106 @@ Errores: `400` `sucursalId` inválido, o `modo="real"` sin credenciales configur
 
 ---
 
+### Hojas y conteos — `/api/hojas` (requiere sesión; los 4 roles entran, con recorte por hoja)
+
+El núcleo del negocio: repartir, contar y finalizar. Sirve a `RepositorioHojas` y `RepositorioCatalogo` de `mobile/lib/puertos/repositorios.ts`.
+
+**El recorte fino NO es por rol solo, es por HOJA** (`hojas.permisos.ts`), porque depende de si está asignada a quien pide y de qué sucursal es:
+
+| Acción | Quién |
+|---|---|
+| Ver **las suyas** (`alcance=mias`) | los 4 roles — siempre filtrado al colaborador de la sesión |
+| Ver **el lote entero** (`alcance=todas`) | `coordinador`, `auditor`, `administrador`. **Nunca `conteo`** |
+| Abrir **una** hoja | `conteo` solo si está asignada a él; `coordinador`/`auditor` cualquiera de su sucursal; `administrador` cualquiera |
+| **Escribir** (contar, finalizar) | **solo quien tiene la hoja asignada**, sea cual sea su rol |
+
+Escribir es más estricto que leer a propósito: el inventario se audita y "quién contó esto" tiene que tener respuesta. Que un rol tenga más jerarquía no lo pone frente a la góndola — un `coordinador` (y hasta el `administrador`) recibe `403` si intenta contar en una hoja que no es suya.
+
+**Conteo ciego**: ningún endpoint de acá devuelve stock del ERP. `Producto` no tiene ese campo, ni acá ni en el dominio del front — el stock de Dynamics solo lo ve el Auditor después de cerrado el ciclo. Y `alcance=mias` filtra **en la consulta SQL**, no después en memoria: lo que no se pide, no se trae.
+
+Salir de la propia sucursal da `403` (o `404` en el listado, para no confirmar que ese inventario existe).
+
+#### `GET /api/hojas?inventarioId=<n>&alcance=mias|todas&ronda=1&numero=<opcional>`
+- `alcance` opcional, default **`mias`** — el default es el restrictivo: si alguien olvida el parámetro, la respuesta segura no es el lote entero.
+- `ronda` opcional, default `1` (`HojaConteo.numeroConteo`: 1er conteo, reconteo, auditoría). El puerto del front todavía no habla de rondas.
+- `numero` opcional: así se resuelve `porNumero` del puerto — devuelve una lista de 0 o 1 elemento.
+
+Respuesta `200`: array de hojas con el shape de `mobile/lib/dominio/tipos.ts#HojaConteo`.
+```json
+[{
+  "id": 7, "inventarioId": 1, "numero": "002", "zona": "Abarrotes", "gondola": "A2",
+  "tamano": 50, "estado": "en-proceso", "sync": "sincronizado",
+  "asignados": ["María Rojas"], "productos": [], "conteos": []
+}]
+```
+`estado` sale como `"en-proceso"` (el dominio del front), no `"en_proceso"` (el enum de Prisma).
+
+Errores: `403` un `conteo` pidiendo `alcance=todas` · `404` inventario inexistente o de otra sucursal.
+
+#### `GET /api/hojas/:id`
+La hoja con sus `productos` y `conteos` completos. Mismo shape que un ítem del listado.
+
+Errores: `403` no asignada a vos (rol `conteo`) o de otra sucursal · `404` no existe.
+
+#### `GET /api/hojas/:id/productos`
+Solo el catálogo de esa hoja — `RepositorioCatalogo.deHoja`.
+
+Respuesta `200`:
+```json
+[{
+  "id": 51, "codigo": "0051", "codigoBarras": "7750123051",
+  "descripcion": "Aceite Vegetal Primor 1L",
+  "empaque": { "nombre": "Caja", "factor": 12, "codigoBarras": "17750123051" },
+  "ubicacion": "Góndola A2 · Nivel 3"
+}]
+```
+
+#### `GET /api/hojas/:id/productos/barras/:codigo`
+`RepositorioCatalogo.porCodigoBarras`. Matchea contra el código de la **unidad suelta** y también contra el del **empaque** (la caja de 12 puede traer código propio): escanear la caja resuelve al mismo producto.
+
+Respuesta `200`: un producto, mismo shape que arriba.
+
+`404` cuando el código no pertenece a la hoja. **No es un error a mostrar en rojo**: es el caso de la góndola, donde el producto de al lado entra en cuadro del escáner. El front lo traduce a "este código no pertenece a la hoja" y no cuenta nada.
+
+#### `PUT /api/hojas/:id/conteos/:productoId`
+Guarda o corrige el conteo de un producto.
+
+Body:
+```json
+{ "empaques": 2, "sueltas": 5, "confirmadoPorEscaner": true, "contadoEn": "2026-09-03T10:00:00.000Z" }
+```
+- `confirmadoPorEscaner` opcional, default `false`.
+- `contadoEn` es la hora **del teléfono**, no la del servidor: la cola offline manda esto recién cuando vuelve el WiFi, y la diferencia puede ser de horas.
+- **No se acepta `total`.** Si viene, se ignora. El total se calcula (`empaques × factor + sueltas`); guardarlo junto a sus partes garantiza que algún día no coincidan, y ése es el número que se audita contra el ERP.
+
+Respuesta `200`:
+```json
+{ "conteo": { "productoId": 51, "empaques": 2, "sueltas": 5, "confirmadoPorEscaner": true, "contadoEn": "..." },
+  "total": 53, "estadoHoja": "en-proceso" }
+```
+`total` viene calculado, para que la app no tenga que repetir la cuenta.
+
+**IDEMPOTENTE — esto es lo que la cola de sincronización necesita.** Es `PUT` y no `POST` porque un conteo tiene identidad propia: el par (hoja, producto). Por debajo es un `upsert` sobre `@@unique([hojaId, productoId])`. Mandar el mismo conteo N veces deja exactamente el mismo estado que mandarlo una — **un reintento no puede duplicar nada**. No hace falta que el cliente mande un id de operación: la cola del front ya deduplica por `(hojaId, tipo, productoId)` (`sqlite-cola.ts#claveDedup`), así que las dos puntas coinciden en cuál es la identidad de la operación.
+
+El primer conteo mueve la hoja de `pendiente` a `en-proceso`. **Nunca la finaliza sola.**
+
+Errores:
+- **`409` la hoja ya está finalizada.** El que la cola tiene que saber distinguir: el dato del teléfono **no está mal** — puede ser un conteo válido que quedó en la cola offline y llegó tarde, después de que alguien finalizara la hoja. Es un conflicto de estado, no de forma, por eso `409` y no `400`. Cuando llega esto, el conteo local ya no se puede sincronizar nunca: hay que sacarlo de la cola y avisarle a la persona, no reintentar.
+- `403` la hoja no está asignada a vos.
+- `404` la hoja no existe, o el producto no pertenece a esa hoja.
+- `400` forma inválida (negativos, decimales, falta `contadoEn`).
+
+#### `POST /api/hojas/:id/finalizar`
+Punto de no retorno: después de esto `PUT .../conteos/...` responde `409`.
+
+Sin body. Respuesta `200`: la hoja completa, ya `"finalizada"`.
+
+**También idempotente**: finalizar una hoja ya finalizada devuelve la hoja, no un error. Si tirara `409`, la cola dejaría el ítem en `error` para siempre por haber hecho exactamente lo que se le pidió.
+
+Errores: `403` no asignada a vos · `404` no existe.
+
+---
+
 ## Desarrollo
 
 ```bash
