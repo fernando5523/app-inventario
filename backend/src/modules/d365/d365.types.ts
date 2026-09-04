@@ -135,6 +135,30 @@ export interface D365Almacen {
   WarehouseName?: string;
 }
 
+/**
+ * Un precio de venta de `SalesPriceAgreements`, la entidad donde vive el
+ * precio en este tenant.
+ *
+ * Medido contra el tenant real antes de diseñar nada:
+ *  - `ReleasedProductsV2.SalesPrice` existe y es 1:1, pero viene en 0 en el
+ *    100% de 2.000 filas. Inutil.
+ *  - `InventItemPrices` trae precio, pero `PriceType: "Cost"` -- es COSTO.
+ *  - `SalesPriceAgreements` trae 100% con precio > 0, en PEN.
+ *
+ * OJO con la cardinalidad, que es la trampa: SIN filtrar por almacen hay
+ * hasta 15 filas por item (2.000 filas -> 239 items distintos), porque el
+ * precio es POR TIENDA. Filtrando por `PriceWarehouseId` baja a ~1:1, y el
+ * residuo que queda es por UNIDAD DE VENTA (ver `elegirPrecioVenta`).
+ */
+export interface D365PrecioVenta {
+  ItemNumber: string;
+  Price: number;
+  /** "U", "Emp.20", "SA"... la unidad a la que aplica ESE precio. */
+  QuantityUnitySymbol?: string;
+  PriceWarehouseId?: string;
+  PriceCurrencyCode?: string;
+}
+
 /** Stock por almacen -- `WarehousesOnHandV2` del tenant real. */
 export interface D365StockAlmacen {
   ItemNumber: string;
@@ -142,6 +166,24 @@ export interface D365StockAlmacen {
   OnHandQuantity: number;
   AvailableOnHandQuantity?: number;
   TotalAvailableQuantity?: number;
+}
+
+/**
+ * Fila de `ProductCategoryAssignments`. VERIFICADA contra el tenant real con
+ * una muestra de 2.000: una sola jerarquia ("Catalogo Ventas"), CERO
+ * productos con mas de una asignacion, 134 categorias distintas.
+ *
+ * Esa unicidad es lo que permite cruzarla sin miedo: si un producto tuviera
+ * dos categorias, un join lo duplicaria en las hojas y se contaria dos veces
+ * en tienda -- un error que no se ve en el codigo y aparece recien en la
+ * auditoria como un descuadre.
+ */
+export interface D365CategoriaItem {
+  ProductNumber: string;
+  /** "Catalogo Ventas". Hoy la unica del tenant; se filtra igual, por si aparece otra. */
+  ProductCategoryHierarchyName: string;
+  /** "FIDEOS Y PASTAS", "GALLETAS", "DETERGENTES EN POLVO". */
+  ProductCategoryName: string;
 }
 
 export interface CatalogoItemDto {
@@ -161,6 +203,23 @@ export interface CatalogoItemDto {
    * alguien lo pague. Se deja null salvo que Dynamics haya dado un numero.
    */
   stockErp: number | null;
+  /**
+   * Precio de venta de la UNIDAD suelta, en el almacen de la sucursal.
+   *
+   * `null` = no lo sabemos, y nunca 0: mismo criterio que `stockErp`. Un 0
+   * falso haria que la auditoria valorice un faltante real en cero y que
+   * nadie lo vea en la liquidacion.
+   */
+  precioVenta: number | null;
+  /**
+   * Categoria de "Catalogo Ventas" en Dynamics. Es el ORDEN con el que se
+   * arman las hojas de conteo, no un dato decorativo: sin ella las hojas
+   * salen por codigo de item y el operario cruza la tienda en cada renglon.
+   *
+   * `null` = el ERP no tiene asignacion para ese producto. Esos van al
+   * final, juntos, nunca afuera del inventario.
+   */
+  categoria: string | null;
   /**
    * true = el faltante lo asume la EMPRESA, no se le descuenta al operario
    * (mobile/lib/dominio/tipos.ts#ItemAuditoria.esEmpresa). Sale de

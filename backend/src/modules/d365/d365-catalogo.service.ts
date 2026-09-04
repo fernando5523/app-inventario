@@ -7,10 +7,15 @@
  * lado que persiste algo es Postgres, del lado de aca.
  */
 
-import { d365Config } from '../../config/d365.config';
 import { mensajeSinAlmacen } from '../tiendas/tiendas.almacen';
 import { factorDesdeSimbolo } from '../../dominio/empaque';
 import { prisma } from '../../config/database';
+import { d365AuthService } from './d365-auth.service';
+import {
+  CLAVE_ALMACENES,
+  filtrar as filtrarHabilitados,
+  parsear as parsearAlmacenes,
+} from './d365.almacenes-inventario';
 import { registrarAuditoria } from '../../shared/auditoria';
 import { ErrorHttp } from '../../shared/errores';
 import { d365EntityService } from './d365-entity.service';
@@ -18,8 +23,10 @@ import type {
   CatalogoItemDto,
   D365ProductBarcode,
   D365ReleasedProduct,
+  D365CategoriaItem,
   D365ResponsableItem,
   D365Almacen,
+  D365PrecioVenta,
   D365StockAlmacen,
   D365UnitConversion,
   EmpaqueDto,
@@ -147,6 +154,30 @@ export function agruparResponsablesPorItem(responsables: D365ResponsableItem[]):
 }
 
 /**
+ * Categoria por ItemNumber, para ordenar las hojas.
+ *
+ * Se filtra por jerarquia aunque hoy el tenant tenga UNA sola ("Catalogo
+ * Ventas"): el dia que alguien cargue "Catalogo Compras", sin este filtro el
+ * mismo producto entraria dos veces y se contaria dos veces en gondola. El
+ * costo de la linea es cero; el de no tenerla, una jornada de conteo.
+ *
+ * Ante dos filas de la misma jerarquia para un producto (no pasa hoy: 0/2000
+ * en la muestra) gana la primera. Cualquier criterio sirve mientras sea UNO:
+ * lo que no puede pasar es que el item aparezca duplicado.
+ */
+export const JERARQUIA_CATEGORIAS = 'Catalogo Ventas';
+
+export function agruparCategoriasPorItem(categorias: D365CategoriaItem[]): Map<string, string> {
+  const mapa = new Map<string, string>();
+  for (const c of categorias) {
+    if (c.ProductCategoryHierarchyName !== JERARQUIA_CATEGORIAS) continue;
+    if (!c.ProductNumber || !c.ProductCategoryName) continue;
+    if (!mapa.has(c.ProductNumber)) mapa.set(c.ProductNumber, c.ProductCategoryName);
+  }
+  return mapa;
+}
+
+/**
  * Un item entra al inventario solo si su responsable es el Empleado.
  *
  * Los `Company` no se cuentan (los asume la empresa) y los `None` o sin
@@ -178,6 +209,66 @@ export function agruparStockPorItem(filas: D365StockAlmacen[]): Map<string, numb
     mapa.set(fila.ItemNumber, (mapa.get(fila.ItemNumber) ?? 0) + cantidad);
   }
   return mapa;
+}
+
+/**
+ * Normaliza un simbolo de unidad para poder cruzarlo entre entidades.
+ *
+ * NO es cosmetica: medido contra el tenant real, `ReleasedProductsV2` dice
+ * `"U."`, `"SA."`, `"LTR."` y `SalesPriceAgreements` dice `"U"`, `"SA"`,
+ * `"LTR"`. Con comparacion exacta coinciden CERO de 1.554 filas -- o sea que
+ * `precioVenta` habria quedado en null en el 100% del catalogo, en silencio y
+ * sin ningun error. La diferencia es el punto final.
+ */
+export function normalizarUnidad(simbolo: string | null | undefined): string {
+  if (!simbolo) return '';
+  return simbolo.trim().replace(/\.+$/, '').toUpperCase();
+}
+
+export function agruparPreciosPorItem(filas: D365PrecioVenta[]): Map<string, D365PrecioVenta[]> {
+  const mapa = new Map<string, D365PrecioVenta[]>();
+  for (const fila of filas) {
+    if (!fila.ItemNumber) continue;
+    const previos = mapa.get(fila.ItemNumber);
+    if (previos) previos.push(fila);
+    else mapa.set(fila.ItemNumber, [fila]);
+  }
+  return mapa;
+}
+
+/**
+ * Elige el precio de la UNIDAD SUELTA entre las filas de precio del item.
+ *
+ * Por que hay que elegir y no alcanza con tomar la primera: dentro de UN
+ * almacen el mismo item puede tener dos filas, una por unidad y otra por
+ * empaque. Caso real medido (item 101127, MD01_LUZ):
+ *
+ *     U        ->  S/  1.20
+ *     Emp.20   ->  S/ 22.80
+ *
+ * `ItemAuditoria.precioVenta` valoriza UNIDADES (el conteo se convierte a
+ * unidades con el factor del empaque). Tomar la fila del empaque valorizaria
+ * cada unidad al precio de la caja: 20x de mas en la liquidacion de alguien.
+ *
+ * Y no se deriva el precio unitario dividiendo el del empaque: 1.20 x 20 =
+ * 24, no 22.80. El empaque tiene descuento por volumen, asi que dividir
+ * inventaria plata. Sin fila de unidad suelta, `null` -- no sabemos.
+ */
+export function elegirPrecioVenta(
+  preciosDelItem: D365PrecioVenta[],
+  unidadDeInventario: string | null | undefined,
+): number | null {
+  const objetivo = normalizarUnidad(unidadDeInventario);
+  if (!objetivo) return null;
+
+  const fila = preciosDelItem.find((p) => normalizarUnidad(p.QuantityUnitySymbol) === objetivo);
+  if (!fila) return null;
+
+  const precio = typeof fila.Price === 'number' ? fila.Price : Number(fila.Price);
+  // 0 se trata como "sin precio": un producto de la gondola no vale cero, y
+  // valorizarlo asi esconde el faltante en vez de mostrarlo.
+  if (!Number.isFinite(precio) || precio <= 0) return null;
+  return precio;
 }
 
 /**
@@ -226,6 +317,8 @@ export function mapearProducto(
   conversionesDelItem: D365UnitConversion[],
   responsableCrudo?: string,
   stockErp: number | null = null,
+  categoria: string | null = null,
+  precioVenta: number | null = null,
 ): CatalogoItemDto {
   const suelto = barcodesDelItem.find((b) => b.IsDefaultDisplayedBarcode === 'Yes') ?? barcodesDelItem[0];
 
@@ -240,6 +333,8 @@ export function mapearProducto(
     empaques: elegirEmpaques(conversionesDelItem, producto),
     esEmpresa: esDeLaEmpresa(responsableCrudo),
     stockErp,
+    precioVenta,
+    categoria,
   };
 }
 
@@ -293,6 +388,8 @@ export function mapearCatalogo(
   tipo: TipoInventario = 'mensual',
   stockPorItem: Map<string, number> = new Map(),
   filtrarPorStock = false,
+  categoriaPorItem: Map<string, string> = new Map(),
+  preciosPorItem: Map<string, D365PrecioVenta[]> = new Map(),
 ): CatalogoItemDto[] {
   const barcodesPorItem = agruparBarcodesPorItem(barcodes);
   const conversionesPorItem = agruparConversionesPorProducto(conversiones);
@@ -317,6 +414,13 @@ export function mapearCatalogo(
       // `?? null` y NUNCA `?? 0`: un item sin fila de stock es "no sabemos",
       // no "hay cero". Ver CatalogoItemDto.stockErp.
       stockPorItem.get(producto.ItemNumber) ?? null,
+      // Sin categoria el item NO se descarta: va al final del orden, junto
+      // con los otros sin categoria. Un producto que esta en la gondola
+      // tiene que contarse aunque el ERP no lo haya clasificado.
+      categoriaPorItem.get(producto.ItemNumber) ?? null,
+      // La unidad de inventario del PRODUCTO es la que decide cual de sus
+      // filas de precio corresponde (ver elegirPrecioVenta).
+      elegirPrecioVenta(preciosPorItem.get(producto.ItemNumber) ?? [], producto.InventoryUnitSymbol),
     ),
   );
 
@@ -357,9 +461,10 @@ async function obtenerCatalogoReal(
   tipo: TipoInventario,
   almacen?: string,
 ): Promise<{ catalogo: CatalogoItemDto[]; descartes: DescartesPorStock }> {
-  const filtroCompania = d365Config.dataAreaId ? `dataAreaId eq '${d365Config.dataAreaId}'` : undefined;
+  const dataAreaId = await d365AuthService.getDataAreaId();
+  const filtroCompania = dataAreaId ? `dataAreaId eq '${dataAreaId}'` : undefined;
 
-  const [productos, barcodes, conversiones, responsables, stock] = await Promise.all([
+  const [productos, barcodes, conversiones, responsables, stock, categorias, precios] = await Promise.all([
     d365EntityService.obtenerTodos<D365ReleasedProduct>('ReleasedProductsV2', {
       $select: 'ItemNumber,SearchName,InventoryUnitSymbol,PurchaseUnitSymbol',
       ...(filtroCompania ? { $filter: filtroCompania } : {}),
@@ -397,6 +502,43 @@ async function obtenerCatalogoReal(
           })
           .catch(() => [] as D365StockAlmacen[])
       : Promise.resolve([] as D365StockAlmacen[]),
+    /**
+     * CATEGORIAS -- lo que ORDENA las hojas de conteo.
+     *
+     * Mismo criterio que responsables: si falla, NO se cae el snapshot. Se
+     * sigue sin categoria y las hojas salen por codigo, que es como salian
+     * antes de esto. Un recorrido peor es un problema; un inventario que no
+     * se puede arrancar es otro mucho mayor.
+     *
+     * No lleva `filtroCompania`: la entidad no expone `dataAreaId` (las
+     * categorias son del producto, no de la empresa que lo vende).
+     */
+    d365EntityService
+      .obtenerTodos<D365CategoriaItem>('ProductCategoryAssignments', {
+        $select: 'ProductNumber,ProductCategoryHierarchyName,ProductCategoryName',
+      })
+      .catch(() => [] as D365CategoriaItem[]),
+    /**
+     * EL PRECIO TAMPOCO VIENE DEL CATALOGO, igual que el stock: vive en
+     * `SalesPriceAgreements` y es POR ALMACEN (el mismo item vale distinto en
+     * cada tienda -- medido: hasta 15 filas por item sin filtrar).
+     *
+     * Sin `almacen` no se consulta: traer el consolidado mezclaria precios de
+     * las 4 sucursales y valorizaria el faltante de una con el precio de otra.
+     *
+     * `.catch(() => [])` como las demas: si esta entidad falla, el snapshot
+     * sigue y los precios quedan en null. Un catalogo sin precio se puede
+     * auditar en unidades; un snapshot que no existe deja al Coordinador sin
+     * poder arrancar.
+     */
+    almacen
+      ? d365EntityService
+          .obtenerTodos<D365PrecioVenta>('SalesPriceAgreements', {
+            $filter: `PriceWarehouseId eq '${almacen}'`,
+            $select: 'ItemNumber,Price,QuantityUnitySymbol,PriceWarehouseId,PriceCurrencyCode',
+          })
+          .catch(() => [] as D365PrecioVenta[])
+      : Promise.resolve([] as D365PrecioVenta[]),
   ]);
 
   /**
@@ -404,7 +546,17 @@ async function obtenerCatalogoReal(
    * recien despues se filtra. Contar primero es lo que permite responder "por
    * que esta hoja no trae tal producto" sin volver a golpear Dynamics.
    */
-  const sinFiltrar = mapearCatalogo(productos, barcodes, conversiones, responsables, tipo, agruparStockPorItem(stock));
+  const sinFiltrar = mapearCatalogo(
+    productos,
+    barcodes,
+    conversiones,
+    responsables,
+    tipo,
+    agruparStockPorItem(stock),
+    false,
+    agruparCategoriasPorItem(categorias),
+    agruparPreciosPorItem(precios),
+  );
   const descartes = resumirDescartes(sinFiltrar);
 
   // Solo se filtra si de verdad se consulto stock: sin almacen no hay dato y
@@ -431,17 +583,37 @@ export interface AlmacenDto {
  * parecen validos y nadie se entera hasta que no cuadra a fin de mes. Si la
  * lista sale del ERP, el error deja de ser posible.
  *
+ * FILTRADA por `ALMACENES_INVENTARIO` (ver d365.almacenes-inventario.ts): el
+ * tenant tiene 70 almacenes y solo un punado se inventaria. Los de Transito
+ * (mercaderia en viaje) y Cuarentena (mercaderia bloqueada) NO se cuentan, y
+ * sus nombres se parecen tanto a los de tienda que elegir el equivocado es
+ * cuestion de tiempo: "ALMACEN CUARENTENA MARKET LUZURIAGA" contra "ALMACEN
+ * DISPONIBLE MARKET LUZURIAGA".
+ *
+ * `todos: true` saltea el filtro -- es para dar de alta una tienda cuyo
+ * almacen todavia no esta habilitado. No se saca el filtro entero por eso:
+ * el caso raro no puede volver peligroso el caso comun.
+ *
  * Se ordena por codigo: la lista se lee, no se busca.
  */
-export async function listarAlmacenes(): Promise<AlmacenDto[]> {
+export async function listarAlmacenes(opciones?: { todos?: boolean }): Promise<AlmacenDto[]> {
   const almacenes = await d365EntityService.obtenerTodos<D365Almacen>('Warehouses', {
     $select: 'WarehouseId,WarehouseName',
   });
 
-  return almacenes
+  const listados = almacenes
     .filter((a) => a.WarehouseId)
     .map((a) => ({ codigo: a.WarehouseId, nombre: a.WarehouseName || a.WarehouseId }))
     .sort((a, b) => a.codigo.localeCompare(b.codigo));
+
+  if (opciones?.todos === true) return listados;
+  return filtrarHabilitados(listados, await almacenesHabilitados());
+}
+
+/** Los codigos habilitados, leidos de `Configuracion`. Vacio = sin filtro. */
+export async function almacenesHabilitados(): Promise<string[]> {
+  const fila = await prisma.configuracion.findUnique({ where: { clave: CLAVE_ALMACENES } });
+  return parsearAlmacenes(fila?.valor);
 }
 
 // ---------------------------------------------------------------------------
@@ -510,7 +682,7 @@ export async function crearSnapshot(
     throw new ErrorHttp(400, mensajeSinAlmacen(sucursal.nombre));
   }
 
-  if (modo === 'real' && !d365Config.isConfigured()) {
+  if (modo === 'real' && !(await d365AuthService.isConfigured())) {
     throw new ErrorHttp(
       400,
       'Dynamics no configurado. Configurá D365_TENANT_ID/D365_CLIENT_ID/D365_CLIENT_SECRET/D365_BASE_URL, o pedí el snapshot con modo "ejemplo".',
@@ -549,6 +721,15 @@ export async function crearSnapshot(
             esEmpresa: item.esEmpresa,
             // null cuando no hubo dato: nunca 0 (ver CatalogoItemDto.stockErp).
             stockErp: item.stockErp,
+            // null cuando no hay fila de precio para la unidad suelta:
+            // nunca 0 (ver elegirPrecioVenta).
+            precioVenta: item.precioVenta,
+            // El ORDEN con el que se van a armar las hojas de conteo. Se
+            // guarda con el snapshot y no se recalcula despues: si manana
+            // alguien reclasifica un producto en Dynamics, las hojas ya
+            // repartidas no pueden cambiar de contenido debajo de quien las
+            // esta contando. Mismo criterio que `stockErp`.
+            categoria: item.categoria,
             empaques: {
               // `exactOptionalPropertyTypes` no deja `codigoBarras: undefined`
               // explicito -- se omite la clave entera cuando no vino.
