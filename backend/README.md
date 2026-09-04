@@ -1394,6 +1394,110 @@ node scripts/verificar-cierre-pendientes.mjs   # backend en :3000
 
 Verifica los tres frentes: que la auditoría distinga NULL de 0 contra los datos reales, el camino completo de rotación de PINs con sus permisos, y las tres reglas del histórico **escribiendo directo en Postgres** (no por la API) — porque una regla que solo vive en un `if` la saltea cualquiera que escriba en la tabla.
 
+---
+
+### El almacén de Dynamics: un atributo de la sucursal
+
+Decisión textual del cliente: **"al crear el sitio, se debe asociar el almacén"**. No una tabla de traducción sucursal → almacén que alguien tiene que mantener sincronizada a mano, sino un dato que se elige cuando se da de alta la tienda y vive con ella.
+
+`Sucursal.almacenId` guarda el `WarehouseId` de Dynamics (`MD01_LUZ`, `AD04_TCE`) y `Sucursal.almacenNombre` el nombre legible, copiado del ERP al elegirlo.
+
+#### Nullable, y por qué
+
+`null` significa **"todavía no sabemos cuál es"**, que es la verdad para una tienda recién dada de alta. La alternativa era hacerlo obligatorio y rellenar las existentes con un placeholder, y **un almacén inventado es peor que ninguno**: trae el stock de otra tienda, la auditoría compara contra números que parecen válidos, y nadie se entera hasta que el inventario no cuadra a fin de mes — con once personas ya habiendo contado. Es el mismo criterio que `CatalogoItem.stockErp`: "no sé" nunca se escribe como un valor.
+
+Sin almacén **no se puede traer snapshot**, y eso se rechaza al pedirlo con un mensaje que dice qué falta y quién lo arregla. Pero dar de alta la tienda sigue siendo posible: trabar el padrón porque alguien todavía no fue a buscar el código en Dynamics sería bloquear el alta por un dato que se agrega después.
+
+`GET /api/tiendas` expone `puedeTraerStock` para que la pantalla lo diga al listar, en vez de que el Coordinador se entere recién cuando aprieta "traer snapshot" y falla.
+
+#### Se elige de la lista del ERP, no se tipea
+
+`GET /api/d365/almacenes` (rol `administrador`) devuelve los 70 almacenes del tenant:
+
+```json
+[
+  { "codigo": "MD01_LUZ", "nombre": "ALMACÉN DISPONIBLE MARKET LUZURIAGA" },
+  { "codigo": "MD03_CRH", "nombre": "ALMACÉN DISPONIBLE MARKET CARHUAZ" }
+]
+```
+
+El servidor **verifica el código contra esa lista** antes de guardarlo, y no alcanza con validar el formato: `MD01_LUZ` y `MD01_LZU` tienen los dos la forma correcta, y el segundo traería el stock de otra tienda — o de ninguna — sin fallar. Un almacén inexistente responde `400` con los códigos parecidos sugeridos, porque casi siempre es un dedazo:
+
+```json
+{ "error": "El almacen \"MD01_LZU\" no existe en Dynamics. ¿Quisiste decir alguno de estos? MD01_LUZ. Un almacen mal escrito trae el stock de otra tienda y el error recien se nota cuando el inventario no cuadra." }
+```
+
+Se acepta el código en minúsculas, pero **se guarda el del ERP con su capitalización original**: si se guardara lo que vino del cliente, dos tiendas podrían quedar con `md01_luz` y `MD01_LUZ` para el mismo almacén y cualquier comparación posterior fallaría.
+
+Si Dynamics no contesta, el alta **falla** con un mensaje claro en vez de guardar un almacén sin verificar.
+
+#### En la gestión de tiendas
+
+`POST /api/tiendas` acepta `almacenId` (opcional). `PATCH /api/tiendas/:id` también, y ahí `null` **desasocia** el almacén — que se pueda desasociar es a propósito: si alguien detecta que estaba mal configurado, dejarlo en `null` es mejor que dejar uno equivocado. El primero falla ruidosamente al pedir el snapshot; el segundo trae números de otra tienda en silencio.
+
+`GET /api/tiendas` ahora devuelve, además de lo de antes:
+```json
+{ "almacenId": "MD01_LUZ", "almacenNombre": "ALMACÉN DISPONIBLE MARKET LUZURIAGA", "puedeTraerStock": true }
+```
+
+#### El snapshot lo toma de la sucursal
+
+`POST /api/d365/snapshot` ya no necesita `almacen`: sale de `Sucursal.almacenId`. El parámetro queda como **override explícito** para probar otro almacén sin reconfigurar la tienda, pero el camino normal es no mandarlo.
+
+Que sea la sucursal y no un parámetro es lo que hace imposible el error caro: un almacén que se tipea en cada llamada es un almacén que alguna vez se va a tipear mal.
+
+Sin almacén configurado y `modo: "real"` → `400`. Con un inventario ya en curso, la idempotencia responde antes y ni mira el almacén: no hay nada que traer del ERP.
+
+> **A confirmar con el cliente**: cada tienda tiene **tres** almacenes en el ERP y el seed eligió el **DISPONIBLE**:
+> ```
+> MD01_LUZ  ALMACÉN DISPONIBLE MARKET LUZURIAGA   <- el que se usa
+> MC01_LUZ  ALMACÉN CUARENTENA MARKET LUZURIAGA
+> MT01_LUZ  ALMACÉN TRÁNSITO MARKET LUZURIAGA
+> ```
+> "Disponible" es el stock vendible en góndola, que es lo que once personas salen a contar; cuarentena es mercadería retenida y tránsito lo que va en camino. Es la lectura razonable, pero **es una lectura**: si el cliente también cuenta la cuarentena, estos códigos cambian. Los códigos en sí son reales, no placeholders — salen de `Warehouses` del tenant y el nombre coincide exactamente con cada sucursal.
+
+Mapeo sembrado: Luzuriaga → `MD01_LUZ` · Carhuaz → `MD03_CRH` · Bolívar → `MD06_BOL` · Sucre → `MD04_SUC`.
+
+---
+
+### Tipo de inventario: mensual y anual
+
+`Inventario.tipo` es `mensual` (default) o `anual`. Son **dos universos distintos**, confirmados por el cliente:
+
+| Tipo | Qué cuenta |
+|---|---|
+| `mensual` | Solo los productos de **responsabilidad del empleado** — 6.297 de 11.835 en el catálogo real. Los que asume la empresa quedan fuera. |
+| `anual` | **Todo** el catálogo activo, empresa incluida ("en el anual ya cuentan todo"). |
+
+Default `mensual` a propósito: es el que se hace todos los meses. El anual es la excepción y hay que pedirlo explícito — que alguien cuente 11.835 ítems creyendo que cuenta 6.297 es una jornada entera perdida.
+
+#### Las dos restricciones únicas, ajustadas de forma asimétrica
+
+Esta es la parte que hay que entender antes de tocarla: `tipo` entra en una y **no** en la otra, por razones distintas.
+
+**`@@unique([sucursalId, periodoAnio, periodoMes, tipo])`** — `tipo` **sí** entra.
+
+El anual de 2026 y el mensual de diciembre 2026 son **dos cierres distintos del mismo período**, y los dos tienen que poder existir en el histórico. Sin `tipo`, el segundo chocaría contra el primero y no se podría archivar el anual.
+
+**`@@unique([sucursalId, abierto])`** — `tipo` **no** entra. Un solo inventario abierto por sucursal, del tipo que sea.
+
+Y no es que la restricción "restrinja de más". El anual es un **superconjunto** del mensual (11.835 ⊃ 6.297). Si los dos pudieran estar abiertos a la vez:
+
+- los mismos productos se estarían contando en dos inventarios simultáneos, con dos conteos que pueden diferir;
+- si los dos llegan a liquidarse, al empleado **se le descuenta dos veces el mismo faltante**.
+
+Además, en la práctica: son once personas en la tienda. No pueden hacer dos inventarios a la vez.
+
+Así que la restricción dice exactamente lo que el negocio necesita: **primero se cierra uno, después se abre el otro**. Verificado contra Postgres — un anual abierto con un mensual abierto da `P2002 (sucursal_id, abierto)`; cerrado el mensual, el anual del mismo período se abre sin problema y los dos conviven en el histórico.
+
+### Verificación
+
+```bash
+node scripts/verificar-almacen-y-tipo.mjs   # backend en :3000
+```
+
+Prueba el almacén contra la lista real del ERP (incluido el rechazo de un código mal tipeado y la normalización de mayúsculas), el snapshot tomando el almacén de la sucursal, y las dos restricciones **escribiendo directo en Postgres** — porque una regla que solo vive en un `if` la saltea cualquiera que escriba en la tabla.
+
 ## Desarrollo
 
 ```bash

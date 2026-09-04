@@ -40,11 +40,34 @@ import argon2 from 'argon2';
 
 const prisma = new PrismaClient();
 
+/**
+ * Las 4 sucursales con su ALMACEN de Dynamics.
+ *
+ * Los codigos son REALES: salen de la entidad `Warehouses` del tenant de
+ * Market Trujillo (`GET /api/d365/almacenes`, 70 almacenes) y el nombre de
+ * cada uno coincide exactamente con el de la sucursal. No son placeholders.
+ *
+ * LO QUE SI ES UNA INFERENCIA -- y hay que confirmarlo con el cliente: cada
+ * tienda tiene TRES almacenes en el ERP, y se eligio el DISPONIBLE:
+ *
+ *   MD01_LUZ  ALMACEN DISPONIBLE MARKET LUZURIAGA   <- el que se usa
+ *   MC01_LUZ  ALMACEN CUARENTENA MARKET LUZURIAGA
+ *   MT01_LUZ  ALMACEN TRANSITO MARKET LUZURIAGA
+ *
+ * "Disponible" es el stock vendible en gondola, que es lo que once personas
+ * salen a contar; cuarentena es mercaderia retenida y transito lo que va en
+ * camino. Es la lectura razonable, pero es una lectura: si el cliente cuenta
+ * tambien la cuarentena, estos codigos cambian.
+ *
+ * El almacen NO esta clavado en el codigo: vive en `Sucursal.almacenId` y el
+ * Administrador lo cambia desde la gestion de tiendas eligiendo de la lista
+ * real del ERP. Esto es solo el valor inicial para poder probar.
+ */
 const SUCURSALES = [
-  { id: 1, nombre: 'Market Central Luzuriaga' },
-  { id: 2, nombre: 'Market Carhuaz' },
-  { id: 3, nombre: 'Market Bolívar' },
-  { id: 4, nombre: 'Market Sucre' },
+  { id: 1, nombre: 'Market Central Luzuriaga', almacenId: 'MD01_LUZ', almacenNombre: 'ALMACÉN DISPONIBLE MARKET LUZURIAGA' },
+  { id: 2, nombre: 'Market Carhuaz', almacenId: 'MD03_CRH', almacenNombre: 'ALMACÉN DISPONIBLE MARKET CARHUAZ' },
+  { id: 3, nombre: 'Market Bolívar', almacenId: 'MD06_BOL', almacenNombre: 'ALMACÉN DISPONIBLE MARKET BOLIVAR' },
+  { id: 4, nombre: 'Market Sucre', almacenId: 'MD04_SUC', almacenNombre: 'ALMACÉN DISPONIBLE MARKET  SUCRE' },
 ] as const;
 
 const COLABORADORES = {
@@ -130,8 +153,17 @@ async function main() {
   for (const sucursal of SUCURSALES) {
     await prisma.sucursal.upsert({
       where: { id: sucursal.id },
-      update: { nombre: sucursal.nombre },
-      create: { id: sucursal.id, nombre: sucursal.nombre },
+      // El `update` SI pisa el almacen, a diferencia de lo que hace con las
+      // configuraciones: aca el valor del seed es el correcto segun el ERP,
+      // y si alguien lo cambio a mano desde la pantalla, volver a correr el
+      // seed es justamente pedir que se restauren los datos base.
+      update: { nombre: sucursal.nombre, almacenId: sucursal.almacenId, almacenNombre: sucursal.almacenNombre },
+      create: {
+        id: sucursal.id,
+        nombre: sucursal.nombre,
+        almacenId: sucursal.almacenId,
+        almacenNombre: sucursal.almacenNombre,
+      },
     });
   }
 
@@ -178,7 +210,7 @@ async function main() {
     });
   }
 
-  console.log('Seed OK: 4 sucursales, 29 colaboradores + 1 administrador, 3 configuraciones.');
+  console.log('Seed OK: 4 sucursales (con almacen de Dynamics), 29 colaboradores + 1 administrador, 3 configuraciones.');
 }
 
 main()

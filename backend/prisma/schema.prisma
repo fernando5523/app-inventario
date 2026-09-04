@@ -93,6 +93,24 @@ enum EstadoInventario {
   @@map("estado_inventario")
 }
 
+/// Los DOS universos de inventario, confirmados por el cliente. No son dos
+/// nombres para lo mismo: cuentan cosas distintas.
+///
+///   mensual  Solo los productos de RESPONSABILIDAD DEL EMPLEADO (6.297 de
+///            11.835 en el catalogo real). Los que asume la empresa quedan
+///            fuera: no se cuentan.
+///   anual    TODO el catalogo activo, empresa incluida ("en el anual ya
+///            cuentan todo").
+///
+/// El anual es un SUPERCONJUNTO del mensual, y de ahi sale la regla de que
+/// no pueden estar abiertos a la vez (ver los @@unique de Inventario).
+enum TipoInventario {
+  mensual
+  anual
+
+  @@map("tipo_inventario")
+}
+
 // ---------------------------------------------------------------------------
 // Sesion / padron
 // ---------------------------------------------------------------------------
@@ -105,6 +123,32 @@ model Sucursal {
   activa        Boolean       @default(true)
   direccion     String?
   telefono      String?
+
+  /// Almacen de Dynamics del que esta tienda trae su stock (`WarehouseId`,
+  /// ej. "MD11_CENT"). Decision del cliente: "al crear el sitio, se debe
+  /// asociar el almacen" -- es un ATRIBUTO de la sucursal, no una tabla de
+  /// traduccion aparte que alguien tiene que mantener sincronizada.
+  ///
+  /// NULLABLE, y la razon importa: null significa "todavia no sabemos cual
+  /// es", que es la verdad para las tiendas ya cargadas. La alternativa era
+  /// hacerlo obligatorio y rellenar las existentes con un placeholder -- y
+  /// un almacen inventado es PEOR que ninguno: trae el stock de otra tienda,
+  /// la auditoria compara contra numeros que parecen validos y nadie se
+  /// entera hasta que no cuadra a fin de mes. Es el mismo criterio que
+  /// CatalogoItem.stockErp: "no se" nunca se escribe como un valor.
+  ///
+  /// Sin almacen NO se puede traer snapshot -- eso se rechaza en el momento
+  /// de traerlo, con un mensaje que dice que falta configurarlo (ver
+  /// d365-catalogo.service.ts). Dar de alta la tienda sigue siendo posible:
+  /// bloquear el alta porque alguien todavia no averiguo el codigo en
+  /// Dynamics seria trabar el padron por un dato que se agrega despues.
+  almacenId     String?       @map("almacen_id")
+  /// Nombre legible del almacen, copiado de Dynamics al elegirlo. Se guarda
+  /// para no tener que ir al ERP cada vez que se muestra la tienda, y para
+  /// que quede constancia de que se eligio -- misma razon que
+  /// DiferenciaItem.descripcion.
+  almacenNombre String?       @map("almacen_nombre")
+
   colaboradores Colaborador[]
   inventarios   Inventario[]
 
@@ -257,6 +301,12 @@ model Inventario {
   /// posible al nacer.
   estado           EstadoInventario @default(en_curso)
 
+  /// Que universo se cuenta -- ver TipoInventario. Default `mensual` a
+  /// proposito: es el que se hace todos los meses. El anual es la excepcion
+  /// y hay que pedirlo explicito; que alguien cuente 11.835 items creyendo
+  /// que cuenta 6.297 es una jornada entera perdida.
+  tipo             TipoInventario   @default(mensual)
+
   /// Periodo mensual al que pertenece este inventario ("Agosto 2026" en la
   /// maqueta). Se guarda como anio+mes y NO como un DateTime porque el
   /// periodo es un mes calendario entero, no un instante: guardarlo como
@@ -317,13 +367,30 @@ model Inventario {
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
-  /// El inventario es MENSUAL por sucursal: no hay dos "agosto 2026" de
-  /// Luzuriaga. Restriccion independiente de la de arriba -- esta impide
-  /// duplicar un periodo (incluso entre inventarios ya cerrados), la de
-  /// `abierto` impide tener dos en curso a la vez.
-  @@unique([sucursalId, periodoAnio, periodoMes])
+  /// UN inventario de cada TIPO por sucursal y periodo. `tipo` entra en esta
+  /// restriccion y NO en la de abajo, y la asimetria es deliberada:
+  ///
+  /// El anual de 2026 y el mensual de diciembre 2026 son dos cierres
+  /// distintos del mismo periodo, y los dos tienen que poder existir en el
+  /// historico. Sin `tipo` aca, el segundo chocaria contra el primero y no
+  /// se podria archivar el anual.
+  @@unique([sucursalId, periodoAnio, periodoMes, tipo])
+
+  /// UN SOLO INVENTARIO ABIERTO POR SUCURSAL, sin importar el tipo. Aca
+  /// `tipo` NO entra, y esa es la decision:
+  ///
+  /// El anual es un superconjunto del mensual (11.835 items contra 6.297).
+  /// Si los dos pudieran estar abiertos a la vez, los mismos productos se
+  /// estarian contando en dos inventarios simultaneos, con dos conteos que
+  /// pueden diferir; y si los dos llegan a liquidarse, al empleado se le
+  /// descuenta DOS VECES el mismo faltante. Ademas, en la practica: son
+  /// once personas en la tienda, no pueden hacer dos inventarios a la vez.
+  ///
+  /// Asi que la restriccion no es "de mas" -- dice exactamente lo que el
+  /// negocio necesita: primero se cierra uno, despues se abre el otro.
   @@unique([sucursalId, abierto])
   @@index([sucursalId, estado])
+  @@index([sucursalId, tipo])
   @@map("inventarios")
 }
 
