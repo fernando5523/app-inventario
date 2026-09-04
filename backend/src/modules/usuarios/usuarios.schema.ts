@@ -63,6 +63,26 @@ export const crearUsuarioSchema = z
   });
 export type CrearUsuarioInput = z.infer<typeof crearUsuarioSchema>;
 
+export const editarUsuarioSchema = z
+  .object({
+    nombre: z.string().trim().min(1, 'El nombre no puede estar vacio.').optional(),
+    dni: dniSchema.optional(),
+    rol: rolSchema.optional(),
+    sucursalId: z.number().int().positive().nullable().optional(),
+  })
+  .superRefine((datos, ctx) => {
+    if (datos.rol === 'administrador') {
+      if (datos.sucursalId !== undefined && datos.sucursalId !== null) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['sucursalId'],
+          message: 'Un administrador no pertenece a ninguna sucursal: no mandes sucursalId.',
+        });
+      }
+    }
+  });
+export type EditarUsuarioInput = z.infer<typeof editarUsuarioSchema>;
+
 export const actualizarEstadoSchema = z.object({
   activo: z.boolean(),
 });
@@ -72,3 +92,4 @@ export const resetearPinSchema = z.object({
   pin: pinSchema,
 });
 export type ResetearPinInput = z.infer<typeof resetearPinSchema>;
+

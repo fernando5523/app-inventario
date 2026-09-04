@@ -48,7 +48,7 @@
 
 import { puedeCrearRol } from '../dominio/roles';
 import type { Rol, Usuario } from '../dominio/tipos';
-import type { DatosNuevoUsuario, RepositorioUsuarios } from '../puertos/repositorios';
+import type { DatosEditarUsuario, DatosNuevoUsuario, RepositorioUsuarios } from '../puertos/repositorios';
 import { pedir, pedirSinCuerpo } from './_http';
 
 /**
@@ -64,6 +64,7 @@ const RUTAS = {
   listar: (sucursalId?: number) =>
     sucursalId === undefined ? '/api/usuarios' : `/api/usuarios?sucursalId=${sucursalId}`,
   coleccion: '/api/usuarios',
+  usuario: (usuarioId: number) => `/api/usuarios/${usuarioId}`,
   estado: (usuarioId: number) => `/api/usuarios/${usuarioId}/estado`,
   resetearPin: (usuarioId: number) => `/api/usuarios/${usuarioId}/resetear-pin`,
 };
@@ -140,6 +141,24 @@ export const usuariosApi: RepositorioUsuarios = {
     );
   },
 
+  async editar(usuarioId, datos: DatosEditarUsuario) {
+    return aUsuario(
+      await pedir<UsuarioDto>(RUTAS.usuario(usuarioId), {
+        metodo: 'PATCH',
+        cuerpo: {
+          ...(datos.nombre !== undefined ? { nombre: datos.nombre } : {}),
+          ...(datos.dni !== undefined ? { dni: datos.dni } : {}),
+          ...(datos.rol !== undefined ? { rol: datos.rol } : {}),
+          ...(datos.rol === 'administrador'
+            ? {}
+            : datos.sucursalId !== undefined
+              ? { sucursalId: datos.sucursalId }
+              : {}),
+        },
+      }),
+    );
+  },
+
   async cambiarActivo(usuarioId, activo) {
     return aUsuario(await pedir<UsuarioDto>(RUTAS.estado(usuarioId), { metodo: 'PATCH', cuerpo: { activo } }));
   },
@@ -147,5 +166,10 @@ export const usuariosApi: RepositorioUsuarios = {
   async resetearPin(usuarioId, nuevoPin) {
     // 204 sin cuerpo: no hay nada que parsear y el puerto devuelve void.
     await pedirSinCuerpo(RUTAS.resetearPin(usuarioId), { metodo: 'POST', cuerpo: { pin: nuevoPin } });
+  },
+
+  async eliminar(usuarioId) {
+    // 204 sin cuerpo
+    await pedirSinCuerpo(RUTAS.usuario(usuarioId), { metodo: 'DELETE' });
   },
 };

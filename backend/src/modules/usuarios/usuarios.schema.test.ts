@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { actualizarEstadoSchema, crearUsuarioSchema, resetearPinSchema } from './usuarios.schema';
+import { actualizarEstadoSchema, crearUsuarioSchema, editarUsuarioSchema, resetearPinSchema } from './usuarios.schema';
 
 const base = { nombre: 'Ana Test', dni: '12345678', pin: '123456' };
 
@@ -65,6 +65,31 @@ describe('crearUsuarioSchema', () => {
   });
 });
 
+describe('editarUsuarioSchema', () => {
+  it('acepta un objeto vacio (todos los campos opcionales)', () => {
+    expect(editarUsuarioSchema.safeParse({}).success).toBe(true);
+  });
+
+  it('acepta campos parciales validos', () => {
+    expect(editarUsuarioSchema.safeParse({ nombre: 'Juan Modificado' }).success).toBe(true);
+    expect(editarUsuarioSchema.safeParse({ dni: '87654321' }).success).toBe(true);
+    expect(editarUsuarioSchema.safeParse({ rol: 'coordinador', sucursalId: 2 }).success).toBe(true);
+  });
+
+  it('rechaza administrador con sucursalId no nulo', () => {
+    expect(editarUsuarioSchema.safeParse({ rol: 'administrador', sucursalId: 2 }).success).toBe(false);
+  });
+
+  it('acepta administrador con sucursalId null', () => {
+    expect(editarUsuarioSchema.safeParse({ rol: 'administrador', sucursalId: null }).success).toBe(true);
+  });
+
+  it('rechaza DNI invalido o nombre vacio', () => {
+    expect(editarUsuarioSchema.safeParse({ dni: 'abc' }).success).toBe(false);
+    expect(editarUsuarioSchema.safeParse({ nombre: '' }).success).toBe(false);
+  });
+});
+
 describe('actualizarEstadoSchema', () => {
   it('exige que activo sea booleano', () => {
     expect(actualizarEstadoSchema.safeParse({ activo: true }).success).toBe(true);
@@ -79,3 +104,4 @@ describe('resetearPinSchema', () => {
     expect(resetearPinSchema.safeParse({ pin: '00000' }).success).toBe(false);
   });
 });
+

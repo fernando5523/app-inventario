@@ -14,7 +14,7 @@
 
 import { puedeCrearRol } from '../dominio/roles';
 import type { Rol, Usuario } from '../dominio/tipos';
-import type { DatosNuevoUsuario, RepositorioUsuarios } from '../puertos/repositorios';
+import type { DatosEditarUsuario, DatosNuevoUsuario, RepositorioUsuarios } from '../puertos/repositorios';
 import { simularLatencia } from './_compartido';
 import { sesionMemoria } from './sesion-memoria';
 
@@ -82,6 +82,25 @@ export const usuariosMemoria: RepositorioUsuarios = {
     return nuevo;
   },
 
+  async editar(usuarioId, datos: DatosEditarUsuario) {
+    await simularLatencia();
+    await asegurarSemilla();
+    const usuario = usuarios.find((u) => u.id === usuarioId);
+    if (!usuario) throw new Error(`Usuario ${usuarioId} no encontrado.`);
+    if (datos.nombre !== undefined) usuario.nombre = datos.nombre;
+    if (datos.dni !== undefined) usuario.dni = datos.dni;
+    if (datos.rol !== undefined) {
+      usuario.rol = datos.rol;
+      if (datos.rol === 'administrador') {
+        delete usuario.sucursalId;
+      }
+    }
+    if (datos.sucursalId !== undefined && usuario.rol !== 'administrador') {
+      usuario.sucursalId = datos.sucursalId;
+    }
+    return usuario;
+  },
+
   async cambiarActivo(usuarioId, activo) {
     await simularLatencia();
     await asegurarSemilla();
@@ -101,5 +120,13 @@ export const usuariosMemoria: RepositorioUsuarios = {
     // no hay backend todavía, así que no hay dónde guardarlo de verdad) —
     // el punto de esta llamada es que exista un método real que el
     // adaptador HTTP pueda reemplazar sin tocar la pantalla.
+  },
+
+  async eliminar(usuarioId) {
+    await simularLatencia();
+    await asegurarSemilla();
+    const idx = usuarios.findIndex((u) => u.id === usuarioId);
+    if (idx === -1) throw new Error(`Usuario ${usuarioId} no encontrado.`);
+    usuarios.splice(idx, 1);
   },
 };

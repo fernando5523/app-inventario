@@ -5,6 +5,7 @@ import * as service from './usuarios.service';
 import type {
   ActualizarEstadoInput,
   CrearUsuarioInput,
+  EditarUsuarioInput,
   ListarUsuariosQuery,
   ParametrosUsuario,
   ResetearPinInput,
@@ -23,6 +24,18 @@ export const listar = asyncHandler(async (req: RequestAutenticado, res: Response
 export const crear = asyncHandler(async (req: RequestAutenticado, res: Response) => {
   const input = req.body as CrearUsuarioInput;
   res.status(201).json(await service.crear(actorDe(req), input));
+});
+
+export const editar = asyncHandler(async (req: RequestAutenticado, res: Response) => {
+  const { id } = req.params as unknown as ParametrosUsuario;
+  const input = req.body as EditarUsuarioInput;
+  res.json(await service.editar(actorDe(req), id, input));
+});
+
+export const eliminar = asyncHandler(async (req: RequestAutenticado, res: Response) => {
+  const { id } = req.params as unknown as ParametrosUsuario;
+  await service.eliminar(actorDe(req), id);
+  res.status(204).send();
 });
 
 export const actualizarEstado = asyncHandler(async (req: RequestAutenticado, res: Response) => {

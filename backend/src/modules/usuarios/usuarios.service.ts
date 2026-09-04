@@ -8,11 +8,11 @@
 import { Prisma } from '@prisma/client';
 import { prisma } from '../../config/database';
 import { registrarAuditoria } from '../../shared/auditoria';
-import { Conflicto, NoEncontrado } from '../../shared/errores';
+import { Conflicto, NoEncontrado, Prohibido } from '../../shared/errores';
 import { hashearPin } from '../../shared/pin';
 import type { ColaboradorAutenticado, Rol } from '../../shared/tipos';
-import { validarAlcanceDeGestion, validarPermisoDeAlta } from './usuarios.permisos';
-import type { CrearUsuarioInput } from './usuarios.schema';
+import { ROLES_GESTIONABLES_POR_AUDITOR, validarAlcanceDeGestion, validarPermisoDeAlta } from './usuarios.permisos';
+import type { CrearUsuarioInput, EditarUsuarioInput } from './usuarios.schema';
 
 export interface UsuarioDto {
   id: number;
@@ -142,3 +142,95 @@ export async function resetearPin(actor: ColaboradorAutenticado, id: number, pin
     detalle: null,
   });
 }
+
+export async function editar(actor: ColaboradorAutenticado, id: number, input: EditarUsuarioInput): Promise<UsuarioDto> {
+  await obtenerConAlcance(actor, id);
+
+  if (actor.rol === 'auditor') {
+    if (input.rol && !ROLES_GESTIONABLES_POR_AUDITOR.includes(input.rol)) {
+      throw new Prohibido('Un auditor solo puede asignar roles coordinador o conteo.');
+    }
+    if (input.sucursalId !== undefined && input.sucursalId !== actor.sucursalId) {
+      throw new Prohibido('Un auditor solo puede asignar cuentas de su propia sucursal.');
+    }
+  }
+
+  const data: Prisma.ColaboradorUncheckedUpdateInput = {};
+  if (input.nombre !== undefined) data.nombre = input.nombre;
+  if (input.dni !== undefined) data.dni = input.dni;
+  if (input.rol !== undefined) {
+    data.rol = input.rol;
+    if (input.rol === 'administrador') {
+      data.sucursalId = null;
+    }
+  }
+  if (input.sucursalId !== undefined) {
+    data.sucursalId = input.rol === 'administrador' ? null : input.sucursalId;
+  }
+
+  try {
+    const actualizado = await prisma.colaborador.update({
+      where: { id },
+      data,
+    });
+
+    await registrarAuditoria({
+      actorId: actor.colaboradorId,
+      accion: 'colaborador.editado',
+      entidad: 'colaborador',
+      entidadId: id,
+      detalle: {
+        nombre: actualizado.nombre,
+        dni: actualizado.dni,
+        rol: actualizado.rol,
+        sucursalId: actualizado.sucursalId,
+      },
+    });
+
+    return aDto(actualizado);
+  } catch (err) {
+    if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
+      throw new Conflicto('Ya existe un colaborador con ese DNI en esa sucursal.');
+    }
+    throw err;
+  }
+}
+
+export async function eliminar(actor: ColaboradorAutenticado, id: number): Promise<void> {
+  const objetivo = await obtenerConAlcance(actor, id);
+
+  if (actor.colaboradorId === id) {
+    throw new Conflicto('No podés eliminar tu propia cuenta.');
+  }
+
+  // Elimina sesiones asociadas
+  await prisma.sesionToken.deleteMany({ where: { colaboradorId: id } });
+
+  // Limpiar referencias para evitar fallas por FK
+  await prisma.colaborador.updateMany({ where: { creadoPorId: id }, data: { creadoPorId: null } });
+  await prisma.hojaConteo.updateMany({ where: { asignadoAId: id }, data: { asignadoAId: null } });
+  await prisma.hojaConteo.updateMany({ where: { asignadoA2Id: id }, data: { asignadoA2Id: null } });
+
+  try {
+    await prisma.colaborador.delete({ where: { id } });
+  } catch (err) {
+    if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2003') {
+      throw new Conflicto('No se puede eliminar el usuario porque tiene registros históricos asociados.');
+    }
+    throw err;
+  }
+
+  await registrarAuditoria({
+    actorId: actor.colaboradorId,
+    accion: 'colaborador.eliminado',
+    entidad: 'colaborador',
+    entidadId: id,
+    detalle: {
+      nombre: objetivo.nombre,
+      dni: objetivo.dni,
+      rol: objetivo.rol,
+      sucursalId: objetivo.sucursalId,
+    },
+  });
+}
+

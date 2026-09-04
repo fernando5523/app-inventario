@@ -48,6 +48,9 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 // se quiere real, contra el servidor de prueba de este archivo.
 vi.mock('react-native', () => ({ Platform: { OS: 'android' } }));
 vi.mock('expo-constants', () => ({ default: { expoConfig: { extra: {} } } }));
+vi.mock('./sesion-api', () => ({
+  sesionApi: { sesionActiva: async () => null },
+}));
 
 import { avance } from '../dominio/hoja';
 import type { Conteo } from '../dominio/tipos';

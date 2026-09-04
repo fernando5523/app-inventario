@@ -6,6 +6,7 @@ import * as controller from './usuarios.controller';
 import {
   actualizarEstadoSchema,
   crearUsuarioSchema,
+  editarUsuarioSchema,
   listarUsuariosQuerySchema,
   parametrosUsuarioSchema,
   resetearPinSchema,
@@ -25,6 +26,17 @@ usuariosRouter.use(requiereSesion, rolesConAcceso);
 
 usuariosRouter.get('/', validar(listarUsuariosQuerySchema, 'query'), controller.listar);
 usuariosRouter.post('/', validar(crearUsuarioSchema, 'body'), controller.crear);
+usuariosRouter.patch(
+  '/:id',
+  validar(parametrosUsuarioSchema, 'params'),
+  validar(editarUsuarioSchema, 'body'),
+  controller.editar,
+);
+usuariosRouter.delete(
+  '/:id',
+  validar(parametrosUsuarioSchema, 'params'),
+  controller.eliminar,
+);
 usuariosRouter.patch(
   '/:id/estado',
   validar(parametrosUsuarioSchema, 'params'),
