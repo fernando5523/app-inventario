@@ -4,7 +4,6 @@ import { Camera, Flashlight, FlashlightOff, X } from 'lucide-react-native';
 import { useCallback, useEffect, useRef, useState, type JSX } from 'react';
 import { ActivityIndicator, LayoutChangeEvent, Pressable, StyleSheet, Text, View } from 'react-native';
 
-import type { Producto } from '../../lib/dominio/tipos';
 import { colors, fonts, fontSize, radius, shadow, spacing } from '../../lib/theme';
 
 /**
@@ -329,22 +328,6 @@ export function ModalEscaner({ visible, error, onEscanear, onCerrar }: ModalEsca
       </View>
     </View>
   );
-}
-
-/**
- * @deprecated Quedaron del simulador de lecturas. Ya no las usa ninguna
- * pantalla —`contar.tsx` ahora escanea con la cámara— pero
- * `components/ui/index.ts` todavía las re-exporta y ese archivo está fuera
- * del alcance de esta tarea. Borrar las tres cosas juntas.
- */
-export interface OpcionEscaneo {
-  etiqueta: string;
-  codigo: string;
-}
-
-/** @deprecated Ver `OpcionEscaneo`. */
-export function opcionesDeEscaneo(productos: Producto[]): OpcionEscaneo[] {
-  return productos.slice(0, 2).map((p) => ({ etiqueta: p.descripcion, codigo: p.codigoBarras }));
 }
 
 const styles = StyleSheet.create({
