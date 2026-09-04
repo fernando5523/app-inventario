@@ -9,6 +9,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   agruparResponsablesPorItem,
+  agruparStockPorItem,
   esDeLaEmpresa,
   mapearCatalogo,
   seCuenta,
@@ -98,5 +99,40 @@ describe('mapearCatalogo: el filtro sobre el catalogo completo', () => {
     // red deja al Coordinador sin poder arrancar el inventario.
     const catalogo = mapearCatalogo(productos, [], [], []);
     expect(catalogo).toHaveLength(4);
+  });
+});
+
+describe('stock del ERP: null NO es cero', () => {
+  const productos = [prod('A1'), prod('A2')];
+
+  it('agrupa por item y suma filas repetidas del mismo almacen', () => {
+    const filas = [
+      { ItemNumber: 'A1', InventoryWarehouseId: 'MD11', OnHandQuantity: 10 },
+      { ItemNumber: 'A1', InventoryWarehouseId: 'MD11', OnHandQuantity: 5 },
+      { ItemNumber: 'A2', InventoryWarehouseId: 'MD11', OnHandQuantity: 3 },
+    ];
+    const mapa = agruparStockPorItem(filas);
+    // Sumar, no quedarse con la ultima: perderia existencias.
+    expect(mapa.get('A1')).toBe(15);
+    expect(mapa.get('A2')).toBe(3);
+  });
+
+  it('un item SIN dato de stock queda en null, nunca en 0', () => {
+    // "No se cuanto hay" y "hay cero" llevan a conclusiones opuestas: un 0
+    // falso hace que la auditoria reporte un faltante que no existe.
+    const catalogo = mapearCatalogo(productos, [], [], [], 'anual', new Map([['A1', 7]]));
+    expect(catalogo.find((c) => c.codigo === 'A1')!.stockErp).toBe(7);
+    expect(catalogo.find((c) => c.codigo === 'A2')!.stockErp).toBeNull();
+  });
+
+  it('un stock de CERO real si se guarda como 0', () => {
+    // Cero es un dato: significa que el ERP dice que no hay.
+    const catalogo = mapearCatalogo([prod('A1')], [], [], [], 'anual', new Map([['A1', 0]]));
+    expect(catalogo[0]!.stockErp).toBe(0);
+  });
+
+  it('sin ninguna consulta de stock, TODO queda en null', () => {
+    const catalogo = mapearCatalogo(productos, [], [], [], 'anual');
+    expect(catalogo.every((c) => c.stockErp === null)).toBe(true);
   });
 });

@@ -8,6 +8,7 @@
  */
 
 import { d365Config } from '../../config/d365.config';
+import { factorDesdeSimbolo } from '../../dominio/empaque';
 import { prisma } from '../../config/database';
 import { ErrorHttp } from '../../shared/errores';
 import { d365EntityService } from './d365-entity.service';
@@ -16,6 +17,7 @@ import type {
   D365ProductBarcode,
   D365ReleasedProduct,
   D365ResponsableItem,
+  D365StockAlmacen,
   D365UnitConversion,
   EmpaqueDto,
 } from './d365.types';
@@ -77,8 +79,22 @@ export function elegirEmpaques(conversionesDelProducto: D365UnitConversion[], pr
     }
   }
 
+  /**
+   * RESPALDO -- no reemplazo.
+   *
+   * Cuando D365 tiene una conversion de unidad, ESE numero manda: es un dato
+   * explicito del ERP, no una lectura del nombre. Parsear el texto por encima
+   * de una conversion seria cambiar un dato duro por una inferencia.
+   *
+   * Pero 3.728 de 11.835 productos no tienen ninguna conversion cargada, y
+   * para esos el unico lugar donde vive el factor es el nombre de la unidad
+   * de compra ("Emp.12"). Ahi aplica la regla del cliente
+   * (dominio/empaque.ts): sacar el numero, y si no hay, factor 1.
+   */
   if (factoresPorUnidad.size === 0) {
-    return [{ nombre: producto.InventoryUnitSymbol || producto.PurchaseUnitSymbol || 'UND', factor: 1 }];
+    const simbolo = producto.PurchaseUnitSymbol || producto.InventoryUnitSymbol || 'UND';
+    const factor = factorDesdeSimbolo(producto.PurchaseUnitSymbol);
+    return [{ nombre: simbolo, factor }];
   }
 
   return [...factoresPorUnidad.entries()].sort((a, b) => b[1] - a[1]).map(([nombre, factor]) => ({ nombre, factor }));
@@ -139,11 +155,30 @@ export function esDeLaEmpresa(responsableCrudo: string | undefined): boolean {
   return responsableCrudo === RESPONSABLE_EMPRESA;
 }
 
+/**
+ * Stock por item para UN almacen. `WarehousesOnHandV2` devuelve una fila por
+ * (item, almacen): filtrando por almacen, cada item aparece una sola vez.
+ *
+ * Se suman las filas repetidas por las dudas (dimensiones de inventario
+ * distintas del mismo item en el mismo almacen): sumar es lo correcto, quedarse
+ * con la ultima perderia existencias.
+ */
+export function agruparStockPorItem(filas: D365StockAlmacen[]): Map<string, number> {
+  const mapa = new Map<string, number>();
+  for (const fila of filas) {
+    if (!fila.ItemNumber) continue;
+    const cantidad = typeof fila.OnHandQuantity === 'number' ? fila.OnHandQuantity : 0;
+    mapa.set(fila.ItemNumber, (mapa.get(fila.ItemNumber) ?? 0) + cantidad);
+  }
+  return mapa;
+}
+
 export function mapearProducto(
   producto: D365ReleasedProduct,
   barcodesDelItem: D365ProductBarcode[],
   conversionesDelItem: D365UnitConversion[],
   responsableCrudo?: string,
+  stockErp: number | null = null,
 ): CatalogoItemDto {
   const suelto = barcodesDelItem.find((b) => b.IsDefaultDisplayedBarcode === 'Yes') ?? barcodesDelItem[0];
 
@@ -157,6 +192,7 @@ export function mapearProducto(
     descripcion,
     empaques: elegirEmpaques(conversionesDelItem, producto),
     esEmpresa: esDeLaEmpresa(responsableCrudo),
+    stockErp,
   };
 }
 
@@ -208,6 +244,7 @@ export function mapearCatalogo(
   conversiones: D365UnitConversion[],
   responsables: D365ResponsableItem[] = [],
   tipo: TipoInventario = 'mensual',
+  stockPorItem: Map<string, number> = new Map(),
 ): CatalogoItemDto[] {
   const barcodesPorItem = agruparBarcodesPorItem(barcodes);
   const conversionesPorItem = agruparConversionesPorProducto(conversiones);
@@ -229,6 +266,9 @@ export function mapearCatalogo(
       barcodesPorItem.get(producto.ItemNumber) ?? [],
       conversionesPorItem.get(producto.ItemNumber) ?? [],
       responsablePorItem.get(producto.ItemNumber),
+      // `?? null` y NUNCA `?? 0`: un item sin fila de stock es "no sabemos",
+      // no "hay cero". Ver CatalogoItemDto.stockErp.
+      stockPorItem.get(producto.ItemNumber) ?? null,
     ),
   );
 
@@ -256,10 +296,10 @@ export function obtenerCatalogoEjemplo(): CatalogoItemDto[] {
  * (confirmado contra el tenant real), asi que se trae completa y se
  * agrupa localmente por ProductNumber en vez de filtrar por item.
  */
-async function obtenerCatalogoReal(tipo: TipoInventario): Promise<CatalogoItemDto[]> {
+async function obtenerCatalogoReal(tipo: TipoInventario, almacen?: string): Promise<CatalogoItemDto[]> {
   const filtroCompania = d365Config.dataAreaId ? `dataAreaId eq '${d365Config.dataAreaId}'` : undefined;
 
-  const [productos, barcodes, conversiones, responsables] = await Promise.all([
+  const [productos, barcodes, conversiones, responsables, stock] = await Promise.all([
     d365EntityService.obtenerTodos<D365ReleasedProduct>('ReleasedProductsV2', {
       $select: 'ItemNumber,SearchName,InventoryUnitSymbol,PurchaseUnitSymbol',
       ...(filtroCompania ? { $filter: filtroCompania } : {}),
@@ -279,9 +319,27 @@ async function obtenerCatalogoReal(tipo: TipoInventario): Promise<CatalogoItemDt
         $select: 'ItemId,ModuleType,TRU_InventoryManagerPE',
       })
       .catch(() => [] as D365ResponsableItem[]),
+    /**
+     * EL STOCK NO VIENE DEL CATALOGO DE PRODUCTOS: vive en una data entity
+     * aparte, `WarehousesOnHandV2`, y se consulta POR ALMACEN. Por eso no
+     * aparecia por mas campos que se le agregaran al $select de
+     * ReleasedProductsV2.
+     *
+     * Sin `almacen` no se consulta nada y todo queda en null -- traer el
+     * consolidado de las 4 sucursales seria peor que no tener el dato: la
+     * auditoria de Luzuriaga compararia contra el stock de todas.
+     */
+    almacen
+      ? d365EntityService
+          .obtenerTodos<D365StockAlmacen>('WarehousesOnHandV2', {
+            $filter: `InventoryWarehouseId eq '${almacen}'`,
+            $select: 'ItemNumber,InventoryWarehouseId,OnHandQuantity,AvailableOnHandQuantity,TotalAvailableQuantity',
+          })
+          .catch(() => [] as D365StockAlmacen[])
+      : Promise.resolve([] as D365StockAlmacen[]),
   ]);
 
-  return mapearCatalogo(productos, barcodes, conversiones, responsables, tipo);
+  return mapearCatalogo(productos, barcodes, conversiones, responsables, tipo, agruparStockPorItem(stock));
 }
 
 // ---------------------------------------------------------------------------
@@ -306,6 +364,7 @@ export async function crearSnapshot(
   sucursalId: number,
   modo: ModoCatalogo,
   tipo: TipoInventario = 'mensual',
+  almacen?: string,
 ): Promise<SnapshotDto> {
   const existente = await prisma.inventario.findFirst({ where: { sucursalId }, orderBy: { id: 'desc' } });
   if (existente) {
@@ -323,7 +382,7 @@ export async function crearSnapshot(
     );
   }
 
-  const catalogo = modo === 'ejemplo' ? obtenerCatalogoEjemplo() : await obtenerCatalogoReal(tipo);
+  const catalogo = modo === 'ejemplo' ? obtenerCatalogoEjemplo() : await obtenerCatalogoReal(tipo, almacen);
   const tomadoEn = new Date();
 
   const inventario = await prisma.inventario.create({
@@ -346,6 +405,8 @@ export async function crearSnapshot(
             // este item (ver seCuenta/esDeLaEmpresa). Hasta ahora quedaba
             // NULL en la base y la auditoria no podia distinguirlos.
             esEmpresa: item.esEmpresa,
+            // null cuando no hubo dato: nunca 0 (ver CatalogoItemDto.stockErp).
+            stockErp: item.stockErp,
             empaques: {
               // `exactOptionalPropertyTypes` no deja `codigoBarras: undefined`
               // explicito -- se omite la clave entera cuando no vino.

@@ -144,6 +144,15 @@ export interface CatalogoItemDto {
   /** Siempre al menos uno. `[0]` = el de mayor factor (ver elegirEmpaques). */
   empaques: EmpaqueDto[];
   /**
+   * Existencia del ERP para el almacen consultado.
+   *
+   * `null` = NO SABEMOS, y es radicalmente distinto de 0. En un inventario,
+   * "no tengo el dato" y "hay cero" llevan a conclusiones opuestas: un 0
+   * falso hace que la auditoria reporte un faltante que no existe y que
+   * alguien lo pague. Se deja null salvo que Dynamics haya dado un numero.
+   */
+  stockErp: number | null;
+  /**
    * true = el faltante lo asume la EMPRESA, no se le descuenta al operario
    * (mobile/lib/dominio/tipos.ts#ItemAuditoria.esEmpresa). Sale de
    * `TRU_InventoryManagerPE`, no se calcula.

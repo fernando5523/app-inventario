@@ -67,10 +67,13 @@ describe('mapearProducto (forma real: barcode siempre de unidad suelta)', () => 
 });
 
 describe('elegirEmpaques (el factor vive en ProductSpecificUnitOfMeasureConversions, no en el barcode)', () => {
-  it('una fila con Factor=1 (equivalencia U/U.) NO cuenta como empaque', () => {
+  it('una fila con Factor=1 (equivalencia U/U.) NO cuenta como empaque: cae al simbolo de compra', () => {
+    // CAMBIO 2026-09-04, regla confirmada por el cliente: sin conversion
+    // util, el factor se lee del texto de la unidad de compra
+    // (dominio/empaque.ts). Antes esto devolvia {U., 1} y perdia el empaque.
     const soloIdentidad: D365UnitConversion[] = [{ ProductNumber: '110605', FromUnitSymbol: 'U', ToUnitSymbol: 'U.', Factor: 1 }];
     const resultado = elegirEmpaques(soloIdentidad, producto);
-    expect(resultado).toEqual([{ nombre: 'U.', factor: 1 }]);
+    expect(resultado).toEqual([{ nombre: 'Emp.12', factor: 12 }]);
   });
 
   it('una fila con Factor != 1 es el empaque real (caso confirmado contra datos reales: Emp.12 = 12)', () => {
@@ -95,13 +98,22 @@ describe('elegirEmpaques (el factor vive en ProductSpecificUnitOfMeasureConversi
     ]);
   });
 
-  it('sin ninguna conversion, cae a la unidad de inventario con factor 1', () => {
-    expect(elegirEmpaques([], producto)).toEqual([{ nombre: 'U.', factor: 1 }]);
+  it('sin ninguna conversion, saca el factor del texto de la unidad de compra', () => {
+    // "Emp.12 es 12 unidades" -- 3.728 de 11.835 productos no tienen ninguna
+    // conversion cargada en D365 y este es su unico factor posible.
+    expect(elegirEmpaques([], producto)).toEqual([{ nombre: 'Emp.12', factor: 12 }]);
   });
 
-  it('sin conversion NI unidad de inventario, cae a PurchaseUnitSymbol', () => {
+  it('una unidad de medida sin numero sigue dando factor 1', () => {
+    const porBolsa: D365ReleasedProduct = { ItemNumber: '1', InventoryUnitSymbol: 'U.', PurchaseUnitSymbol: 'Bolsa' };
+    expect(elegirEmpaques([], porBolsa)).toEqual([{ nombre: 'Bolsa', factor: 1 }]);
+  });
+
+  it('sin conversion NI unidad de inventario, usa PurchaseUnitSymbol Y su numero', () => {
+    // Este era el bug: devolvia factor 1 para "Emp.6". El operario cargaba
+    // "2 packs" y el sistema guardaba 2 unidades en vez de 12.
     const sinInventoryUnit: D365ReleasedProduct = { ItemNumber: '1', PurchaseUnitSymbol: 'Emp.6' };
-    expect(elegirEmpaques([], sinInventoryUnit)).toEqual([{ nombre: 'Emp.6', factor: 1 }]);
+    expect(elegirEmpaques([], sinInventoryUnit)).toEqual([{ nombre: 'Emp.6', factor: 6 }]);
   });
 
   it('sin nada de nada, cae a "UND"', () => {

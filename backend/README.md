@@ -372,6 +372,11 @@ Body:
   El filtro sale de `TRU_InventoryManagerPEEntities` (entidad CUSTOM del tenant): `ModuleType eq 'Invent'`, campo `TRU_InventoryManagerPE` con valores `Employee`/`Company`/`None`. Los `None` y los que no tienen fila NO se cuentan en el mensual: sin responsable asignado no hay a quien liquidarle una diferencia.
 
   ⚠️ **El tipo NO se persiste todavia**: `Inventario` no tiene columna para el. Ver la nota de limitaciones abajo.
+- `almacen` es opcional (`WarehouseId` de Dynamics, ej. `"MD11_CENT"`). **El stock NO viene del catalogo de productos**: vive en la data entity `WarehousesOnHandV2` y se consulta POR ALMACEN (`$filter: InventoryWarehouseId eq '<codigo>'`). Sin este parametro no se consulta stock y `stockErp` queda en **null**.
+
+  `null` NO es `0`, y la diferencia importa: "no se cuanto hay" y "hay cero" llevan a conclusiones opuestas. Un 0 falso hace que la auditoria reporte un faltante que no existe y que alguien lo pague.
+
+  ⚠️ Va por parametro porque `Sucursal` no tiene columna de almacen. Hace falta `codigoAlmacenD365` en `Sucursal` + cargarle el valor a las 4 sucursales; el listado sale de la entidad `Warehouses` (`$select: WarehouseId,WarehouseName`).
 - `modo` es opcional, default `"real"`. `"ejemplo"` nunca toca red ni exige credenciales: devuelve siempre los mismos 4 productos ya validados en `mobile/design/conteo.html` (Aceite Vegetal Primor, Cerveza Cusqueña, Leche Evaporada, Fideos Canuto), cada uno con sus empaques — el Aceite trae dos (Emp.12 y Emp.6) para poder probar de verdad la pantalla con más de un empaque por producto. Nunca se sustituye `"real"` por datos de ejemplo en silencio — si no hay credenciales y se pide `"real"`, es un `400`, no un fallback automático.
 
 Respuesta `200`:

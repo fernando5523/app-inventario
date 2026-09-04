@@ -23,5 +23,15 @@ export const crearSnapshotSchema = z.object({
    * 11.835 items creyendo que cuenta 6.297 es una jornada perdida.
    */
   tipo: z.enum(['mensual', 'anual']).optional().default('mensual'),
+  /**
+   * Codigo de almacen de Dynamics (`WarehouseId`, ej. "MD11_CENT") del que se
+   * trae el stock. Sin esto NO se consulta stock y `stockErp` queda en null
+   * -- que es la verdad: no sabemos.
+   *
+   * Va como parametro y no sale de la sucursal porque `Sucursal` todavia no
+   * tiene columna de almacen (hace falta una migracion, ver README). Cuando
+   * la tenga, este parametro pasa a ser el override y el default sale de ahi.
+   */
+  almacen: z.string().trim().min(1).max(30).optional(),
 });
 export type CrearSnapshotInput = z.infer<typeof crearSnapshotSchema>;
