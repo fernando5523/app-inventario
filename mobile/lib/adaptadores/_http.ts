@@ -28,13 +28,28 @@ import { Platform } from 'react-native';
 // ---------------------------------------------------------------------------
 
 /**
- * `process` no existe como global tipado en React Native. Metro igual
- * inlinea literalmente cualquier `process.env.EXPO_PUBLIC_*` en tiempo de
- * build, así que el acceso funciona; lo que falta es el tipo. Este cast
- * acotado evita meter `@types/node` en una app móvil solo para leer una
- * variable.
+ * `process` no existe como global tipado en React Native, pero el plugin de
+ * Babel que inlinea `EXPO_PUBLIC_*` en tiempo de build necesita ver el
+ * patrón LITERAL `process.env.NOMBRE` en el AST -- exacto, sin indirección.
+ *
+ * BUG REAL que tuvo esta función: guardar `process.env` en una variable
+ * (`const entorno = (globalThis as {...}).process?.env`) y leer
+ * `entorno?.EXPO_PUBLIC_API_URL` le esconde el literal al plugin, que nunca
+ * lo reemplaza. Y en el bundle de producción `globalThis.process` no existe
+ * (no hay polyfill de Node ahí), así que el valor leído en runtime SIEMPRE
+ * era `undefined` -- la función caía al fallback de desarrollo pase lo que
+ * pase, sin ningún error visible. Nadie lo notó hasta que se compiló para un
+ * teléfono físico con una IP distinta del fallback del emulador: el cliente
+ * instaló el APK y se quedó sin datos (ver mobile/README.md, "APK para un
+ * TELEFONO FISICO"). Contra el emulador el bug quedaba tapado porque el
+ * fallback (`10.0.2.2`) es justo lo que hace falta ahí.
+ *
+ * La función accede `process.env.EXPO_PUBLIC_API_URL` DIRECTO más abajo — el
+ * cast a `any` es solo para que TypeScript no se queje de que `process` no
+ * está tipado; en el JS emitido no deja rastro, así que Babel sigue viendo
+ * el literal que necesita para inlinearlo.
  */
-const entorno = (globalThis as { process?: { env?: Record<string, string | undefined> } }).process?.env;
+declare const process: any;
 
 /**
  * Fallback SOLO de desarrollo. En el emulador de Android `localhost` es el
@@ -63,8 +78,8 @@ let avisoUrlEmitido = false;
  * generando `//api/sesion` según cómo la haya escrito quien configuró.
  */
 export function urlBase(): string {
-  const configurada =
-    entorno?.EXPO_PUBLIC_API_URL ?? (Constants.expoConfig?.extra?.apiUrl as string | undefined);
+  const configurada: string | undefined =
+    process.env.EXPO_PUBLIC_API_URL ?? (Constants.expoConfig?.extra?.apiUrl as string | undefined);
 
   if (configurada) return configurada.replace(/\/+$/, '');
 

@@ -89,7 +89,7 @@ function construirXml() {
 
   return `<?xml version="1.0" encoding="utf-8"?>
 <!--
-  GENERADO por mobile/plugins/withNetworkSecurityConfigDev.js -- no editar a
+  GENERADO por mobile/plugins/withNetworkSecurityConfigDev.js: no editar a
   mano. Cleartext habilitado SOLO para los hosts de desarrollo listados; el
   host de red sale de EXPO_PUBLIC_API_URL al compilar. Todo lo demas exige
   HTTPS. Sacar este archivo (y el plugin que lo instala) cuando el backend de
