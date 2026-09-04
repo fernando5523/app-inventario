@@ -1,0 +1,1584 @@
+<meta charset="utf-8">
+<title>Gestión de usuarios</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Baloo+2:wght@600;700&family=Figtree:wght@400;500;600;700&display=swap">
+<style>
+/* =====================================================================
+   TRUJILLO · Sistema de controles de la app de inventario
+   Validado en la pantalla 1 (login). Copiar completo en cada maqueta.
+
+   Regla de oro: los tokens de marca son FIJOS en ambos temas. La app
+   pinta su propio mundo; solo el lienzo que rodea al telefono sigue el
+   tema del visor.
+   ===================================================================== */
+
+:root {
+  /* Marca — valores tomados del PNG del logo, no estimados */
+  --rojo:        #D82018;
+  --rojo-hover:  #B81810;
+  --rojo-suave:  #FDF0EF;
+  --dorado:      #F8B818;
+
+  /* Superficie de la app */
+  --app-fondo:   #FFFFFF;
+  --app-tinta:   #1C1917;
+  --app-gris:    #6B6560;
+  --app-gris-cl: #9A938D;
+  --app-borde:   #E3DEDA;
+  --app-campo:   #FFFFFF;
+
+  /* Lienzo del documento de maqueta (fuera del telefono) — tema claro */
+  --lienzo:      #F2EEEB;
+  --lienzo-alt:  #FFFFFF;
+  --lienzo-tinta:#26211E;
+  --lienzo-gris: #6E6660;
+  --lienzo-borde:#DED7D2;
+
+  --sombra: 0 1px 2px rgba(28,25,23,.04), 0 12px 40px rgba(28,25,23,.10);
+  --radio: 10px;
+  --tabbar-alto: 60px;
+
+  --fuente-ui: 'Figtree', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  --fuente-marca: 'Baloo 2', 'Figtree', -apple-system, sans-serif;
+}
+
+/* Solo el lienzo cambia con el tema. Nunca los tokens --app-* */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --lienzo:      #191614;
+    --lienzo-alt:  #221E1B;
+    --lienzo-tinta:#F2EEEB;
+    --lienzo-gris: #A79E97;
+    --lienzo-borde:#332D29;
+    --sombra: 0 1px 2px rgba(0,0,0,.4), 0 16px 48px rgba(0,0,0,.55);
+  }
+}
+:root[data-theme="dark"] {
+  --lienzo:      #191614;
+  --lienzo-alt:  #221E1B;
+  --lienzo-tinta:#F2EEEB;
+  --lienzo-gris: #A79E97;
+  --lienzo-borde:#332D29;
+  --sombra: 0 1px 2px rgba(0,0,0,.4), 0 16px 48px rgba(0,0,0,.55);
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--lienzo);
+  color: var(--lienzo-tinta);
+  font-family: var(--fuente-ui);
+  -webkit-font-smoothing: antialiased;
+}
+
+.lienzo {
+  min-height: 100vh;
+  display: flex; flex-direction: column; align-items: center;
+  gap: 28px; padding: 32px 20px 56px;
+}
+
+/* ---------- Cabecera del documento de maqueta ---------- */
+.cabecera { text-align: center; display: flex; flex-direction: column; gap: 6px; }
+.cabecera .eyebrow {
+  font-size: 11px; font-weight: 600; letter-spacing: .13em;
+  text-transform: uppercase; color: var(--lienzo-gris);
+}
+.cabecera h1 {
+  margin: 0; font-family: var(--fuente-marca); font-weight: 700;
+  font-size: clamp(22px, 4vw, 28px); letter-spacing: -.01em; text-wrap: balance;
+}
+.cabecera p { margin: 0; font-size: 14px; color: var(--lienzo-gris); max-width: 52ch; }
+
+/* ---------- Marco del telefono ---------- */
+/* Pantalla operativa: mas ancho util para listas y tarjetas */
+.telefono.denso { --pad-lateral: 14px; }
+
+.telefono {
+  /* Un solo lugar decide el margen lateral. Lo leen .pantalla, .toast,
+     .chips y .accion-fija, asi una pantalla densa gana ancho sin que
+     haya que recalibrar cada uno a mano. */
+  --pad-lateral: 26px;
+  width: 380px; max-width: 100%;
+  background: var(--app-fondo);
+  border-radius: 34px;
+  border: 1px solid var(--lienzo-borde);
+  box-shadow: var(--sombra);
+  overflow: hidden;
+  position: relative;   /* ancla de los modales */
+}
+.barra-estado {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 12px 22px 4px;
+  font-size: 12px; font-weight: 600; color: var(--app-tinta);
+  font-variant-numeric: tabular-nums;
+}
+.barra-estado .senales { display: flex; gap: 5px; align-items: center; opacity: .75; }
+
+/* OBLIGATORIO el `color`: sin el, todo texto sin color propio hereda
+   --lienzo-tinta, que en tema oscuro es CLARO, y desaparece sobre el
+   fondo blanco de la app. */
+.pantalla {
+  position: relative;
+  padding: 8px var(--pad-lateral) 26px;
+  display: flex; flex-direction: column; gap: 20px;
+  color: var(--app-tinta);
+}
+
+/* ---------- Marca ---------- */
+.marca { display: flex; flex-direction: column; align-items: center; padding: 14px 0 4px; }
+.marca img { width: 172px; height: auto; display: block; }
+
+.saludo { display: flex; flex-direction: column; gap: 2px; }
+.saludo h2 {
+  margin: 0; display: flex; align-items: center; gap: 9px;
+  font-family: var(--fuente-marca); font-weight: 700; font-size: 27px;
+  color: var(--rojo); letter-spacing: -.01em;
+}
+.saludo p { margin: 0; font-size: 14.5px; color: var(--app-gris); }
+
+/* ---------- Campos ---------- */
+.campos { display: flex; flex-direction: column; gap: 15px; }
+/* position: relative -> es el ancla del desplegable */
+.campo { position: relative; display: flex; flex-direction: column; gap: 6px; }
+.campo label { font-size: 13.5px; font-weight: 600; color: var(--app-tinta); }
+
+.control {
+  width: 100%; display: flex; align-items: center; gap: 12px;
+  min-height: 54px; padding: 0 15px;
+  background: var(--app-campo);
+  border: 1px solid var(--app-borde);
+  border-radius: var(--radio);
+  font: inherit; font-size: 15.5px; color: var(--app-tinta);
+  text-align: left; cursor: pointer;
+  transition: border-color .15s ease, box-shadow .15s ease;
+}
+.control:hover:not(:disabled) { border-color: #CFC7C1; }
+.control:focus-visible {
+  outline: none; border-color: var(--rojo);
+  box-shadow: 0 0 0 3px rgba(216,32,24,.14);
+}
+.control[aria-expanded="true"] {
+  border-color: var(--rojo); box-shadow: 0 0 0 3px rgba(216,32,24,.14);
+}
+.control:disabled { background: #F7F5F4; cursor: not-allowed; opacity: .7; }
+.control .valor { flex: 1; min-width: 0; }
+.control .valor.vacio { color: var(--app-gris-cl); }
+.control .sub {
+  display: block; font-size: 11.5px; color: var(--app-gris);
+  margin-top: 1px; font-variant-numeric: tabular-nums;
+}
+.chevron { color: var(--rojo); flex: none; transition: transform .18s ease; }
+.control[aria-expanded="true"] .chevron { transform: rotate(180deg); }
+.control:disabled .chevron { color: var(--app-gris-cl); }
+
+/* Los iconos de campo van SIEMPRE en gris. El rojo se reserva para
+   el chevron, la seleccion y las acciones. */
+.icono { flex: none; color: var(--app-gris-cl); }
+
+/* ---------- Desplegable ---------- */
+.lista {
+  /* Fuera del flujo: si ocupara espacio, abrirlo empujaria todo lo de
+     abajo y la pantalla saltaria. */
+  position: absolute;
+  top: 100%; left: 0; right: 0; z-index: 30;
+  margin-top: 6px;
+  /* El tope NO es multiplo de la altura de fila a proposito: el corte
+     cae sobre una fila a medias y eso avisa que hay mas abajo. */
+  max-height: 262px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+  /* Barra oculta en los tres motores: una lista nativa se desplaza,
+     no muestra barra. */
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+  border: 1px solid var(--app-borde); border-radius: var(--radio);
+  background: var(--app-campo);
+  box-shadow: 0 10px 30px rgba(28,25,23,.14);
+}
+.lista::-webkit-scrollbar { width: 0; height: 0; display: none; }
+.lista[hidden] { display: none; }
+
+.opcion {
+  width: 100%; display: flex; align-items: center; gap: 12px;
+  padding: 12px 15px; background: none; border: 0;
+  border-bottom: 1px solid #F0ECE9;
+  font: inherit; font-size: 15px; color: var(--app-tinta);
+  text-align: left; cursor: pointer;
+}
+.opcion:last-child { border-bottom: 0; }
+.opcion:hover, .opcion:focus-visible { background: var(--rojo-suave); outline: none; }
+.opcion[aria-selected="true"],
+.opcion[aria-selected="true"]:hover {
+  background: var(--rojo); color: #fff; font-weight: 600;
+}
+.opcion[aria-selected="true"] .meta { color: rgba(255,255,255,.82); }
+.opcion .meta {
+  display: block; font-size: 11.5px; font-weight: 400; color: var(--app-gris);
+  margin-top: 1px; font-variant-numeric: tabular-nums;
+}
+
+/* ---------- PIN ---------- */
+.pin-puntos { display: flex; align-items: center; gap: 11px; }
+.pin-puntos.grande { justify-content: center; gap: 15px; min-height: 30px; }
+.pin-puntos.grande .punto-pin { width: 14px; height: 14px; }
+.pin-puntos.grande .punto-pin.visible { min-width: 14px; font-size: 19px; }
+
+.punto-pin {
+  width: 11px; height: 11px; border-radius: 50%;
+  border: 1.5px solid #C9C1BB; background: transparent;
+  display: grid; place-items: center;
+  font-size: 15px; font-weight: 700; color: var(--app-tinta);
+  font-variant-numeric: tabular-nums;
+  transition: background .14s ease, border-color .14s ease, transform .14s ease;
+}
+.punto-pin.lleno { background: var(--app-tinta); border-color: var(--app-tinta); transform: scale(1.06); }
+.punto-pin.visible {
+  width: auto; min-width: 11px; height: auto;
+  background: transparent; border-color: transparent; transform: none;
+}
+
+.teclado { display: grid; grid-template-columns: repeat(3, 1fr); gap: 9px; }
+.tecla {
+  min-height: 50px; display: grid; place-items: center;
+  background: var(--app-campo);
+  border: 1px solid var(--app-borde); border-radius: var(--radio);
+  font: inherit; font-size: 21px; font-weight: 600; color: var(--app-tinta);
+  font-variant-numeric: tabular-nums; cursor: pointer;
+  transition: background .12s ease, border-color .12s ease, transform .08s ease;
+}
+.tecla:hover { border-color: #CFC7C1; }
+.tecla:active { background: var(--rojo-suave); border-color: var(--rojo); transform: scale(.97); }
+.tecla:focus-visible { outline: 2px solid var(--rojo); outline-offset: 2px; }
+.tecla.auxiliar { color: var(--app-gris); }
+.tecla.auxiliar:hover { color: var(--app-tinta); }
+
+/* ---------- Modal ----------
+   Va colgado de .telefono, NO de .campo: colgando del campo se sale de
+   la pantalla cuando el campo esta abajo. Centrado siempre. */
+.modal {
+  position: absolute; inset: 0; z-index: 60;
+  display: flex; align-items: center; justify-content: center;
+  padding: 22px;
+}
+.modal[hidden] { display: none; }
+.modal-fondo {
+  position: absolute; inset: 0;
+  background: rgba(28,25,23,.42);
+  animation: aparecer .18s ease;
+}
+.modal-caja {
+  position: relative;
+  width: 100%; max-width: 310px;
+  display: flex; flex-direction: column; gap: 15px;
+  padding: 17px;
+  background: var(--app-campo);
+  border-radius: 16px;
+  box-shadow: 0 22px 55px rgba(28,25,23,.32);
+  animation: subir .2s cubic-bezier(.2,.8,.3,1);
+}
+@keyframes aparecer { from { opacity: 0; } }
+@keyframes subir { from { opacity: 0; transform: translateY(10px) scale(.97); } }
+
+.modal-cabecera { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.modal-cabecera h3 { margin: 0; font-size: 15px; font-weight: 700; color: var(--app-tinta); }
+.modal-cerrar {
+  width: 32px; height: 32px; flex: none;
+  display: grid; place-items: center;
+  background: none; border: 0; border-radius: 8px;
+  color: var(--app-gris); cursor: pointer;
+  transition: background .14s ease, color .14s ease;
+}
+.modal-cerrar:hover { background: var(--rojo-suave); color: var(--rojo); }
+.modal-cerrar:focus-visible { outline: 2px solid var(--rojo); outline-offset: 1px; }
+
+/* ---------- Grupo segmentado NO elegible (dato derivado: .roles) ----------
+   El rol sale del padron de la persona: se muestra, no se elige. Son
+   elementos div, no button. Distinto de .segmentado/.segmento (mas abajo),
+   que SI es elegible. Confundirlos rompe la regla de "un dato derivado
+   se muestra, no se elige". */
+.roles {
+  display: grid; grid-template-columns: repeat(3, 1fr);
+  border: 1.5px solid var(--rojo); border-radius: var(--radio);
+  background: var(--app-campo);
+  overflow: hidden;
+  transition: opacity .2s ease;
+}
+.roles.inerte { opacity: .38; }   /* sin dato todavia: se ve, no se toca */
+.rol {
+  padding: 13px 4px; display: grid; place-items: center;
+  border-right: 1.5px solid var(--rojo);
+  background: var(--app-campo); color: var(--app-tinta);
+  font-size: 12.5px; font-weight: 700;
+  letter-spacing: .07em; text-transform: uppercase;
+  transition: background .18s ease, color .18s ease;
+}
+.rol:last-child { border-right: 0; }
+.rol.activo { background: var(--rojo); color: #fff; }
+
+.rol-cabecera { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+.rol-cabecera .nota { font-size: 11px; color: var(--app-gris-cl); font-weight: 500; }
+
+/* ---------- Grupo segmentado ELEGIBLE (.segmentado/.segmento) ----------
+   Visualmente parecido a .roles, pero son elementos button reales: la persona
+   SI elige (p.ej. el tamano de hoja para un reconteo). Usar .roles
+   cuando el dato ya esta derivado y solo se muestra; usar .segmentado
+   cuando el usuario tiene que decidir entre opciones reales. */
+.segmentado {
+  display: grid; grid-template-columns: repeat(3, 1fr);
+  border: 1.5px solid var(--rojo); border-radius: var(--radio);
+  background: var(--app-campo); overflow: hidden;
+}
+.segmento {
+  padding: 11px 4px; display: grid; place-items: center;
+  border-right: 1.5px solid var(--rojo); border-left: 0; border-top: 0; border-bottom: 0;
+  background: var(--app-campo); color: var(--app-tinta);
+  font: inherit; font-size: 12.5px; font-weight: 700;
+  letter-spacing: .04em; cursor: pointer;
+  transition: background .16s ease, color .16s ease;
+}
+.segmento:last-child { border-right: 0; }
+.segmento:hover { background: var(--rojo-suave); }
+.segmento:focus-visible { outline: 2px solid var(--rojo); outline-offset: -2px; }
+.segmento.activo { background: var(--rojo); color: #fff; }
+
+/* ---------- Accion principal ---------- */
+.ingresar {
+  width: 100%; min-height: 56px;
+  display: flex; align-items: center; justify-content: center; gap: 12px;
+  background: var(--rojo); color: #fff;
+  border: 0; border-radius: 6px;
+  font: inherit; font-size: 17px; font-weight: 700; cursor: pointer;
+  transition: background .16s ease, opacity .16s ease;
+}
+.ingresar:hover:not(:disabled) { background: var(--rojo-hover); }
+.ingresar:focus-visible { outline: 3px solid rgba(216,32,24,.35); outline-offset: 2px; }
+.ingresar:disabled { background: #DCD6D2; color: #FBFAFA; cursor: not-allowed; }
+.ingresar svg { color: var(--dorado); }
+.ingresar:disabled svg { color: #FBFAFA; }
+
+.olvide {
+  align-self: flex-start; margin-top: 2px;
+  background: none; border: 0; padding: 0;
+  font: inherit; font-size: 13.5px; color: var(--rojo); cursor: pointer;
+}
+.olvide:hover { text-decoration: underline; }
+
+/* ---------- Pie de pantalla ----------
+   tagline + version agrupados, para que el gap del contenedor los separe
+   sin margenes negativos peleando con el gap de .pantalla. */
+.pie { display: flex; flex-direction: column; align-items: center; gap: 5px; }
+.version {
+  margin: 0;
+  font-size: 11.5px; font-weight: 500;
+  color: var(--app-gris-cl);
+  font-variant-numeric: tabular-nums; letter-spacing: .04em;
+}
+
+.tagline {
+  display: flex; align-items: center; justify-content: center; gap: 10px;
+  font-family: var(--fuente-marca); font-weight: 600;
+  font-size: 13.5px; color: var(--rojo);
+}
+
+/* ---------- Toast ---------- */
+.toast {
+  position: absolute; left: var(--pad-lateral); right: var(--pad-lateral); bottom: 22px;
+  display: flex; align-items: center; gap: 10px;
+  padding: 13px 15px; border-radius: var(--radio);
+  background: var(--app-tinta); color: #fff;
+  font-size: 13.5px; font-weight: 500;
+  box-shadow: 0 10px 30px rgba(28,25,23,.28);
+  opacity: 0; transform: translateY(8px);
+  transition: opacity .22s ease, transform .22s ease;
+  pointer-events: none;
+}
+.toast.visible { opacity: 1; transform: translateY(0); }
+.toast svg { color: var(--dorado); flex: none; }
+
+/* ---------- Panel de validacion (fuera del telefono) ---------- */
+.pruebas {
+  width: 380px; max-width: 100%;
+  background: var(--lienzo-alt);
+  border: 1px solid var(--lienzo-borde);
+  border-radius: 14px; padding: 16px 18px;
+  display: flex; flex-direction: column; gap: 11px;
+}
+.pruebas h3 {
+  margin: 0; font-size: 11px; font-weight: 600;
+  letter-spacing: .13em; text-transform: uppercase; color: var(--lienzo-gris);
+}
+.pruebas p { margin: 0; font-size: 13px; color: var(--lienzo-gris); line-height: 1.5; }
+.atajos { display: flex; flex-wrap: wrap; gap: 8px; }
+.atajo {
+  padding: 7px 13px;
+  background: transparent; color: var(--lienzo-tinta);
+  border: 1px solid var(--lienzo-borde); border-radius: 99px;
+  font: inherit; font-size: 12.5px; font-weight: 500; cursor: pointer;
+  transition: border-color .15s ease, color .15s ease;
+}
+.atajo:hover { border-color: var(--rojo); color: var(--rojo); }
+.atajo:focus-visible { outline: 2px solid var(--rojo); outline-offset: 2px; }
+
+@media (prefers-reduced-motion: reduce) {
+  * { transition: none !important; animation: none !important; }
+}
+@media (max-width: 440px) {
+  .lienzo { padding: 20px 12px 40px; }
+  .telefono { --pad-lateral: 18px; }
+  .pantalla { padding-bottom: 20px; }
+}
+
+/* ============ Pantalla 2: hojas de conteo ============
+   Colores de estado. Son semanticos, no de marca: el rojo Trujillo
+   sigue siendo la accion, no un estado. Todos los pares texto/fondo
+   estan verificados >= 4.5:1. */
+:root {
+  --ok:        #0A6B57;  --ok-suave:      #E7F4EF;   /* 5.71:1 */
+  --proceso:   #8A5A05;  --proceso-suave: #FDF3DC;   /* 5.37:1 */
+  --espera:    #6B6560;  --espera-suave:  #F2EFED;   /* 5.02:1 */
+  --falta:     #A23B2E;  --falta-suave:   #FBEAE7;   /* 6.56:1 / 5.63:1 */
+  --riel:      #EDE9E6;
+}
+
+/* La pantalla se desplaza dentro del telefono, con barra oculta */
+.pantalla.scroll {
+  height: 720px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+  padding-bottom: 92px;   /* deja lugar a la accion fija */
+  gap: 16px;
+}
+.pantalla.scroll::-webkit-scrollbar { width: 0; display: none; }
+
+/* ---------- Barra superior de contexto ---------- */
+.barra-app {
+  display: flex; align-items: flex-start; gap: 12px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid var(--app-borde);
+}
+.barra-app .rotulo {
+  margin: 0 0 3px; display: flex; align-items: center; gap: 6px;
+  font-size: 10.5px; font-weight: 700; letter-spacing: .11em;
+  text-transform: uppercase; color: var(--rojo);
+}
+.barra-app .contexto { flex: 1; min-width: 0; }
+.barra-app .sede {
+  margin: 0; font-size: 16px; font-weight: 700; color: var(--app-tinta);
+}
+.barra-app .cifras {
+  margin: 2px 0 0; font-size: 12px; color: var(--app-gris);
+  font-variant-numeric: tabular-nums;
+}
+.salir {
+  width: 38px; height: 38px; flex: none;
+  display: grid; place-items: center;
+  background: none; color: var(--app-gris);
+  border: 1px solid var(--app-borde); border-radius: 9px;
+  cursor: pointer; transition: background .14s ease, color .14s ease, border-color .14s ease;
+}
+.salir:hover { background: var(--rojo-suave); color: var(--rojo); border-color: var(--rojo); }
+.salir:focus-visible { outline: 2px solid var(--rojo); outline-offset: 2px; }
+
+/* ---------- Tarjeta ---------- */
+.tarjeta {
+  display: flex; flex-direction: column; gap: 13px;
+  padding: 15px;
+  background: var(--app-campo);
+  border: 1px solid var(--app-borde); border-radius: 13px;
+}
+.tarjeta-cabecera { display: flex; align-items: center; gap: 10px; }
+.tarjeta-cabecera h2 {
+  margin: 0; flex: 1; min-width: 0;
+  font-size: 14.5px; font-weight: 700; color: var(--app-tinta);
+}
+.tarjeta-cabecera .icono { color: var(--rojo); }
+
+/* ---------- Badges de estado ---------- */
+.badge {
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 5px 9px; border-radius: 99px;
+  font-size: 10.5px; font-weight: 700;
+  letter-spacing: .05em; text-transform: uppercase;
+  white-space: nowrap; font-variant-numeric: tabular-nums;
+  background: var(--espera-suave); color: var(--espera);
+}
+.badge.ok      { background: var(--ok-suave);      color: var(--ok); }
+.badge.proceso { background: var(--proceso-suave); color: var(--proceso); }
+.badge.falta   { background: var(--falta-suave);   color: var(--falta); }
+
+/* ---------- Bloque de reparto ---------- */
+.reparto {
+  display: flex; flex-direction: column; gap: 9px;
+  padding: 13px;
+  background: var(--rojo-suave);
+  border: 1px solid rgba(216,32,24,.22); border-radius: 11px;
+}
+.reparto-cabecera { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+.reparto-cabecera strong { font-size: 13.5px; color: var(--app-tinta); }
+.reparto-cabecera .ratio {
+  font-size: 11.5px; font-weight: 700; color: var(--rojo);
+  font-variant-numeric: tabular-nums; white-space: nowrap;
+}
+.reparto p { margin: 0; font-size: 12.5px; line-height: 1.45; color: var(--app-gris); }
+
+.accion {
+  width: 100%; min-height: 46px;
+  display: flex; align-items: center; justify-content: center; gap: 9px;
+  background: var(--rojo); color: #fff;
+  border: 0; border-radius: 8px;
+  font: inherit; font-size: 14.5px; font-weight: 700; cursor: pointer;
+  transition: background .16s ease;
+}
+.accion:hover:not(:disabled) { background: var(--rojo-hover); }
+.accion:focus-visible { outline: 3px solid rgba(216,32,24,.35); outline-offset: 2px; }
+.accion:disabled { background: #DCD6D2; color: #FBFAFA; cursor: not-allowed; }
+/* .accion tambien se usa como <a> (link a la siguiente pantalla del flujo) */
+.accion { text-decoration: none; }
+/* Accion secundaria dentro de una fila (p.ej. "Aprobar" en una validacion) */
+.accion-mini { width: auto; min-height: 38px; padding: 0 16px; font-size: 13px; }
+
+/* ---------- Encabezado de seccion ---------- */
+.seccion {
+  display: flex; align-items: baseline; justify-content: space-between; gap: 10px;
+}
+.seccion h2 {
+  margin: 0; font-size: 11px; font-weight: 600;
+  letter-spacing: .12em; text-transform: uppercase; color: var(--app-gris);
+}
+.seccion .total {
+  font-size: 11.5px; color: var(--app-gris-cl); font-variant-numeric: tabular-nums;
+}
+
+/* ---------- Chips de zona ---------- */
+.chips {
+  display: flex; gap: 7px;
+  overflow-x: auto; overscroll-behavior-x: contain;
+  scrollbar-width: none; -ms-overflow-style: none;
+  /* el margen negativo deja que los chips lleguen al borde al desplazar */
+  margin: 0 calc(var(--pad-lateral) * -1); padding: 2px var(--pad-lateral);
+}
+.chips::-webkit-scrollbar { height: 0; display: none; }
+.chip {
+  flex: none; padding: 8px 13px;
+  background: var(--app-campo); color: var(--app-tinta);
+  border: 1px solid var(--app-borde); border-radius: 99px;
+  font: inherit; font-size: 12.5px; font-weight: 500;
+  white-space: nowrap; cursor: pointer;
+  font-variant-numeric: tabular-nums;
+  transition: background .14s ease, border-color .14s ease, color .14s ease;
+}
+.chip:hover { border-color: var(--rojo); color: var(--rojo); }
+.chip:focus-visible { outline: 2px solid var(--rojo); outline-offset: 2px; }
+.chip[aria-pressed="true"] {
+  background: var(--rojo); border-color: var(--rojo); color: #fff; font-weight: 700;
+}
+
+/* ---------- Hoja de conteo ---------- */
+.hojas { display: flex; flex-direction: column; gap: 10px; }
+.hoja {
+  display: flex; flex-direction: column;
+  border: 1px solid var(--app-borde); border-radius: 12px;
+  background: var(--app-campo);
+  overflow: hidden;
+}
+/* El estado se lee por la franja lateral, no solo por el badge: en
+   una lista larga el ojo la encuentra sin leer. */
+.hoja.en-proceso { border-color: rgba(138,90,5,.42); }
+.hoja.contada    { border-color: rgba(10,107,87,.34); }
+
+.hoja-cuerpo { display: flex; gap: 11px; padding: 13px 14px 11px; }
+.hoja-codigo {
+  flex: none; width: 38px; height: 38px;
+  display: grid; place-items: center; border-radius: 9px;
+  background: var(--espera-suave); color: var(--espera);
+  font-size: 11.5px; font-weight: 700; letter-spacing: .02em;
+  font-variant-numeric: tabular-nums;
+}
+.hoja.contada .hoja-codigo    { background: var(--ok-suave);      color: var(--ok); }
+.hoja.en-proceso .hoja-codigo { background: var(--proceso-suave); color: var(--proceso); }
+
+.hoja-datos { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.hoja-titulo {
+  display: flex; align-items: flex-start; justify-content: space-between; gap: 9px;
+}
+.hoja-titulo h3 {
+  margin: 0; font-size: 14px; font-weight: 700; color: var(--app-tinta);
+  line-height: 1.3; text-wrap: balance;
+}
+.hoja-meta {
+  font-size: 11.5px; color: var(--app-gris); font-variant-numeric: tabular-nums;
+}
+
+.progreso {
+  height: 5px; margin-top: 6px; border-radius: 99px;
+  background: var(--riel); overflow: hidden;
+}
+.progreso span {
+  display: block; height: 100%; border-radius: 99px;
+  background: var(--espera); transition: width .35s ease;
+}
+.hoja.contada .progreso span    { background: var(--ok); }
+.hoja.en-proceso .progreso span { background: var(--proceso); }
+
+.hoja-pie {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  padding: 9px 14px;
+  border-top: 1px solid #F2EFED;
+  background: #FCFBFA;
+  font-size: 12px; color: var(--app-gris);
+}
+.hoja-pie .quien { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hoja-pie .quien strong { color: var(--app-tinta); font-weight: 600; }
+.hoja-pie .sin-asignar { color: var(--app-gris-cl); font-style: italic; }
+.hoja-pie .estado-sync { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; }
+.hoja-pie .estado-sync.ok { color: var(--ok); font-weight: 600; }
+.hoja-pie .abrir {
+  background: none; border: 0; padding: 0;
+  font: inherit; font-size: 12px; font-weight: 700; color: var(--rojo);
+  cursor: pointer; display: inline-flex; align-items: center; gap: 5px;
+  white-space: nowrap;
+}
+.hoja-pie .abrir:hover { text-decoration: underline; }
+.hoja-pie .abrir:focus-visible { outline: 2px solid var(--rojo); outline-offset: 2px; }
+
+/* ---------- Pie de la lista ---------- */
+.pie-lista {
+  display: flex; align-items: center; gap: 9px;
+  padding: 12px 14px; border-radius: 11px;
+  background: var(--espera-suave); color: var(--app-gris);
+  font-size: 12.5px; font-variant-numeric: tabular-nums;
+}
+.pie-lista .icono { color: var(--app-gris-cl); }
+.pie-lista strong { color: var(--app-tinta); font-weight: 700; }
+
+/* ---------- Accion fija sobre el borde inferior ---------- */
+.accion-fija {
+  position: absolute; left: 0; right: 0; bottom: 0; z-index: 20;
+  padding: 12px var(--pad-lateral) 20px;
+  background: linear-gradient(to top, var(--app-fondo) 68%, rgba(255,255,255,0));
+}
+.accion-fija .accion { min-height: 52px; font-size: 16px; }
+
+/* ---------- Tab bar inferior (navegacion principal por rol) ----------
+   Cuelga de .telefono con position:absolute, igual que .accion-fija, y
+   los dos pueden querer el mismo borde inferior. La regla que evita que
+   cada pantalla lo resuelva distinto:
+
+     - Si el boton de .accion-fija navega a una seccion PARALELA (algo
+       que ya es o deberia ser un tab) -> el tab bar lo REEMPLAZA. No
+       tiene sentido duplicar la misma navegacion en dos controles.
+     - Si el boton de .accion-fija confirma o cierra algo de ESTA
+       pantalla (guardar, enviar, finalizar) -> CONVIVEN, apilados: la
+       accion fija se apoya justo arriba del tab bar usando
+       --tabbar-alto, y el padding-bottom de .pantalla.scroll tiene que
+       crecer para no esconder el ultimo item detras de los dos.
+
+   Markup minimo (los botones se arman por JS a partir de una lista de
+   tabs por rol, ver home.html):
+     <nav class="tab-bar" aria-label="Navegacion principal">
+       <button class="tab activo" data-destino="/inicio">
+         <span class="tab-indicador" aria-hidden="true"></span>
+         <svg class="icono">...</svg>
+         <span class="tab-etiqueta">Inicio</span>
+       </button>
+       ...
+     </nav> */
+.tab-bar {
+  position: absolute; left: 0; right: 0; bottom: 0; z-index: 25;
+  display: flex;
+  min-height: var(--tabbar-alto);
+  background: var(--app-fondo);
+  border-top: 1px solid var(--app-borde);
+}
+.tab {
+  position: relative;
+  flex: 1; min-height: 58px;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px;
+  padding: 9px 4px 7px;
+  background: none; border: 0;
+  font: inherit; color: var(--app-gris); cursor: pointer;
+  transition: color .14s ease;
+}
+.tab:hover { color: var(--app-tinta); }
+.tab:active { background: var(--rojo-suave); }
+.tab:focus-visible { outline: 2px solid var(--rojo); outline-offset: -2px; }
+.tab-indicador {
+  position: absolute; top: 0; left: 50%; transform: translateX(-50%);
+  width: 26px; height: 3px; border-radius: 0 0 4px 4px;
+  background: var(--rojo);
+  opacity: 0; transition: opacity .14s ease;
+}
+.tab-etiqueta { font-size: 10.5px; font-weight: 600; }
+.tab.activo { color: var(--rojo); }
+.tab.activo .tab-indicador { opacity: 1; }
+.tab.activo .tab-etiqueta { font-weight: 700; }
+
+/* ============ Pantallas 4-7: ciclo de conteos, auditoria, liquidacion, lacrado ============ */
+
+/* ---------- Banda de sincronizacion (offline-first) ----------
+   Los equipos son WiFi de tienda, sin datos moviles: la WiFi es punto
+   unico de falla. Toda pantalla con datos sincronizados necesita este
+   estado visible, no solo texto suelto. Usado en 5 de las 7 pantallas. */
+.banda-sync {
+  display: flex; align-items: center; gap: 8px;
+  padding: 9px 12px; border-radius: 10px;
+  font-size: 11.5px; font-weight: 700;
+  background: var(--ok-suave); color: var(--ok);
+}
+.banda-sync .icono-sync { flex: none; }
+.banda-sync.pendiente { background: var(--proceso-suave); color: var(--proceso); }
+.banda-sync.offline   { background: var(--falta-suave);   color: var(--falta); }
+
+/* ---------- Resumen de cifras clave (tira de KPIs) ---------- */
+.resumen-global { display: flex; flex-direction: column; gap: 10px; }
+.resumen-dato { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+.resumen-etiqueta { font-size: 12.5px; color: var(--app-gris); }
+.resumen-dato strong { font-size: 16px; font-variant-numeric: tabular-nums; color: var(--app-tinta); }
+.resumen-dato strong.ok { color: var(--ok); }
+.resumen-dato strong.falta { color: var(--falta); }
+.resumen-pct { font-size: 11.5px; font-weight: 500; color: var(--app-gris); }
+
+/* ---------- Identidad de persona (nombre + subtitulo) ----------
+   Bloque reusable dentro de una fila de planilla o de validacion. */
+.persona-datos { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.persona-datos strong { font-size: 13.5px; color: var(--app-tinta); font-weight: 700; }
+.persona-datos span { font-size: 11.5px; color: var(--app-gris); }
+
+
+/* ==========================================================================
+   Controles nuevos de las pantallas del Administrador (9, 10 y 11).
+   Todo sale de los tokens ya validados: ningun color nuevo.
+   ========================================================================== */
+
+/* ---------- Entrada de texto ----------
+   El design system solo tenia controles de SELECCION (.control es un
+   boton). Estas tres pantallas son las primeras que piden tipeo libre
+   (nombre, DNI, direccion, credenciales), asi que .entrada replica el
+   mismo cuerpo visual del .control -- mismo alto, borde, radio e icono
+   gris -- pero con un <input> real adentro. Espeja CampoTexto.tsx. */
+.entrada {
+  display: flex; align-items: center; gap: 12px;
+  min-height: 54px; padding: 0 15px;
+  background: var(--app-campo);
+  border: 1px solid var(--app-borde); border-radius: var(--radio);
+}
+.entrada:focus-within { border-color: var(--rojo); box-shadow: 0 0 0 3px rgba(216,32,24,.14); }
+.entrada input {
+  flex: 1; min-width: 0;
+  border: 0; background: none; padding: 0;
+  font: inherit; font-size: 15px; color: var(--app-tinta);
+}
+.entrada input:focus { outline: none; }
+.entrada input::placeholder { color: var(--app-gris-cl); }
+/* Los que llevan un identificador tecnico largo (tenant, client id, URL)
+   no se leen palabra por palabra: se comparan de un vistazo. */
+.entrada input.tecnico { font-size: 13px; font-variant-numeric: tabular-nums; }
+
+/* ---------- Ficha de gestion (una cuenta / una tienda) ----------
+   Es .tarjeta con menos aire: estas listas son largas (30 cuentas) y el
+   padding de bloque de .tarjeta las estiraria a tres pantallas de scroll. */
+.gestion { display: flex; flex-direction: column; gap: 10px; }
+.ficha { gap: 10px; padding: 13px; }
+.ficha-cabecera { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
+.ficha-textos { flex: 1; min-width: 0; }
+.ficha-nombre { margin: 0; font-size: 13.5px; font-weight: 700; color: var(--app-tinta); }
+.ficha-meta { margin: 2px 0 0; font-size: 11.5px; color: var(--app-gris); }
+.ficha-badges { flex: none; display: flex; flex-direction: column; align-items: flex-end; gap: 6px; }
+.ficha-acciones { display: flex; gap: 8px; }
+.ficha-acciones .boton-sec { flex: 1; }
+
+/* ---------- Boton secundario (outline) ----------
+   Espeja Button variant="outline" de la app: borde neutro y tinta, NO
+   rojo. El rojo es la accion principal de la pantalla y hay una sola;
+   si "Deshabilitar" y "Resetear PIN" tambien fueran rojos, ninguna de
+   las tres se leeria como la principal. */
+.boton-sec {
+  display: inline-flex; align-items: center; justify-content: center; gap: 7px;
+  min-height: 40px; padding: 0 13px;
+  background: var(--app-campo);
+  border: 1px solid var(--app-borde); border-radius: var(--radio);
+  font: inherit; font-size: 13px; font-weight: 600; color: var(--app-tinta);
+  cursor: pointer;
+  transition: border-color .12s ease, background .12s ease;
+}
+.boton-sec:hover { border-color: #CFC7C1; background: #FAF8F7; }
+.boton-sec:focus-visible { outline: 2px solid var(--rojo); outline-offset: 2px; }
+.boton-sec:disabled { color: var(--app-gris-cl); cursor: not-allowed; }
+.boton-sec svg { color: var(--app-gris); flex: none; }
+.boton-sec:disabled svg { color: var(--app-gris-cl); }
+
+/* ---------- Badge sin relleno ----------
+   Cuarta variante de .badge (las otras tres son ok / proceso / falta).
+   Se usa para el rol "Conteo", el mas frecuente del padron: con relleno,
+   veinte fichas seguidas se convierten en una mancha de color y el badge
+   deja de senalar nada. */
+.badge.contorno { background: none; border: 1px solid var(--app-borde); color: var(--app-tinta); }
+
+/* ---------- Estado vacio ---------- */
+.vacio-estado {
+  display: flex; flex-direction: column; align-items: center; gap: 6px;
+  padding: 30px 20px; text-align: center;
+  background: var(--app-campo);
+  border: 1px dashed var(--app-borde); border-radius: 14px;
+}
+.vacio-estado svg { color: var(--app-gris-cl); }
+.vacio-estado strong { font-size: 13.5px; color: var(--app-tinta); }
+.vacio-estado span { font-size: 12.5px; color: var(--app-gris); }
+
+/* ---------- [hidden] sobre contenedores flex ----------
+   Mismo gotcha que .campo en hojas.html: el display propio le gana al
+   [hidden] nativo, asi que hay que declararlo elemento por elemento. */
+.campo[hidden], .tarjeta[hidden], .gestion[hidden], .seccion[hidden],
+.ficha-acciones[hidden], .vacio-estado[hidden], .entrada[hidden] { display: none; }
+
+/* ---------- Selector de sesion (solo de la maqueta) ----------
+   No es UI de la app: en la app el rol sale de la sesion. Vive en el
+   lienzo, fuera del telefono, para que se note que es un atajo de
+   validacion y no un control que el usuario final va a ver. */
+.sesion-maqueta { display: flex; flex-direction: column; gap: 8px; }
+.sesion-maqueta .aviso {
+  margin: 0; font-size: 12.5px; color: var(--lienzo-gris); line-height: 1.5;
+}
+.atajo[aria-pressed="true"] {
+  border-color: var(--rojo); color: var(--rojo); font-weight: 700;
+}
+
+/* ---------- Pantalla 9 ---------- */
+.boton-sec.ancho { width: 100%; min-height: 46px; font-size: 14.5px; font-weight: 700; }
+
+</style>
+
+<div class="lienzo">
+
+  <header class="cabecera">
+    <span class="eyebrow">Inventario de Autoservicio · Pantalla 9 · gestión de cuentas</span>
+    <h1>Gestión de usuarios</h1>
+    <p>Alta, habilitación y reseteo de PIN de cuentas. La ve el Administrador (todas las sucursales) y el Auditor (solo la suya).</p>
+  </header>
+
+  <div class="telefono denso">
+    <div class="barra-estado">
+      <span>09:41</span>
+      <span class="senales">
+        <svg width="15" height="11" viewBox="0 0 15 11" fill="currentColor" aria-hidden="true"><rect x="0" y="7" width="2.5" height="4" rx="1"/><rect x="4" y="5" width="2.5" height="6" rx="1"/><rect x="8" y="2.5" width="2.5" height="8.5" rx="1"/><rect x="12" y="0" width="2.5" height="11" rx="1"/></svg>
+        <svg width="22" height="11" viewBox="0 0 22 11" fill="none" aria-hidden="true"><rect x="0.5" y="0.5" width="18" height="10" rx="2.5" stroke="currentColor"/><rect x="2" y="2" width="15" height="7" rx="1.2" fill="currentColor"/><path d="M20 4v3a1.8 1.8 0 0 0 0-3Z" fill="currentColor"/></svg>
+      </span>
+    </div>
+
+    <div class="pantalla scroll">
+
+      <!-- ================= CONTENIDO DE LA PANTALLA ================= -->
+
+      <div class="barra-app">
+        <div class="contexto">
+          <p class="rotulo"><svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8ZM22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75Z"/></svg>Usuarios</p>
+          <p class="sede" id="sede" hidden></p>
+          <p class="cifras" id="cifras"></p>
+        </div>
+        <button type="button" class="salir" id="btn-salir" aria-label="Cerrar sesión"><svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4m7 14 5-5-5-5m5 5H9"/></svg></button>
+      </div>
+
+      <!-- Alta de cuenta. El boton alterna primary/outline igual que en la
+           app (UsuariosScreen.tsx): abrir y cerrar es el mismo control, no
+           dos botones distintos. -->
+      <button type="button" class="accion" id="btn-nueva">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2M8.5 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8ZM19 8v6M22 11h-6"/></svg>
+        <span id="txt-nueva">Nueva cuenta</span>
+      </button>
+
+      <div class="tarjeta" id="formulario" hidden>
+        <div class="tarjeta-cabecera">
+          <svg class="icono" width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2M8.5 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8ZM19 8v6M22 11h-6"/></svg>
+          <h2>Nueva cuenta</h2>
+        </div>
+
+        <div class="campos">
+          <div class="campo">
+            <label id="lbl-nombre" for="in-nombre">Nombre completo</label>
+            <div class="entrada">
+              <svg class="icono" width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+              <input type="text" id="in-nombre" placeholder="Ej. Ana Villanueva" autocomplete="off">
+            </div>
+          </div>
+
+          <div class="campo">
+            <label id="lbl-dni" for="in-dni">DNI</label>
+            <div class="entrada">
+              <svg class="icono" width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+              <input type="text" id="in-dni" inputmode="numeric" pattern="[0-9]*" placeholder="Ej. 4410" autocomplete="off">
+            </div>
+          </div>
+
+          <!-- El selector NUNCA ofrece un rol que quien crea no pueda
+               otorgar: las opciones salen de rolesQuePuedeCrear() (misma
+               funcion que revalida el repositorio). Un Auditor ve dos
+               opciones, no cuatro con dos deshabilitadas -- una opcion
+               visible es una opcion que alguien va a pedir. -->
+          <div class="campo">
+            <label id="lbl-rol">Rol</label>
+            <button type="button" class="control" id="btn-rol" aria-labelledby="lbl-rol" aria-expanded="false" aria-haspopup="listbox">
+              <svg class="icono" width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+              <span class="valor vacio" id="val-rol">Elegí un rol</span>
+              <svg class="chevron" width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
+            </button>
+            <div class="lista" id="lista-rol" role="listbox" aria-labelledby="lbl-rol" hidden></div>
+          </div>
+
+          <!-- Solo el Administrador elige sucursal, y solo si el rol nuevo
+               no es Administrador (ese no cuelga de ninguna). El Auditor no
+               ve este campo: crea siempre para SU sucursal. -->
+          <div class="campo" id="campo-sucursal" hidden>
+            <label id="lbl-sucursal">Sucursal</label>
+            <button type="button" class="control" id="btn-sucursal" aria-labelledby="lbl-sucursal" aria-expanded="false" aria-haspopup="listbox">
+              <svg class="icono" width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z"/><circle cx="12" cy="10" r="3"/></svg>
+              <span class="valor vacio" id="val-sucursal">Elegí una sucursal</span>
+              <svg class="chevron" width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
+            </button>
+            <div class="lista" id="lista-sucursal" role="listbox" aria-labelledby="lbl-sucursal" hidden></div>
+          </div>
+
+          <div class="campo">
+            <label id="lbl-pin">PIN inicial</label>
+            <button type="button" class="control" id="btn-pin" aria-labelledby="lbl-pin" aria-expanded="false">
+              <svg class="icono" width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+              <span class="valor vacio" id="val-pin">Definir PIN de 6 dígitos</span>
+            </button>
+          </div>
+        </div>
+
+        <button type="button" class="accion" id="btn-crear" disabled>Crear cuenta</button>
+      </div>
+
+      <div class="seccion">
+        <h2>Cuentas</h2>
+        <span class="total" id="total-cuentas"></span>
+      </div>
+
+      <div class="gestion" id="lista-cuentas"></div>
+
+      <div class="vacio-estado" id="sin-cuentas" hidden>
+        <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/></svg>
+        <strong>Todavía no hay cuentas</strong>
+        <span>Creá la primera con el botón de arriba.</span>
+      </div>
+
+      <!-- =========================================================== -->
+
+      <div class="toast" id="toast" role="status" aria-live="polite">
+        <svg width="19" height="19" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 2 4 5.5v6c0 5 3.4 9.4 8 10.5 4.6-1.1 8-5.5 8-10.5v-6L12 2Zm-1.2 13.4-3.2-3.2 1.4-1.4 1.8 1.8 4.6-4.6 1.4 1.4-6 6Z"/></svg>
+        <span id="toast-texto"></span>
+      </div>
+
+    </div>
+
+    <!-- Los modales cuelgan del TELEFONO, no de .pantalla ni de .campo -->
+    <div class="modal" id="modal-pin" role="dialog" aria-modal="true" aria-labelledby="titulo-pin" hidden>
+      <div class="modal-fondo" id="fondo-pin"></div>
+      <div class="modal-caja">
+        <div class="modal-cabecera">
+          <h3 id="titulo-pin">Definí el PIN inicial</h3>
+          <button type="button" class="modal-cerrar" id="btn-cerrar-pin" aria-label="Cerrar el teclado"><svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12"/></svg></button>
+        </div>
+        <div class="pin-puntos grande" id="pin-modal" role="status" aria-live="polite"></div>
+        <div class="teclado" id="teclado" role="group" aria-labelledby="titulo-pin"></div>
+      </div>
+    </div>
+
+    <!-- Tab bar del rol: reemplaza a .accion-fija porque en esta pantalla
+         no hay una accion de cierre (crear una cuenta cierra el formulario,
+         no la pantalla). Se repinta con el rol: el Administrador y el
+         Auditor no tienen los mismos tabs. -->
+    <nav class="tab-bar" id="tab-bar" aria-label="Navegación principal"></nav>
+
+  </div>
+
+  <section class="pruebas">
+    <h3>Atajos para validar</h3>
+    <div class="sesion-maqueta">
+      <p class="aviso">La misma pantalla la usan dos roles y <strong>no ven lo mismo</strong>. Cambiá la sesión acá abajo, abrí &laquo;Nueva cuenta&raquo; y mirá el selector de Rol: un Administrador puede otorgar los 4 roles; un Auditor solo Coordinador y Conteo, y solo para su propia sucursal. Los roles que no puede otorgar <strong>no aparecen</strong> en la lista, ni siquiera en gris.</p>
+      <div class="atajos" id="atajos"></div>
+    </div>
+  </section>
+
+</div>
+
+<script>
+(function () {
+  'use strict';
+
+  var $ = function (id) { return document.getElementById(id); };
+  var toast = $('toast'), toastTexto = $('toast-texto');
+
+  var temporizador;
+  function mostrarToast(texto) {
+    toastTexto.textContent = texto;
+    toast.classList.add('visible');
+    clearTimeout(temporizador);
+    temporizador = setTimeout(function () { toast.classList.remove('visible'); }, 2800);
+  }
+
+  /* ---------- Padron ----------
+     Mismos nombres, DNI y roles que lib/adaptadores/sesion-memoria.ts, de
+     donde el adaptador de usuarios siembra su lista. No es un padron
+     paralelo inventado para la maqueta. */
+  var SUCURSALES = [
+    { id: 1, nombre: 'Market Central Luzuriaga' },
+    { id: 2, nombre: 'Market Carhuaz' },
+    { id: 3, nombre: 'Market Bolivar' },
+    { id: 4, nombre: 'Market Sucre' }
+  ];
+  SUCURSALES[2].nombre = 'Market Bol\u00edvar';
+
+  var cuentas = [
+    { id: 1000, nombre: 'Admin Sistema',     dni: '00000001', rol: 'administrador', sucursalId: null, activo: true },
+    { id: 101,  nombre: 'Jos\u00e9 Tarazona',     dni: '1256', rol: 'coordinador', sucursalId: 1, activo: true },
+    { id: 102,  nombre: 'Mar\u00eda Rojas',       dni: '8890', rol: 'conteo',      sucursalId: 1, activo: true },
+    { id: 103,  nombre: 'Gilmer Quispe',      dni: '3421', rol: 'auditor',     sucursalId: 1, activo: true },
+    { id: 104,  nombre: 'Elena Pr\u00edncipe',    dni: '7714', rol: 'conteo',      sucursalId: 1, activo: true },
+    { id: 105,  nombre: 'Walter Norabuena',   dni: '2038', rol: 'conteo',      sucursalId: 1, activo: true },
+    { id: 106,  nombre: 'Rosa Melgarejo',     dni: '5567', rol: 'auditor',     sucursalId: 1, activo: true },
+    { id: 107,  nombre: 'Luis Shuan',         dni: '9102', rol: 'conteo',      sucursalId: 1, activo: true },
+    { id: 108,  nombre: 'Carla Depaz',        dni: '4483', rol: 'conteo',      sucursalId: 1, activo: true },
+    { id: 109,  nombre: 'Manuel Ch\u00e1vez',     dni: '6017', rol: 'conteo',      sucursalId: 1, activo: true },
+    { id: 110,  nombre: 'Yeni Sotelo',        dni: '3390', rol: 'conteo',      sucursalId: 1, activo: true },
+    { id: 111,  nombre: 'Hugo Vergaray',      dni: '8845', rol: 'conteo',      sucursalId: 1, activo: true },
+    { id: 201,  nombre: 'Ana Villanueva',     dni: '4410', rol: 'coordinador', sucursalId: 2, activo: true },
+    { id: 202,  nombre: 'Pedro Cochachin',    dni: '6689', rol: 'conteo',      sucursalId: 2, activo: true },
+    { id: 203,  nombre: 'Nilda Ram\u00edrez',     dni: '1174', rol: 'auditor',     sucursalId: 2, activo: true },
+    { id: 204,  nombre: 'Julio Espinoza',     dni: '5528', rol: 'conteo',      sucursalId: 2, activo: true },
+    { id: 205,  nombre: 'Betty Salazar',      dni: '9063', rol: 'conteo',      sucursalId: 2, activo: true },
+    { id: 206,  nombre: 'Ra\u00fal Colonia',      dni: '2295', rol: 'conteo',      sucursalId: 2, activo: true },
+    { id: 301,  nombre: '\u00d3scar Magui\u00f1a',     dni: '3391', rol: 'coordinador', sucursalId: 3, activo: true },
+    { id: 302,  nombre: 'Silvia Huerta',      dni: '8021', rol: 'conteo',      sucursalId: 3, activo: true },
+    { id: 303,  nombre: 'Jorge Alvarado',     dni: '5543', rol: 'auditor',     sucursalId: 3, activo: true },
+    { id: 304,  nombre: 'Delia Oca\u00f1a',       dni: '7716', rol: 'conteo',      sucursalId: 3, activo: true },
+    { id: 305,  nombre: 'Marco Zarzosa',      dni: '1108', rol: 'conteo',      sucursalId: 3, activo: true },
+    { id: 306,  nombre: 'Pilar Ant\u00fanez',     dni: '6634', rol: 'conteo',      sucursalId: 3, activo: true },
+    { id: 307,  nombre: 'Iv\u00e1n Loli',         dni: '2280', rol: 'conteo',      sucursalId: 3, activo: true },
+    { id: 401,  nombre: 'Carmen Sol\u00eds',      dni: '2287', rol: 'coordinador', sucursalId: 4, activo: true },
+    { id: 402,  nombre: 'Iv\u00e1n Castromonte',  dni: '6650', rol: 'conteo',      sucursalId: 4, activo: true },
+    { id: 403,  nombre: 'Teresa Bail\u00f3n',     dni: '4419', rol: 'auditor',     sucursalId: 4, activo: true },
+    { id: 404,  nombre: 'Fredy Minaya',       dni: '9971', rol: 'conteo',      sucursalId: 4, activo: true },
+    { id: 405,  nombre: 'Nancy Chinchay',     dni: '3302', rol: 'conteo',      sucursalId: 4, activo: true }
+  ];
+  var proximoId = 1001;
+
+  var NOMBRE_ROL = {
+    administrador: 'Administrador', coordinador: 'Coordinador',
+    conteo: 'Conteo', auditor: 'Auditor'
+  };
+  /* Mismo mapa que BADGE_ROL en UsuariosScreen.tsx. "Conteo" -- 20 de las
+     30 cuentas -- va sin relleno: con color, la lista entera seria una
+     sola mancha y el badge dejaria de senalar nada. */
+  var CLASE_ROL = {
+    administrador: 'badge proceso', auditor: 'badge',
+    coordinador: 'badge', conteo: 'badge contorno'
+  };
+
+  /* Regla de negocio, copiada tal cual de lib/dominio/roles.ts. NO es un
+     ranking "igual o inferior": el Auditor es un caso explicito aparte --
+     no puede crear ni Auditor (su propio rol) ni Administrador. */
+  var ROLES_QUE_PUEDE_CREAR = {
+    administrador: ['administrador', 'auditor', 'coordinador', 'conteo'],
+    auditor: ['coordinador', 'conteo']
+  };
+  function rolesQuePuedeCrear(creador) { return ROLES_QUE_PUEDE_CREAR[creador] || []; }
+
+  /* Sesiones de la maqueta. En la app esto sale del login (sesion.colaborador). */
+  var SESIONES = {
+    administrador: { rol: 'administrador', nombre: 'Admin Sistema', sucursalId: null },
+    auditor:       { rol: 'auditor',       nombre: 'Gilmer Quispe', sucursalId: 1 }
+  };
+  var TABS = {
+    administrador: [
+      { id: 'inicio', destino: 'home.html', etiqueta: 'Inicio' },
+      { id: 'usuarios', destino: 'usuarios.html', etiqueta: 'Usuarios' },
+      { id: 'tiendas', destino: 'tiendas.html', etiqueta: 'Tiendas' },
+      { id: 'config', destino: 'config.html', etiqueta: 'Config' }
+    ],
+    auditor: [
+      { id: 'inicio', destino: 'home.html', etiqueta: 'Inicio' },
+      { id: 'auditoria', destino: 'auditoria.html', etiqueta: 'Auditor\u00eda' },
+      { id: 'ciclo', destino: 'ciclo-conteos.html', etiqueta: 'Ciclo' },
+      { id: 'usuarios', destino: 'usuarios.html', etiqueta: 'Usuarios' }
+    ]
+  };
+  var ICONO_TAB = {
+    inicio: '<svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 3 2 12h3v9h14v-9h3Z"/></svg>',
+    usuarios: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></svg>',
+    tiendas: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m3 3 1.5 5h15L21 3M4.5 8v12h15V8M9 20v-6h6v6"/></svg>',
+    config: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.6 1.6 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.6 1.6 0 0 0-2.7 1.1v.3a2 2 0 1 1-4 0v-.2a1.6 1.6 0 0 0-2.8-1.1l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1A1.6 1.6 0 0 0 3.5 15H3a2 2 0 1 1 0-4h.2A1.6 1.6 0 0 0 4.3 8.2l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.6 1.6 0 0 0 2.7-1.1V4a2 2 0 1 1 4 0v.2a1.6 1.6 0 0 0 2.8 1.1l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.6 1.6 0 0 0 1.1 2.7h.3a2 2 0 1 1 0 4h-.2a1.6 1.6 0 0 0-1.2 1Z"/></svg>',
+    auditoria: '<svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M4 20V10h4v10H4Zm6 0V4h4v16h-4Zm6 0v-7h4v7h-4Z"/></svg>',
+    ciclo: '<svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="m12 2 10 5-10 5L2 7l10-5Zm0 8.8L4.6 7 12 3.2 19.4 7 12 10.8ZM2 12l10 5 10-5-1.9-.9L12 15l-8.1-3.9L2 12Zm0 5 10 5 10-5-1.9-.9L12 20l-8.1-3.9L2 17Z"/></svg>'
+  };
+
+  var LARGO_PIN = 6;
+  var sesion = SESIONES.administrador;
+  var abierto = false;                 /* formulario de alta */
+  var campoAbierto = null;             /* 'rol' | 'sucursal' | null */
+  var form = { nombre: '', dni: '', rol: null, sucursalId: null, pin: '' };
+  var pinVisible = false;
+  var modoPin = 'nuevo';               /* 'nuevo' | 'reset' */
+  var cuentaReset = null;
+
+  function nombreSucursal(id) {
+    for (var i = 0; i < SUCURSALES.length; i++) if (SUCURSALES[i].id === id) return SUCURSALES[i].nombre;
+    return 'Sucursal';
+  }
+
+  /* Alcance: el Administrador ve todas las cuentas; el Auditor SOLO las de
+     su sucursal. No es un filtro de la vista -- es lo que el repositorio le
+     devuelve (listar(sucursalId)). El Administrador, sin sucursal propia,
+     no aparece en la lista del Auditor. */
+  function visibles() {
+    if (sesion.rol === 'auditor') {
+      return cuentas.filter(function (c) { return c.sucursalId === sesion.sucursalId; });
+    }
+    return cuentas;
+  }
+
+  /* ---------- Formulario ---------- */
+  function requiereSucursal() {
+    return sesion.rol === 'administrador' && form.rol !== null && form.rol !== 'administrador';
+  }
+
+  function puedeCrear() {
+    return form.nombre.trim().length > 0 &&
+           form.dni.trim().length > 0 &&
+           form.rol !== null &&
+           form.pin.length === LARGO_PIN &&
+           (!requiereSucursal() || form.sucursalId !== null);
+  }
+
+  function limpiarFormulario() {
+    form = { nombre: '', dni: '', rol: null, sucursalId: null, pin: '' };
+    abierto = false;
+    campoAbierto = null;
+    $('in-nombre').value = '';
+    $('in-dni').value = '';
+  }
+
+  function pintarFormulario() {
+    $('formulario').hidden = !abierto;
+    $('txt-nueva').textContent = abierto ? 'Cancelar' : 'Nueva cuenta';
+    $('btn-nueva').className = abierto ? 'boton-sec ancho' : 'accion';
+
+    var valRol = $('val-rol');
+    if (form.rol) { valRol.className = 'valor'; valRol.textContent = NOMBRE_ROL[form.rol]; }
+    else { valRol.className = 'valor vacio'; valRol.textContent = 'Eleg\u00ed un rol'; }
+
+    $('campo-sucursal').hidden = !requiereSucursal();
+    var valSuc = $('val-sucursal');
+    if (form.sucursalId) { valSuc.className = 'valor'; valSuc.textContent = nombreSucursal(form.sucursalId); }
+    else { valSuc.className = 'valor vacio'; valSuc.textContent = 'Eleg\u00ed una sucursal'; }
+
+    pintarPinCampo();
+    $('btn-crear').disabled = !puedeCrear();
+  }
+
+  /* ---------- Desplegables ---------- */
+  function cerrarListas() {
+    campoAbierto = null;
+    $('lista-rol').hidden = true;
+    $('lista-sucursal').hidden = true;
+    $('btn-rol').setAttribute('aria-expanded', 'false');
+    $('btn-sucursal').setAttribute('aria-expanded', 'false');
+  }
+
+  function pintarListaRol() {
+    var cont = $('lista-rol');
+    cont.innerHTML = '';
+    rolesQuePuedeCrear(sesion.rol).forEach(function (r) {
+      var b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'opcion';
+      b.setAttribute('role', 'option');
+      b.setAttribute('aria-selected', String(form.rol === r));
+      var s = document.createElement('span');
+      s.textContent = NOMBRE_ROL[r];
+      b.appendChild(s);
+      b.addEventListener('click', function () {
+        form.rol = r;
+        /* El Administrador no cuelga de ninguna sucursal: elegir ese rol
+           descarta la sucursal ya elegida en vez de mandarla igual. */
+        if (r === 'administrador') form.sucursalId = null;
+        cerrarListas();
+        pintarFormulario();
+      });
+      cont.appendChild(b);
+    });
+  }
+
+  function pintarListaSucursal() {
+    var cont = $('lista-sucursal');
+    cont.innerHTML = '';
+    SUCURSALES.forEach(function (s) {
+      var b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'opcion';
+      b.setAttribute('role', 'option');
+      b.setAttribute('aria-selected', String(form.sucursalId === s.id));
+      var t = document.createElement('span');
+      t.textContent = s.nombre;
+      var m = document.createElement('span');
+      m.className = 'meta';
+      var n = cuentas.filter(function (c) { return c.sucursalId === s.id; }).length;
+      m.textContent = n + (n === 1 ? ' cuenta' : ' cuentas');
+      t.appendChild(m);
+      b.appendChild(t);
+      b.addEventListener('click', function () {
+        form.sucursalId = s.id;
+        cerrarListas();
+        pintarFormulario();
+      });
+      cont.appendChild(b);
+    });
+  }
+
+  /* ---------- PIN ---------- */
+  function construirPuntos(valor) {
+    var frag = document.createDocumentFragment();
+    for (var i = 0; i < LARGO_PIN; i++) {
+      var d = document.createElement('span');
+      var lleno = i < valor.length;
+      d.className = 'punto-pin' + (lleno ? ' lleno' : '') + (lleno && pinVisible ? ' visible' : '');
+      if (lleno && pinVisible) d.textContent = valor.charAt(i);
+      frag.appendChild(d);
+    }
+    return frag;
+  }
+
+  var pinReset = '';
+  function valorPin() { return modoPin === 'reset' ? pinReset : form.pin; }
+
+  function pintarPinCampo() {
+    var val = $('val-pin');
+    if (!form.pin.length) {
+      val.className = 'valor vacio';
+      val.textContent = 'Definir PIN de 6 d\u00edgitos';
+      return;
+    }
+    val.className = 'valor';
+    val.innerHTML = '';
+    var puntos = document.createElement('span');
+    puntos.className = 'pin-puntos';
+    puntos.appendChild(construirPuntos(form.pin));
+    val.appendChild(puntos);
+  }
+
+  function pintarPinModal() {
+    $('pin-modal').innerHTML = '';
+    $('pin-modal').appendChild(construirPuntos(valorPin()));
+  }
+
+  function abrirPin(modo, cuenta) {
+    modoPin = modo;
+    cuentaReset = cuenta || null;
+    pinVisible = false;
+    cerrarListas();
+    if (modo === 'reset') {
+      pinReset = '';
+      $('titulo-pin').textContent = 'Nuevo PIN para ' + cuenta.nombre;
+    } else {
+      $('titulo-pin').textContent = 'Defin\u00ed el PIN inicial';
+    }
+    construirTeclado();
+    pintarPinModal();
+    $('modal-pin').hidden = false;
+    var primera = $('modal-pin').querySelector('.tecla');
+    if (primera) primera.focus();
+  }
+
+  function cerrarPin() {
+    if ($('modal-pin').hidden) return;
+    $('modal-pin').hidden = true;
+    /* Reseteo: el PIN se aplica al cerrarse el teclado con los 6 digitos
+       puestos -- mismo contrato que TecladoPin.onCerrar en la app. Si se
+       cierra a medias no se toca nada: media clave no es una clave. */
+    if (modoPin === 'reset' && cuentaReset && pinReset.length === LARGO_PIN) {
+      mostrarToast('Se asign\u00f3 un PIN nuevo a ' + cuentaReset.nombre + '.');
+    }
+    cuentaReset = null;
+    pintarFormulario();
+  }
+
+  function tecleaDigito(d) {
+    if (modoPin === 'reset') {
+      if (pinReset.length >= LARGO_PIN) return;
+      pinReset += d;
+    } else {
+      if (form.pin.length >= LARGO_PIN) return;
+      form.pin += d;
+    }
+    pintarPinModal();
+    pintarFormulario();
+    if (valorPin().length === LARGO_PIN) cerrarPin();
+  }
+
+  function borrarDigito() {
+    if (modoPin === 'reset') pinReset = pinReset.slice(0, -1);
+    else form.pin = form.pin.slice(0, -1);
+    pintarPinModal();
+    pintarFormulario();
+  }
+
+  var OJO = '<svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 5C6.5 5 2.3 9.1 1 12c1.3 2.9 5.5 7 11 7s9.7-4.1 11-7c-1.3-2.9-5.5-7-11-7Zm0 11.5A4.5 4.5 0 1 1 12 7.5a4.5 4.5 0 0 1 0 9Zm0-2a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5Z"/></svg>';
+  var BORRAR = '<svg width="23" height="23" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M9 4h11a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H9a2 2 0 0 1-1.5-.7l-5.2-5.9a2 2 0 0 1 0-2.8l5.2-5.9A2 2 0 0 1 9 4Zm3.6 8L10 9.4 11.4 8 14 10.6 16.6 8 18 9.4 15.4 12l2.6 2.6-1.4 1.4L14 13.4 11.4 16 10 14.6 12.6 12Z"/></svg>';
+
+  function construirTeclado() {
+    var cont = $('teclado');
+    cont.innerHTML = '';
+    ['1', '2', '3', '4', '5', '6', '7', '8', '9', 'ver', '0', 'borrar'].forEach(function (t) {
+      var b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'tecla';
+      if (t === 'ver') {
+        b.className += ' auxiliar';
+        b.innerHTML = OJO;
+        b.setAttribute('aria-label', 'Mostrar el PIN');
+        b.setAttribute('aria-pressed', 'false');
+        b.addEventListener('click', function () {
+          pinVisible = !pinVisible;
+          b.setAttribute('aria-pressed', String(pinVisible));
+          b.setAttribute('aria-label', pinVisible ? 'Ocultar el PIN' : 'Mostrar el PIN');
+          pintarPinModal();
+          pintarPinCampo();
+        });
+      } else if (t === 'borrar') {
+        b.className += ' auxiliar';
+        b.innerHTML = BORRAR;
+        b.setAttribute('aria-label', 'Borrar un d\u00edgito');
+        b.addEventListener('click', borrarDigito);
+      } else {
+        b.textContent = t;
+        b.addEventListener('click', function () { tecleaDigito(t); });
+      }
+      cont.appendChild(b);
+    });
+  }
+
+  /* ---------- Lista de cuentas ---------- */
+  function ficha(c) {
+    var art = document.createElement('div');
+    art.className = 'tarjeta ficha';
+
+    var cab = document.createElement('div');
+    cab.className = 'ficha-cabecera';
+
+    var textos = document.createElement('div');
+    textos.className = 'ficha-textos';
+    var h = document.createElement('p');
+    h.className = 'ficha-nombre';
+    h.textContent = c.nombre;
+    var meta = document.createElement('p');
+    meta.className = 'ficha-meta';
+    /* El Auditor no necesita el nombre de la sucursal: todas las cuentas
+       que ve son de la suya. Al Administrador si le hace falta. */
+    meta.textContent = 'DNI ' + c.dni +
+      (sesion.rol === 'administrador' && c.sucursalId ? ' \u00b7 ' + nombreSucursal(c.sucursalId) : '');
+    textos.appendChild(h);
+    textos.appendChild(meta);
+
+    var badges = document.createElement('div');
+    badges.className = 'ficha-badges';
+    var bRol = document.createElement('span');
+    bRol.className = CLASE_ROL[c.rol];
+    bRol.textContent = NOMBRE_ROL[c.rol];
+    var bEstado = document.createElement('span');
+    bEstado.className = c.activo ? 'badge ok' : 'badge';
+    bEstado.textContent = c.activo ? 'Habilitada' : 'Deshabilitada';
+    badges.appendChild(bRol);
+    badges.appendChild(bEstado);
+
+    cab.appendChild(textos);
+    cab.appendChild(badges);
+
+    var acciones = document.createElement('div');
+    acciones.className = 'ficha-acciones';
+
+    /* Nunca hay "Eliminar": una cuenta borrada deja conteos huerfanos en
+       un inventario que se audita. Se deshabilita, y la cuenta sigue
+       respondiendo por lo que conto. */
+    var bAlternar = document.createElement('button');
+    bAlternar.type = 'button';
+    bAlternar.className = 'boton-sec';
+    bAlternar.textContent = c.activo ? 'Deshabilitar' : 'Habilitar';
+    bAlternar.addEventListener('click', function () {
+      c.activo = !c.activo;
+      render();
+      mostrarToast(c.nombre + (c.activo ? ': cuenta habilitada.' : ': cuenta deshabilitada.'));
+    });
+
+    var bPin = document.createElement('button');
+    bPin.type = 'button';
+    bPin.className = 'boton-sec';
+    bPin.innerHTML = '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="7.5" cy="15.5" r="4.5"/><path d="m10.7 12.3 8.3-8.3 2 2-2 2 2 2-3 3-2-2-2 2"/></svg>';
+    var etq = document.createElement('span');
+    etq.textContent = 'Resetear PIN';
+    bPin.appendChild(etq);
+    bPin.addEventListener('click', function () { abrirPin('reset', c); });
+
+    acciones.appendChild(bAlternar);
+    acciones.appendChild(bPin);
+
+    art.appendChild(cab);
+    art.appendChild(acciones);
+    return art;
+  }
+
+  function pintarLista() {
+    var lista = visibles();
+    var cont = $('lista-cuentas');
+    cont.innerHTML = '';
+    lista.forEach(function (c) { cont.appendChild(ficha(c)); });
+    cont.hidden = lista.length === 0;
+    $('sin-cuentas').hidden = lista.length !== 0;
+    $('total-cuentas').textContent = lista.length + (lista.length === 1 ? ' cuenta' : ' cuentas');
+  }
+
+  function pintarBarra() {
+    var lista = visibles();
+    var habilitadas = lista.filter(function (c) { return c.activo; }).length;
+    /* La sede se muestra solo para el Auditor: es su alcance real. Para el
+       Administrador no hay una sede que mostrar -- ve las cuatro. */
+    var sede = $('sede');
+    sede.hidden = sesion.rol !== 'auditor';
+    sede.textContent = sesion.rol === 'auditor' ? nombreSucursal(sesion.sucursalId) : '';
+    $('cifras').textContent = lista.length + (lista.length === 1 ? ' cuenta' : ' cuentas') +
+      ' \u00b7 ' + habilitadas + ' habilitadas';
+  }
+
+  function pintarTabs() {
+    var cont = $('tab-bar');
+    cont.innerHTML = '';
+    TABS[sesion.rol].forEach(function (t) {
+      var b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'tab' + (t.id === 'usuarios' ? ' activo' : '');
+      if (t.id === 'usuarios') b.setAttribute('aria-current', 'page');
+      b.innerHTML = '<span class="tab-indicador" aria-hidden="true"></span>' + ICONO_TAB[t.id] +
+        '<span class="tab-etiqueta">' + t.etiqueta + '</span>';
+      b.addEventListener('click', function () {
+        if (t.id === 'usuarios') return;
+        mostrarToast('Ir\u00eda a "' + t.etiqueta + '" (' + t.destino + ').');
+      });
+      cont.appendChild(b);
+    });
+  }
+
+  function pintarAtajos() {
+    var cont = $('atajos');
+    cont.innerHTML = '';
+    [
+      { clave: 'administrador', etiqueta: 'Sesi\u00f3n: Admin Sistema (Administrador)' },
+      { clave: 'auditor', etiqueta: 'Sesi\u00f3n: Gilmer Quispe (Auditor \u00b7 Luzuriaga)' }
+    ].forEach(function (a) {
+      var b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'atajo';
+      b.textContent = a.etiqueta;
+      b.setAttribute('aria-pressed', String(sesion.rol === a.clave));
+      b.addEventListener('click', function () {
+        sesion = SESIONES[a.clave];
+        limpiarFormulario();
+        render();
+        mostrarToast('Sesi\u00f3n de ' + (a.clave === 'auditor' ? 'Auditor' : 'Administrador') + '.');
+      });
+      cont.appendChild(b);
+    });
+  }
+
+  function render() {
+    pintarBarra();
+    pintarListaRol();
+    pintarListaSucursal();
+    pintarFormulario();
+    pintarLista();
+    pintarTabs();
+    pintarAtajos();
+  }
+
+  /* ---------- Eventos ---------- */
+  $('btn-nueva').addEventListener('click', function () {
+    if (abierto) { limpiarFormulario(); }
+    else { abierto = true; }
+    render();
+  });
+
+  $('in-nombre').addEventListener('input', function (e) {
+    form.nombre = e.target.value;
+    $('btn-crear').disabled = !puedeCrear();
+  });
+  $('in-dni').addEventListener('input', function (e) {
+    e.target.value = e.target.value.replace(/[^0-9]/g, '');
+    form.dni = e.target.value;
+    $('btn-crear').disabled = !puedeCrear();
+  });
+
+  $('btn-rol').addEventListener('click', function (e) {
+    e.stopPropagation();
+    var abrir = campoAbierto !== 'rol';
+    cerrarListas();
+    if (abrir) {
+      campoAbierto = 'rol';
+      $('lista-rol').hidden = false;
+      $('btn-rol').setAttribute('aria-expanded', 'true');
+    }
+  });
+
+  $('btn-sucursal').addEventListener('click', function (e) {
+    e.stopPropagation();
+    var abrir = campoAbierto !== 'sucursal';
+    cerrarListas();
+    if (abrir) {
+      campoAbierto = 'sucursal';
+      $('lista-sucursal').hidden = false;
+      $('btn-sucursal').setAttribute('aria-expanded', 'true');
+    }
+  });
+
+  $('btn-pin').addEventListener('click', function () { abrirPin('nuevo'); });
+  $('btn-cerrar-pin').addEventListener('click', cerrarPin);
+  $('fondo-pin').addEventListener('click', cerrarPin);
+
+  $('btn-crear').addEventListener('click', function () {
+    if (!puedeCrear()) return;
+    /* Revalidacion, igual que en el repositorio: la pantalla ya filtro el
+       selector, pero eso no se da por hecho. */
+    if (rolesQuePuedeCrear(sesion.rol).indexOf(form.rol) === -1) {
+      mostrarToast('Un ' + sesion.rol + ' no puede crear una cuenta de rol ' + form.rol + '.');
+      return;
+    }
+    var sucursalId = form.rol === 'administrador' ? null
+      : (requiereSucursal() ? form.sucursalId : sesion.sucursalId);
+    cuentas.push({
+      id: proximoId++, nombre: form.nombre.trim(), dni: form.dni.trim(),
+      rol: form.rol, sucursalId: sucursalId, activo: true
+    });
+    var creado = form.nombre.trim();
+    limpiarFormulario();
+    render();
+    mostrarToast('Cuenta creada para ' + creado + '.');
+  });
+
+  $('btn-salir').addEventListener('click', function () {
+    mostrarToast('Cerrar\u00eda la sesi\u00f3n y volver\u00eda al login.');
+  });
+
+  /* El cierre por click-fuera excluye los modales: sin eso, tocar dentro
+     del teclado del PIN cerraria los desplegables de atras. */
+  document.addEventListener('click', function (e) {
+    if (!e.target.closest('.campo') && !e.target.closest('.modal')) cerrarListas();
+  });
+  document.addEventListener('keydown', function (e) {
+    if (e.key !== 'Escape') return;
+    if (!$('modal-pin').hidden) cerrarPin();
+    else cerrarListas();
+  });
+
+  render();
+})();
+</script>

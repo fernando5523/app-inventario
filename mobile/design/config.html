@@ -1,0 +1,1287 @@
+<meta charset="utf-8">
+<title>Configuración del sistema</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Baloo+2:wght@600;700&family=Figtree:wght@400;500;600;700&display=swap">
+<style>
+/* =====================================================================
+   TRUJILLO · Sistema de controles de la app de inventario
+   Validado en la pantalla 1 (login). Copiar completo en cada maqueta.
+
+   Regla de oro: los tokens de marca son FIJOS en ambos temas. La app
+   pinta su propio mundo; solo el lienzo que rodea al telefono sigue el
+   tema del visor.
+   ===================================================================== */
+
+:root {
+  /* Marca — valores tomados del PNG del logo, no estimados */
+  --rojo:        #D82018;
+  --rojo-hover:  #B81810;
+  --rojo-suave:  #FDF0EF;
+  --dorado:      #F8B818;
+
+  /* Superficie de la app */
+  --app-fondo:   #FFFFFF;
+  --app-tinta:   #1C1917;
+  --app-gris:    #6B6560;
+  --app-gris-cl: #9A938D;
+  --app-borde:   #E3DEDA;
+  --app-campo:   #FFFFFF;
+
+  /* Lienzo del documento de maqueta (fuera del telefono) — tema claro */
+  --lienzo:      #F2EEEB;
+  --lienzo-alt:  #FFFFFF;
+  --lienzo-tinta:#26211E;
+  --lienzo-gris: #6E6660;
+  --lienzo-borde:#DED7D2;
+
+  --sombra: 0 1px 2px rgba(28,25,23,.04), 0 12px 40px rgba(28,25,23,.10);
+  --radio: 10px;
+  --tabbar-alto: 60px;
+
+  --fuente-ui: 'Figtree', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  --fuente-marca: 'Baloo 2', 'Figtree', -apple-system, sans-serif;
+}
+
+/* Solo el lienzo cambia con el tema. Nunca los tokens --app-* */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --lienzo:      #191614;
+    --lienzo-alt:  #221E1B;
+    --lienzo-tinta:#F2EEEB;
+    --lienzo-gris: #A79E97;
+    --lienzo-borde:#332D29;
+    --sombra: 0 1px 2px rgba(0,0,0,.4), 0 16px 48px rgba(0,0,0,.55);
+  }
+}
+:root[data-theme="dark"] {
+  --lienzo:      #191614;
+  --lienzo-alt:  #221E1B;
+  --lienzo-tinta:#F2EEEB;
+  --lienzo-gris: #A79E97;
+  --lienzo-borde:#332D29;
+  --sombra: 0 1px 2px rgba(0,0,0,.4), 0 16px 48px rgba(0,0,0,.55);
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--lienzo);
+  color: var(--lienzo-tinta);
+  font-family: var(--fuente-ui);
+  -webkit-font-smoothing: antialiased;
+}
+
+.lienzo {
+  min-height: 100vh;
+  display: flex; flex-direction: column; align-items: center;
+  gap: 28px; padding: 32px 20px 56px;
+}
+
+/* ---------- Cabecera del documento de maqueta ---------- */
+.cabecera { text-align: center; display: flex; flex-direction: column; gap: 6px; }
+.cabecera .eyebrow {
+  font-size: 11px; font-weight: 600; letter-spacing: .13em;
+  text-transform: uppercase; color: var(--lienzo-gris);
+}
+.cabecera h1 {
+  margin: 0; font-family: var(--fuente-marca); font-weight: 700;
+  font-size: clamp(22px, 4vw, 28px); letter-spacing: -.01em; text-wrap: balance;
+}
+.cabecera p { margin: 0; font-size: 14px; color: var(--lienzo-gris); max-width: 52ch; }
+
+/* ---------- Marco del telefono ---------- */
+/* Pantalla operativa: mas ancho util para listas y tarjetas */
+.telefono.denso { --pad-lateral: 14px; }
+
+.telefono {
+  /* Un solo lugar decide el margen lateral. Lo leen .pantalla, .toast,
+     .chips y .accion-fija, asi una pantalla densa gana ancho sin que
+     haya que recalibrar cada uno a mano. */
+  --pad-lateral: 26px;
+  width: 380px; max-width: 100%;
+  background: var(--app-fondo);
+  border-radius: 34px;
+  border: 1px solid var(--lienzo-borde);
+  box-shadow: var(--sombra);
+  overflow: hidden;
+  position: relative;   /* ancla de los modales */
+}
+.barra-estado {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 12px 22px 4px;
+  font-size: 12px; font-weight: 600; color: var(--app-tinta);
+  font-variant-numeric: tabular-nums;
+}
+.barra-estado .senales { display: flex; gap: 5px; align-items: center; opacity: .75; }
+
+/* OBLIGATORIO el `color`: sin el, todo texto sin color propio hereda
+   --lienzo-tinta, que en tema oscuro es CLARO, y desaparece sobre el
+   fondo blanco de la app. */
+.pantalla {
+  position: relative;
+  padding: 8px var(--pad-lateral) 26px;
+  display: flex; flex-direction: column; gap: 20px;
+  color: var(--app-tinta);
+}
+
+/* ---------- Marca ---------- */
+.marca { display: flex; flex-direction: column; align-items: center; padding: 14px 0 4px; }
+.marca img { width: 172px; height: auto; display: block; }
+
+.saludo { display: flex; flex-direction: column; gap: 2px; }
+.saludo h2 {
+  margin: 0; display: flex; align-items: center; gap: 9px;
+  font-family: var(--fuente-marca); font-weight: 700; font-size: 27px;
+  color: var(--rojo); letter-spacing: -.01em;
+}
+.saludo p { margin: 0; font-size: 14.5px; color: var(--app-gris); }
+
+/* ---------- Campos ---------- */
+.campos { display: flex; flex-direction: column; gap: 15px; }
+/* position: relative -> es el ancla del desplegable */
+.campo { position: relative; display: flex; flex-direction: column; gap: 6px; }
+.campo label { font-size: 13.5px; font-weight: 600; color: var(--app-tinta); }
+
+.control {
+  width: 100%; display: flex; align-items: center; gap: 12px;
+  min-height: 54px; padding: 0 15px;
+  background: var(--app-campo);
+  border: 1px solid var(--app-borde);
+  border-radius: var(--radio);
+  font: inherit; font-size: 15.5px; color: var(--app-tinta);
+  text-align: left; cursor: pointer;
+  transition: border-color .15s ease, box-shadow .15s ease;
+}
+.control:hover:not(:disabled) { border-color: #CFC7C1; }
+.control:focus-visible {
+  outline: none; border-color: var(--rojo);
+  box-shadow: 0 0 0 3px rgba(216,32,24,.14);
+}
+.control[aria-expanded="true"] {
+  border-color: var(--rojo); box-shadow: 0 0 0 3px rgba(216,32,24,.14);
+}
+.control:disabled { background: #F7F5F4; cursor: not-allowed; opacity: .7; }
+.control .valor { flex: 1; min-width: 0; }
+.control .valor.vacio { color: var(--app-gris-cl); }
+.control .sub {
+  display: block; font-size: 11.5px; color: var(--app-gris);
+  margin-top: 1px; font-variant-numeric: tabular-nums;
+}
+.chevron { color: var(--rojo); flex: none; transition: transform .18s ease; }
+.control[aria-expanded="true"] .chevron { transform: rotate(180deg); }
+.control:disabled .chevron { color: var(--app-gris-cl); }
+
+/* Los iconos de campo van SIEMPRE en gris. El rojo se reserva para
+   el chevron, la seleccion y las acciones. */
+.icono { flex: none; color: var(--app-gris-cl); }
+
+/* ---------- Desplegable ---------- */
+.lista {
+  /* Fuera del flujo: si ocupara espacio, abrirlo empujaria todo lo de
+     abajo y la pantalla saltaria. */
+  position: absolute;
+  top: 100%; left: 0; right: 0; z-index: 30;
+  margin-top: 6px;
+  /* El tope NO es multiplo de la altura de fila a proposito: el corte
+     cae sobre una fila a medias y eso avisa que hay mas abajo. */
+  max-height: 262px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+  /* Barra oculta en los tres motores: una lista nativa se desplaza,
+     no muestra barra. */
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+  border: 1px solid var(--app-borde); border-radius: var(--radio);
+  background: var(--app-campo);
+  box-shadow: 0 10px 30px rgba(28,25,23,.14);
+}
+.lista::-webkit-scrollbar { width: 0; height: 0; display: none; }
+.lista[hidden] { display: none; }
+
+.opcion {
+  width: 100%; display: flex; align-items: center; gap: 12px;
+  padding: 12px 15px; background: none; border: 0;
+  border-bottom: 1px solid #F0ECE9;
+  font: inherit; font-size: 15px; color: var(--app-tinta);
+  text-align: left; cursor: pointer;
+}
+.opcion:last-child { border-bottom: 0; }
+.opcion:hover, .opcion:focus-visible { background: var(--rojo-suave); outline: none; }
+.opcion[aria-selected="true"],
+.opcion[aria-selected="true"]:hover {
+  background: var(--rojo); color: #fff; font-weight: 600;
+}
+.opcion[aria-selected="true"] .meta { color: rgba(255,255,255,.82); }
+.opcion .meta {
+  display: block; font-size: 11.5px; font-weight: 400; color: var(--app-gris);
+  margin-top: 1px; font-variant-numeric: tabular-nums;
+}
+
+/* ---------- PIN ---------- */
+.pin-puntos { display: flex; align-items: center; gap: 11px; }
+.pin-puntos.grande { justify-content: center; gap: 15px; min-height: 30px; }
+.pin-puntos.grande .punto-pin { width: 14px; height: 14px; }
+.pin-puntos.grande .punto-pin.visible { min-width: 14px; font-size: 19px; }
+
+.punto-pin {
+  width: 11px; height: 11px; border-radius: 50%;
+  border: 1.5px solid #C9C1BB; background: transparent;
+  display: grid; place-items: center;
+  font-size: 15px; font-weight: 700; color: var(--app-tinta);
+  font-variant-numeric: tabular-nums;
+  transition: background .14s ease, border-color .14s ease, transform .14s ease;
+}
+.punto-pin.lleno { background: var(--app-tinta); border-color: var(--app-tinta); transform: scale(1.06); }
+.punto-pin.visible {
+  width: auto; min-width: 11px; height: auto;
+  background: transparent; border-color: transparent; transform: none;
+}
+
+.teclado { display: grid; grid-template-columns: repeat(3, 1fr); gap: 9px; }
+.tecla {
+  min-height: 50px; display: grid; place-items: center;
+  background: var(--app-campo);
+  border: 1px solid var(--app-borde); border-radius: var(--radio);
+  font: inherit; font-size: 21px; font-weight: 600; color: var(--app-tinta);
+  font-variant-numeric: tabular-nums; cursor: pointer;
+  transition: background .12s ease, border-color .12s ease, transform .08s ease;
+}
+.tecla:hover { border-color: #CFC7C1; }
+.tecla:active { background: var(--rojo-suave); border-color: var(--rojo); transform: scale(.97); }
+.tecla:focus-visible { outline: 2px solid var(--rojo); outline-offset: 2px; }
+.tecla.auxiliar { color: var(--app-gris); }
+.tecla.auxiliar:hover { color: var(--app-tinta); }
+
+/* ---------- Modal ----------
+   Va colgado de .telefono, NO de .campo: colgando del campo se sale de
+   la pantalla cuando el campo esta abajo. Centrado siempre. */
+.modal {
+  position: absolute; inset: 0; z-index: 60;
+  display: flex; align-items: center; justify-content: center;
+  padding: 22px;
+}
+.modal[hidden] { display: none; }
+.modal-fondo {
+  position: absolute; inset: 0;
+  background: rgba(28,25,23,.42);
+  animation: aparecer .18s ease;
+}
+.modal-caja {
+  position: relative;
+  width: 100%; max-width: 310px;
+  display: flex; flex-direction: column; gap: 15px;
+  padding: 17px;
+  background: var(--app-campo);
+  border-radius: 16px;
+  box-shadow: 0 22px 55px rgba(28,25,23,.32);
+  animation: subir .2s cubic-bezier(.2,.8,.3,1);
+}
+@keyframes aparecer { from { opacity: 0; } }
+@keyframes subir { from { opacity: 0; transform: translateY(10px) scale(.97); } }
+
+.modal-cabecera { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.modal-cabecera h3 { margin: 0; font-size: 15px; font-weight: 700; color: var(--app-tinta); }
+.modal-cerrar {
+  width: 32px; height: 32px; flex: none;
+  display: grid; place-items: center;
+  background: none; border: 0; border-radius: 8px;
+  color: var(--app-gris); cursor: pointer;
+  transition: background .14s ease, color .14s ease;
+}
+.modal-cerrar:hover { background: var(--rojo-suave); color: var(--rojo); }
+.modal-cerrar:focus-visible { outline: 2px solid var(--rojo); outline-offset: 1px; }
+
+/* ---------- Grupo segmentado NO elegible (dato derivado: .roles) ----------
+   El rol sale del padron de la persona: se muestra, no se elige. Son
+   elementos div, no button. Distinto de .segmentado/.segmento (mas abajo),
+   que SI es elegible. Confundirlos rompe la regla de "un dato derivado
+   se muestra, no se elige". */
+.roles {
+  display: grid; grid-template-columns: repeat(3, 1fr);
+  border: 1.5px solid var(--rojo); border-radius: var(--radio);
+  background: var(--app-campo);
+  overflow: hidden;
+  transition: opacity .2s ease;
+}
+.roles.inerte { opacity: .38; }   /* sin dato todavia: se ve, no se toca */
+.rol {
+  padding: 13px 4px; display: grid; place-items: center;
+  border-right: 1.5px solid var(--rojo);
+  background: var(--app-campo); color: var(--app-tinta);
+  font-size: 12.5px; font-weight: 700;
+  letter-spacing: .07em; text-transform: uppercase;
+  transition: background .18s ease, color .18s ease;
+}
+.rol:last-child { border-right: 0; }
+.rol.activo { background: var(--rojo); color: #fff; }
+
+.rol-cabecera { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+.rol-cabecera .nota { font-size: 11px; color: var(--app-gris-cl); font-weight: 500; }
+
+/* ---------- Grupo segmentado ELEGIBLE (.segmentado/.segmento) ----------
+   Visualmente parecido a .roles, pero son elementos button reales: la persona
+   SI elige (p.ej. el tamano de hoja para un reconteo). Usar .roles
+   cuando el dato ya esta derivado y solo se muestra; usar .segmentado
+   cuando el usuario tiene que decidir entre opciones reales. */
+.segmentado {
+  display: grid; grid-template-columns: repeat(3, 1fr);
+  border: 1.5px solid var(--rojo); border-radius: var(--radio);
+  background: var(--app-campo); overflow: hidden;
+}
+.segmento {
+  padding: 11px 4px; display: grid; place-items: center;
+  border-right: 1.5px solid var(--rojo); border-left: 0; border-top: 0; border-bottom: 0;
+  background: var(--app-campo); color: var(--app-tinta);
+  font: inherit; font-size: 12.5px; font-weight: 700;
+  letter-spacing: .04em; cursor: pointer;
+  transition: background .16s ease, color .16s ease;
+}
+.segmento:last-child { border-right: 0; }
+.segmento:hover { background: var(--rojo-suave); }
+.segmento:focus-visible { outline: 2px solid var(--rojo); outline-offset: -2px; }
+.segmento.activo { background: var(--rojo); color: #fff; }
+
+/* ---------- Accion principal ---------- */
+.ingresar {
+  width: 100%; min-height: 56px;
+  display: flex; align-items: center; justify-content: center; gap: 12px;
+  background: var(--rojo); color: #fff;
+  border: 0; border-radius: 6px;
+  font: inherit; font-size: 17px; font-weight: 700; cursor: pointer;
+  transition: background .16s ease, opacity .16s ease;
+}
+.ingresar:hover:not(:disabled) { background: var(--rojo-hover); }
+.ingresar:focus-visible { outline: 3px solid rgba(216,32,24,.35); outline-offset: 2px; }
+.ingresar:disabled { background: #DCD6D2; color: #FBFAFA; cursor: not-allowed; }
+.ingresar svg { color: var(--dorado); }
+.ingresar:disabled svg { color: #FBFAFA; }
+
+.olvide {
+  align-self: flex-start; margin-top: 2px;
+  background: none; border: 0; padding: 0;
+  font: inherit; font-size: 13.5px; color: var(--rojo); cursor: pointer;
+}
+.olvide:hover { text-decoration: underline; }
+
+/* ---------- Pie de pantalla ----------
+   tagline + version agrupados, para que el gap del contenedor los separe
+   sin margenes negativos peleando con el gap de .pantalla. */
+.pie { display: flex; flex-direction: column; align-items: center; gap: 5px; }
+.version {
+  margin: 0;
+  font-size: 11.5px; font-weight: 500;
+  color: var(--app-gris-cl);
+  font-variant-numeric: tabular-nums; letter-spacing: .04em;
+}
+
+.tagline {
+  display: flex; align-items: center; justify-content: center; gap: 10px;
+  font-family: var(--fuente-marca); font-weight: 600;
+  font-size: 13.5px; color: var(--rojo);
+}
+
+/* ---------- Toast ---------- */
+.toast {
+  position: absolute; left: var(--pad-lateral); right: var(--pad-lateral); bottom: 22px;
+  display: flex; align-items: center; gap: 10px;
+  padding: 13px 15px; border-radius: var(--radio);
+  background: var(--app-tinta); color: #fff;
+  font-size: 13.5px; font-weight: 500;
+  box-shadow: 0 10px 30px rgba(28,25,23,.28);
+  opacity: 0; transform: translateY(8px);
+  transition: opacity .22s ease, transform .22s ease;
+  pointer-events: none;
+}
+.toast.visible { opacity: 1; transform: translateY(0); }
+.toast svg { color: var(--dorado); flex: none; }
+
+/* ---------- Panel de validacion (fuera del telefono) ---------- */
+.pruebas {
+  width: 380px; max-width: 100%;
+  background: var(--lienzo-alt);
+  border: 1px solid var(--lienzo-borde);
+  border-radius: 14px; padding: 16px 18px;
+  display: flex; flex-direction: column; gap: 11px;
+}
+.pruebas h3 {
+  margin: 0; font-size: 11px; font-weight: 600;
+  letter-spacing: .13em; text-transform: uppercase; color: var(--lienzo-gris);
+}
+.pruebas p { margin: 0; font-size: 13px; color: var(--lienzo-gris); line-height: 1.5; }
+.atajos { display: flex; flex-wrap: wrap; gap: 8px; }
+.atajo {
+  padding: 7px 13px;
+  background: transparent; color: var(--lienzo-tinta);
+  border: 1px solid var(--lienzo-borde); border-radius: 99px;
+  font: inherit; font-size: 12.5px; font-weight: 500; cursor: pointer;
+  transition: border-color .15s ease, color .15s ease;
+}
+.atajo:hover { border-color: var(--rojo); color: var(--rojo); }
+.atajo:focus-visible { outline: 2px solid var(--rojo); outline-offset: 2px; }
+
+@media (prefers-reduced-motion: reduce) {
+  * { transition: none !important; animation: none !important; }
+}
+@media (max-width: 440px) {
+  .lienzo { padding: 20px 12px 40px; }
+  .telefono { --pad-lateral: 18px; }
+  .pantalla { padding-bottom: 20px; }
+}
+
+/* ============ Pantalla 2: hojas de conteo ============
+   Colores de estado. Son semanticos, no de marca: el rojo Trujillo
+   sigue siendo la accion, no un estado. Todos los pares texto/fondo
+   estan verificados >= 4.5:1. */
+:root {
+  --ok:        #0A6B57;  --ok-suave:      #E7F4EF;   /* 5.71:1 */
+  --proceso:   #8A5A05;  --proceso-suave: #FDF3DC;   /* 5.37:1 */
+  --espera:    #6B6560;  --espera-suave:  #F2EFED;   /* 5.02:1 */
+  --falta:     #A23B2E;  --falta-suave:   #FBEAE7;   /* 6.56:1 / 5.63:1 */
+  --riel:      #EDE9E6;
+}
+
+/* La pantalla se desplaza dentro del telefono, con barra oculta */
+.pantalla.scroll {
+  height: 720px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+  padding-bottom: 92px;   /* deja lugar a la accion fija */
+  gap: 16px;
+}
+.pantalla.scroll::-webkit-scrollbar { width: 0; display: none; }
+
+/* ---------- Barra superior de contexto ---------- */
+.barra-app {
+  display: flex; align-items: flex-start; gap: 12px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid var(--app-borde);
+}
+.barra-app .rotulo {
+  margin: 0 0 3px; display: flex; align-items: center; gap: 6px;
+  font-size: 10.5px; font-weight: 700; letter-spacing: .11em;
+  text-transform: uppercase; color: var(--rojo);
+}
+.barra-app .contexto { flex: 1; min-width: 0; }
+.barra-app .sede {
+  margin: 0; font-size: 16px; font-weight: 700; color: var(--app-tinta);
+}
+.barra-app .cifras {
+  margin: 2px 0 0; font-size: 12px; color: var(--app-gris);
+  font-variant-numeric: tabular-nums;
+}
+.salir {
+  width: 38px; height: 38px; flex: none;
+  display: grid; place-items: center;
+  background: none; color: var(--app-gris);
+  border: 1px solid var(--app-borde); border-radius: 9px;
+  cursor: pointer; transition: background .14s ease, color .14s ease, border-color .14s ease;
+}
+.salir:hover { background: var(--rojo-suave); color: var(--rojo); border-color: var(--rojo); }
+.salir:focus-visible { outline: 2px solid var(--rojo); outline-offset: 2px; }
+
+/* ---------- Tarjeta ---------- */
+.tarjeta {
+  display: flex; flex-direction: column; gap: 13px;
+  padding: 15px;
+  background: var(--app-campo);
+  border: 1px solid var(--app-borde); border-radius: 13px;
+}
+.tarjeta-cabecera { display: flex; align-items: center; gap: 10px; }
+.tarjeta-cabecera h2 {
+  margin: 0; flex: 1; min-width: 0;
+  font-size: 14.5px; font-weight: 700; color: var(--app-tinta);
+}
+.tarjeta-cabecera .icono { color: var(--rojo); }
+
+/* ---------- Badges de estado ---------- */
+.badge {
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 5px 9px; border-radius: 99px;
+  font-size: 10.5px; font-weight: 700;
+  letter-spacing: .05em; text-transform: uppercase;
+  white-space: nowrap; font-variant-numeric: tabular-nums;
+  background: var(--espera-suave); color: var(--espera);
+}
+.badge.ok      { background: var(--ok-suave);      color: var(--ok); }
+.badge.proceso { background: var(--proceso-suave); color: var(--proceso); }
+.badge.falta   { background: var(--falta-suave);   color: var(--falta); }
+
+/* ---------- Bloque de reparto ---------- */
+.reparto {
+  display: flex; flex-direction: column; gap: 9px;
+  padding: 13px;
+  background: var(--rojo-suave);
+  border: 1px solid rgba(216,32,24,.22); border-radius: 11px;
+}
+.reparto-cabecera { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+.reparto-cabecera strong { font-size: 13.5px; color: var(--app-tinta); }
+.reparto-cabecera .ratio {
+  font-size: 11.5px; font-weight: 700; color: var(--rojo);
+  font-variant-numeric: tabular-nums; white-space: nowrap;
+}
+.reparto p { margin: 0; font-size: 12.5px; line-height: 1.45; color: var(--app-gris); }
+
+.accion {
+  width: 100%; min-height: 46px;
+  display: flex; align-items: center; justify-content: center; gap: 9px;
+  background: var(--rojo); color: #fff;
+  border: 0; border-radius: 8px;
+  font: inherit; font-size: 14.5px; font-weight: 700; cursor: pointer;
+  transition: background .16s ease;
+}
+.accion:hover:not(:disabled) { background: var(--rojo-hover); }
+.accion:focus-visible { outline: 3px solid rgba(216,32,24,.35); outline-offset: 2px; }
+.accion:disabled { background: #DCD6D2; color: #FBFAFA; cursor: not-allowed; }
+/* .accion tambien se usa como <a> (link a la siguiente pantalla del flujo) */
+.accion { text-decoration: none; }
+/* Accion secundaria dentro de una fila (p.ej. "Aprobar" en una validacion) */
+.accion-mini { width: auto; min-height: 38px; padding: 0 16px; font-size: 13px; }
+
+/* ---------- Encabezado de seccion ---------- */
+.seccion {
+  display: flex; align-items: baseline; justify-content: space-between; gap: 10px;
+}
+.seccion h2 {
+  margin: 0; font-size: 11px; font-weight: 600;
+  letter-spacing: .12em; text-transform: uppercase; color: var(--app-gris);
+}
+.seccion .total {
+  font-size: 11.5px; color: var(--app-gris-cl); font-variant-numeric: tabular-nums;
+}
+
+/* ---------- Chips de zona ---------- */
+.chips {
+  display: flex; gap: 7px;
+  overflow-x: auto; overscroll-behavior-x: contain;
+  scrollbar-width: none; -ms-overflow-style: none;
+  /* el margen negativo deja que los chips lleguen al borde al desplazar */
+  margin: 0 calc(var(--pad-lateral) * -1); padding: 2px var(--pad-lateral);
+}
+.chips::-webkit-scrollbar { height: 0; display: none; }
+.chip {
+  flex: none; padding: 8px 13px;
+  background: var(--app-campo); color: var(--app-tinta);
+  border: 1px solid var(--app-borde); border-radius: 99px;
+  font: inherit; font-size: 12.5px; font-weight: 500;
+  white-space: nowrap; cursor: pointer;
+  font-variant-numeric: tabular-nums;
+  transition: background .14s ease, border-color .14s ease, color .14s ease;
+}
+.chip:hover { border-color: var(--rojo); color: var(--rojo); }
+.chip:focus-visible { outline: 2px solid var(--rojo); outline-offset: 2px; }
+.chip[aria-pressed="true"] {
+  background: var(--rojo); border-color: var(--rojo); color: #fff; font-weight: 700;
+}
+
+/* ---------- Hoja de conteo ---------- */
+.hojas { display: flex; flex-direction: column; gap: 10px; }
+.hoja {
+  display: flex; flex-direction: column;
+  border: 1px solid var(--app-borde); border-radius: 12px;
+  background: var(--app-campo);
+  overflow: hidden;
+}
+/* El estado se lee por la franja lateral, no solo por el badge: en
+   una lista larga el ojo la encuentra sin leer. */
+.hoja.en-proceso { border-color: rgba(138,90,5,.42); }
+.hoja.contada    { border-color: rgba(10,107,87,.34); }
+
+.hoja-cuerpo { display: flex; gap: 11px; padding: 13px 14px 11px; }
+.hoja-codigo {
+  flex: none; width: 38px; height: 38px;
+  display: grid; place-items: center; border-radius: 9px;
+  background: var(--espera-suave); color: var(--espera);
+  font-size: 11.5px; font-weight: 700; letter-spacing: .02em;
+  font-variant-numeric: tabular-nums;
+}
+.hoja.contada .hoja-codigo    { background: var(--ok-suave);      color: var(--ok); }
+.hoja.en-proceso .hoja-codigo { background: var(--proceso-suave); color: var(--proceso); }
+
+.hoja-datos { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.hoja-titulo {
+  display: flex; align-items: flex-start; justify-content: space-between; gap: 9px;
+}
+.hoja-titulo h3 {
+  margin: 0; font-size: 14px; font-weight: 700; color: var(--app-tinta);
+  line-height: 1.3; text-wrap: balance;
+}
+.hoja-meta {
+  font-size: 11.5px; color: var(--app-gris); font-variant-numeric: tabular-nums;
+}
+
+.progreso {
+  height: 5px; margin-top: 6px; border-radius: 99px;
+  background: var(--riel); overflow: hidden;
+}
+.progreso span {
+  display: block; height: 100%; border-radius: 99px;
+  background: var(--espera); transition: width .35s ease;
+}
+.hoja.contada .progreso span    { background: var(--ok); }
+.hoja.en-proceso .progreso span { background: var(--proceso); }
+
+.hoja-pie {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  padding: 9px 14px;
+  border-top: 1px solid #F2EFED;
+  background: #FCFBFA;
+  font-size: 12px; color: var(--app-gris);
+}
+.hoja-pie .quien { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hoja-pie .quien strong { color: var(--app-tinta); font-weight: 600; }
+.hoja-pie .sin-asignar { color: var(--app-gris-cl); font-style: italic; }
+.hoja-pie .estado-sync { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; }
+.hoja-pie .estado-sync.ok { color: var(--ok); font-weight: 600; }
+.hoja-pie .abrir {
+  background: none; border: 0; padding: 0;
+  font: inherit; font-size: 12px; font-weight: 700; color: var(--rojo);
+  cursor: pointer; display: inline-flex; align-items: center; gap: 5px;
+  white-space: nowrap;
+}
+.hoja-pie .abrir:hover { text-decoration: underline; }
+.hoja-pie .abrir:focus-visible { outline: 2px solid var(--rojo); outline-offset: 2px; }
+
+/* ---------- Pie de la lista ---------- */
+.pie-lista {
+  display: flex; align-items: center; gap: 9px;
+  padding: 12px 14px; border-radius: 11px;
+  background: var(--espera-suave); color: var(--app-gris);
+  font-size: 12.5px; font-variant-numeric: tabular-nums;
+}
+.pie-lista .icono { color: var(--app-gris-cl); }
+.pie-lista strong { color: var(--app-tinta); font-weight: 700; }
+
+/* ---------- Accion fija sobre el borde inferior ---------- */
+.accion-fija {
+  position: absolute; left: 0; right: 0; bottom: 0; z-index: 20;
+  padding: 12px var(--pad-lateral) 20px;
+  background: linear-gradient(to top, var(--app-fondo) 68%, rgba(255,255,255,0));
+}
+.accion-fija .accion { min-height: 52px; font-size: 16px; }
+
+/* ---------- Tab bar inferior (navegacion principal por rol) ----------
+   Cuelga de .telefono con position:absolute, igual que .accion-fija, y
+   los dos pueden querer el mismo borde inferior. La regla que evita que
+   cada pantalla lo resuelva distinto:
+
+     - Si el boton de .accion-fija navega a una seccion PARALELA (algo
+       que ya es o deberia ser un tab) -> el tab bar lo REEMPLAZA. No
+       tiene sentido duplicar la misma navegacion en dos controles.
+     - Si el boton de .accion-fija confirma o cierra algo de ESTA
+       pantalla (guardar, enviar, finalizar) -> CONVIVEN, apilados: la
+       accion fija se apoya justo arriba del tab bar usando
+       --tabbar-alto, y el padding-bottom de .pantalla.scroll tiene que
+       crecer para no esconder el ultimo item detras de los dos.
+
+   Markup minimo (los botones se arman por JS a partir de una lista de
+   tabs por rol, ver home.html):
+     <nav class="tab-bar" aria-label="Navegacion principal">
+       <button class="tab activo" data-destino="/inicio">
+         <span class="tab-indicador" aria-hidden="true"></span>
+         <svg class="icono">...</svg>
+         <span class="tab-etiqueta">Inicio</span>
+       </button>
+       ...
+     </nav> */
+.tab-bar {
+  position: absolute; left: 0; right: 0; bottom: 0; z-index: 25;
+  display: flex;
+  min-height: var(--tabbar-alto);
+  background: var(--app-fondo);
+  border-top: 1px solid var(--app-borde);
+}
+.tab {
+  position: relative;
+  flex: 1; min-height: 58px;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px;
+  padding: 9px 4px 7px;
+  background: none; border: 0;
+  font: inherit; color: var(--app-gris); cursor: pointer;
+  transition: color .14s ease;
+}
+.tab:hover { color: var(--app-tinta); }
+.tab:active { background: var(--rojo-suave); }
+.tab:focus-visible { outline: 2px solid var(--rojo); outline-offset: -2px; }
+.tab-indicador {
+  position: absolute; top: 0; left: 50%; transform: translateX(-50%);
+  width: 26px; height: 3px; border-radius: 0 0 4px 4px;
+  background: var(--rojo);
+  opacity: 0; transition: opacity .14s ease;
+}
+.tab-etiqueta { font-size: 10.5px; font-weight: 600; }
+.tab.activo { color: var(--rojo); }
+.tab.activo .tab-indicador { opacity: 1; }
+.tab.activo .tab-etiqueta { font-weight: 700; }
+
+/* ============ Pantallas 4-7: ciclo de conteos, auditoria, liquidacion, lacrado ============ */
+
+/* ---------- Banda de sincronizacion (offline-first) ----------
+   Los equipos son WiFi de tienda, sin datos moviles: la WiFi es punto
+   unico de falla. Toda pantalla con datos sincronizados necesita este
+   estado visible, no solo texto suelto. Usado en 5 de las 7 pantallas. */
+.banda-sync {
+  display: flex; align-items: center; gap: 8px;
+  padding: 9px 12px; border-radius: 10px;
+  font-size: 11.5px; font-weight: 700;
+  background: var(--ok-suave); color: var(--ok);
+}
+.banda-sync .icono-sync { flex: none; }
+.banda-sync.pendiente { background: var(--proceso-suave); color: var(--proceso); }
+.banda-sync.offline   { background: var(--falta-suave);   color: var(--falta); }
+
+/* ---------- Resumen de cifras clave (tira de KPIs) ---------- */
+.resumen-global { display: flex; flex-direction: column; gap: 10px; }
+.resumen-dato { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+.resumen-etiqueta { font-size: 12.5px; color: var(--app-gris); }
+.resumen-dato strong { font-size: 16px; font-variant-numeric: tabular-nums; color: var(--app-tinta); }
+.resumen-dato strong.ok { color: var(--ok); }
+.resumen-dato strong.falta { color: var(--falta); }
+.resumen-pct { font-size: 11.5px; font-weight: 500; color: var(--app-gris); }
+
+/* ---------- Identidad de persona (nombre + subtitulo) ----------
+   Bloque reusable dentro de una fila de planilla o de validacion. */
+.persona-datos { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.persona-datos strong { font-size: 13.5px; color: var(--app-tinta); font-weight: 700; }
+.persona-datos span { font-size: 11.5px; color: var(--app-gris); }
+
+
+/* ==========================================================================
+   Controles nuevos de las pantallas del Administrador (9, 10 y 11).
+   Todo sale de los tokens ya validados: ningun color nuevo.
+   ========================================================================== */
+
+/* ---------- Entrada de texto ----------
+   El design system solo tenia controles de SELECCION (.control es un
+   boton). Estas tres pantallas son las primeras que piden tipeo libre
+   (nombre, DNI, direccion, credenciales), asi que .entrada replica el
+   mismo cuerpo visual del .control -- mismo alto, borde, radio e icono
+   gris -- pero con un <input> real adentro. Espeja CampoTexto.tsx. */
+.entrada {
+  display: flex; align-items: center; gap: 12px;
+  min-height: 54px; padding: 0 15px;
+  background: var(--app-campo);
+  border: 1px solid var(--app-borde); border-radius: var(--radio);
+}
+.entrada:focus-within { border-color: var(--rojo); box-shadow: 0 0 0 3px rgba(216,32,24,.14); }
+.entrada input {
+  flex: 1; min-width: 0;
+  border: 0; background: none; padding: 0;
+  font: inherit; font-size: 15px; color: var(--app-tinta);
+}
+.entrada input:focus { outline: none; }
+.entrada input::placeholder { color: var(--app-gris-cl); }
+/* Los que llevan un identificador tecnico largo (tenant, client id, URL)
+   no se leen palabra por palabra: se comparan de un vistazo. */
+.entrada input.tecnico { font-size: 13px; font-variant-numeric: tabular-nums; }
+
+/* ---------- Ficha de gestion (una cuenta / una tienda) ----------
+   Es .tarjeta con menos aire: estas listas son largas (30 cuentas) y el
+   padding de bloque de .tarjeta las estiraria a tres pantallas de scroll. */
+.gestion { display: flex; flex-direction: column; gap: 10px; }
+.ficha { gap: 10px; padding: 13px; }
+.ficha-cabecera { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
+.ficha-textos { flex: 1; min-width: 0; }
+.ficha-nombre { margin: 0; font-size: 13.5px; font-weight: 700; color: var(--app-tinta); }
+.ficha-meta { margin: 2px 0 0; font-size: 11.5px; color: var(--app-gris); }
+.ficha-badges { flex: none; display: flex; flex-direction: column; align-items: flex-end; gap: 6px; }
+.ficha-acciones { display: flex; gap: 8px; }
+.ficha-acciones .boton-sec { flex: 1; }
+
+/* ---------- Boton secundario (outline) ----------
+   Espeja Button variant="outline" de la app: borde neutro y tinta, NO
+   rojo. El rojo es la accion principal de la pantalla y hay una sola;
+   si "Deshabilitar" y "Resetear PIN" tambien fueran rojos, ninguna de
+   las tres se leeria como la principal. */
+.boton-sec {
+  display: inline-flex; align-items: center; justify-content: center; gap: 7px;
+  min-height: 40px; padding: 0 13px;
+  background: var(--app-campo);
+  border: 1px solid var(--app-borde); border-radius: var(--radio);
+  font: inherit; font-size: 13px; font-weight: 600; color: var(--app-tinta);
+  cursor: pointer;
+  transition: border-color .12s ease, background .12s ease;
+}
+.boton-sec:hover { border-color: #CFC7C1; background: #FAF8F7; }
+.boton-sec:focus-visible { outline: 2px solid var(--rojo); outline-offset: 2px; }
+.boton-sec:disabled { color: var(--app-gris-cl); cursor: not-allowed; }
+.boton-sec svg { color: var(--app-gris); flex: none; }
+.boton-sec:disabled svg { color: var(--app-gris-cl); }
+
+/* ---------- Badge sin relleno ----------
+   Cuarta variante de .badge (las otras tres son ok / proceso / falta).
+   Se usa para el rol "Conteo", el mas frecuente del padron: con relleno,
+   veinte fichas seguidas se convierten en una mancha de color y el badge
+   deja de senalar nada. */
+.badge.contorno { background: none; border: 1px solid var(--app-borde); color: var(--app-tinta); }
+
+/* ---------- Estado vacio ---------- */
+.vacio-estado {
+  display: flex; flex-direction: column; align-items: center; gap: 6px;
+  padding: 30px 20px; text-align: center;
+  background: var(--app-campo);
+  border: 1px dashed var(--app-borde); border-radius: 14px;
+}
+.vacio-estado svg { color: var(--app-gris-cl); }
+.vacio-estado strong { font-size: 13.5px; color: var(--app-tinta); }
+.vacio-estado span { font-size: 12.5px; color: var(--app-gris); }
+
+/* ---------- [hidden] sobre contenedores flex ----------
+   Mismo gotcha que .campo en hojas.html: el display propio le gana al
+   [hidden] nativo, asi que hay que declararlo elemento por elemento. */
+.campo[hidden], .tarjeta[hidden], .gestion[hidden], .seccion[hidden],
+.ficha-acciones[hidden], .vacio-estado[hidden], .entrada[hidden] { display: none; }
+
+/* ---------- Pantalla 11 ---------- */
+
+/* Texto explicativo de un parametro. Cada ajuste de esta pantalla cambia
+   como se comporta un inventario de 8.000 items: ninguno se deja sin
+   explicar arriba del control. */
+.ayuda { margin: 0; font-size: 12.5px; color: var(--app-gris); line-height: 1.45; }
+
+/* ---------- Stepper (+/-) ----------
+   Para los dos parametros numericos de rango corto (conteos del ciclo,
+   umbral del paquete). No es un input libre: los valores validos son
+   pocos y contiguos, y tipear "30" donde van "3" conteos es un error que
+   el control directamente no deja cometer. */
+.stepper { display: flex; align-items: center; gap: 10px; }
+.stepper-btn {
+  width: 38px; height: 38px; flex: none;
+  display: grid; place-items: center;
+  background: var(--app-campo);
+  border: 1px solid var(--app-borde); border-radius: 8px;
+  color: var(--app-tinta); cursor: pointer;
+  transition: border-color .12s ease, background .12s ease;
+}
+.stepper-btn:hover:not(:disabled) { border-color: #CFC7C1; background: #FAF8F7; }
+.stepper-btn:focus-visible { outline: 2px solid var(--rojo); outline-offset: 2px; }
+.stepper-btn:disabled { color: var(--app-gris-cl); cursor: not-allowed; }
+.stepper-valor {
+  flex: 1; text-align: center;
+  font-size: 19px; font-weight: 700; color: var(--app-tinta);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---------- Secreto ya guardado ----------
+   El unico dato que se lee del secreto es SI existe. Un secreto que la
+   pantalla puede mostrar de vuelta es un secreto que alguien puede
+   fotografiar desde atras del mostrador. */
+.secreto-fila { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.secreto-guardado { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; }
+.secreto-guardado svg { color: var(--ok); flex: none; }
+.secreto-guardado span { font-size: 12.5px; font-weight: 600; color: var(--ok); }
+.cancelar-secreto {
+  align-self: flex-start;
+  background: none; border: 0; padding: 0;
+  font: inherit; font-size: 12.5px; color: var(--rojo); cursor: pointer;
+}
+.cancelar-secreto:hover { text-decoration: underline; }
+.cancelar-secreto[hidden] { display: none; }
+
+.acciones-fila { display: flex; gap: 10px; }
+.acciones-fila > * { flex: 1; }
+
+</style>
+
+<div class="lienzo">
+
+  <header class="cabecera">
+    <span class="eyebrow">Inventario de Autoservicio · Pantalla 11 · parámetros del sistema</span>
+    <h1>Configuración del sistema</h1>
+    <p>Parámetros del ciclo de inventario y credenciales de Dynamics. Solo el Administrador.</p>
+  </header>
+
+  <div class="telefono denso">
+    <div class="barra-estado">
+      <span>09:41</span>
+      <span class="senales">
+        <svg width="15" height="11" viewBox="0 0 15 11" fill="currentColor" aria-hidden="true"><rect x="0" y="7" width="2.5" height="4" rx="1"/><rect x="4" y="5" width="2.5" height="6" rx="1"/><rect x="8" y="2.5" width="2.5" height="8.5" rx="1"/><rect x="12" y="0" width="2.5" height="11" rx="1"/></svg>
+        <svg width="22" height="11" viewBox="0 0 22 11" fill="none" aria-hidden="true"><rect x="0.5" y="0.5" width="18" height="10" rx="2.5" stroke="currentColor"/><rect x="2" y="2" width="15" height="7" rx="1.2" fill="currentColor"/><path d="M20 4v3a1.8 1.8 0 0 0 0-3Z" fill="currentColor"/></svg>
+      </span>
+    </div>
+
+    <div class="pantalla scroll">
+
+      <!-- ================= CONTENIDO DE LA PANTALLA ================= -->
+
+      <div class="barra-app">
+        <div class="contexto">
+          <p class="rotulo"><svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 8.5A3.5 3.5 0 1 0 12 15.5 3.5 3.5 0 0 0 12 8.5Zm9 3.5-2.1-1.2.4-2.4-2.2-1.3-1.8 1.6-2.2-.9L12 5.4h-2.5l-1.1 2.4-2.2.9-1.8-1.6-2.2 1.3.4 2.4L1 12l2.1 1.2-.4 2.4 2.2 1.3 1.8-1.6 2.2.9 1.1 2.4H12l1.1-2.4 2.2-.9 1.8 1.6 2.2-1.3-.4-2.4L21 12Z"/></svg>Configuración</p>
+          <p class="cifras">Parámetros del sistema</p>
+        </div>
+        <button type="button" class="salir" id="btn-salir" aria-label="Cerrar sesión"><svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4m7 14 5-5-5-5m5 5H9"/></svg></button>
+      </div>
+
+      <!-- Tamano de hoja: .segmentado (no .roles) porque ací SI hay una
+           eleccion real. Los tres valores son los del dominio
+           (TAMANOS_HOJA = 20, 30, 50), no una escala inventada. -->
+      <div class="tarjeta">
+        <div class="tarjeta-cabecera">
+          <h2>Tamaño de hoja por defecto</h2>
+        </div>
+        <p class="ayuda">Cuántos ítems entran por hoja al crear un inventario nuevo. El Coordinador puede elegir otro al armar las hojas.</p>
+        <div class="segmentado" id="tamano" role="group" aria-label="Tamaño de hoja por defecto">
+          <button type="button" class="segmento" data-tam="20">20 ítems</button>
+          <button type="button" class="segmento" data-tam="30">30 ítems</button>
+          <button type="button" class="segmento" data-tam="50">50 ítems</button>
+        </div>
+      </div>
+
+      <div class="tarjeta">
+        <div class="tarjeta-cabecera">
+          <h2>Conteos del ciclo</h2>
+        </div>
+        <p class="ayuda">Cuántas pasadas tiene el ciclo de conteo (hoy: 1er conteo + 2 reconteos = 3).</p>
+        <div class="stepper">
+          <button type="button" class="stepper-btn" id="btn-conteos-menos" aria-label="Restar un conteo">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M5 12h14"/></svg>
+          </button>
+          <span class="stepper-valor" id="val-conteos" role="status" aria-live="polite">3</span>
+          <button type="button" class="stepper-btn" id="btn-conteos-mas" aria-label="Sumar un conteo">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+          </button>
+        </div>
+      </div>
+
+      <!-- Umbral del paquete: hoy es una regla que el Auditor aplica a
+           mano caso por caso (docs/pantallas.md, pregunta abierta 1). Acá
+           se guarda el valor por defecto, no se automatiza la decision. -->
+      <div class="tarjeta">
+        <div class="tarjeta-cabecera">
+          <h2>Umbral de media unidad de paquete</h2>
+        </div>
+        <p class="ayuda">Desde qué fracción del paquete una diferencia se descuenta por paquete completo en vez de por unidad suelta (&laquo;mitad del paquete más uno&raquo; &mdash; hoy lo define el Auditor caso por caso, esto es el default).</p>
+        <div class="stepper">
+          <button type="button" class="stepper-btn" id="btn-umbral-menos" aria-label="Bajar el umbral">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M5 12h14"/></svg>
+          </button>
+          <span class="stepper-valor" id="val-umbral" role="status" aria-live="polite">50%</span>
+          <button type="button" class="stepper-btn" id="btn-umbral-mas" aria-label="Subir el umbral">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+          </button>
+        </div>
+      </div>
+
+      <button type="button" class="accion" id="btn-guardar">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.6 1.6 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.6 1.6 0 0 0-2.7 1.1v.3a2 2 0 1 1-4 0v-.2a1.6 1.6 0 0 0-2.8-1.1l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1A1.6 1.6 0 0 0 3.5 15H3a2 2 0 1 1 0-4h.2A1.6 1.6 0 0 0 4.3 8.2l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.6 1.6 0 0 0 2.7-1.1V4a2 2 0 1 1 4 0v.2a1.6 1.6 0 0 0 2.8 1.1l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.6 1.6 0 0 0 1.1 2.7h.3a2 2 0 1 1 0 4h-.2a1.6 1.6 0 0 0-1.2 1Z"/></svg>
+        Guardar cambios
+      </button>
+
+      <div class="tarjeta">
+        <div class="tarjeta-cabecera">
+          <h2>Integración con Dynamics</h2>
+          <span class="badge" id="badge-dynamics">Sin configurar</span>
+        </div>
+        <p class="ayuda">Credenciales de Azure AD para que el paso 1 del Coordinador (&laquo;Catálogo de Dynamics&raquo;) traiga los ítems reales. Solo lectura del catálogo &mdash; nunca escribe ni ajusta nada en Dynamics.</p>
+
+        <div class="campos">
+          <div class="campo">
+            <label id="lbl-tenant" for="in-tenant">Tenant ID</label>
+            <div class="entrada">
+              <svg class="icono" width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17.5 19a4.5 4.5 0 0 0 .5-8.97A6 6 0 0 0 6.2 10.4 4 4 0 0 0 7 19h10.5Z"/></svg>
+              <input type="text" id="in-tenant" class="tecnico" placeholder="00000000-0000-0000-0000-000000000000" autocomplete="off" autocapitalize="none" spellcheck="false">
+            </div>
+          </div>
+
+          <div class="campo">
+            <label id="lbl-client" for="in-client">Client ID</label>
+            <div class="entrada">
+              <svg class="icono" width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="7.5" cy="15.5" r="4.5"/><path d="m10.7 12.3 8.3-8.3 2 2-2 2 2 2-3 3-2-2-2 2"/></svg>
+              <input type="text" id="in-client" class="tecnico" placeholder="00000000-0000-0000-0000-000000000000" autocomplete="off" autocapitalize="none" spellcheck="false">
+            </div>
+          </div>
+
+          <div class="campo">
+            <label id="lbl-url" for="in-url">URL base</label>
+            <div class="entrada">
+              <svg class="icono" width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9.5 14.5a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1"/><path d="M14.5 9.5a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1"/></svg>
+              <input type="text" id="in-url" class="tecnico" placeholder="https://org.crm.dynamics.com" autocomplete="off" autocapitalize="none" spellcheck="false">
+            </div>
+          </div>
+
+          <!-- Dos estados excluyentes del mismo campo:
+               (a) escribiendo un secreto nuevo, o
+               (b) ya hay uno guardado -> se dice QUE existe, nunca cual. -->
+          <div class="campo" id="campo-secreto-edicion">
+            <label id="lbl-secreto" for="in-secreto">Client secret</label>
+            <div class="entrada">
+              <svg class="icono" width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 2 4 5.5v6c0 5 3.4 9.4 8 10.5 4.6-1.1 8-5.5 8-10.5v-6L12 2Z"/><path d="m9 12 2 2 4-4"/></svg>
+              <input type="password" id="in-secreto" placeholder="Pegá el secreto nuevo" autocomplete="off" autocapitalize="none" spellcheck="false">
+            </div>
+            <button type="button" class="cancelar-secreto" id="btn-cancelar-secreto" hidden>Cancelar &mdash; dejar el secreto ya guardado</button>
+          </div>
+
+          <div class="campo" id="campo-secreto-guardado" hidden>
+            <label id="lbl-secreto-ok">Client secret</label>
+            <div class="secreto-fila">
+              <div class="secreto-guardado">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 2 4 5.5v6c0 5 3.4 9.4 8 10.5 4.6-1.1 8-5.5 8-10.5v-6L12 2Z"/><path d="m9 12 2 2 4-4"/></svg>
+                <span>Configurado &mdash; no se muestra por seguridad</span>
+              </div>
+              <button type="button" class="boton-sec" id="btn-reemplazar">Reemplazar</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="acciones-fila">
+          <button type="button" class="accion" id="btn-guardar-dynamics" disabled>Guardar credenciales</button>
+          <button type="button" class="boton-sec" id="btn-probar" disabled>
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 2 4 5.5v6c0 5 3.4 9.4 8 10.5 4.6-1.1 8-5.5 8-10.5v-6L12 2Z"/><path d="m9 12 2 2 4-4"/></svg>
+          <span>Probar conexión</span>
+          </button>
+        </div>
+      </div>
+
+      <!-- =========================================================== -->
+
+      <div class="toast" id="toast" role="status" aria-live="polite">
+        <svg width="19" height="19" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 2 4 5.5v6c0 5 3.4 9.4 8 10.5 4.6-1.1 8-5.5 8-10.5v-6L12 2Zm-1.2 13.4-3.2-3.2 1.4-1.4 1.8 1.8 4.6-4.6 1.4 1.4-6 6Z"/></svg>
+        <span id="toast-texto"></span>
+      </div>
+
+    </div>
+
+    <!-- Los modales cuelgan del TELEFONO, no de .pantalla ni de .campo -->
+
+    <!-- Tab bar del Administrador. Reemplaza a .accion-fija: "Guardar
+         cambios" y "Guardar credenciales" pertenecen cada uno a SU bloque
+         y viven junto al bloque que guardan, no flotando abajo. -->
+    <nav class="tab-bar" id="tab-bar" aria-label="Navegación principal"></nav>
+
+  </div>
+
+  <section class="pruebas">
+    <h3>Atajos para validar</h3>
+    <p>Mové los tres parámetros y guardá. Después cargá las credenciales de Dynamics con el atajo y mirá el campo del secreto: una vez guardado, la pantalla <strong>nunca</strong> lo muestra de vuelta &mdash; solo dice que existe y ofrece reemplazarlo.</p>
+    <div class="atajos" id="atajos"></div>
+  </section>
+
+</div>
+
+<script>
+(function () {
+  'use strict';
+
+  var $ = function (id) { return document.getElementById(id); };
+  var toast = $('toast'), toastTexto = $('toast-texto');
+
+  var temporizador;
+  function mostrarToast(texto) {
+    toastTexto.textContent = texto;
+    toast.classList.add('visible');
+    clearTimeout(temporizador);
+    temporizador = setTimeout(function () { toast.classList.remove('visible'); }, 2800);
+  }
+
+  /* Defaults de lib/adaptadores/config-memoria.ts: 50 items por hoja y 3
+     conteos son los ya validados en hojas.html y ciclo-conteos.html; el
+     umbral 50% es la "mitad del paquete" de la reunion, ahora
+     configurable en vez de clavada. */
+  var TAMANOS = [20, 30, 50];
+  var MIN_CONTEOS = 1, MAX_CONTEOS = 5;
+  var PASO_UMBRAL = 5, MIN_UMBRAL = 5, MAX_UMBRAL = 100;   /* en % enteros */
+
+  var config = { tamano: 50, conteos: 3, umbral: 50 };
+
+  /* El clientSecret NO vive en este objeto, ni siquiera en la maqueta: lo
+     unico que se guarda es el booleano de si existe. Mismo criterio que
+     config-dynamics-memoria.ts, donde el secreto es una variable de
+     modulo que obtener() jamas devuelve. */
+  var dynamics = { tenantId: '', clientId: '', urlBase: '', secretoConfigurado: false };
+  var reemplazandoSecreto = true;   /* sin nada guardado, se arranca en edicion */
+
+  var TABS = [
+    { id: 'inicio', destino: 'home.html', etiqueta: 'Inicio' },
+    { id: 'usuarios', destino: 'usuarios.html', etiqueta: 'Usuarios' },
+    { id: 'tiendas', destino: 'tiendas.html', etiqueta: 'Tiendas' },
+    { id: 'config', destino: 'config.html', etiqueta: 'Config' }
+  ];
+  var ICONO_TAB = {
+    inicio: '<svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 3 2 12h3v9h14v-9h3Z"/></svg>',
+    usuarios: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></svg>',
+    tiendas: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m3 3 1.5 5h15L21 3M4.5 8v12h15V8M9 20v-6h6v6"/></svg>',
+    config: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.6 1.6 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.6 1.6 0 0 0-2.7 1.1v.3a2 2 0 1 1-4 0v-.2a1.6 1.6 0 0 0-2.8-1.1l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1A1.6 1.6 0 0 0 3.5 15H3a2 2 0 1 1 0-4h.2A1.6 1.6 0 0 0 4.3 8.2l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.6 1.6 0 0 0 2.7-1.1V4a2 2 0 1 1 4 0v.2a1.6 1.6 0 0 0 2.8 1.1l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.6 1.6 0 0 0 1.1 2.7h.3a2 2 0 1 1 0 4h-.2a1.6 1.6 0 0 0-1.2 1Z"/></svg>'
+  };
+
+  /* ---------- Parametros del ciclo ---------- */
+  function pintarParametros() {
+    Array.prototype.forEach.call(document.querySelectorAll('.segmento'), function (b) {
+      var activo = Number(b.getAttribute('data-tam')) === config.tamano;
+      b.className = 'segmento' + (activo ? ' activo' : '');
+      b.setAttribute('aria-pressed', String(activo));
+    });
+    $('val-conteos').textContent = String(config.conteos);
+    $('btn-conteos-menos').disabled = config.conteos <= MIN_CONTEOS;
+    $('btn-conteos-mas').disabled = config.conteos >= MAX_CONTEOS;
+
+    $('val-umbral').textContent = config.umbral + '%';
+    $('btn-umbral-menos').disabled = config.umbral <= MIN_UMBRAL;
+    $('btn-umbral-mas').disabled = config.umbral >= MAX_UMBRAL;
+  }
+
+  /* ---------- Dynamics ---------- */
+  function puedeGuardarDynamics() {
+    return $('in-tenant').value.trim().length > 0 &&
+           $('in-client').value.trim().length > 0 &&
+           $('in-url').value.trim().length > 0 &&
+           (!reemplazandoSecreto || $('in-secreto').value.length > 0);
+  }
+
+  function pintarDynamics() {
+    var badge = $('badge-dynamics');
+    badge.className = dynamics.secretoConfigurado ? 'badge ok' : 'badge';
+    badge.textContent = dynamics.secretoConfigurado ? 'Configurado' : 'Sin configurar';
+
+    $('campo-secreto-edicion').hidden = !reemplazandoSecreto;
+    $('campo-secreto-guardado').hidden = reemplazandoSecreto;
+    /* Solo se puede cancelar la edicion si HAY un secreto guardado al que
+       volver. Sin eso, cancelar dejaria la integracion a medio configurar. */
+    $('btn-cancelar-secreto').hidden = !dynamics.secretoConfigurado;
+
+    $('btn-guardar-dynamics').disabled = !puedeGuardarDynamics();
+    /* Probar conexion sin credenciales no prueba nada: se habilita recien
+       cuando hay algo guardado contra que probar. */
+    $('btn-probar').disabled = !dynamics.secretoConfigurado;
+  }
+
+  function pintarTabs() {
+    var cont = $('tab-bar');
+    cont.innerHTML = '';
+    TABS.forEach(function (t) {
+      var b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'tab' + (t.id === 'config' ? ' activo' : '');
+      if (t.id === 'config') b.setAttribute('aria-current', 'page');
+      b.innerHTML = '<span class="tab-indicador" aria-hidden="true"></span>' + ICONO_TAB[t.id] +
+        '<span class="tab-etiqueta">' + t.etiqueta + '</span>';
+      b.addEventListener('click', function () {
+        if (t.id === 'config') return;
+        mostrarToast('Ir\u00eda a "' + t.etiqueta + '" (' + t.destino + ').');
+      });
+      cont.appendChild(b);
+    });
+  }
+
+  function pintarAtajos() {
+    var cont = $('atajos');
+    cont.innerHTML = '';
+    [
+      { etiqueta: 'Cargar credenciales de prueba', accion: function () {
+          $('in-tenant').value = '7f3a2c19-4b8e-4d51-9a06-2e5c8b71d940';
+          $('in-client').value = 'b41e8d27-9c53-4a16-8f72-3d0a95e6c184';
+          $('in-url').value = 'https://markettrujillo.crm2.dynamics.com';
+          if (!reemplazandoSecreto) { reemplazandoSecreto = true; }
+          $('in-secreto').value = 'Qz7~8fPl2.KdN0xVr4bHtM';
+          render();
+        } },
+      { etiqueta: 'Ciclo de 5 conteos', accion: function () {
+          config.conteos = 5; pintarParametros();
+        } },
+      { etiqueta: 'Umbral al 65%', accion: function () {
+          config.umbral = 65; pintarParametros();
+        } },
+      { etiqueta: 'Volver a los valores por defecto', accion: function () {
+          config = { tamano: 50, conteos: 3, umbral: 50 };
+          dynamics = { tenantId: '', clientId: '', urlBase: '', secretoConfigurado: false };
+          reemplazandoSecreto = true;
+          $('in-tenant').value = '';
+          $('in-client').value = '';
+          $('in-url').value = '';
+          $('in-secreto').value = '';
+          render();
+          mostrarToast('Valores por defecto repuestos.');
+        } }
+    ].forEach(function (a) {
+      var b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'atajo';
+      b.textContent = a.etiqueta;
+      b.addEventListener('click', a.accion);
+      cont.appendChild(b);
+    });
+  }
+
+  function render() {
+    pintarParametros();
+    pintarDynamics();
+    pintarTabs();
+    pintarAtajos();
+  }
+
+  /* ---------- Eventos ---------- */
+  Array.prototype.forEach.call(document.querySelectorAll('.segmento'), function (b) {
+    b.addEventListener('click', function () {
+      config.tamano = Number(b.getAttribute('data-tam'));
+      pintarParametros();
+    });
+  });
+
+  $('btn-conteos-menos').addEventListener('click', function () {
+    config.conteos = Math.max(MIN_CONTEOS, config.conteos - 1);
+    pintarParametros();
+  });
+  $('btn-conteos-mas').addEventListener('click', function () {
+    config.conteos = Math.min(MAX_CONTEOS, config.conteos + 1);
+    pintarParametros();
+  });
+  $('btn-umbral-menos').addEventListener('click', function () {
+    config.umbral = Math.max(MIN_UMBRAL, config.umbral - PASO_UMBRAL);
+    pintarParametros();
+  });
+  $('btn-umbral-mas').addEventListener('click', function () {
+    config.umbral = Math.min(MAX_UMBRAL, config.umbral + PASO_UMBRAL);
+    pintarParametros();
+  });
+
+  $('btn-guardar').addEventListener('click', function () {
+    mostrarToast('Configuraci\u00f3n guardada: hojas de ' + config.tamano + ', ' +
+      config.conteos + ' conteos, umbral ' + config.umbral + '%.');
+  });
+
+  ['in-tenant', 'in-client', 'in-url', 'in-secreto'].forEach(function (id) {
+    $(id).addEventListener('input', pintarDynamics);
+  });
+
+  $('btn-reemplazar').addEventListener('click', function () {
+    reemplazandoSecreto = true;
+    $('in-secreto').value = '';
+    pintarDynamics();
+    $('in-secreto').focus();
+  });
+
+  $('btn-cancelar-secreto').addEventListener('click', function () {
+    reemplazandoSecreto = false;
+    $('in-secreto').value = '';
+    pintarDynamics();
+  });
+
+  $('btn-guardar-dynamics').addEventListener('click', function () {
+    if (!puedeGuardarDynamics()) return;
+    dynamics.tenantId = $('in-tenant').value.trim();
+    dynamics.clientId = $('in-client').value.trim();
+    dynamics.urlBase = $('in-url').value.trim();
+    /* El secreto se manda una vez y no vuelve: lo unico que queda del
+       lado de la pantalla es este booleano. */
+    if (reemplazandoSecreto && $('in-secreto').value.length > 0) {
+      dynamics.secretoConfigurado = true;
+    }
+    $('in-secreto').value = '';
+    reemplazandoSecreto = false;
+    pintarDynamics();
+    mostrarToast('Credenciales guardadas. El Coordinador ya puede traer el cat\u00e1logo.');
+  });
+
+  $('btn-probar').addEventListener('click', function () {
+    if (!dynamics.secretoConfigurado) return;
+    mostrarToast('Conexi\u00f3n correcta (simulada) \u2014 el adaptador real prueba contra Azure AD.');
+  });
+
+  $('btn-salir').addEventListener('click', function () {
+    mostrarToast('Cerrar\u00eda la sesi\u00f3n y volver\u00eda al login.');
+  });
+
+  render();
+})();
+</script>

@@ -1,0 +1,1196 @@
+<meta charset="utf-8">
+<title>Gestión de tiendas</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Baloo+2:wght@600;700&family=Figtree:wght@400;500;600;700&display=swap">
+<style>
+/* =====================================================================
+   TRUJILLO · Sistema de controles de la app de inventario
+   Validado en la pantalla 1 (login). Copiar completo en cada maqueta.
+
+   Regla de oro: los tokens de marca son FIJOS en ambos temas. La app
+   pinta su propio mundo; solo el lienzo que rodea al telefono sigue el
+   tema del visor.
+   ===================================================================== */
+
+:root {
+  /* Marca — valores tomados del PNG del logo, no estimados */
+  --rojo:        #D82018;
+  --rojo-hover:  #B81810;
+  --rojo-suave:  #FDF0EF;
+  --dorado:      #F8B818;
+
+  /* Superficie de la app */
+  --app-fondo:   #FFFFFF;
+  --app-tinta:   #1C1917;
+  --app-gris:    #6B6560;
+  --app-gris-cl: #9A938D;
+  --app-borde:   #E3DEDA;
+  --app-campo:   #FFFFFF;
+
+  /* Lienzo del documento de maqueta (fuera del telefono) — tema claro */
+  --lienzo:      #F2EEEB;
+  --lienzo-alt:  #FFFFFF;
+  --lienzo-tinta:#26211E;
+  --lienzo-gris: #6E6660;
+  --lienzo-borde:#DED7D2;
+
+  --sombra: 0 1px 2px rgba(28,25,23,.04), 0 12px 40px rgba(28,25,23,.10);
+  --radio: 10px;
+  --tabbar-alto: 60px;
+
+  --fuente-ui: 'Figtree', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  --fuente-marca: 'Baloo 2', 'Figtree', -apple-system, sans-serif;
+}
+
+/* Solo el lienzo cambia con el tema. Nunca los tokens --app-* */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --lienzo:      #191614;
+    --lienzo-alt:  #221E1B;
+    --lienzo-tinta:#F2EEEB;
+    --lienzo-gris: #A79E97;
+    --lienzo-borde:#332D29;
+    --sombra: 0 1px 2px rgba(0,0,0,.4), 0 16px 48px rgba(0,0,0,.55);
+  }
+}
+:root[data-theme="dark"] {
+  --lienzo:      #191614;
+  --lienzo-alt:  #221E1B;
+  --lienzo-tinta:#F2EEEB;
+  --lienzo-gris: #A79E97;
+  --lienzo-borde:#332D29;
+  --sombra: 0 1px 2px rgba(0,0,0,.4), 0 16px 48px rgba(0,0,0,.55);
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--lienzo);
+  color: var(--lienzo-tinta);
+  font-family: var(--fuente-ui);
+  -webkit-font-smoothing: antialiased;
+}
+
+.lienzo {
+  min-height: 100vh;
+  display: flex; flex-direction: column; align-items: center;
+  gap: 28px; padding: 32px 20px 56px;
+}
+
+/* ---------- Cabecera del documento de maqueta ---------- */
+.cabecera { text-align: center; display: flex; flex-direction: column; gap: 6px; }
+.cabecera .eyebrow {
+  font-size: 11px; font-weight: 600; letter-spacing: .13em;
+  text-transform: uppercase; color: var(--lienzo-gris);
+}
+.cabecera h1 {
+  margin: 0; font-family: var(--fuente-marca); font-weight: 700;
+  font-size: clamp(22px, 4vw, 28px); letter-spacing: -.01em; text-wrap: balance;
+}
+.cabecera p { margin: 0; font-size: 14px; color: var(--lienzo-gris); max-width: 52ch; }
+
+/* ---------- Marco del telefono ---------- */
+/* Pantalla operativa: mas ancho util para listas y tarjetas */
+.telefono.denso { --pad-lateral: 14px; }
+
+.telefono {
+  /* Un solo lugar decide el margen lateral. Lo leen .pantalla, .toast,
+     .chips y .accion-fija, asi una pantalla densa gana ancho sin que
+     haya que recalibrar cada uno a mano. */
+  --pad-lateral: 26px;
+  width: 380px; max-width: 100%;
+  background: var(--app-fondo);
+  border-radius: 34px;
+  border: 1px solid var(--lienzo-borde);
+  box-shadow: var(--sombra);
+  overflow: hidden;
+  position: relative;   /* ancla de los modales */
+}
+.barra-estado {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 12px 22px 4px;
+  font-size: 12px; font-weight: 600; color: var(--app-tinta);
+  font-variant-numeric: tabular-nums;
+}
+.barra-estado .senales { display: flex; gap: 5px; align-items: center; opacity: .75; }
+
+/* OBLIGATORIO el `color`: sin el, todo texto sin color propio hereda
+   --lienzo-tinta, que en tema oscuro es CLARO, y desaparece sobre el
+   fondo blanco de la app. */
+.pantalla {
+  position: relative;
+  padding: 8px var(--pad-lateral) 26px;
+  display: flex; flex-direction: column; gap: 20px;
+  color: var(--app-tinta);
+}
+
+/* ---------- Marca ---------- */
+.marca { display: flex; flex-direction: column; align-items: center; padding: 14px 0 4px; }
+.marca img { width: 172px; height: auto; display: block; }
+
+.saludo { display: flex; flex-direction: column; gap: 2px; }
+.saludo h2 {
+  margin: 0; display: flex; align-items: center; gap: 9px;
+  font-family: var(--fuente-marca); font-weight: 700; font-size: 27px;
+  color: var(--rojo); letter-spacing: -.01em;
+}
+.saludo p { margin: 0; font-size: 14.5px; color: var(--app-gris); }
+
+/* ---------- Campos ---------- */
+.campos { display: flex; flex-direction: column; gap: 15px; }
+/* position: relative -> es el ancla del desplegable */
+.campo { position: relative; display: flex; flex-direction: column; gap: 6px; }
+.campo label { font-size: 13.5px; font-weight: 600; color: var(--app-tinta); }
+
+.control {
+  width: 100%; display: flex; align-items: center; gap: 12px;
+  min-height: 54px; padding: 0 15px;
+  background: var(--app-campo);
+  border: 1px solid var(--app-borde);
+  border-radius: var(--radio);
+  font: inherit; font-size: 15.5px; color: var(--app-tinta);
+  text-align: left; cursor: pointer;
+  transition: border-color .15s ease, box-shadow .15s ease;
+}
+.control:hover:not(:disabled) { border-color: #CFC7C1; }
+.control:focus-visible {
+  outline: none; border-color: var(--rojo);
+  box-shadow: 0 0 0 3px rgba(216,32,24,.14);
+}
+.control[aria-expanded="true"] {
+  border-color: var(--rojo); box-shadow: 0 0 0 3px rgba(216,32,24,.14);
+}
+.control:disabled { background: #F7F5F4; cursor: not-allowed; opacity: .7; }
+.control .valor { flex: 1; min-width: 0; }
+.control .valor.vacio { color: var(--app-gris-cl); }
+.control .sub {
+  display: block; font-size: 11.5px; color: var(--app-gris);
+  margin-top: 1px; font-variant-numeric: tabular-nums;
+}
+.chevron { color: var(--rojo); flex: none; transition: transform .18s ease; }
+.control[aria-expanded="true"] .chevron { transform: rotate(180deg); }
+.control:disabled .chevron { color: var(--app-gris-cl); }
+
+/* Los iconos de campo van SIEMPRE en gris. El rojo se reserva para
+   el chevron, la seleccion y las acciones. */
+.icono { flex: none; color: var(--app-gris-cl); }
+
+/* ---------- Desplegable ---------- */
+.lista {
+  /* Fuera del flujo: si ocupara espacio, abrirlo empujaria todo lo de
+     abajo y la pantalla saltaria. */
+  position: absolute;
+  top: 100%; left: 0; right: 0; z-index: 30;
+  margin-top: 6px;
+  /* El tope NO es multiplo de la altura de fila a proposito: el corte
+     cae sobre una fila a medias y eso avisa que hay mas abajo. */
+  max-height: 262px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+  /* Barra oculta en los tres motores: una lista nativa se desplaza,
+     no muestra barra. */
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+  border: 1px solid var(--app-borde); border-radius: var(--radio);
+  background: var(--app-campo);
+  box-shadow: 0 10px 30px rgba(28,25,23,.14);
+}
+.lista::-webkit-scrollbar { width: 0; height: 0; display: none; }
+.lista[hidden] { display: none; }
+
+.opcion {
+  width: 100%; display: flex; align-items: center; gap: 12px;
+  padding: 12px 15px; background: none; border: 0;
+  border-bottom: 1px solid #F0ECE9;
+  font: inherit; font-size: 15px; color: var(--app-tinta);
+  text-align: left; cursor: pointer;
+}
+.opcion:last-child { border-bottom: 0; }
+.opcion:hover, .opcion:focus-visible { background: var(--rojo-suave); outline: none; }
+.opcion[aria-selected="true"],
+.opcion[aria-selected="true"]:hover {
+  background: var(--rojo); color: #fff; font-weight: 600;
+}
+.opcion[aria-selected="true"] .meta { color: rgba(255,255,255,.82); }
+.opcion .meta {
+  display: block; font-size: 11.5px; font-weight: 400; color: var(--app-gris);
+  margin-top: 1px; font-variant-numeric: tabular-nums;
+}
+
+/* ---------- PIN ---------- */
+.pin-puntos { display: flex; align-items: center; gap: 11px; }
+.pin-puntos.grande { justify-content: center; gap: 15px; min-height: 30px; }
+.pin-puntos.grande .punto-pin { width: 14px; height: 14px; }
+.pin-puntos.grande .punto-pin.visible { min-width: 14px; font-size: 19px; }
+
+.punto-pin {
+  width: 11px; height: 11px; border-radius: 50%;
+  border: 1.5px solid #C9C1BB; background: transparent;
+  display: grid; place-items: center;
+  font-size: 15px; font-weight: 700; color: var(--app-tinta);
+  font-variant-numeric: tabular-nums;
+  transition: background .14s ease, border-color .14s ease, transform .14s ease;
+}
+.punto-pin.lleno { background: var(--app-tinta); border-color: var(--app-tinta); transform: scale(1.06); }
+.punto-pin.visible {
+  width: auto; min-width: 11px; height: auto;
+  background: transparent; border-color: transparent; transform: none;
+}
+
+.teclado { display: grid; grid-template-columns: repeat(3, 1fr); gap: 9px; }
+.tecla {
+  min-height: 50px; display: grid; place-items: center;
+  background: var(--app-campo);
+  border: 1px solid var(--app-borde); border-radius: var(--radio);
+  font: inherit; font-size: 21px; font-weight: 600; color: var(--app-tinta);
+  font-variant-numeric: tabular-nums; cursor: pointer;
+  transition: background .12s ease, border-color .12s ease, transform .08s ease;
+}
+.tecla:hover { border-color: #CFC7C1; }
+.tecla:active { background: var(--rojo-suave); border-color: var(--rojo); transform: scale(.97); }
+.tecla:focus-visible { outline: 2px solid var(--rojo); outline-offset: 2px; }
+.tecla.auxiliar { color: var(--app-gris); }
+.tecla.auxiliar:hover { color: var(--app-tinta); }
+
+/* ---------- Modal ----------
+   Va colgado de .telefono, NO de .campo: colgando del campo se sale de
+   la pantalla cuando el campo esta abajo. Centrado siempre. */
+.modal {
+  position: absolute; inset: 0; z-index: 60;
+  display: flex; align-items: center; justify-content: center;
+  padding: 22px;
+}
+.modal[hidden] { display: none; }
+.modal-fondo {
+  position: absolute; inset: 0;
+  background: rgba(28,25,23,.42);
+  animation: aparecer .18s ease;
+}
+.modal-caja {
+  position: relative;
+  width: 100%; max-width: 310px;
+  display: flex; flex-direction: column; gap: 15px;
+  padding: 17px;
+  background: var(--app-campo);
+  border-radius: 16px;
+  box-shadow: 0 22px 55px rgba(28,25,23,.32);
+  animation: subir .2s cubic-bezier(.2,.8,.3,1);
+}
+@keyframes aparecer { from { opacity: 0; } }
+@keyframes subir { from { opacity: 0; transform: translateY(10px) scale(.97); } }
+
+.modal-cabecera { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.modal-cabecera h3 { margin: 0; font-size: 15px; font-weight: 700; color: var(--app-tinta); }
+.modal-cerrar {
+  width: 32px; height: 32px; flex: none;
+  display: grid; place-items: center;
+  background: none; border: 0; border-radius: 8px;
+  color: var(--app-gris); cursor: pointer;
+  transition: background .14s ease, color .14s ease;
+}
+.modal-cerrar:hover { background: var(--rojo-suave); color: var(--rojo); }
+.modal-cerrar:focus-visible { outline: 2px solid var(--rojo); outline-offset: 1px; }
+
+/* ---------- Grupo segmentado NO elegible (dato derivado: .roles) ----------
+   El rol sale del padron de la persona: se muestra, no se elige. Son
+   elementos div, no button. Distinto de .segmentado/.segmento (mas abajo),
+   que SI es elegible. Confundirlos rompe la regla de "un dato derivado
+   se muestra, no se elige". */
+.roles {
+  display: grid; grid-template-columns: repeat(3, 1fr);
+  border: 1.5px solid var(--rojo); border-radius: var(--radio);
+  background: var(--app-campo);
+  overflow: hidden;
+  transition: opacity .2s ease;
+}
+.roles.inerte { opacity: .38; }   /* sin dato todavia: se ve, no se toca */
+.rol {
+  padding: 13px 4px; display: grid; place-items: center;
+  border-right: 1.5px solid var(--rojo);
+  background: var(--app-campo); color: var(--app-tinta);
+  font-size: 12.5px; font-weight: 700;
+  letter-spacing: .07em; text-transform: uppercase;
+  transition: background .18s ease, color .18s ease;
+}
+.rol:last-child { border-right: 0; }
+.rol.activo { background: var(--rojo); color: #fff; }
+
+.rol-cabecera { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+.rol-cabecera .nota { font-size: 11px; color: var(--app-gris-cl); font-weight: 500; }
+
+/* ---------- Grupo segmentado ELEGIBLE (.segmentado/.segmento) ----------
+   Visualmente parecido a .roles, pero son elementos button reales: la persona
+   SI elige (p.ej. el tamano de hoja para un reconteo). Usar .roles
+   cuando el dato ya esta derivado y solo se muestra; usar .segmentado
+   cuando el usuario tiene que decidir entre opciones reales. */
+.segmentado {
+  display: grid; grid-template-columns: repeat(3, 1fr);
+  border: 1.5px solid var(--rojo); border-radius: var(--radio);
+  background: var(--app-campo); overflow: hidden;
+}
+.segmento {
+  padding: 11px 4px; display: grid; place-items: center;
+  border-right: 1.5px solid var(--rojo); border-left: 0; border-top: 0; border-bottom: 0;
+  background: var(--app-campo); color: var(--app-tinta);
+  font: inherit; font-size: 12.5px; font-weight: 700;
+  letter-spacing: .04em; cursor: pointer;
+  transition: background .16s ease, color .16s ease;
+}
+.segmento:last-child { border-right: 0; }
+.segmento:hover { background: var(--rojo-suave); }
+.segmento:focus-visible { outline: 2px solid var(--rojo); outline-offset: -2px; }
+.segmento.activo { background: var(--rojo); color: #fff; }
+
+/* ---------- Accion principal ---------- */
+.ingresar {
+  width: 100%; min-height: 56px;
+  display: flex; align-items: center; justify-content: center; gap: 12px;
+  background: var(--rojo); color: #fff;
+  border: 0; border-radius: 6px;
+  font: inherit; font-size: 17px; font-weight: 700; cursor: pointer;
+  transition: background .16s ease, opacity .16s ease;
+}
+.ingresar:hover:not(:disabled) { background: var(--rojo-hover); }
+.ingresar:focus-visible { outline: 3px solid rgba(216,32,24,.35); outline-offset: 2px; }
+.ingresar:disabled { background: #DCD6D2; color: #FBFAFA; cursor: not-allowed; }
+.ingresar svg { color: var(--dorado); }
+.ingresar:disabled svg { color: #FBFAFA; }
+
+.olvide {
+  align-self: flex-start; margin-top: 2px;
+  background: none; border: 0; padding: 0;
+  font: inherit; font-size: 13.5px; color: var(--rojo); cursor: pointer;
+}
+.olvide:hover { text-decoration: underline; }
+
+/* ---------- Pie de pantalla ----------
+   tagline + version agrupados, para que el gap del contenedor los separe
+   sin margenes negativos peleando con el gap de .pantalla. */
+.pie { display: flex; flex-direction: column; align-items: center; gap: 5px; }
+.version {
+  margin: 0;
+  font-size: 11.5px; font-weight: 500;
+  color: var(--app-gris-cl);
+  font-variant-numeric: tabular-nums; letter-spacing: .04em;
+}
+
+.tagline {
+  display: flex; align-items: center; justify-content: center; gap: 10px;
+  font-family: var(--fuente-marca); font-weight: 600;
+  font-size: 13.5px; color: var(--rojo);
+}
+
+/* ---------- Toast ---------- */
+.toast {
+  position: absolute; left: var(--pad-lateral); right: var(--pad-lateral); bottom: 22px;
+  display: flex; align-items: center; gap: 10px;
+  padding: 13px 15px; border-radius: var(--radio);
+  background: var(--app-tinta); color: #fff;
+  font-size: 13.5px; font-weight: 500;
+  box-shadow: 0 10px 30px rgba(28,25,23,.28);
+  opacity: 0; transform: translateY(8px);
+  transition: opacity .22s ease, transform .22s ease;
+  pointer-events: none;
+}
+.toast.visible { opacity: 1; transform: translateY(0); }
+.toast svg { color: var(--dorado); flex: none; }
+
+/* ---------- Panel de validacion (fuera del telefono) ---------- */
+.pruebas {
+  width: 380px; max-width: 100%;
+  background: var(--lienzo-alt);
+  border: 1px solid var(--lienzo-borde);
+  border-radius: 14px; padding: 16px 18px;
+  display: flex; flex-direction: column; gap: 11px;
+}
+.pruebas h3 {
+  margin: 0; font-size: 11px; font-weight: 600;
+  letter-spacing: .13em; text-transform: uppercase; color: var(--lienzo-gris);
+}
+.pruebas p { margin: 0; font-size: 13px; color: var(--lienzo-gris); line-height: 1.5; }
+.atajos { display: flex; flex-wrap: wrap; gap: 8px; }
+.atajo {
+  padding: 7px 13px;
+  background: transparent; color: var(--lienzo-tinta);
+  border: 1px solid var(--lienzo-borde); border-radius: 99px;
+  font: inherit; font-size: 12.5px; font-weight: 500; cursor: pointer;
+  transition: border-color .15s ease, color .15s ease;
+}
+.atajo:hover { border-color: var(--rojo); color: var(--rojo); }
+.atajo:focus-visible { outline: 2px solid var(--rojo); outline-offset: 2px; }
+
+@media (prefers-reduced-motion: reduce) {
+  * { transition: none !important; animation: none !important; }
+}
+@media (max-width: 440px) {
+  .lienzo { padding: 20px 12px 40px; }
+  .telefono { --pad-lateral: 18px; }
+  .pantalla { padding-bottom: 20px; }
+}
+
+/* ============ Pantalla 2: hojas de conteo ============
+   Colores de estado. Son semanticos, no de marca: el rojo Trujillo
+   sigue siendo la accion, no un estado. Todos los pares texto/fondo
+   estan verificados >= 4.5:1. */
+:root {
+  --ok:        #0A6B57;  --ok-suave:      #E7F4EF;   /* 5.71:1 */
+  --proceso:   #8A5A05;  --proceso-suave: #FDF3DC;   /* 5.37:1 */
+  --espera:    #6B6560;  --espera-suave:  #F2EFED;   /* 5.02:1 */
+  --falta:     #A23B2E;  --falta-suave:   #FBEAE7;   /* 6.56:1 / 5.63:1 */
+  --riel:      #EDE9E6;
+}
+
+/* La pantalla se desplaza dentro del telefono, con barra oculta */
+.pantalla.scroll {
+  height: 720px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+  padding-bottom: 92px;   /* deja lugar a la accion fija */
+  gap: 16px;
+}
+.pantalla.scroll::-webkit-scrollbar { width: 0; display: none; }
+
+/* ---------- Barra superior de contexto ---------- */
+.barra-app {
+  display: flex; align-items: flex-start; gap: 12px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid var(--app-borde);
+}
+.barra-app .rotulo {
+  margin: 0 0 3px; display: flex; align-items: center; gap: 6px;
+  font-size: 10.5px; font-weight: 700; letter-spacing: .11em;
+  text-transform: uppercase; color: var(--rojo);
+}
+.barra-app .contexto { flex: 1; min-width: 0; }
+.barra-app .sede {
+  margin: 0; font-size: 16px; font-weight: 700; color: var(--app-tinta);
+}
+.barra-app .cifras {
+  margin: 2px 0 0; font-size: 12px; color: var(--app-gris);
+  font-variant-numeric: tabular-nums;
+}
+.salir {
+  width: 38px; height: 38px; flex: none;
+  display: grid; place-items: center;
+  background: none; color: var(--app-gris);
+  border: 1px solid var(--app-borde); border-radius: 9px;
+  cursor: pointer; transition: background .14s ease, color .14s ease, border-color .14s ease;
+}
+.salir:hover { background: var(--rojo-suave); color: var(--rojo); border-color: var(--rojo); }
+.salir:focus-visible { outline: 2px solid var(--rojo); outline-offset: 2px; }
+
+/* ---------- Tarjeta ---------- */
+.tarjeta {
+  display: flex; flex-direction: column; gap: 13px;
+  padding: 15px;
+  background: var(--app-campo);
+  border: 1px solid var(--app-borde); border-radius: 13px;
+}
+.tarjeta-cabecera { display: flex; align-items: center; gap: 10px; }
+.tarjeta-cabecera h2 {
+  margin: 0; flex: 1; min-width: 0;
+  font-size: 14.5px; font-weight: 700; color: var(--app-tinta);
+}
+.tarjeta-cabecera .icono { color: var(--rojo); }
+
+/* ---------- Badges de estado ---------- */
+.badge {
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 5px 9px; border-radius: 99px;
+  font-size: 10.5px; font-weight: 700;
+  letter-spacing: .05em; text-transform: uppercase;
+  white-space: nowrap; font-variant-numeric: tabular-nums;
+  background: var(--espera-suave); color: var(--espera);
+}
+.badge.ok      { background: var(--ok-suave);      color: var(--ok); }
+.badge.proceso { background: var(--proceso-suave); color: var(--proceso); }
+.badge.falta   { background: var(--falta-suave);   color: var(--falta); }
+
+/* ---------- Bloque de reparto ---------- */
+.reparto {
+  display: flex; flex-direction: column; gap: 9px;
+  padding: 13px;
+  background: var(--rojo-suave);
+  border: 1px solid rgba(216,32,24,.22); border-radius: 11px;
+}
+.reparto-cabecera { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+.reparto-cabecera strong { font-size: 13.5px; color: var(--app-tinta); }
+.reparto-cabecera .ratio {
+  font-size: 11.5px; font-weight: 700; color: var(--rojo);
+  font-variant-numeric: tabular-nums; white-space: nowrap;
+}
+.reparto p { margin: 0; font-size: 12.5px; line-height: 1.45; color: var(--app-gris); }
+
+.accion {
+  width: 100%; min-height: 46px;
+  display: flex; align-items: center; justify-content: center; gap: 9px;
+  background: var(--rojo); color: #fff;
+  border: 0; border-radius: 8px;
+  font: inherit; font-size: 14.5px; font-weight: 700; cursor: pointer;
+  transition: background .16s ease;
+}
+.accion:hover:not(:disabled) { background: var(--rojo-hover); }
+.accion:focus-visible { outline: 3px solid rgba(216,32,24,.35); outline-offset: 2px; }
+.accion:disabled { background: #DCD6D2; color: #FBFAFA; cursor: not-allowed; }
+/* .accion tambien se usa como <a> (link a la siguiente pantalla del flujo) */
+.accion { text-decoration: none; }
+/* Accion secundaria dentro de una fila (p.ej. "Aprobar" en una validacion) */
+.accion-mini { width: auto; min-height: 38px; padding: 0 16px; font-size: 13px; }
+
+/* ---------- Encabezado de seccion ---------- */
+.seccion {
+  display: flex; align-items: baseline; justify-content: space-between; gap: 10px;
+}
+.seccion h2 {
+  margin: 0; font-size: 11px; font-weight: 600;
+  letter-spacing: .12em; text-transform: uppercase; color: var(--app-gris);
+}
+.seccion .total {
+  font-size: 11.5px; color: var(--app-gris-cl); font-variant-numeric: tabular-nums;
+}
+
+/* ---------- Chips de zona ---------- */
+.chips {
+  display: flex; gap: 7px;
+  overflow-x: auto; overscroll-behavior-x: contain;
+  scrollbar-width: none; -ms-overflow-style: none;
+  /* el margen negativo deja que los chips lleguen al borde al desplazar */
+  margin: 0 calc(var(--pad-lateral) * -1); padding: 2px var(--pad-lateral);
+}
+.chips::-webkit-scrollbar { height: 0; display: none; }
+.chip {
+  flex: none; padding: 8px 13px;
+  background: var(--app-campo); color: var(--app-tinta);
+  border: 1px solid var(--app-borde); border-radius: 99px;
+  font: inherit; font-size: 12.5px; font-weight: 500;
+  white-space: nowrap; cursor: pointer;
+  font-variant-numeric: tabular-nums;
+  transition: background .14s ease, border-color .14s ease, color .14s ease;
+}
+.chip:hover { border-color: var(--rojo); color: var(--rojo); }
+.chip:focus-visible { outline: 2px solid var(--rojo); outline-offset: 2px; }
+.chip[aria-pressed="true"] {
+  background: var(--rojo); border-color: var(--rojo); color: #fff; font-weight: 700;
+}
+
+/* ---------- Hoja de conteo ---------- */
+.hojas { display: flex; flex-direction: column; gap: 10px; }
+.hoja {
+  display: flex; flex-direction: column;
+  border: 1px solid var(--app-borde); border-radius: 12px;
+  background: var(--app-campo);
+  overflow: hidden;
+}
+/* El estado se lee por la franja lateral, no solo por el badge: en
+   una lista larga el ojo la encuentra sin leer. */
+.hoja.en-proceso { border-color: rgba(138,90,5,.42); }
+.hoja.contada    { border-color: rgba(10,107,87,.34); }
+
+.hoja-cuerpo { display: flex; gap: 11px; padding: 13px 14px 11px; }
+.hoja-codigo {
+  flex: none; width: 38px; height: 38px;
+  display: grid; place-items: center; border-radius: 9px;
+  background: var(--espera-suave); color: var(--espera);
+  font-size: 11.5px; font-weight: 700; letter-spacing: .02em;
+  font-variant-numeric: tabular-nums;
+}
+.hoja.contada .hoja-codigo    { background: var(--ok-suave);      color: var(--ok); }
+.hoja.en-proceso .hoja-codigo { background: var(--proceso-suave); color: var(--proceso); }
+
+.hoja-datos { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.hoja-titulo {
+  display: flex; align-items: flex-start; justify-content: space-between; gap: 9px;
+}
+.hoja-titulo h3 {
+  margin: 0; font-size: 14px; font-weight: 700; color: var(--app-tinta);
+  line-height: 1.3; text-wrap: balance;
+}
+.hoja-meta {
+  font-size: 11.5px; color: var(--app-gris); font-variant-numeric: tabular-nums;
+}
+
+.progreso {
+  height: 5px; margin-top: 6px; border-radius: 99px;
+  background: var(--riel); overflow: hidden;
+}
+.progreso span {
+  display: block; height: 100%; border-radius: 99px;
+  background: var(--espera); transition: width .35s ease;
+}
+.hoja.contada .progreso span    { background: var(--ok); }
+.hoja.en-proceso .progreso span { background: var(--proceso); }
+
+.hoja-pie {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  padding: 9px 14px;
+  border-top: 1px solid #F2EFED;
+  background: #FCFBFA;
+  font-size: 12px; color: var(--app-gris);
+}
+.hoja-pie .quien { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hoja-pie .quien strong { color: var(--app-tinta); font-weight: 600; }
+.hoja-pie .sin-asignar { color: var(--app-gris-cl); font-style: italic; }
+.hoja-pie .estado-sync { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; }
+.hoja-pie .estado-sync.ok { color: var(--ok); font-weight: 600; }
+.hoja-pie .abrir {
+  background: none; border: 0; padding: 0;
+  font: inherit; font-size: 12px; font-weight: 700; color: var(--rojo);
+  cursor: pointer; display: inline-flex; align-items: center; gap: 5px;
+  white-space: nowrap;
+}
+.hoja-pie .abrir:hover { text-decoration: underline; }
+.hoja-pie .abrir:focus-visible { outline: 2px solid var(--rojo); outline-offset: 2px; }
+
+/* ---------- Pie de la lista ---------- */
+.pie-lista {
+  display: flex; align-items: center; gap: 9px;
+  padding: 12px 14px; border-radius: 11px;
+  background: var(--espera-suave); color: var(--app-gris);
+  font-size: 12.5px; font-variant-numeric: tabular-nums;
+}
+.pie-lista .icono { color: var(--app-gris-cl); }
+.pie-lista strong { color: var(--app-tinta); font-weight: 700; }
+
+/* ---------- Accion fija sobre el borde inferior ---------- */
+.accion-fija {
+  position: absolute; left: 0; right: 0; bottom: 0; z-index: 20;
+  padding: 12px var(--pad-lateral) 20px;
+  background: linear-gradient(to top, var(--app-fondo) 68%, rgba(255,255,255,0));
+}
+.accion-fija .accion { min-height: 52px; font-size: 16px; }
+
+/* ---------- Tab bar inferior (navegacion principal por rol) ----------
+   Cuelga de .telefono con position:absolute, igual que .accion-fija, y
+   los dos pueden querer el mismo borde inferior. La regla que evita que
+   cada pantalla lo resuelva distinto:
+
+     - Si el boton de .accion-fija navega a una seccion PARALELA (algo
+       que ya es o deberia ser un tab) -> el tab bar lo REEMPLAZA. No
+       tiene sentido duplicar la misma navegacion en dos controles.
+     - Si el boton de .accion-fija confirma o cierra algo de ESTA
+       pantalla (guardar, enviar, finalizar) -> CONVIVEN, apilados: la
+       accion fija se apoya justo arriba del tab bar usando
+       --tabbar-alto, y el padding-bottom de .pantalla.scroll tiene que
+       crecer para no esconder el ultimo item detras de los dos.
+
+   Markup minimo (los botones se arman por JS a partir de una lista de
+   tabs por rol, ver home.html):
+     <nav class="tab-bar" aria-label="Navegacion principal">
+       <button class="tab activo" data-destino="/inicio">
+         <span class="tab-indicador" aria-hidden="true"></span>
+         <svg class="icono">...</svg>
+         <span class="tab-etiqueta">Inicio</span>
+       </button>
+       ...
+     </nav> */
+.tab-bar {
+  position: absolute; left: 0; right: 0; bottom: 0; z-index: 25;
+  display: flex;
+  min-height: var(--tabbar-alto);
+  background: var(--app-fondo);
+  border-top: 1px solid var(--app-borde);
+}
+.tab {
+  position: relative;
+  flex: 1; min-height: 58px;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px;
+  padding: 9px 4px 7px;
+  background: none; border: 0;
+  font: inherit; color: var(--app-gris); cursor: pointer;
+  transition: color .14s ease;
+}
+.tab:hover { color: var(--app-tinta); }
+.tab:active { background: var(--rojo-suave); }
+.tab:focus-visible { outline: 2px solid var(--rojo); outline-offset: -2px; }
+.tab-indicador {
+  position: absolute; top: 0; left: 50%; transform: translateX(-50%);
+  width: 26px; height: 3px; border-radius: 0 0 4px 4px;
+  background: var(--rojo);
+  opacity: 0; transition: opacity .14s ease;
+}
+.tab-etiqueta { font-size: 10.5px; font-weight: 600; }
+.tab.activo { color: var(--rojo); }
+.tab.activo .tab-indicador { opacity: 1; }
+.tab.activo .tab-etiqueta { font-weight: 700; }
+
+/* ============ Pantallas 4-7: ciclo de conteos, auditoria, liquidacion, lacrado ============ */
+
+/* ---------- Banda de sincronizacion (offline-first) ----------
+   Los equipos son WiFi de tienda, sin datos moviles: la WiFi es punto
+   unico de falla. Toda pantalla con datos sincronizados necesita este
+   estado visible, no solo texto suelto. Usado en 5 de las 7 pantallas. */
+.banda-sync {
+  display: flex; align-items: center; gap: 8px;
+  padding: 9px 12px; border-radius: 10px;
+  font-size: 11.5px; font-weight: 700;
+  background: var(--ok-suave); color: var(--ok);
+}
+.banda-sync .icono-sync { flex: none; }
+.banda-sync.pendiente { background: var(--proceso-suave); color: var(--proceso); }
+.banda-sync.offline   { background: var(--falta-suave);   color: var(--falta); }
+
+/* ---------- Resumen de cifras clave (tira de KPIs) ---------- */
+.resumen-global { display: flex; flex-direction: column; gap: 10px; }
+.resumen-dato { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+.resumen-etiqueta { font-size: 12.5px; color: var(--app-gris); }
+.resumen-dato strong { font-size: 16px; font-variant-numeric: tabular-nums; color: var(--app-tinta); }
+.resumen-dato strong.ok { color: var(--ok); }
+.resumen-dato strong.falta { color: var(--falta); }
+.resumen-pct { font-size: 11.5px; font-weight: 500; color: var(--app-gris); }
+
+/* ---------- Identidad de persona (nombre + subtitulo) ----------
+   Bloque reusable dentro de una fila de planilla o de validacion. */
+.persona-datos { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.persona-datos strong { font-size: 13.5px; color: var(--app-tinta); font-weight: 700; }
+.persona-datos span { font-size: 11.5px; color: var(--app-gris); }
+
+
+/* ==========================================================================
+   Controles nuevos de las pantallas del Administrador (9, 10 y 11).
+   Todo sale de los tokens ya validados: ningun color nuevo.
+   ========================================================================== */
+
+/* ---------- Entrada de texto ----------
+   El design system solo tenia controles de SELECCION (.control es un
+   boton). Estas tres pantallas son las primeras que piden tipeo libre
+   (nombre, DNI, direccion, credenciales), asi que .entrada replica el
+   mismo cuerpo visual del .control -- mismo alto, borde, radio e icono
+   gris -- pero con un <input> real adentro. Espeja CampoTexto.tsx. */
+.entrada {
+  display: flex; align-items: center; gap: 12px;
+  min-height: 54px; padding: 0 15px;
+  background: var(--app-campo);
+  border: 1px solid var(--app-borde); border-radius: var(--radio);
+}
+.entrada:focus-within { border-color: var(--rojo); box-shadow: 0 0 0 3px rgba(216,32,24,.14); }
+.entrada input {
+  flex: 1; min-width: 0;
+  border: 0; background: none; padding: 0;
+  font: inherit; font-size: 15px; color: var(--app-tinta);
+}
+.entrada input:focus { outline: none; }
+.entrada input::placeholder { color: var(--app-gris-cl); }
+/* Los que llevan un identificador tecnico largo (tenant, client id, URL)
+   no se leen palabra por palabra: se comparan de un vistazo. */
+.entrada input.tecnico { font-size: 13px; font-variant-numeric: tabular-nums; }
+
+/* ---------- Ficha de gestion (una cuenta / una tienda) ----------
+   Es .tarjeta con menos aire: estas listas son largas (30 cuentas) y el
+   padding de bloque de .tarjeta las estiraria a tres pantallas de scroll. */
+.gestion { display: flex; flex-direction: column; gap: 10px; }
+.ficha { gap: 10px; padding: 13px; }
+.ficha-cabecera { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
+.ficha-textos { flex: 1; min-width: 0; }
+.ficha-nombre { margin: 0; font-size: 13.5px; font-weight: 700; color: var(--app-tinta); }
+.ficha-meta { margin: 2px 0 0; font-size: 11.5px; color: var(--app-gris); }
+.ficha-badges { flex: none; display: flex; flex-direction: column; align-items: flex-end; gap: 6px; }
+.ficha-acciones { display: flex; gap: 8px; }
+.ficha-acciones .boton-sec { flex: 1; }
+
+/* ---------- Boton secundario (outline) ----------
+   Espeja Button variant="outline" de la app: borde neutro y tinta, NO
+   rojo. El rojo es la accion principal de la pantalla y hay una sola;
+   si "Deshabilitar" y "Resetear PIN" tambien fueran rojos, ninguna de
+   las tres se leeria como la principal. */
+.boton-sec {
+  display: inline-flex; align-items: center; justify-content: center; gap: 7px;
+  min-height: 40px; padding: 0 13px;
+  background: var(--app-campo);
+  border: 1px solid var(--app-borde); border-radius: var(--radio);
+  font: inherit; font-size: 13px; font-weight: 600; color: var(--app-tinta);
+  cursor: pointer;
+  transition: border-color .12s ease, background .12s ease;
+}
+.boton-sec:hover { border-color: #CFC7C1; background: #FAF8F7; }
+.boton-sec:focus-visible { outline: 2px solid var(--rojo); outline-offset: 2px; }
+.boton-sec:disabled { color: var(--app-gris-cl); cursor: not-allowed; }
+.boton-sec svg { color: var(--app-gris); flex: none; }
+.boton-sec:disabled svg { color: var(--app-gris-cl); }
+
+/* ---------- Badge sin relleno ----------
+   Cuarta variante de .badge (las otras tres son ok / proceso / falta).
+   Se usa para el rol "Conteo", el mas frecuente del padron: con relleno,
+   veinte fichas seguidas se convierten en una mancha de color y el badge
+   deja de senalar nada. */
+.badge.contorno { background: none; border: 1px solid var(--app-borde); color: var(--app-tinta); }
+
+/* ---------- Estado vacio ---------- */
+.vacio-estado {
+  display: flex; flex-direction: column; align-items: center; gap: 6px;
+  padding: 30px 20px; text-align: center;
+  background: var(--app-campo);
+  border: 1px dashed var(--app-borde); border-radius: 14px;
+}
+.vacio-estado svg { color: var(--app-gris-cl); }
+.vacio-estado strong { font-size: 13.5px; color: var(--app-tinta); }
+.vacio-estado span { font-size: 12.5px; color: var(--app-gris); }
+
+/* ---------- [hidden] sobre contenedores flex ----------
+   Mismo gotcha que .campo en hojas.html: el display propio le gana al
+   [hidden] nativo, asi que hay que declararlo elemento por elemento. */
+.campo[hidden], .tarjeta[hidden], .gestion[hidden], .seccion[hidden],
+.ficha-acciones[hidden], .vacio-estado[hidden], .entrada[hidden] { display: none; }
+
+/* ---------- Pantalla 10 ---------- */
+.boton-sec.ancho { width: 100%; min-height: 46px; font-size: 14.5px; font-weight: 700; }
+
+</style>
+
+<div class="lienzo">
+
+  <header class="cabecera">
+    <span class="eyebrow">Inventario de Autoservicio · Pantalla 10 · gestión de sucursales</span>
+    <h1>Gestión de tiendas</h1>
+    <p>Alta, edición y activación de sucursales. Solo el Administrador.</p>
+  </header>
+
+  <div class="telefono denso">
+    <div class="barra-estado">
+      <span>09:41</span>
+      <span class="senales">
+        <svg width="15" height="11" viewBox="0 0 15 11" fill="currentColor" aria-hidden="true"><rect x="0" y="7" width="2.5" height="4" rx="1"/><rect x="4" y="5" width="2.5" height="6" rx="1"/><rect x="8" y="2.5" width="2.5" height="8.5" rx="1"/><rect x="12" y="0" width="2.5" height="11" rx="1"/></svg>
+        <svg width="22" height="11" viewBox="0 0 22 11" fill="none" aria-hidden="true"><rect x="0.5" y="0.5" width="18" height="10" rx="2.5" stroke="currentColor"/><rect x="2" y="2" width="15" height="7" rx="1.2" fill="currentColor"/><path d="M20 4v3a1.8 1.8 0 0 0 0-3Z" fill="currentColor"/></svg>
+      </span>
+    </div>
+
+    <div class="pantalla scroll">
+
+      <!-- ================= CONTENIDO DE LA PANTALLA ================= -->
+
+      <div class="barra-app">
+        <div class="contexto">
+          <p class="rotulo"><svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="m3 3 1.5 5h15L21 3H3Zm1.5 6v12h15V9h-15Zm4.5 5h6v6H9v-6Z"/></svg>Tiendas</p>
+          <p class="cifras" id="cifras"></p>
+        </div>
+        <button type="button" class="salir" id="btn-salir" aria-label="Cerrar sesión"><svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4m7 14 5-5-5-5m5 5H9"/></svg></button>
+      </div>
+
+      <!-- Mismo control para abrir y cerrar el formulario, igual que en la
+           app (tiendas.tsx): pasa de accion principal a boton secundario. -->
+      <button type="button" class="accion" id="btn-nueva">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m3 3 1.5 5h15L21 3M4.5 8v12h15V8M9 20v-6h6v6"/></svg>
+        <span id="txt-nueva">Nueva tienda</span>
+      </button>
+
+      <div class="tarjeta" id="formulario" hidden>
+        <div class="tarjeta-cabecera">
+          <svg class="icono" width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m3 3 1.5 5h15L21 3M4.5 8v12h15V8M9 20v-6h6v6"/></svg>
+          <h2 id="titulo-formulario">Nueva tienda</h2>
+        </div>
+
+        <div class="campos">
+          <div class="campo">
+            <label id="lbl-nombre" for="in-nombre">Nombre</label>
+            <div class="entrada">
+              <svg class="icono" width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m3 3 1.5 5h15L21 3M4.5 8v12h15V8M9 20v-6h6v6"/></svg>
+              <input type="text" id="in-nombre" placeholder="Ej. Market Yungay" autocomplete="off">
+            </div>
+          </div>
+
+          <!-- La direccion es opcional a proposito: las 4 sucursales del
+               padron no la traen y una tienda nueva no se bloquea por un
+               dato que quien la da de alta puede no tener a mano. -->
+          <div class="campo">
+            <label id="lbl-direccion" for="in-direccion">Dirección (opcional)</label>
+            <div class="entrada">
+              <svg class="icono" width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z"/><circle cx="12" cy="10" r="3"/></svg>
+              <input type="text" id="in-direccion" placeholder="Ej. Jr. Comercio 450" autocomplete="off">
+            </div>
+          </div>
+        </div>
+
+        <button type="button" class="accion" id="btn-guardar" disabled>Crear tienda</button>
+      </div>
+
+      <div class="seccion">
+        <h2>Sucursales</h2>
+        <span class="total" id="total-tiendas"></span>
+      </div>
+
+      <div class="gestion" id="lista-tiendas"></div>
+
+      <div class="vacio-estado" id="sin-tiendas" hidden>
+        <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m3 3 1.5 5h15L21 3M4.5 8v12h15V8M9 20v-6h6v6"/></svg>
+        <strong>Todavía no hay tiendas</strong>
+        <span>Creá la primera con el botón de arriba.</span>
+      </div>
+
+      <!-- =========================================================== -->
+
+      <div class="toast" id="toast" role="status" aria-live="polite">
+        <svg width="19" height="19" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 2 4 5.5v6c0 5 3.4 9.4 8 10.5 4.6-1.1 8-5.5 8-10.5v-6L12 2Zm-1.2 13.4-3.2-3.2 1.4-1.4 1.8 1.8 4.6-4.6 1.4 1.4-6 6Z"/></svg>
+        <span id="toast-texto"></span>
+      </div>
+
+    </div>
+
+    <!-- Los modales cuelgan del TELEFONO, no de .pantalla ni de .campo -->
+
+    <!-- Tab bar del Administrador. Reemplaza a .accion-fija: guardar una
+         tienda cierra el formulario, no la pantalla. -->
+    <nav class="tab-bar" id="tab-bar" aria-label="Navegación principal"></nav>
+
+  </div>
+
+  <section class="pruebas">
+    <h3>Atajos para validar</h3>
+    <p>Creá una sucursal, editá una existente y desactivá otra. Una tienda desactivada no se borra: sigue en la lista, con su badge, y deja de ofrecerse al crear cuentas nuevas &mdash; los conteos que ya se hicieron ahí siguen teniendo a quién colgarse.</p>
+    <div class="atajos" id="atajos"></div>
+  </section>
+
+</div>
+
+<script>
+(function () {
+  'use strict';
+
+  var $ = function (id) { return document.getElementById(id); };
+  var toast = $('toast'), toastTexto = $('toast-texto');
+
+  var temporizador;
+  function mostrarToast(texto) {
+    toastTexto.textContent = texto;
+    toast.classList.add('visible');
+    clearTimeout(temporizador);
+    temporizador = setTimeout(function () { toast.classList.remove('visible'); }, 2800);
+  }
+
+  /* Mismas 4 sucursales que lib/adaptadores/tiendas-memoria.ts, que a su
+     vez arranca del padron de sesion-memoria.ts. Ninguna trae direccion:
+     el padron original no la tenia, y el campo se sumo con la gestion. */
+  var tiendas = [
+    { id: 1, nombre: 'Market Central Luzuriaga', direccion: null, colaboradores: 11, activa: true },
+    { id: 2, nombre: 'Market Carhuaz',           direccion: null, colaboradores: 6,  activa: true },
+    { id: 3, nombre: 'Market Bol\u00edvar',           direccion: null, colaboradores: 7,  activa: true },
+    { id: 4, nombre: 'Market Sucre',             direccion: null, colaboradores: 5,  activa: true }
+  ];
+  var proximoId = 5;
+
+  var TABS = [
+    { id: 'inicio', destino: 'home.html', etiqueta: 'Inicio' },
+    { id: 'usuarios', destino: 'usuarios.html', etiqueta: 'Usuarios' },
+    { id: 'tiendas', destino: 'tiendas.html', etiqueta: 'Tiendas' },
+    { id: 'config', destino: 'config.html', etiqueta: 'Config' }
+  ];
+  var ICONO_TAB = {
+    inicio: '<svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 3 2 12h3v9h14v-9h3Z"/></svg>',
+    usuarios: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></svg>',
+    tiendas: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m3 3 1.5 5h15L21 3M4.5 8v12h15V8M9 20v-6h6v6"/></svg>',
+    config: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.6 1.6 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.6 1.6 0 0 0-2.7 1.1v.3a2 2 0 1 1-4 0v-.2a1.6 1.6 0 0 0-2.8-1.1l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1A1.6 1.6 0 0 0 3.5 15H3a2 2 0 1 1 0-4h.2A1.6 1.6 0 0 0 4.3 8.2l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.6 1.6 0 0 0 2.7-1.1V4a2 2 0 1 1 4 0v.2a1.6 1.6 0 0 0 2.8 1.1l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.6 1.6 0 0 0 1.1 2.7h.3a2 2 0 1 1 0 4h-.2a1.6 1.6 0 0 0-1.2 1Z"/></svg>'
+  };
+
+  var abierto = false;
+  var editando = null;     /* la tienda que se esta editando, o null si es alta */
+
+  function puedeGuardar() { return $('in-nombre').value.trim().length > 0; }
+
+  function abrirAlta() {
+    editando = null;
+    abierto = true;
+    $('in-nombre').value = '';
+    $('in-direccion').value = '';
+    render();
+  }
+
+  function abrirEdicion(t) {
+    editando = t;
+    abierto = true;
+    $('in-nombre').value = t.nombre;
+    $('in-direccion').value = t.direccion || '';
+    render();
+    $('in-nombre').focus();
+  }
+
+  function cerrarFormulario() {
+    editando = null;
+    abierto = false;
+    $('in-nombre').value = '';
+    $('in-direccion').value = '';
+    render();
+  }
+
+  function pintarFormulario() {
+    $('formulario').hidden = !abierto;
+    $('txt-nueva').textContent = abierto ? 'Cancelar' : 'Nueva tienda';
+    $('btn-nueva').className = abierto ? 'boton-sec ancho' : 'accion';
+    $('titulo-formulario').textContent = editando ? 'Editar ' + editando.nombre : 'Nueva tienda';
+    $('btn-guardar').textContent = editando ? 'Guardar cambios' : 'Crear tienda';
+    $('btn-guardar').disabled = !puedeGuardar();
+  }
+
+  function ficha(t) {
+    var art = document.createElement('div');
+    art.className = 'tarjeta ficha';
+
+    var cab = document.createElement('div');
+    cab.className = 'ficha-cabecera';
+
+    var textos = document.createElement('div');
+    textos.className = 'ficha-textos';
+    var h = document.createElement('p');
+    h.className = 'ficha-nombre';
+    h.textContent = t.nombre;
+    var meta = document.createElement('p');
+    meta.className = 'ficha-meta';
+    meta.textContent = (t.direccion || 'Sin direcci\u00f3n registrada') + ' \u00b7 ' +
+      t.colaboradores + (t.colaboradores === 1 ? ' colaborador' : ' colaboradores');
+    textos.appendChild(h);
+    textos.appendChild(meta);
+
+    /* Estado con la paleta semantica, nunca con el rojo de marca: el rojo
+       de esta pantalla es "Nueva tienda", la accion. */
+    var badge = document.createElement('span');
+    badge.className = t.activa ? 'badge ok' : 'badge';
+    badge.textContent = t.activa ? 'Activa' : 'Inactiva';
+
+    var badges = document.createElement('div');
+    badges.className = 'ficha-badges';
+    badges.appendChild(badge);
+
+    cab.appendChild(textos);
+    cab.appendChild(badges);
+
+    var acciones = document.createElement('div');
+    acciones.className = 'ficha-acciones';
+
+    var bEditar = document.createElement('button');
+    bEditar.type = 'button';
+    bEditar.className = 'boton-sec';
+    bEditar.textContent = 'Editar';
+    bEditar.addEventListener('click', function () { abrirEdicion(t); });
+
+    /* No hay "Eliminar": una sucursal borrada deja hojas, conteos y
+       cuentas sin sede. Se desactiva, y el historial sigue en pie. */
+    var bAlternar = document.createElement('button');
+    bAlternar.type = 'button';
+    bAlternar.className = 'boton-sec';
+    bAlternar.textContent = t.activa ? 'Desactivar' : 'Activar';
+    bAlternar.addEventListener('click', function () {
+      t.activa = !t.activa;
+      render();
+      mostrarToast(t.nombre + (t.activa ? ': tienda activada.' : ': tienda desactivada.'));
+    });
+
+    acciones.appendChild(bEditar);
+    acciones.appendChild(bAlternar);
+
+    art.appendChild(cab);
+    art.appendChild(acciones);
+    return art;
+  }
+
+  function pintarLista() {
+    var cont = $('lista-tiendas');
+    cont.innerHTML = '';
+    tiendas.forEach(function (t) { cont.appendChild(ficha(t)); });
+    cont.hidden = tiendas.length === 0;
+    $('sin-tiendas').hidden = tiendas.length !== 0;
+    $('total-tiendas').textContent = tiendas.length + (tiendas.length === 1 ? ' sucursal' : ' sucursales');
+  }
+
+  function pintarBarra() {
+    var activas = tiendas.filter(function (t) { return t.activa; }).length;
+    $('cifras').textContent = activas + ' de ' + tiendas.length + ' activas';
+  }
+
+  function pintarTabs() {
+    var cont = $('tab-bar');
+    cont.innerHTML = '';
+    TABS.forEach(function (t) {
+      var b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'tab' + (t.id === 'tiendas' ? ' activo' : '');
+      if (t.id === 'tiendas') b.setAttribute('aria-current', 'page');
+      b.innerHTML = '<span class="tab-indicador" aria-hidden="true"></span>' + ICONO_TAB[t.id] +
+        '<span class="tab-etiqueta">' + t.etiqueta + '</span>';
+      b.addEventListener('click', function () {
+        if (t.id === 'tiendas') return;
+        mostrarToast('Ir\u00eda a "' + t.etiqueta + '" (' + t.destino + ').');
+      });
+      cont.appendChild(b);
+    });
+  }
+
+  function pintarAtajos() {
+    var cont = $('atajos');
+    cont.innerHTML = '';
+    [
+      { etiqueta: 'Dar de alta Market Yungay', accion: function () {
+          abrirAlta();
+          $('in-nombre').value = 'Market Yungay';
+          $('in-direccion').value = 'Jr. Comercio 450';
+          pintarFormulario();
+        } },
+      { etiqueta: 'Editar Market Carhuaz', accion: function () { abrirEdicion(tiendas[1]); } },
+      { etiqueta: 'Desactivar Market Sucre', accion: function () {
+          tiendas[3].activa = false;
+          render();
+          mostrarToast('Market Sucre: tienda desactivada.');
+        } },
+      { etiqueta: 'Reponer el estado inicial', accion: function () {
+          tiendas.length = 0;
+          [['Market Central Luzuriaga', 11], ['Market Carhuaz', 6], ['Market Bol\u00edvar', 7], ['Market Sucre', 5]]
+            .forEach(function (par, i) {
+              tiendas.push({ id: i + 1, nombre: par[0], direccion: null, colaboradores: par[1], activa: true });
+            });
+          proximoId = 5;
+          cerrarFormulario();
+          mostrarToast('Estado inicial repuesto.');
+        } }
+    ].forEach(function (a) {
+      var b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'atajo';
+      b.textContent = a.etiqueta;
+      b.addEventListener('click', a.accion);
+      cont.appendChild(b);
+    });
+  }
+
+  function render() {
+    pintarBarra();
+    pintarFormulario();
+    pintarLista();
+    pintarTabs();
+    pintarAtajos();
+  }
+
+  /* ---------- Eventos ---------- */
+  $('btn-nueva').addEventListener('click', function () {
+    if (abierto) cerrarFormulario();
+    else abrirAlta();
+  });
+
+  $('in-nombre').addEventListener('input', pintarFormulario);
+
+  $('btn-guardar').addEventListener('click', function () {
+    if (!puedeGuardar()) return;
+    var nombre = $('in-nombre').value.trim();
+    var direccion = $('in-direccion').value.trim() || null;
+    if (editando) {
+      editando.nombre = nombre;
+      editando.direccion = direccion;
+      mostrarToast('Cambios guardados en ' + nombre + '.');
+    } else {
+      /* Una tienda nueva arranca en 0 colaboradores: las cuentas se dan de
+         alta despues, desde Usuarios. */
+      tiendas.push({ id: proximoId++, nombre: nombre, direccion: direccion, colaboradores: 0, activa: true });
+      mostrarToast('Tienda ' + nombre + ' creada.');
+    }
+    cerrarFormulario();
+  });
+
+  $('btn-salir').addEventListener('click', function () {
+    mostrarToast('Cerrar\u00eda la sesi\u00f3n y volver\u00eda al login.');
+  });
+
+  document.addEventListener('keydown', function (e) {
+    if (e.key === 'Escape' && abierto) cerrarFormulario();
+  });
+
+  render();
+})();
+</script>
