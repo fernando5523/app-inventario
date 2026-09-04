@@ -11,7 +11,6 @@ import {
   ModalConteo,
   ModalEscaner,
   TarjetaProducto,
-  opcionesDeEscaneo,
   sincronizacionDeHojas,
 } from '../../components/ui';
 import { PantallaConTabs } from '../../components/navegacion/PantallaConTabs';
@@ -52,6 +51,20 @@ export default function ContarScreen(): JSX.Element {
   const [confirmadosPendientes, setConfirmadosPendientes] = useState<Set<number>>(new Set());
 
   const [modalProducto, setModalProducto] = useState<Producto | null>(null);
+  /**
+   * Qué presentacion se leyo en el ultimo escaneo: la unidad suelta o el
+   * empaque (la caja de 12 puede tener codigo propio, ver manejarEscaneo).
+   *
+   * PENDIENTE, y hay que decirlo: hoy este dato NO llega a ModalConteo, que
+   * es donde serviria para pre-cargar "1 empaque" en vez de "1 suelta".
+   * ModalConteo esta fuera del alcance de esta tarea y sus props no tienen
+   * por donde recibirlo. Falta agregarle uno (`presentacionEscaneada`) y
+   * pasarlo desde aca -- mientras tanto se muestra en la tarjeta del
+   * producto para que el operario vea que se reconocio el empaque.
+   */
+  const [ultimoEscaneo, setUltimoEscaneo] = useState<{ producto: Producto; presentacion: 'unidad' | 'empaque' } | null>(
+    null,
+  );
   const [modalScanVisible, setModalScanVisible] = useState(false);
   const [scanError, setScanError] = useState<string | null>(null);
   const [modalFinalizarVisible, setModalFinalizarVisible] = useState(false);
@@ -183,15 +196,31 @@ export default function ContarScreen(): JSX.Element {
   // Regla c: el escáner es SECUNDARIO. Si el código pertenece a la hoja,
   // confirma y abre el registro del producto — no cuenta por sí solo. Si
   // no pertenece, lo avisa claro y no registra nada.
+  //
+  // Un código puede ser el de la UNIDAD suelta (`Producto.codigoBarras`) o
+  // el del EMPAQUE (`Empaque.codigoBarras`, opcional): la caja de 12 puede
+  // traer un código distinto al de la unidad. Es lo que permite que el
+  // escaneo diga "esto que tengo en la mano es una CAJA de este producto",
+  // no solo de qué producto se trata.
+  //
+  // El puerto `porCodigoBarras` resuelve la unidad; el empaque se busca acá
+  // sobre `hoja.productos`, que ya está cargada en memoria. No es lógica de
+  // catálogo duplicada: es desambiguar QUÉ presentación se escaneó, y la
+  // pantalla ya tiene el dato sin pedir nada.
   async function manejarEscaneo(codigo: string): Promise<void> {
-    const producto = await repositorioCatalogo.porCodigoBarras(hoja!.id, codigo);
+    const porUnidad = await repositorioCatalogo.porCodigoBarras(hoja!.id, codigo);
+    const porEmpaque = porUnidad ? null : hoja!.productos.find((p) => p.empaque.codigoBarras === codigo) ?? null;
+    const producto = porUnidad ?? porEmpaque;
+
     if (!producto) {
       setScanError(`Este código no pertenece a la hoja #${hoja!.numero}.`);
       return;
     }
+
     setScanError(null);
     setModalScanVisible(false);
     setConfirmadosPendientes((prev) => new Set(prev).add(producto.id));
+    setUltimoEscaneo({ producto, presentacion: porEmpaque ? 'empaque' : 'unidad' });
     setModalProducto(producto);
   }
 
@@ -256,6 +285,16 @@ export default function ContarScreen(): JSX.Element {
         </Pressable>
       </View>
 
+      {ultimoEscaneo ? (
+        <View style={styles.notaEscaneo}>
+          <Text style={styles.notaEscaneoTexto}>
+            {ultimoEscaneo.presentacion === 'empaque'
+              ? `Leiste el codigo del EMPAQUE (${ultimoEscaneo.producto.empaque.nombre} x${ultimoEscaneo.producto.empaque.factor}) de ${ultimoEscaneo.producto.descripcion}.`
+              : `Leiste el codigo de la UNIDAD suelta de ${ultimoEscaneo.producto.descripcion}.`}
+          </Text>
+        </View>
+      ) : null}
+
       <View style={styles.lista}>
         {visibles.map((producto) => (
           <TarjetaProducto
@@ -299,7 +338,6 @@ export default function ContarScreen(): JSX.Element {
 
       <ModalEscaner
         visible={modalScanVisible}
-        opciones={opcionesDeEscaneo(hoja.productos)}
         error={scanError}
         onEscanear={manejarEscaneo}
         onCerrar={() => setModalScanVisible(false)}
@@ -355,6 +393,8 @@ const styles = StyleSheet.create({
   buscadorInput: { flex: 1, fontSize: 14, color: colors.tinta, fontFamily: fonts.regular, padding: 0 },
   btnScan: { width: 46, height: 46, alignItems: 'center', justifyContent: 'center', borderRadius: radius.md, backgroundColor: colors.rojo },
   btnScanDeshabilitado: { backgroundColor: '#DCD6D2' },
+  notaEscaneo: { padding: 11, borderRadius: radius.sm, backgroundColor: colors.okSuave },
+  notaEscaneoTexto: { fontSize: 12.5, color: colors.ok, fontFamily: fonts.semibold, lineHeight: 17 },
   lista: { gap: 10 },
   pieLista: { padding: 12, borderRadius: 11, backgroundColor: colors.esperaSuave },
   pieTexto: { fontSize: 12.5, color: colors.gris, fontFamily: fonts.regular },
