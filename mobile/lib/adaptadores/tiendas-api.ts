@@ -134,7 +134,9 @@ export const tiendasApi: RepositorioTiendas = {
     return aSucursal(await pedir<TiendaDto>(RUTAS.una(sucursalId), { metodo: 'PATCH', cuerpo: { activa } }));
   },
 
-  async listarAlmacenes() {
-    return pedir<Almacen[]>(RUTAS.almacenes);
+  async listarAlmacenes(opciones?: { todos?: boolean }) {
+    // `?todos=1` es lo que el backend espera (d365.controller.ts): sin el
+    // parametro la respuesta viene filtrada, que es el caso comun.
+    return pedir<Almacen[]>(opciones?.todos === true ? `${RUTAS.almacenes}?todos=1` : RUTAS.almacenes);
   },
 };

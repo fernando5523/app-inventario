@@ -379,6 +379,14 @@ export interface DatosNuevoUsuario {
   pin: string;
 }
 
+/** Datos para editar una cuenta existente. */
+export interface DatosEditarUsuario {
+  nombre?: string;
+  dni?: string;
+  rol?: Rol;
+  sucursalId?: number;
+}
+
 /**
  * Gestión de cuentas (Administrador: todas; Auditor: solo las de su
  * propia sucursal — pantalla "Usuarios", pedida por el cliente para
@@ -396,14 +404,14 @@ export interface RepositorioUsuarios {
    * `rolesQuePuedeCrear` en lib/dominio/roles.ts).
    */
   crear(datos: DatosNuevoUsuario, creadoPorRol: Rol): Promise<Usuario>;
-  /**
-   * Habilita o deshabilita. Nunca hay un `eliminar`: un usuario borrado
-   * deja conteos huérfanos en un sistema que se audita — se deshabilita,
-   * nunca se borra.
-   */
+  /** Edita los datos básicos de la cuenta (nombre, DNI, rol, sucursal). */
+  editar(usuarioId: number, datos: DatosEditarUsuario): Promise<Usuario>;
+  /** Habilita o deshabilita la cuenta. */
   cambiarActivo(usuarioId: number, activo: boolean): Promise<Usuario>;
   /** PIN nuevo de 6 dígitos, mismo campo que el login. */
   resetearPin(usuarioId: number, nuevoPin: string): Promise<void>;
+  /** Elimina definitivamente la cuenta. */
+  eliminar(usuarioId: number): Promise<void>;
 }
 
 /**
@@ -439,8 +447,17 @@ export interface RepositorioTiendas {
    * stock de OTRA tienda, y la auditoría compara contra números que
    * parecen válidos sin que nadie se entere hasta que no cuadra a fin de
    * mes. Si la lista sale del ERP, ese error deja de ser posible.
+   *
+   * Por defecto trae SOLO los habilitados para inventario (10 de 70): el
+   * tenant tiene almacenes de Tránsito y Cuarentena cuyos nombres se
+   * parecen muchísimo a los de tienda — "ALMACÉN CUARENTENA MARKET
+   * LUZURIAGA" contra "ALMACÉN DISPONIBLE MARKET LUZURIAGA" — y elegir el
+   * equivocado haría contar mercadería bloqueada.
+   *
+   * `todos: true` trae los 70, para la tienda que abre hoy y cuyo almacén
+   * todavía no está habilitado. Al asociarlo, el backend lo habilita solo.
    */
-  listarAlmacenes(): Promise<Almacen[]>;
+  listarAlmacenes(opciones?: { todos?: boolean }): Promise<Almacen[]>;
 }
 
 /** Configuración global del sistema (solo Administrador). */
@@ -459,20 +476,22 @@ export interface EstadoConfigDynamics {
   tenantId: string;
   clientId: string;
   urlBase: string;
+  /**
+   * Lo ÚNICO que se dice del secreto: si hay uno guardado. Nunca su valor,
+   * su largo ni sus primeros caracteres — un secreto que la pantalla puede
+   * mostrar de vuelta es un secreto que alguien puede fotografiar.
+   */
   secretoConfigurado: boolean;
-}
-
-/**
- * Lo que se puede ESCRIBIR. `clientSecret` es opcional a propósito: sin
- * él, `guardar` actualiza tenant/clientId/urlBase y deja el secreto ya
- * guardado tal cual — así se puede corregir el tenant sin forzar a
- * re-tipear el secreto entero.
- */
-export interface DatosConfigDynamics {
-  tenantId: string;
-  clientId: string;
-  urlBase: string;
-  clientSecret?: string;
+  /**
+   * De dónde salen las credenciales que el backend está usando DE VERDAD.
+   * `base` = cargadas con `npm run config:dynamics`; `entorno` = todavía
+   * salen del .env del servidor. La distinción importa: explica por qué un
+   * cambio en la base no tuvo efecto (el proceso no se reinició) sin que
+   * nadie tenga que entrar al servidor a mirar.
+   */
+  origen: 'base' | 'entorno' | 'ninguno';
+  /** ISO-8601, o null si nunca se cargaron por base. */
+  actualizadoEn: string | null;
 }
 
 export interface ResultadoPruebaDynamics {
@@ -487,9 +506,17 @@ export interface ResultadoPruebaDynamics {
  * vuelta) y `probarConexion` (una llamada de red real, no una lectura
  * local) son razones concretas para aislarlo, no una config más.
  */
+/**
+ * SOLO LECTURA: no hay `guardar`.
+ *
+ * Las credenciales de Dynamics se cargan en el servidor
+ * (`backend/scripts/cargar-config-dynamics.ts`), no desde el teléfono. El
+ * puerto no expone escritura porque la app no debe poder escribir las
+ * credenciales del ERP: lo que no está en la interfaz no se puede llamar
+ * por error ni desde una pantalla futura que no conozca esta decisión.
+ */
 export interface RepositorioConfigDynamics {
   obtener(): Promise<EstadoConfigDynamics>;
-  guardar(datos: DatosConfigDynamics): Promise<EstadoConfigDynamics>;
   /** Prueba las credenciales YA guardadas contra Azure AD, sin traer los 8.000 ítems del catálogo. */
   probarConexion(): Promise<ResultadoPruebaDynamics>;
 }

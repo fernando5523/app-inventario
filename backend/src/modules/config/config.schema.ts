@@ -1,14 +1,16 @@
 import { z } from 'zod';
 
 /**
- * Las 3 claves conocidas hoy (ver prisma/schema.prisma#Configuracion para
+ * Las claves conocidas hoy (ver prisma/schema.prisma#Configuracion para
  * la justificacion de por que es clave-valor). Agregar una clave nueva es
- * sumarla aca + al validador en config.service.ts -- nunca una migracion.
+ * sumarla aca + al validador en config.validadores.ts -- nunca una migracion.
  */
 export const CLAVES_CONFIGURACION = [
   'TAMANO_HOJA_DEFECTO',
   'CANTIDAD_CONTEOS_CICLO',
   'UMBRAL_MEDIA_UNIDAD_PAQUETE',
+  /** Que almacenes de Dynamics entran al inventario -- ver d365.almacenes-inventario.ts. */
+  'ALMACENES_INVENTARIO',
 ] as const;
 export type ClaveConfiguracion = (typeof CLAVES_CONFIGURACION)[number];
 

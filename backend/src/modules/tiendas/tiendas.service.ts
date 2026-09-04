@@ -5,6 +5,12 @@ import { registrarAuditoria } from '../../shared/auditoria';
 import { NoEncontrado, SolicitudInvalida } from '../../shared/errores';
 import type { ColaboradorAutenticado } from '../../shared/tipos';
 import { listarAlmacenes } from '../d365/d365-catalogo.service';
+import {
+  CLAVE_ALMACENES,
+  agregar as agregarAlmacen,
+  parsear as parsearAlmacenes,
+  serializar as serializarAlmacenes,
+} from '../d365/d365.almacenes-inventario';
 import { resolverAlmacen, type AlmacenResuelto } from './tiendas.almacen';
 import type { ActualizarTiendaInput, CrearTiendaInput } from './tiendas.schema';
 
@@ -63,7 +69,13 @@ function aDto(t: {
 async function verificarAlmacen(codigo: string): Promise<AlmacenResuelto> {
   let disponibles;
   try {
-    disponibles = await listarAlmacenes();
+    // `todos: true` A PROPOSITO: lo que se verifica aca es que el codigo
+    // EXISTA en Dynamics, no que este habilitado para inventario. Son dos
+    // cosas distintas -- una tienda que abre hoy tiene un almacen real que
+    // todavia no esta en la lista, y verificar contra la lista filtrada la
+    // rechazaria diciendo que su almacen "no existe", que es mentira.
+    // Habilitarlo es el paso siguiente (ver `habilitarAlmacen`).
+    disponibles = await listarAlmacenes({ todos: true });
   } catch (err) {
     throw new SolicitudInvalida(
       'No se pudo consultar la lista de almacenes de Dynamics para verificar el codigo. ' +
@@ -72,6 +84,45 @@ async function verificarAlmacen(codigo: string): Promise<AlmacenResuelto> {
     );
   }
   return resolverAlmacen(codigo, disponibles);
+}
+
+/**
+ * Habilita el almacen para inventario si todavia no lo estaba.
+ *
+ * POR QUE AUTOMATICO Y NO UNA PANTALLA APARTE: la lista de almacenes de
+ * inventario y la lista de tiendas dadas de alta son, en la practica, la
+ * misma cosa. Pedirle al Administrador que cargue la tienda y DESPUES vaya a
+ * otro lado a habilitar su almacen es pedirle que haga dos veces el mismo
+ * trabajo -- y el dia que se olvide del segundo paso, su tienda nueva no
+ * aparece en ningun selector y nadie sabe por que.
+ *
+ * NO devuelve error si falla: la tienda ya se creo, y una lista de
+ * habilitados desactualizada es un problema menor y reversible (se arregla
+ * desde /api/config) comparado con hacer fallar un alta que ya se persistio.
+ * Queda registrado en auditoria, que es donde se mira cuando algo no cuadra.
+ */
+async function habilitarAlmacen(actor: ColaboradorAutenticado, codigo: string): Promise<void> {
+  const fila = await prisma.configuracion.findUnique({ where: { clave: CLAVE_ALMACENES } });
+  if (fila === null) return; // sin configuracion no hay filtro: no hay nada que habilitar
+
+  const { lista, agregado } = agregarAlmacen(parsearAlmacenes(fila.valor), codigo);
+  if (!agregado) return;
+
+  const valor = serializarAlmacenes(lista);
+  await prisma.configuracion.update({ where: { clave: CLAVE_ALMACENES }, data: { valor } });
+
+  await registrarAuditoria({
+    actorId: actor.colaboradorId,
+    accion: 'configuracion.actualizada',
+    entidad: 'configuracion',
+    entidadId: fila.id,
+    detalle: {
+      clave: CLAVE_ALMACENES,
+      valorAnterior: fila.valor,
+      valorNuevo: valor,
+      motivo: `Alta automatica al asociar el almacen ${codigo} a una tienda.`,
+    },
+  });
 }
 
 /** Solo administrador entra a este modulo (ver tiendas.routes.ts): incluye inactivas a proposito. */
@@ -108,6 +159,12 @@ export async function crear(actor: ColaboradorAutenticado, input: CrearTiendaInp
     entidadId: creada.id,
     detalle: { nombre: creada.nombre, almacenId: creada.almacenId },
   });
+
+  // Despues de persistir, nunca antes: si el alta falla no hay que haber
+  // habilitado el almacen de una tienda que no existe.
+  if (creada.almacenId !== null && creada.almacenId !== '') {
+    await habilitarAlmacen(actor, creada.almacenId);
+  }
 
   return aDto(creada);
 }
@@ -150,6 +207,14 @@ export async function actualizar(
     entidadId: id,
     detalle: input,
   });
+
+  // Mismo criterio que en crear(): si se ASOCIO un almacen (no si se
+  // desasocio), queda habilitado para inventario. Desasociar no lo saca de
+  // la lista a proposito -- otra tienda puede estar usandolo, y sacarlo la
+  // dejaria invisible en el selector sin que nadie tocara esa tienda.
+  if (almacen !== null && almacen !== undefined) {
+    await habilitarAlmacen(actor, almacen.almacenId);
+  }
 
   return aDto(actualizada);
 }

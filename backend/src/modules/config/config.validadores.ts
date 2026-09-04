@@ -4,6 +4,7 @@
  * (ver config.validadores.test.ts).
  */
 
+import { parsear, serializar } from '../d365/d365.almacenes-inventario';
 import { SolicitudInvalida } from '../../shared/errores';
 import type { ClaveConfiguracion } from './config.schema';
 
@@ -30,6 +31,28 @@ export const VALIDADORES: Record<ClaveConfiguracion, (valorCrudo: string | numbe
       throw new SolicitudInvalida('CANTIDAD_CONTEOS_CICLO debe ser un entero mayor o igual a 1.');
     }
     return String(n);
+  },
+  /**
+   * Lista de codigos separados por coma. Se guarda NORMALIZADA (mayusculas,
+   * sin repetidos, ordenada) para que dos escrituras equivalentes no queden
+   * como valores distintos en la base y en el log de auditoria.
+   *
+   * Se acepta la lista VACIA: es como se apaga el filtro (ver `filtrar`, que
+   * con lista vacia devuelve todos los almacenes). Bloquear el vaciado
+   * dejaria sin salida a quien se equivoco y se quedo sin almacenes validos.
+   */
+  ALMACENES_INVENTARIO: (valorCrudo) => {
+    if (typeof valorCrudo !== 'string') {
+      throw new SolicitudInvalida('ALMACENES_INVENTARIO es una lista de codigos separados por coma.');
+    }
+    const codigos = parsear(valorCrudo);
+    const invalido = codigos.find((c) => !/^[A-Z0-9_]{2,20}$/.test(c));
+    if (invalido !== undefined) {
+      throw new SolicitudInvalida(
+        `"${invalido}" no parece un codigo de almacen de Dynamics (letras, numeros y guion bajo, 2 a 20 caracteres).`,
+      );
+    }
+    return serializar(codigos);
   },
   UMBRAL_MEDIA_UNIDAD_PAQUETE: (valorCrudo) => {
     const n = Number(valorCrudo);

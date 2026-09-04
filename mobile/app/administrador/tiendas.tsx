@@ -1,7 +1,7 @@
 import { useFocusEffect } from 'expo-router';
 import { MapPin, Store, TriangleAlert, Warehouse } from 'lucide-react-native';
 import { useCallback, useState, type JSX } from 'react';
-import { ActivityIndicator, Alert, StyleSheet, Text, TextInput, View } from 'react-native';
+import { ActivityIndicator, Alert, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 
 import { PantallaConTabs } from '../../components/navegacion/PantallaConTabs';
 import { Badge, BarraApp, Button, Card, EmptyState, Select, type SelectOpcion } from '../../components/ui';
@@ -36,7 +36,17 @@ export default function TiendasScreen(): JSX.Element {
   const [tiendas, setTiendas] = useState<Sucursal[]>([]);
   // Se carga una sola vez con las tiendas: son los almacenes del ERP, no
   // cambian mientras el Administrador está parado en esta pantalla.
+  //
+  // Por defecto vienen SOLO los habilitados para inventario (10 de 70). El
+  // resto son de Tránsito y Cuarentena, y sus nombres se parecen tanto a los
+  // de tienda —"ALMACÉN CUARENTENA MARKET LUZURIAGA" contra "ALMACÉN
+  // DISPONIBLE MARKET LUZURIAGA"— que elegir el equivocado haría contar
+  // mercadería bloqueada. Ese error no se avisa: se evita no ofreciéndolo.
   const [almacenes, setAlmacenes] = useState<Almacen[]>([]);
+  // La salida para la tienda que abre hoy, cuyo almacén todavía no está en
+  // la lista. Al asociarlo, el backend lo habilita solo.
+  const [mostrandoTodos, setMostrandoTodos] = useState(false);
+  const [trayendoTodos, setTrayendoTodos] = useState(false);
 
   const [formularioAbierto, setFormularioAbierto] = useState(false);
   const [editando, setEditando] = useState<Sucursal | null>(null);
@@ -51,6 +61,25 @@ export default function TiendasScreen(): JSX.Element {
   const [selectAlmacenAbierto, setSelectAlmacenAbierto] = useState(false);
   const [guardando, setGuardando] = useState(false);
 
+  /**
+   * Trae los 70 almacenes del ERP. Es una acción explícita y no el default
+   * porque el caso raro (tienda nueva) no puede volver peligroso el caso
+   * común (elegir entre las diez de siempre).
+   */
+  async function traerTodosLosAlmacenes(): Promise<void> {
+    setTrayendoTodos(true);
+    try {
+      const todos = await repositorioTiendas.listarAlmacenes({ todos: true });
+      setAlmacenes(todos);
+      setMostrandoTodos(true);
+      setSelectAlmacenAbierto(true);
+    } catch (error) {
+      Alert.alert('No se pudo traer la lista completa', error instanceof Error ? error.message : 'Intentá de nuevo.');
+    } finally {
+      setTrayendoTodos(false);
+    }
+  }
+
   const cargar = useCallback(async () => {
     const [lista, listaAlmacenes] = await Promise.all([
       repositorioTiendas.listar(),
@@ -62,6 +91,7 @@ export default function TiendasScreen(): JSX.Element {
     ]);
     setTiendas(lista);
     setAlmacenes(listaAlmacenes);
+    setMostrandoTodos(false);
     setCargando(false);
   }, []);
 
@@ -223,6 +253,19 @@ export default function TiendasScreen(): JSX.Element {
               abierto={selectAlmacenAbierto}
               onCambiarAbierto={setSelectAlmacenAbierto}
             />
+            {mostrandoTodos ? (
+              <Text style={styles.ayudaAlmacen}>
+                Mostrando los {almacenes.length} almacenes del ERP. Los de Tránsito y Cuarentena no se inventarían: elegí uno solo si esta
+                tienda es nueva. Al guardarla queda habilitado para las próximas.
+              </Text>
+            ) : (
+              <Pressable onPress={traerTodosLosAlmacenes} disabled={trayendoTodos} accessibilityRole="button">
+                <Text style={styles.enlaceAlmacen}>
+                  {trayendoTodos ? 'Trayendo…' : '¿Tienda nueva? Ver todos los almacenes del ERP'}
+                </Text>
+              </Pressable>
+            )}
+
             {almacenSeleccionado ? (
               // Un almacén mal asignado es peor que ninguno (decisión del
               // cliente, reflejada del lado del backend): tiene que poder
@@ -308,6 +351,8 @@ const styles = StyleSheet.create({
   seccion: { flexDirection: 'row', alignItems: 'baseline', justifyContent: 'space-between', gap: 10 },
   seccionTitulo: { fontSize: 11, letterSpacing: 1.3, textTransform: 'uppercase', color: colors.gris, fontFamily: fonts.semibold },
   seccionTotal: { fontSize: 11.5, color: colors.grisClaro, fontFamily: fonts.regular },
+  enlaceAlmacen: { fontSize: 12.5, color: colors.rojo, fontFamily: fonts.semibold },
+  ayudaAlmacen: { fontSize: 12, color: colors.gris, fontFamily: fonts.regular, lineHeight: 17 },
   campo: { gap: 6 },
   label: { fontSize: 13.5, color: colors.tinta, fontFamily: fonts.semibold },
   inputFila: {

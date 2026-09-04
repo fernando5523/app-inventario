@@ -25,6 +25,7 @@ import type {
 
 import { auditoriaMemoria } from './adaptadores/auditoria-memoria';
 import { catalogoMemoria } from './adaptadores/catalogo-memoria';
+import { configDynamicsApi } from './adaptadores/config-dynamics-api';
 import { configDynamicsMemoria } from './adaptadores/config-dynamics-memoria';
 import { configMemoria } from './adaptadores/config-memoria';
 import { hojasMemoria } from './adaptadores/hojas-memoria';
@@ -138,7 +139,6 @@ function elegir<T>(puerto: PuertoConectable, memoria: T, api: T): T {
  * `auditoria`). El nombre dice lo que son: cuando exista el endpoint, se
  * reemplaza esta linea por el adaptador HTTP de verdad.
  */
-const configDynamicsApiPendiente = configDynamicsMemoria;
 
 // ---------------------------------------------------------------------------
 // Los puertos
@@ -204,24 +204,22 @@ export const repositorioHojas: RepositorioHojas = elegirHttp('hojas', hojasLocal
 export const repositorioCatalogo: RepositorioCatalogo = elegirHttp('catalogo', catalogoMemoria, catalogoApi);
 
 /**
- * ── INVENTARIO: por el selector, pero resuelve a memoria ──
+ * ── INVENTARIO: CONECTADO ──
  *
- * Estuvo clavado y no debio estarlo: la razon de negocio no cambia que TIENE
- * que poder cambiarse por configuracion (ver la nota de `elegir` arriba).
+ * Los 4 metodos del puerto existen en el backend y estan probados:
+ *   traerSnapshot → POST /api/d365/snapshot                    ✅
+ *   crearHojas    → POST /api/inventarios/:id/hojas            ✅
+ *   asignarHojas  → POST /api/inventarios/:id/hojas/asignar    ✅
+ *   activo        → GET  /api/sucursales/:id/inventarios/activo ✅
  *
- * De los 4 metodos del puerto, el backend hoy tiene UNO:
- *   traerSnapshot → POST /api/d365/snapshot   ✅ probado contra Postgres
- *   crearHojas    → 404, `/api/inventarios` no esta montado
- *   asignarHojas  → 404
- *   activo        → 404
+ * Hasta hoy los tres ultimos daban 404 y el wizard del Coordinador corria
+ * contra memoria: se creaban hojas, se repartian, se cerraba la app y no
+ * quedaba nada. Ese era el bloqueante para probar el flujo con datos reales.
  *
- * Enchufarlo haria que el paso 1 del Coordinador cree un inventario REAL y
- * que los pasos 2 y 3 fallen contra el: quedaria un inventario a medio armar
- * en la base y un wizard que arranca y no termina. Por eso el default sigue
- * siendo memoria — pero ahora se puede forzar con
- * `EXPO_PUBLIC_PUERTOS_HTTP=inventario` para probar el snapshot solo.
+ * Sigue pasando por `elegir` y no por un import directo: `TODO_A_MEMORIA`
+ * tiene que poder devolverlo al mock para desarrollar sin backend.
  */
-export const repositorioInventario: RepositorioInventario = elegirHttp('inventario', inventarioMemoria, inventarioApi);
+export const repositorioInventario: RepositorioInventario = elegir('inventario', inventarioMemoria, inventarioApi);
 
 /**
  * ── AUDITORÍA: CONECTADA ──
@@ -263,29 +261,28 @@ export const repositorioLiquidacion: RepositorioLiquidacion = elegir('liquidacio
 export const repositorioLacrado: RepositorioLacrado = elegir('lacrado', lacradoMemoria, lacradoApi);
 
 /**
- * ── CREDENCIALES DE DYNAMICS: en memoria, y por ahora está bien ──
+ * ── CREDENCIALES DE DYNAMICS: HTTP, y de SOLO LECTURA ──
  *
- * No hay `config-dynamics-api.ts` todavía: el backend guarda las
- * credenciales de Dynamics en su propio `.env`, no las expone por HTTP (y
- * un endpoint que devuelva un client secret es exactamente lo que esta
- * pantalla promete que nunca va a existir).
+ * `/api/config-dynamics` existe y este adaptador lo usa: `GET /` para el
+ * estado y `POST /probar` para validar contra Azure AD sin bajar los 8.000
+ * ítems del catálogo.
  *
- * Igual sale de acá y no de un import directo en la pantalla: el día que
- * haya endpoint, se cambia esta línea. Una pantalla que importa un
- * adaptador concreto es una pantalla que hay que editar para cambiar de
- * implementación, que es justo lo que este archivo existe para evitar.
- */
-/**
- * ── CONFIG-DYNAMICS: sin endpoint ──
+ * Lo que la app NO puede hacer es ESCRIBIRLAS. El backend expone un `PUT`,
+ * pero el puerto no lo declara y el adaptador no lo llama: las credenciales
+ * se cargan en el servidor con `npm run config:dynamics` desde backend/.
+ * Tipear un `client_secret` de Azure —40+ caracteres sin sentido— en el
+ * teclado de un teléfono produce un error que después se diagnostica como
+ * "la integración no anda", porque Azure responde 401 sin decir cuál de los
+ * cuatro campos está mal.
  *
- * `/api/d365` expone solo `GET /estado` (`{configurado}`) y `POST /snapshot`.
- * El puerto pide `obtener`, `guardar` y `probarConexion`: no hay donde
- * GUARDAR credenciales ni donde probarlas sin bajar los 8.000 items.
+ * El secreto nunca viaja de vuelta: el backend no lo devuelve en ninguna
+ * respuesta, ni siquiera enmascarado. Lo único que llega es el booleano
+ * `secretoConfigurado`.
  */
 export const repositorioConfigDynamics: RepositorioConfigDynamics = elegir(
   'config-dynamics',
   configDynamicsMemoria,
-  configDynamicsApiPendiente,
+  configDynamicsApi,
 );
 
 /**
