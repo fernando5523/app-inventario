@@ -2,7 +2,7 @@
 import { PrismaClient } from '@prisma/client';
 
 const prisma = new PrismaClient();
-const IDS = [8004, 8005];
+const IDS = [8004, 8005, 8006];
 
 async function main(): Promise<void> {
   const hojas = await prisma.hojaConteo.findMany({ where: { inventarioId: { in: IDS } }, select: { id: true } });
@@ -10,6 +10,7 @@ async function main(): Promise<void> {
 
   // El orden importa: los hijos antes que los padres (las FK no son en cascada
   // salvo donde el schema lo dice).
+  await prisma.aprobacionCierre.deleteMany({ where: { inventarioId: { in: IDS } } });
   await prisma.conteo.deleteMany({ where: { hojaId: { in: idsHoja } } });
   await prisma.producto.deleteMany({ where: { hojaId: { in: idsHoja } } });
   await prisma.hojaConteo.deleteMany({ where: { inventarioId: { in: IDS } } });

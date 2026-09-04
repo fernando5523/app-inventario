@@ -698,12 +698,50 @@ npm run prisma:seed-auditoria     # matriz completa + un inventario en curso
 npx tsx prisma/limpiar-auditoria-demo.ts   # borra solo los ids 8004-8005
 ```
 
-| Inventario | Estado | Para qué |
-|---|---|---|
-| **8004** · Luzuriaga · 2026-05 | `conteo_cerrado` | La matriz completa: 15 ítems, 8 hojas (una por zona en la ronda 1), embudo 15 → 7 → 5. Están los cuatro casos: ítems que cuadran en la 1ra pasada, dos que se corrigen en la 2da, faltantes confirmados en la 3ra, un sobrante, dos cervezas de empresa con faltante, una cerveza de empresa que cuadra, y uno que nadie contó. |
-| **8005** · Carhuaz · mes en curso | `en_curso` | Existe para ver la otra mitad de la regla: el coordinador de Carhuaz **no** puede abrir su matriz, el auditor y el administrador sí. |
+| Inventario | Tipo | Estado | Para qué |
+|---|---|---|---|
+| **8004** · Luzuriaga · 2026-05 | `mensual` | `conteo_cerrado` | 17 ítems — **solo responsabilidad del empleado**, las cervezas ni aparecen en su catálogo. Embudo 17 → 7 → 5. |
+| **8006** · Luzuriaga · **2026-05** | `anual` | `lacrado` | 21 ítems — **todo**, empresa incluida. Mismo período que el 8004: conviven porque `tipo` entra en la restricción de período. Con sus dos firmas. |
+| **8005** · Carhuaz · mes en curso | `mensual` | `en_curso` | Para ver la otra mitad de la regla del coordinador: **no** puede abrir la matriz de un inventario en curso. |
 
-Los conteos se cargan como los carga el operario ("2 cajas + 3 sueltas"), no como un total plano, así el seed ejercita el cálculo real de `totalUnidades` en vez de esquivarlo.
+**El contraste mensual/anual es el punto**, y se ve en el resumen de cada uno:
+
+```
+MENSUAL (8004)  17 items · 14 auditables · 0 de empresa
+                faltante S/355.50 · descontable S/355.50   <- todo va a nomina
+
+ANUAL   (8006)  21 items · 18 auditables · 3 de empresa
+                faltante S/847.20 · descontable S/355.50   <- S/491.70 los absorbe la empresa
+```
+
+#### Los datos tienen la forma del negocio real
+
+**Empaques**: varios por producto, con los símbolos tal como los carga el ERP. El factor **no se hardcodea**: sale de `factorDesdeSimbolo()`, la misma función del catálogo real — si esa regla se rompe, el seed se rompe con ella.
+
+```
+Emp.12 = 12   Emp.6 = 6   Emp.24 = 24   Emp.20 = 20
+Unidad = 1    Saco = 1    Ltr = 1
+```
+
+14 de los 17 ítems del mensual tienen **más de un empaque** (`Emp.24 + Emp.6 + Unidad`), y 3 tienen todos sus empaques en factor 1 (el arroz se cuenta por saco, el yogurt por litro).
+
+**Stock del ERP en los tres estados**, porque los tres hacen falta para probar que la auditoría los distingue:
+
+| Estado | Ítems | Qué significa |
+|---|---|---|
+| `> 0` | 17 | El ERP dice cuánto debería haber |
+| `0` explícito | 2 | El ERP dice que **no debería haber ninguno** |
+| `null` | 2 | El ERP **no trajo el dato**: no se puede auditar |
+
+Los dos casos de stock cero están elegidos a propósito: uno se contó en 0 y **cuadra** (panetón fuera de temporada), y el otro aparece con 8 unidades — un sobrante puro, mercadería que entró sin registrarse. Ese segundo caso desaparecería de la matriz si un `0` se tratara como "sin dato".
+
+Hay además un ítem **con diferencia pero sin precio**: la diferencia en unidades vale, el monto no (`sinPrecio: 1` en el resumen).
+
+**Los conteos se cargan como los carga el operario** — "2 cajas + 1 pack + 3 sueltas", repartido del empaque más grande al más chico — no como un total plano. Así el seed ejercita el camino real (`LineaConteo` por empaque + `totalUnidades`) en vez de esquivarlo guardando un número ya sumado.
+
+#### Idempotente
+
+Correr cualquiera de los seeds dos veces no duplica ni rompe nada: las sucursales y colaboradores van por `upsert`, y cada inventario de demo se salta si ya existe. Verificado con una consulta de duplicados sobre `catalogo_items` y `empaques_catalogo` después de la segunda corrida: ninguno.
 
 ### Verificación contra la API
 
