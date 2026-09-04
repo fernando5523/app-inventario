@@ -53,13 +53,6 @@ export const fonts = {
 } as const;
 
 export const shadow = {
-  card: {
-    shadowColor: colors.tinta,
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.05,
-    shadowRadius: 3,
-    elevation: 2,
-  },
   modal: {
     shadowColor: colors.tinta,
     shadowOffset: { width: 0, height: 14 },
