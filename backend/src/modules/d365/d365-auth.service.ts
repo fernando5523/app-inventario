@@ -6,13 +6,41 @@
  *
  * `esVigente` esta separada de `getTokenValido` a proposito -- es logica
  * pura (una resta de fechas), se testea sin red (ver d365-auth.test.ts).
+ *
+ * ---------------------------------------------------------------------------
+ * DE DONDE SALEN LAS CREDENCIALES
+ * ---------------------------------------------------------------------------
+ * De `credencialesEfectivas()`, NO de `d365Config` directo: la base gana
+ * sobre el `.env` (ver el comentario de esa funcion). Este archivo leia el
+ * `.env` sin pasar por ahi, y esa era una fuga silenciosa -- las credenciales
+ * cargadas en la base se veian en la pantalla de Configuracion y la prueba de
+ * conexion decia "origen: base", pero el traido real del catalogo seguia
+ * usando el archivo. Todo parecia andar y nada de lo cargado tenia efecto.
+ *
+ * Por eso TODO el modulo d365 pide sus credenciales por aca: la baseUrl de
+ * OData (d365-entity) y el dataAreaId (d365-catalogo) tambien. Un solo lugar
+ * que sepa de donde salen, o vuelve a pasar lo mismo.
  */
 
-import { d365Config } from '../../config/d365.config';
+import {
+  credencialesEfectivas,
+  type CredencialesDynamics,
+} from '../config-dynamics/config-dynamics.service';
 import { ErrorHttp } from '../../shared/errores';
 import type { D365Token, D365TokenResponse } from './d365.types';
 
 const MARGEN_RENOVACION_MS = 5 * 60 * 1000;
+
+/**
+ * Cuanto vive el cache de credenciales.
+ *
+ * No se atan al ciclo del token (que dura ~1 hora) porque entonces cambiar
+ * las credenciales en la base no tendria efecto hasta que venciera el token,
+ * y quien las cambia no tiene forma de saber cuanto falta para eso. Un minuto
+ * es corto para una persona esperando y largo para la base: en una bajada de
+ * catalogo de 16 paginas, se consulta una vez, no dieciseis.
+ */
+const TTL_CREDENCIALES_MS = 60 * 1000;
 
 /** Vigente si expira en mas de 5 minutos -- nunca se usa un token al filo del vencimiento. */
 export function esVigente(token: D365Token, ahora: Date = new Date()): boolean {
@@ -21,20 +49,50 @@ export function esVigente(token: D365Token, ahora: Date = new Date()): boolean {
 
 export class D365AuthService {
   private tokenCache: D365Token | null = null;
+  private credCache: { valor: CredencialesDynamics; vencenEn: number } | null = null;
+
+  /**
+   * Las credenciales que el sistema esta usando DE VERDAD: base si hay,
+   * `.env` si no. Cacheadas por TTL_CREDENCIALES_MS para no consultar la
+   * base en cada request de una bajada de catalogo.
+   */
+  async credenciales(): Promise<CredencialesDynamics> {
+    const ahora = Date.now();
+    if (this.credCache !== null && this.credCache.vencenEn > ahora) return this.credCache.valor;
+
+    const valor = await credencialesEfectivas();
+    this.credCache = { valor, vencenEn: ahora + TTL_CREDENCIALES_MS };
+    return valor;
+  }
+
+  /** Base de las APIs OData (sin barra final). La usa d365-entity. */
+  async getODataBaseUrl(): Promise<string> {
+    const cred = await this.credenciales();
+    return `${cred.baseUrl}/data`;
+  }
+
+  /** "trv" para Market Trujillo. La usa d365-catalogo para filtrar por empresa. */
+  async getDataAreaId(): Promise<string> {
+    return (await this.credenciales()).dataAreaId;
+  }
 
   async generarToken(): Promise<D365Token> {
-    if (!d365Config.isConfigured()) {
-      throw new ErrorHttp(400, 'Dynamics no configurado. Faltan D365_TENANT_ID, D365_CLIENT_ID, D365_CLIENT_SECRET o D365_BASE_URL.');
+    const cred = await this.credenciales();
+    if (cred.origen === 'ninguno') {
+      throw new ErrorHttp(
+        400,
+        'Dynamics no configurado. Cargalas en el servidor con `npm run config:dynamics`, o poné D365_TENANT_ID, D365_CLIENT_ID, D365_CLIENT_SECRET y D365_BASE_URL en el .env.',
+      );
     }
 
     const body = new URLSearchParams({
-      client_id: d365Config.clientId,
-      client_secret: d365Config.clientSecret,
+      client_id: cred.clientId,
+      client_secret: cred.clientSecret,
       grant_type: 'client_credentials',
-      resource: d365Config.baseUrl,
+      resource: cred.baseUrl,
     });
 
-    const respuesta = await fetch(d365Config.getTokenEndpoint(), {
+    const respuesta = await fetch(`https://login.microsoftonline.com/${cred.tenantId}/oauth2/token`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body: body.toString(),
@@ -64,14 +122,21 @@ export class D365AuthService {
     return `${token.tokenType} ${token.accessToken}`;
   }
 
-  /** Fuerza pedir un token nuevo -- usado cuando D365 responde 401 con el actual. */
+  /**
+   * Fuerza pedir un token nuevo -- usado cuando D365 responde 401 con el
+   * actual. Tambien tira el cache de credenciales: si D365 rechaza el token,
+   * una de las causas posibles es que las credenciales cambiaron, y
+   * reintentar con las mismas cacheadas seria pedir el mismo 401 de nuevo.
+   */
   async renovarToken(): Promise<string> {
     this.tokenCache = null;
+    this.credCache = null;
     return this.getTokenValido();
   }
 
-  isConfigured(): boolean {
-    return d365Config.isConfigured();
+  /** Async ahora: saberlo puede requerir leer la base. */
+  async isConfigured(): Promise<boolean> {
+    return (await this.credenciales()).origen !== 'ninguno';
   }
 }
 

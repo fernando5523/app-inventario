@@ -1,17 +1,15 @@
 /**
- * Adaptador en memoria de RepositorioConfigDynamics.
+ * Adaptador en memoria de RepositorioConfigDynamics. Solo para desarrollo
+ * sin backend (ver TODO_A_MEMORIA en contenedor.ts).
  *
- * El `clientSecret` vive SOLO acá adentro (variable de módulo, nunca en
- * el objeto que devuelve `obtener()`) — ni siquiera este archivo lo
- * expone hacia afuera salvo como el booleano `secretoConfigurado`.
+ * Ya no puede ESCRIBIR credenciales: el puerto perdió `guardar` cuando la
+ * carga pasó al servidor (`backend/scripts/cargar-config-dynamics.ts`). Lo
+ * que queda es el estado inicial vacío, que es exactamente lo que se ve sin
+ * backend — y es honesto que se vea así en vez de simular credenciales que
+ * no existen.
  */
 
-import type {
-  DatosConfigDynamics,
-  EstadoConfigDynamics,
-  RepositorioConfigDynamics,
-  ResultadoPruebaDynamics,
-} from '../puertos/repositorios';
+import type { EstadoConfigDynamics, RepositorioConfigDynamics, ResultadoPruebaDynamics } from '../puertos/repositorios';
 import { simularLatencia } from './_compartido';
 
 interface EstadoInterno {
@@ -25,31 +23,20 @@ let estado: EstadoInterno | null = null;
 
 function aEstadoPublico(): EstadoConfigDynamics {
   return estado
-    ? { tenantId: estado.tenantId, clientId: estado.clientId, urlBase: estado.urlBase, secretoConfigurado: true }
-    : { tenantId: '', clientId: '', urlBase: '', secretoConfigurado: false };
+    ? {
+        tenantId: estado.tenantId,
+        clientId: estado.clientId,
+        urlBase: estado.urlBase,
+        secretoConfigurado: true,
+        origen: 'base',
+        actualizadoEn: null,
+      }
+    : { tenantId: '', clientId: '', urlBase: '', secretoConfigurado: false, origen: 'ninguno', actualizadoEn: null };
 }
 
 export const configDynamicsMemoria: RepositorioConfigDynamics = {
   async obtener() {
     await simularLatencia();
-    return aEstadoPublico();
-  },
-
-  async guardar(datos: DatosConfigDynamics) {
-    await simularLatencia();
-    const tenantId = datos.tenantId.trim();
-    const clientId = datos.clientId.trim();
-    const urlBase = datos.urlBase.trim();
-    if (!tenantId || !clientId || !urlBase) {
-      throw new Error('Tenant, Client ID y URL base son obligatorios.');
-    }
-    // Sin clientSecret nuevo: se conserva el ya guardado (permite corregir
-    // tenant/clientId/urlBase sin re-tipear el secreto). Si nunca hubo uno
-    // guardado y tampoco viene uno nuevo, no hay nada que guardar.
-    const clientSecret = datos.clientSecret?.trim() || estado?.clientSecret;
-    if (!clientSecret) throw new Error('Falta el client secret.');
-
-    estado = { tenantId, clientId, urlBase, clientSecret };
     return aEstadoPublico();
   },
 

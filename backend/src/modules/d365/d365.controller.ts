@@ -6,7 +6,7 @@ import * as catalogoService from './d365-catalogo.service';
 import type { CrearSnapshotInput } from './d365.schema';
 
 export const estado = asyncHandler(async (_req: RequestAutenticado, res: Response) => {
-  res.json({ configurado: d365AuthService.isConfigured() });
+  res.json({ configurado: await d365AuthService.isConfigured() });
 });
 
 export const snapshot = asyncHandler(async (req: RequestAutenticado, res: Response) => {
@@ -18,6 +18,9 @@ export const snapshot = asyncHandler(async (req: RequestAutenticado, res: Respon
  * Lista de almacenes de Dynamics. Solo Administrador: es dato de
  * configuracion del sistema, igual que /api/tiendas.
  */
-export const almacenes = asyncHandler(async (_req: RequestAutenticado, res: Response) => {
-  res.json(await catalogoService.listarAlmacenes());
+export const almacenes = asyncHandler(async (req: RequestAutenticado, res: Response) => {
+  // `?todos=1` para el alta de una tienda cuyo almacen todavia no esta
+  // habilitado. Por defecto SIEMPRE filtrado: el caso raro se pide explicito.
+  const todos = req.query.todos === '1' || req.query.todos === 'true';
+  res.json(await catalogoService.listarAlmacenes({ todos }));
 });

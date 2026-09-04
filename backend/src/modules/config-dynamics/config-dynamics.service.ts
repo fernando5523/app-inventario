@@ -61,14 +61,17 @@ export interface EstadoConfigDynamicsDto {
  * De uso INTERNO del servidor: devuelve el secreto en claro para poder
  * pedir el token. Ningun controller la llama.
  */
-export async function credencialesEfectivas(): Promise<{
+export interface CredencialesDynamics {
   tenantId: string;
   clientId: string;
   clientSecret: string;
   baseUrl: string;
   dataAreaId: string;
+  /** `ninguno` = no hay con que autenticar, ni en base ni en el entorno. */
   origen: 'base' | 'entorno' | 'ninguno';
-}> {
+}
+
+export async function credencialesEfectivas(): Promise<CredencialesDynamics> {
   const fila = await prisma.configDynamics.findUnique({ where: { id: ID_FILA } });
 
   if (fila !== null && fila.clientSecretCifrado !== null) {

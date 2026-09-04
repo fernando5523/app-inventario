@@ -5,7 +5,6 @@
  * app/auditor/lacrado.tsx y backend/README.md).
  */
 
-import { d365Config } from '../../config/d365.config';
 import { ErrorHttp } from '../../shared/errores';
 import { d365AuthService } from './d365-auth.service';
 import type { ODataQueryOptions, ODataResponse } from './d365.types';
@@ -26,8 +25,8 @@ export function calcularPaginas(total: number, tamanoLote: number): Array<{ skip
   return paginas;
 }
 
-function construirUrl(entidad: string, options?: ODataQueryOptions): string {
-  let url = `${d365Config.getODataBaseUrl()}/${entidad}`;
+function construirUrl(baseUrl: string, entidad: string, options?: ODataQueryOptions): string {
+  let url = `${baseUrl}/${entidad}`;
   const params = new URLSearchParams();
   if (options?.$filter) params.append('$filter', options.$filter);
   if (options?.$select) params.append('$select', options.$select);
@@ -63,8 +62,8 @@ export class D365EntityService {
   /** Cuenta total de registros -- primero para saber cuantas paginas hacen falta. */
   async contar(entidad: string, filtro?: string): Promise<number> {
     const url = filtro
-      ? `${d365Config.getODataBaseUrl()}/${entidad}/$count?$filter=${encodeURIComponent(filtro)}`
-      : `${d365Config.getODataBaseUrl()}/${entidad}/$count`;
+      ? `${await d365AuthService.getODataBaseUrl()}/${entidad}/$count?$filter=${encodeURIComponent(filtro)}`
+      : `${await d365AuthService.getODataBaseUrl()}/${entidad}/$count`;
     const token = await d365AuthService.getTokenValido();
     const respuesta = await fetch(url, { method: 'GET', headers: { Authorization: token } });
     if (!respuesta.ok) {
@@ -89,9 +88,12 @@ export class D365EntityService {
     if (total === 0) return [];
 
     const paginas = calcularPaginas(total, tamanoLote);
+    // Una sola vez para todas las paginas: la baseUrl no cambia en el medio
+    // de una bajada, y el cache del auth service la sirve igual.
+    const baseUrl = await d365AuthService.getODataBaseUrl();
     const resultado: T[] = [];
     for (const pagina of paginas) {
-      const url = construirUrl(entidad, { ...options, $skip: pagina.skip, $top: pagina.top });
+      const url = construirUrl(baseUrl, entidad, { ...options, $skip: pagina.skip, $top: pagina.top });
       const respuesta = await this.get<ODataResponse<T>>(url);
       resultado.push(...respuesta.value);
     }

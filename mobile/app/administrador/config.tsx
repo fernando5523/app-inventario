@@ -1,18 +1,25 @@
 import { useFocusEffect } from 'expo-router';
-import { Cloud, KeyRound, Link2, Minus, Plus, Settings, ShieldCheck } from 'lucide-react-native';
+import { Minus, Plus, Settings, ShieldCheck } from 'lucide-react-native';
 import { useCallback, useState, type JSX } from 'react';
 import { ActivityIndicator, Alert, Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { PantallaConTabs } from '../../components/navegacion/PantallaConTabs';
-import { Badge, BarraApp, Button, CampoTexto, Card, formatoPct } from '../../components/ui';
-// Del contenedor: los parámetros del ciclo salen de Postgres; las
-// credenciales de Dynamics siguen en memoria porque no hay endpoint (y un
-// endpoint que devuelva un client secret es lo que esta pantalla promete
-// que nunca va a existir). Cuál es cuál lo decide contenedor.ts, no acá.
+import { Badge, BarraApp, Button, Card, formatoPct } from '../../components/ui';
+// Del contenedor: los parámetros del ciclo salen de Postgres y se editan
+// acá. Las credenciales de Dynamics NO: se cargan en el servidor con
+// `npm run config:dynamics` y esta pantalla solo las muestra. Ver el
+// comentario de la tarjeta "Integración con Dynamics" más abajo.
 import { repositorioConfig, repositorioConfigDynamics } from '../../lib/contenedor';
 import { TAMANOS_HOJA, type ConfigSistema, type TamanoHoja } from '../../lib/dominio/tipos';
 import type { EstadoConfigDynamics } from '../../lib/puertos/repositorios';
 import { colors, fonts, fontSize, radius } from '../../lib/theme';
+
+/** De dónde salen las credenciales que el backend está usando de verdad. */
+const ORIGEN: Record<'base' | 'entorno' | 'ninguno', string> = {
+  base: 'Base de datos',
+  entorno: 'Variables del servidor (.env)',
+  ninguno: 'Sin configurar',
+};
 
 const PASO_UMBRAL = 0.05;
 const MIN_UMBRAL = 0.05;
@@ -26,25 +33,12 @@ export default function ConfiguracionScreen(): JSX.Element {
   const [guardando, setGuardando] = useState(false);
 
   const [dynamics, setDynamics] = useState<EstadoConfigDynamics | null>(null);
-  const [tenantId, setTenantId] = useState('');
-  const [clientId, setClientId] = useState('');
-  const [urlBase, setUrlBase] = useState('');
-  const [reemplazandoSecreto, setReemplazandoSecreto] = useState(false);
-  const [nuevoSecreto, setNuevoSecreto] = useState('');
-  const [guardandoDynamics, setGuardandoDynamics] = useState(false);
   const [probando, setProbando] = useState(false);
 
   const cargar = useCallback(async () => {
     const [actual, dynamicsActual] = await Promise.all([repositorioConfig.obtener(), repositorioConfigDynamics.obtener()]);
     setConfig(actual);
     setDynamics(dynamicsActual);
-    setTenantId(dynamicsActual.tenantId);
-    setClientId(dynamicsActual.clientId);
-    setUrlBase(dynamicsActual.urlBase);
-    // Sin nada guardado todavía, no hay "configurado" que mostrar: se
-    // arranca directo en modo edición del secreto.
-    setReemplazandoSecreto(!dynamicsActual.secretoConfigurado);
-    setNuevoSecreto('');
     setCargando(false);
   }, []);
 
@@ -65,29 +59,6 @@ export default function ConfiguracionScreen(): JSX.Element {
       Alert.alert('No se pudo guardar', error instanceof Error ? error.message : 'Intentá de nuevo.');
     } finally {
       setGuardando(false);
-    }
-  }
-
-  const puedeGuardarDynamics =
-    tenantId.trim().length > 0 && clientId.trim().length > 0 && urlBase.trim().length > 0 && (!reemplazandoSecreto || nuevoSecreto.length > 0);
-
-  async function guardarDynamics(): Promise<void> {
-    setGuardandoDynamics(true);
-    try {
-      const actualizado = await repositorioConfigDynamics.guardar({
-        tenantId,
-        clientId,
-        urlBase,
-        clientSecret: reemplazandoSecreto ? nuevoSecreto : undefined,
-      });
-      setDynamics(actualizado);
-      setReemplazandoSecreto(false);
-      setNuevoSecreto('');
-      Alert.alert('Credenciales guardadas', 'El Coordinador ya puede traer el catálogo de esta tienda.');
-    } catch (error) {
-      Alert.alert('No se pudo guardar', error instanceof Error ? error.message : 'Intentá de nuevo.');
-    } finally {
-      setGuardandoDynamics(false);
     }
   }
 
@@ -188,70 +159,64 @@ export default function ConfiguracionScreen(): JSX.Element {
 
           <Button label="Guardar cambios" icon={Settings} onPress={guardar} loading={guardando} />
 
+          {/* SOLO LECTURA — a propósito.
+
+              Las credenciales de Azure AD se cargan en el SERVIDOR, con
+              `npm run config:dynamics` desde backend/. No es una restricción
+              caprichosa: un `client_secret` de Azure son 40+ caracteres sin
+              sentido, y tipearlos en el teclado de un teléfono produce un
+              error que después se diagnostica como "la integración no anda"
+              — Azure responde 401 sin decir cuál de los cuatro campos está
+              mal.
+
+              Lo que SÍ queda acá es el diagnóstico: de dónde salen las
+              credenciales que se están usando y un botón para probarlas
+              contra Azure. Sin eso, el Administrador no tendría forma de
+              saber por qué el Coordinador no puede traer el catálogo. */}
           <Card style={styles.tarjeta}>
             <View style={styles.tituloFila}>
               <Text style={styles.titulo}>Integración con Dynamics</Text>
-              {dynamics?.secretoConfigurado ? <Badge label="Configurado" variant="ok" /> : <Badge label="Sin configurar" variant="espera" /> }
+              {dynamics?.secretoConfigurado ? <Badge label="Configurado" variant="ok" /> : <Badge label="Sin configurar" variant="espera" />}
             </View>
             <Text style={styles.texto}>
-              Credenciales de Azure AD para que el paso 1 del Coordinador ("Catálogo de Dynamics") traiga los ítems reales. Solo lectura del
-              catálogo — nunca escribe ni ajusta nada en Dynamics.
+              Se configura en el servidor, no desde el teléfono. Acá se ve qué credenciales está usando el sistema para que el paso 1 del
+              Coordinador ("Catálogo de Dynamics") traiga los ítems reales. Solo lectura del catálogo — nunca escribe en Dynamics.
             </Text>
 
-            <CampoTexto label="Tenant ID" valor={tenantId} onCambiar={setTenantId} icon={Cloud} placeholder="00000000-0000-0000-0000-000000000000" autoCapitalize="none" />
-            <CampoTexto label="Client ID" valor={clientId} onCambiar={setClientId} icon={KeyRound} placeholder="00000000-0000-0000-0000-000000000000" autoCapitalize="none" />
-            <CampoTexto label="URL base" valor={urlBase} onCambiar={setUrlBase} icon={Link2} placeholder="https://org.crm.dynamics.com" autoCapitalize="none" />
-
-            {reemplazandoSecreto ? (
-              <View style={styles.campo}>
-                <CampoTexto
-                  label="Client secret"
-                  valor={nuevoSecreto}
-                  onCambiar={setNuevoSecreto}
-                  icon={ShieldCheck}
-                  placeholder="Pegá el secreto nuevo"
-                  autoCapitalize="none"
-                  secureTextEntry
-                />
-                {dynamics?.secretoConfigurado ? (
-                  <Pressable
-                    onPress={() => {
-                      setReemplazandoSecreto(false);
-                      setNuevoSecreto('');
-                    }}
-                  >
-                    <Text style={styles.cancelarSecreto}>Cancelar — dejar el secreto ya guardado</Text>
-                  </Pressable>
-                ) : null}
+            <View style={styles.datos}>
+              <View style={styles.datoFila}>
+                <Text style={styles.datoEtiqueta}>Origen</Text>
+                <Text style={styles.datoValor}>{ORIGEN[dynamics?.origen ?? 'ninguno']}</Text>
               </View>
-            ) : (
-              <View style={styles.campo}>
-                <Text style={styles.label}>Client secret</Text>
-                <View style={styles.secretoFila}>
-                  <View style={styles.secretoConfiguradoFila}>
-                    <ShieldCheck size={18} color={colors.ok} />
-                    {/* NUNCA el valor real — un secreto que la pantalla puede
-                        mostrar de vuelta es un secreto que alguien puede
-                        fotografiar. Esto es lo único que se lee: si HAY uno. */}
-                    <Text style={styles.secretoConfiguradoTexto}>Configurado — no se muestra por seguridad</Text>
-                  </View>
-                  <Button label="Reemplazar" variant="outline" size="sm" onPress={() => setReemplazandoSecreto(true)} />
-                </View>
+              <View style={styles.datoFila}>
+                <Text style={styles.datoEtiqueta}>Tenant</Text>
+                <Text style={styles.datoValor} numberOfLines={1}>{dynamics?.tenantId || '—'}</Text>
               </View>
-            )}
-
-            <View style={styles.accionesDynamics}>
-              <Button label="Guardar credenciales" onPress={guardarDynamics} disabled={!puedeGuardarDynamics} loading={guardandoDynamics} style={styles.accionDynamics} />
-              <Button
-                label="Probar conexión"
-                icon={ShieldCheck}
-                variant="outline"
-                onPress={probarConexionDynamics}
-                disabled={!dynamics?.secretoConfigurado}
-                loading={probando}
-                style={styles.accionDynamics}
-              />
+              <View style={styles.datoFila}>
+                <Text style={styles.datoEtiqueta}>Client ID</Text>
+                <Text style={styles.datoValor} numberOfLines={1}>{dynamics?.clientId || '—'}</Text>
+              </View>
+              <View style={styles.datoFila}>
+                <Text style={styles.datoEtiqueta}>URL</Text>
+                <Text style={styles.datoValor} numberOfLines={1}>{dynamics?.urlBase || '—'}</Text>
+              </View>
+              <View style={styles.datoFila}>
+                <Text style={styles.datoEtiqueta}>Client secret</Text>
+                {/* NUNCA el valor, ni enmascarado. Un secreto que la pantalla
+                    puede mostrar es un secreto que alguien puede fotografiar.
+                    Esto es lo único que se dice: si hay uno. */}
+                <Text style={styles.datoValor}>{dynamics?.secretoConfigurado ? 'Cargado — no se muestra' : 'Falta cargarlo'}</Text>
+              </View>
             </View>
+
+            <Button
+              label="Probar conexión"
+              icon={ShieldCheck}
+              variant="outline"
+              onPress={probarConexionDynamics}
+              disabled={!dynamics?.secretoConfigurado}
+              loading={probando}
+            />
           </Card>
         </>
       )}
@@ -292,12 +257,8 @@ const styles = StyleSheet.create({
   stepperValor: { flex: 1, textAlign: 'center', fontSize: 18, color: colors.tinta, fontFamily: fonts.bold },
 
   tituloFila: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10 },
-  campo: { gap: 6 },
-  label: { fontSize: 13.5, color: colors.tinta, fontFamily: fonts.semibold },
-  secretoFila: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10 },
-  secretoConfiguradoFila: { flex: 1, minWidth: 0, flexDirection: 'row', alignItems: 'center', gap: 8 },
-  secretoConfiguradoTexto: { flex: 1, minWidth: 0, fontSize: 12.5, color: colors.ok, fontFamily: fonts.semibold },
-  cancelarSecreto: { fontSize: 12.5, color: colors.rojo, fontFamily: fonts.regular },
-  accionesDynamics: { flexDirection: 'row', gap: 10 },
-  accionDynamics: { flex: 1 },
+  datos: { gap: 7 },
+  datoFila: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 },
+  datoEtiqueta: { flex: 0, fontSize: 12.5, color: colors.gris, fontFamily: fonts.regular },
+  datoValor: { flex: 1, minWidth: 0, textAlign: 'right', fontSize: 12.5, color: colors.tinta, fontFamily: fonts.semibold },
 });
