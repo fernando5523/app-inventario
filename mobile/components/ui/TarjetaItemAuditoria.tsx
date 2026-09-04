@@ -1,4 +1,4 @@
-import type { JSX } from 'react';
+import { memo, type JSX } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 
 import { diferenciaUnidades, diferenciaValor, veredicto } from '../../lib/dominio/auditoria';
@@ -64,8 +64,19 @@ function Celda({ etiqueta, valor, coincideConErp }: CeldaProps): JSX.Element {
   );
 }
 
-/** Item de la matriz comparativa (`.item-comparado` en auditoria.html) — ERP vs los 3 conteos, con la diferencia resaltada por color, no solo por texto. */
-export function TarjetaItemAuditoria({ item }: TarjetaItemAuditoriaProps): JSX.Element {
+/**
+ * Item de la matriz comparativa (`.item-comparado` en auditoria.html) — ERP
+ * vs los 3 conteos, con la diferencia resaltada por color, no solo por texto.
+ *
+ * `React.memo`: con el catálogo real (hasta 8.000 ítems) esto son miles de
+ * instancias montadas por `FlatList` — sin memo, cada render del padre
+ * (auditoria.tsx, por ejemplo al cambiar el filtro) volvería a renderizar
+ * TODAS las tarjetas de la ventana visible, no solo las que cambiaron.
+ * `item` es un objeto estable mientras `items` no cambie en el padre, así
+ * que la comparación por referencia de memo alcanza sin pasarle un
+ * comparador custom.
+ */
+function TarjetaItemAuditoriaComponent({ item }: TarjetaItemAuditoriaProps): JSX.Element {
   const v = veredicto(item);
   const badge = badgeDe(item, v);
   const nota = notaDe(item, v);
@@ -93,6 +104,8 @@ export function TarjetaItemAuditoria({ item }: TarjetaItemAuditoriaProps): JSX.E
     </View>
   );
 }
+
+export const TarjetaItemAuditoria = memo(TarjetaItemAuditoriaComponent);
 
 const styles = StyleSheet.create({
   raiz: { gap: 11, padding: 14, borderWidth: 1, borderRadius: 12, backgroundColor: colors.campo },
