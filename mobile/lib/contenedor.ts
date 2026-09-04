@@ -45,21 +45,17 @@ import { usuariosApi } from './adaptadores/usuarios-api';
 // ---------------------------------------------------------------------------
 
 /**
- * Qué puertos salen a la red. UNA sola perilla, y por una razón concreta:
- * el backend no aparece de golpe entero, aparece módulo por módulo. Hoy
- * `/api/sesion` existe y el resto no. Una bandera booleana global obligaría
- * a elegir entre "todo en memoria" (y no probar nunca el backend) o "todo
- * HTTP" (y romper cinco pantallas contra endpoints que no existen).
+ * Desde 2026-09-04 el backend está VIVO contra Postgres, así que el default
+ * se invirtió: los puertos verificados contra el servidor real salen a la
+ * red, y la perilla sirve para volver a memoria, no para salir de ella.
  *
- * Valores:
- *   - vacío / sin definir  → TODO en memoria. Es el default a propósito:
- *     se puede demostrar la app completa sin levantar nada.
- *   - `*`                  → todos los puertos que tengan adaptador HTTP.
- *   - lista separada por comas → solo esos. Ej: `sesion` hoy;
- *     `sesion,hojas,catalogo` cuando el backend sirva hojas.
+ * `EXPO_PUBLIC_PUERTOS_MEMORIA`:
+ *   - vacío / sin definir  → cada puerto usa lo que dice este archivo.
+ *   - `*`                  → TODO a memoria. Para demostrar sin backend.
+ *   - lista separada por comas → solo esos vuelven a memoria.
+ *     Ej: `sesion` para probar el login sin servidor.
  *
- * Se configura con `EXPO_PUBLIC_PUERTOS_HTTP` (variable de entorno, no
- * requiere tocar app.config.ts) o con `extra.puertosHttp`.
+ * Sigue sin requerir tocar app.config.ts (ver _http.ts#urlBase).
  */
 const entorno = (globalThis as { process?: { env?: Record<string, string | undefined> } }).process?.env;
 
@@ -77,22 +73,22 @@ function leerConfiguracion(): string {
   // `require` en vez de `import` para no arrastrar expo-constants al grafo de
   // módulos cuando la variable de entorno ya resolvió: este archivo lo
   // importa TODA pantalla, y es el primero que se evalúa al arrancar.
-  const desdeEntorno = entorno?.EXPO_PUBLIC_PUERTOS_HTTP;
+  const desdeEntorno = entorno?.EXPO_PUBLIC_PUERTOS_MEMORIA;
   if (desdeEntorno !== undefined) return desdeEntorno;
 
   const Constants = require('expo-constants').default as {
     expoConfig?: { extra?: Record<string, unknown> };
   };
-  return (Constants.expoConfig?.extra?.puertosHttp as string | undefined) ?? '';
+  return (Constants.expoConfig?.extra?.puertosMemoria as string | undefined) ?? '';
 }
 
-const configurados = leerConfiguracion()
+const forzados = leerConfiguracion()
   .split(',')
   .map((nombre) => nombre.trim().toLowerCase())
   .filter(Boolean);
 
-const TODOS = configurados.includes('*');
-const seleccionados = new Set(configurados);
+const TODO_A_MEMORIA = forzados.includes('*');
+const aMemoria = new Set(forzados);
 
 /**
  * Devuelve la implementación que corresponde. El tipo obliga a que ambas
@@ -101,7 +97,7 @@ const seleccionados = new Set(configurados);
  * esto no compila.
  */
 function elegir<T>(puerto: PuertoConectable, memoria: T, api: T): T {
-  return TODOS || seleccionados.has(puerto) ? api : memoria;
+  return TODO_A_MEMORIA || aMemoria.has(puerto) ? memoria : api;
 }
 
 // ---------------------------------------------------------------------------
@@ -109,14 +105,14 @@ function elegir<T>(puerto: PuertoConectable, memoria: T, api: T): T {
 // ---------------------------------------------------------------------------
 
 /**
- * ── Puertos con endpoint REAL, contrastado contra el código del backend ──
+ * ── CONTRA EL BACKEND REAL ──
  *
- * Los 4 routers están montados en backend/src/config/app.ts y las rutas de
- * cada adaptador se leyeron de su `*.routes.ts`, no de un README.
- *
- * Que el contrato esté verificado NO quiere decir que respondan: sin
- * `backend/.env` no hay base, y sin base el backend no arranca. Por eso el
- * default sigue siendo memoria (ver la bandera arriba).
+ * Los cuatro se probaron con curl contra http://localhost:3000 el
+ * 2026-09-04, con la base sembrada: login de un colaborador real (argon2
+ * contra Postgres), listados de usuarios/tiendas/config. La forma que
+ * devuelve el servidor coincide con la que estos adaptadores esperan —
+ * incluidos los `null` de `direccion`/`sucursalId`, que se normalizan a
+ * ausente en el adaptador (ver usuarios-api.ts, tiendas-api.ts).
  */
 export const repositorioSesion: RepositorioSesion = elegir('sesion', sesionMemoria, sesionApi);
 export const repositorioUsuarios: RepositorioUsuarios = elegir('usuarios', usuariosMemoria, usuariosApi);
@@ -124,36 +120,64 @@ export const repositorioTiendas: RepositorioTiendas = elegir('tiendas', tiendasM
 export const repositorioConfig: RepositorioConfig = elegir('config', configMemoria, configApi);
 
 /**
- * ── Puertos con contrato ADIVINADO ──
+ * ── HOJAS: LOCAL + COLA, y NO se toca ──
  *
- * ⚠️ El backend no tiene módulos de hojas, catálogo ni inventario: esas
- * rutas están DEDUCIDAS de la convención de los otros cuatro. Encenderlas
- * hoy da 404, no datos. Ver la cabecera de hojas-api.ts.
+ * SQLite no es "memoria pendiente de migrar": es la persistencia que el
+ * negocio necesita. Los equipos cuentan con la WiFi de la tienda y SIN chip,
+ * y en el fondo del almacén no hay señal. Un `hojasApi` puro dejaría al
+ * operario sin poder contar cada vez que se cae el WiFi — que es la mitad de
+ * la jornada.
  *
- * `hojas` además tiene una tercera variante que las demás no tienen,
- * sqlite (ver la tarea de persistencia offline, 2026-09-03): los conteos
- * NO pueden vivir solo en RAM — un operario en el fondo del depósito,
- * sin señal, pierde 40 ítems contados si la app se cierra. `elegir()`
- * sigue siendo memoria/api; acá se decide aparte cuál de las dos es el
- * lado "memoria" que le llega, porque hay una tercera opción.
+ * La hoja se guarda local y se sincroniza contra `/api/hojas` por la cola
+ * (hojas-sqlite.ts#procesarColaDeSincronizacion). `hojasApi` NO se enchufa
+ * acá: lo usa la cola, no la pantalla.
  *
- * DEFAULT: sqlite. Es lo que el negocio necesita — un conteo que no
- * sobrevive un cierre de la app no es un detalle técnico, es la promesa
- * que la banda de sincronización ("guardado en el equipo") le hace al
- * operario y hoy no cumplía. Escape hatch a la versión pura en memoria
- * (debug, o si sqlite da problemas puntuales en un dispositivo):
- * `EXPO_PUBLIC_HOJAS_MEMORIA=1`.
+ * Escape hatch a la versión pura en memoria (debug): `EXPO_PUBLIC_HOJAS_MEMORIA=1`.
  */
-const hojasLocal: RepositorioHojas = entorno?.EXPO_PUBLIC_HOJAS_MEMORIA === '1' ? hojasMemoria : hojasSqlite;
-export const repositorioHojas: RepositorioHojas = elegir('hojas', hojasLocal, hojasApi);
-export const repositorioCatalogo: RepositorioCatalogo = elegir('catalogo', catalogoMemoria, catalogoApi);
-export const repositorioInventario: RepositorioInventario = elegir('inventario', inventarioMemoria, inventarioApi);
+export const repositorioHojas: RepositorioHojas =
+  entorno?.EXPO_PUBLIC_HOJAS_MEMORIA === '1' ? hojasMemoria : hojasSqlite;
 
 /**
- * Sin adaptador HTTP todavía: auditoría, liquidación y lacrado dependen de
- * la comparación contra Dynamics y del cierre de mes, que son fase 2. Se
- * quedan en memoria hasta que haya endpoints — no se les inventa una ruta
- * para emparejar con los demás.
+ * ── CATÁLOGO: local, por COHERENCIA con hojas ──
+ *
+ * El endpoint `/api/hojas/:id/productos` existe y está bien, pero el
+ * catálogo tiene que salir de la MISMA fuente que la hoja. Si la hoja viene
+ * de SQLite y los productos del backend, se le estarían pidiendo al servidor
+ * los productos de una hoja que el servidor no tiene: 404 en la pantalla de
+ * conteo, con la hoja abierta y vacía.
+ *
+ * Se mueve junto con `hojas`, no por separado.
+ */
+export const repositorioCatalogo: RepositorioCatalogo = catalogoMemoria;
+
+/**
+ * ── INVENTARIO: en memoria, y NO es olvido ──
+ *
+ * De los 4 métodos del puerto, el backend hoy solo tiene uno:
+ *   traerSnapshot → POST /api/d365/snapshot   ✅ probado, devuelve un
+ *                                                inventario real de Postgres
+ *   crearHojas    → 404, no existe el módulo
+ *   asignarHojas  → 404, no existe el módulo
+ *   activo        → 404, no existe el módulo
+ *
+ * Enchufar `inventarioApi` haría que el paso 1 del Coordinador cree un
+ * inventario REAL en Postgres y que los pasos 2 y 3 fallen contra él. Peor
+ * que memoria pura: quedaría un inventario a medio armar en la base, y la
+ * pantalla mostraría un wizard que arranca y no termina.
+ *
+ * Cuando exista el módulo de inventario (crear/asignar hojas), esta línea
+ * pasa a `elegir('inventario', inventarioMemoria, inventarioApi)` y nada más
+ * cambia — el adaptador HTTP ya está escrito y su snapshot ya está probado.
+ */
+export const repositorioInventario: RepositorioInventario = inventarioMemoria;
+
+/**
+ * ── SIN ENDPOINT: auditoría, liquidación y lacrado del lado del conteo ──
+ *
+ * `/api/auditoria` no existe (404 verificado). La matriz ERP vs los 3
+ * conteos depende de comparar contra Dynamics, que es fase 2. Liquidación y
+ * lacrado tienen módulo `historial` en el backend, pero sus puertos todavía
+ * no se cablearon acá.
  */
 export const repositorioAuditoria: RepositorioAuditoria = auditoriaMemoria;
 export const repositorioLiquidacion: RepositorioLiquidacion = liquidacionMemoria;

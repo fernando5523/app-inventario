@@ -15,6 +15,11 @@
  * en el CUERPO y no en la URL, y sobre todo **no hay endpoint de estado de
  * progreso** — el backend resuelve el snapshot en una sola respuesta.
  *
+ * PROBADO CONTRA EL SERVIDOR REAL (2026-09-04): `POST /api/d365/snapshot`
+ * con `{sucursalId: 1}` devolvió `{inventarioId: 1, items: 4, tomadoEn: ...}`
+ * — un inventario de verdad en Postgres, con la forma exacta que espera este
+ * adaptador.
+ *
  * ---------------------------------------------------------------------------
  * PASOS 2 y 3 — CONTRATO ADIVINADO. NO VERIFICADO.
  * ---------------------------------------------------------------------------

@@ -2,8 +2,13 @@
  * Adaptador HTTP de RepositorioCatalogo. Mismo puerto que catalogo-memoria.ts.
  *
  * ---------------------------------------------------------------------------
- * CONTRATO — ADIVINADO. NO VERIFICADO (ver cabecera de hojas-api.ts).
- * El backend no tiene modulo de catalogo: app.ts no monta /api/hojas.
+ * CONTRATO — RUTAS VERIFICADAS contra backend/src/modules/hojas/hojas.routes.ts
+ * (montado en /api/hojas) y documentadas en backend/README.md.
+ *
+ * La FORMA de la respuesta todavia no se pudo probar de punta a punta: el
+ * backend no tiene modulo que CREE hojas (paso 2 del Coordinador), asi que
+ * no hay ninguna hoja en la base contra la cual pedir productos. Las rutas
+ * responden 404 por hoja inexistente, no por ruta faltante.
  * ---------------------------------------------------------------------------
  *   GET /api/hojas/:hojaId/productos                       → deHoja()
  *   GET /api/hojas/:hojaId/productos/barras/:codigo        → porCodigoBarras()

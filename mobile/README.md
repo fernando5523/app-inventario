@@ -29,6 +29,49 @@ npm start          # Expo dev server
 npm run typecheck  # tsc --noEmit
 ```
 
+## Apuntar la app al backend
+
+La URL base **no esta hardcodeada**: sale de configuracion, en este orden
+(`lib/adaptadores/_http.ts#urlBase`).
+
+1. `EXPO_PUBLIC_API_URL` -- variable de entorno. Metro la inlinea en tiempo de
+   build, asi que **hay que definirla ANTES de compilar el APK**.
+2. `extra.apiUrl` de `app.config.ts` -- para cuando el backend tenga una URL
+   fija de despliegue.
+3. Fallback de desarrollo, con un `console.warn`.
+
+### El detalle que rompe el APK: localhost NO es tu maquina
+
+| Donde corre la app | Que es `localhost` | Que hay que usar |
+|---|---|---|
+| Emulador Android | el propio emulador | `http://10.0.2.2:3000` |
+| Telefono fisico (WiFi de la tienda) | el propio telefono | la **IP real** de la maquina, ej. `http://192.168.1.50:3000` |
+| Simulador iOS / web | la maquina | `http://localhost:3000` |
+
+El fallback ya resuelve el caso del emulador Android solo (`10.0.2.2`), pero
+**en un telefono fisico ninguno de los dos sirve**: ahi hay que setear la IP a
+mano. Por eso `urlBase()` avisa por consola cuando cae al fallback.
+
+```bash
+# Emulador Android -- el fallback ya alcanza, pero explicito es mejor:
+EXPO_PUBLIC_API_URL=http://10.0.2.2:3000 npm run android
+
+# Telefono fisico: la IP de ESTA maquina en la WiFi de la tienda.
+# (Windows: ipconfig | Linux/Mac: ip addr / ifconfig)
+EXPO_PUBLIC_API_URL=http://192.168.1.50:3000 ./gradlew assembleRelease
+```
+
+El backend tiene que escuchar en `0.0.0.0`, no solo en `127.0.0.1`, para que
+el telefono lo alcance por la red.
+
+### Volver a memoria sin backend
+
+Para demostrar la app sin levantar nada, `EXPO_PUBLIC_PUERTOS_MEMORIA`
+(`lib/contenedor.ts`): `*` manda todo a memoria, o una lista
+(`sesion,usuarios`) para volver solo algunos. Vacio = cada puerto usa lo que
+dice `contenedor.ts`, que hoy es el backend real para sesion, usuarios,
+tiendas y config.
+
 ## Generar el APK (Gradle local)
 
 Esta maquina tiene el Android SDK completo y el JDK 21 del JBR de Android Studio,
