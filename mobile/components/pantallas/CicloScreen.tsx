@@ -1,15 +1,16 @@
 import { router } from 'expo-router';
-import { ArrowRightCircle, Check, FileText, X } from 'lucide-react-native';
+import { ArrowRightCircle, Check, FileText } from 'lucide-react-native';
 import { useEffect, useState, type JSX } from 'react';
 import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
 
-import { repositorioInventario } from '../../lib/contenedor';
+import { repositorioHojas, repositorioInventario } from '../../lib/contenedor';
+import { avanceConjunto, estadoConjunto, type EstadoConjunto } from '../../lib/dominio/hoja';
 import { partirEnHojas } from '../../lib/dominio/lote';
-import { TAMANOS_HOJA, type Rol, type TamanoHoja } from '../../lib/dominio/tipos';
+import { TAMANOS_HOJA, type HojaConteo, type Rol, type TamanoHoja } from '../../lib/dominio/tipos';
 import { useSesion } from '../../lib/sesion-contexto';
 import { colors, fonts, fontSize, radius, spacing } from '../../lib/theme';
 import { PantallaConTabs } from '../navegacion/PantallaConTabs';
-import { BandaSync, Badge, BarraApp, formatoMiles, formatoPct } from '../ui';
+import { BandaSync, Badge, BarraApp, formatoMiles, formatoPct, type BadgeVariant } from '../ui';
 
 // formatoMiles/formatoPct, no Intl.NumberFormat('es-PE'): no está
 // garantizado que Hermes traiga los datos ICU de es-PE en el emulador —
@@ -36,42 +37,59 @@ function textoCalculo(c: CalculoHojas, tamano: number): string {
   return `${nf.format(c.total)} hojas de ${tamano} ítems: ${nf.format(c.completas)} completas + 1 parcial de ${c.parcial} — la cantidad de hojas se calcula siempre, nunca es fija.`;
 }
 
+/**
+ * Traduce el estado de una ronda (`hoja.ts#EstadoConjunto`) al badge que
+ * se muestra -- NUNCA "Finalizada" fija: antes de este cambio el badge
+ * era texto hardcodeado, sin relacion con las hojas reales (hallazgo I-4
+ * de la auditoria).
+ */
+function badgeDeEstado(estado: EstadoConjunto): { label: string; variant: BadgeVariant } {
+  switch (estado) {
+    case 'finalizada':
+      return { label: 'Finalizada', variant: 'ok' };
+    case 'en-proceso':
+      return { label: 'En curso', variant: 'proceso' };
+    case 'pendiente':
+      return { label: 'Pendiente', variant: 'espera' };
+    case 'sin-hojas':
+      return { label: 'Sin datos todavía', variant: 'outline' };
+  }
+}
+
 interface PasoCicloProps {
   titulo: string;
   descripcion: string;
-  calculo: string;
-  pct: number;
-  textoOk: string;
-  textoFalta: string;
+  estado: EstadoConjunto;
+  calculo?: string;
+  /** Barra + cifra de avance REAL (items contados / total). Sin esto, no se dibuja embudo. */
+  avance?: { pct: number; texto: string };
+  /** Nota honesta cuando falta un dato -- nunca un numero inventado en su lugar. */
+  notaSinDato?: string;
 }
 
 /** Tarjeta de un paso del embudo (`.tarjeta` + `.embudo-*` en la maqueta). */
-function PasoCiclo({ titulo, descripcion, calculo, pct, textoOk, textoFalta }: PasoCicloProps): JSX.Element {
+function PasoCiclo({ titulo, descripcion, estado, calculo, avance, notaSinDato }: PasoCicloProps): JSX.Element {
+  const badge = badgeDeEstado(estado);
   return (
     <View style={styles.tarjeta}>
       <View style={styles.tarjetaCabecera}>
         <Text style={styles.tarjetaTitulo}>{titulo}</Text>
-        <Badge label="Finalizada" variant="ok" />
+        <Badge label={badge.label} variant={badge.variant} />
       </View>
       <Text style={styles.tarjetaTexto}>{descripcion}</Text>
-      <Text style={styles.tarjetaTexto}>{calculo}</Text>
-      <View style={styles.embudoBarra}>
-        <View style={[styles.embudoOk, { width: `${Math.min(100, Math.max(0, pct))}%` }]} />
-      </View>
-      <View style={styles.embudoCifras}>
-        <View style={styles.embudoFila}>
-          <Check size={14} color={colors.ok} />
-          <Text style={[styles.embudoTexto, { color: colors.ok }]}>{textoOk}</Text>
-        </View>
-        <View style={styles.embudoFila}>
-          {/* No existe todavia un token semantico "falta" en lib/theme.ts
-              (mismo TODO que ya dejó BandaSync.tsx) -- se reusa el ambar de
-              "proceso" en vez del rojo de marca, que es la accion, nunca
-              un estado. */}
-          <X size={14} color={colors.proceso} />
-          <Text style={[styles.embudoTexto, { color: colors.proceso }]}>{textoFalta}</Text>
-        </View>
-      </View>
+      {calculo ? <Text style={styles.tarjetaTexto}>{calculo}</Text> : null}
+      {avance ? (
+        <>
+          <View style={styles.embudoBarra}>
+            <View style={[styles.embudoOk, { width: `${Math.min(100, Math.max(0, avance.pct))}%` }]} />
+          </View>
+          <View style={styles.embudoFila}>
+            <Check size={14} color={colors.ok} />
+            <Text style={[styles.embudoTexto, { color: colors.ok }]}>{avance.texto}</Text>
+          </View>
+        </>
+      ) : null}
+      {notaSinDato ? <Text style={styles.notaSinDato}>{notaSinDato}</Text> : null}
     </View>
   );
 }
@@ -89,31 +107,57 @@ export interface CicloScreenProps {
  * lo ve de solo lectura y tiene además el acceso a la matriz de auditoría,
  * que no le corresponde al Coordinador.
  *
- * DATO QUE FALTABA EN LOS PUERTOS: no hay ningún Repositorio que modele
- * una "ronda de conteo" (1er/2do/3er) ni la comparación contra el stock
- * del ERP — RepositorioInventario/RepositorioHojas conocen un único
- * inventario con un único tamaño de hoja, no una secuencia de pasadas
- * con universos que se van achicando. El total de ítems (8.000) SÍ sale
- * de un puerto real (`repositorioInventario.activo()`), y el cálculo de
- * hojas para cada pasada usa `partirEnHojas()` del dominio de verdad —
- * pero los conteos de observados/persistentes (650 / 130) y el estado
- * "Finalizada" de cada paso quedan como dataset local fijo, igual al ya
- * validado en la maqueta, hasta que exista un RepositorioCiclo real.
+ * HALLAZGO I-4 DE LA AUDITORIA (ya corregido acá): el embudo y los 3
+ * badges de estado eran datos locales fijos (650/130 hardcodeados,
+ * "Finalizada" a fuego) — la MISMA sesión contaba dos historias
+ * distintas: Inicio decía "34 de 160 hojas finalizadas" y Ciclo decía
+ * que los 3 conteos habían terminado. Ahora el Paso 1 sale de
+ * `repositorioHojas.todas()` vía `hoja.ts#estadoConjunto`/`avanceConjunto`
+ * — LAS MISMAS funciones que se pueden aplicar sobre las mismas hojas que
+ * usa InicioScreen.tsx, así que no pueden divergir: no hay dos cálculos,
+ * hay uno solo aplicado dos veces.
+ *
+ * DATO QUE SIGUE FALTANDO EN LOS PUERTOS (Pasos 2 y 3): no hay ningún
+ * Repositorio que modele una "ronda de conteo" 2da/3ra ni la comparación
+ * contra el stock del ERP que decide qué ítems pasan de una ronda a la
+ * siguiente — `RepositorioHojas` no tiene parámetro de ronda (el backend
+ * sí lo soporta, `GET /api/hojas?...&ronda=`, pero el puerto del front
+ * nunca lo pasa, siempre trae la 1ra) y `RepositorioAuditoria.matriz()`
+ * (que sí tiene conteo1/2/3 por ítem) hoy solo trae 3 ítems de ejemplo,
+ * no el inventario completo (ver auditoria-memoria.ts). Con eso, los
+ * Pasos 2 y 3 muestran "Sin datos todavía" en vez de inventar un número
+ * — se habilitan cuando exista ese dato (el módulo de auditoría que
+ * min-5 está construyendo en el backend puede ser quien lo exponga).
  */
 export function CicloScreen({ rol }: CicloScreenProps): JSX.Element {
   const { sesion, cerrar } = useSesion();
   const [cargando, setCargando] = useState(true);
   const [items, setItems] = useState<number | null>(null);
+  const [hojasT1, setHojasT1] = useState<HojaConteo[] | null>(null);
   const [tamanoReconteo, setTamanoReconteo] = useState<TamanoHoja>(50);
 
   useEffect(() => {
     if (!sesion) return;
     let vigente = true;
-    repositorioInventario.activo(sesion.sucursal!.id).then((activo) => {
+
+    async function cargar(): Promise<void> {
+      const activo = await repositorioInventario.activo(sesion!.sucursal!.id);
       if (!vigente) return;
       setItems(activo?.items ?? null);
+      if (!activo) {
+        setCargando(false);
+        return;
+      }
+      // `todas()`, no `mias()`: el embudo es del inventario entero, no de
+      // lo que le toca a quien mira la pantalla (mismo puerto que ya usa
+      // InicioScreen.tsx para el Coordinador — ver el comentario de arriba).
+      const todas = await repositorioHojas.todas(activo.inventarioId);
+      if (!vigente) return;
+      setHojasT1(todas);
       setCargando(false);
-    });
+    }
+
+    cargar();
     return () => {
       vigente = false;
     };
@@ -127,19 +171,11 @@ export function CicloScreen({ rol }: CicloScreenProps): JSX.Element {
   }
 
   const totalT1 = items ?? 0;
-  const observadosT2 = 650;
-  const persistentesT3 = 130;
-  const cuadradosT1 = totalT1 - observadosT2;
-  const cuadradosT2 = observadosT2 - persistentesT3;
-  const cuadradosFinal = totalT1 - persistentesT3;
+  const estadoT1 = hojasT1 ? estadoConjunto(hojasT1) : 'sin-hojas';
+  const avanceT1 = hojasT1 ? avanceConjunto(hojasT1) : null;
+  const pctAvanceT1 = avanceT1 && avanceT1.totalItems > 0 ? (avanceT1.itemsContados / avanceT1.totalItems) * 100 : 0;
 
-  const hojasT1 = calcularHojas(totalT1, 50);
-  const hojasT2 = calcularHojas(observadosT2, tamanoReconteo);
-  const hojasT3 = calcularHojas(persistentesT3, tamanoReconteo);
-
-  const pctT1 = totalT1 > 0 ? (cuadradosT1 / totalT1) * 100 : 0;
-  const pctT2 = observadosT2 > 0 ? (cuadradosT2 / observadosT2) * 100 : 0;
-  const pctFinal = totalT1 > 0 ? (cuadradosFinal / totalT1) * 100 : 0;
+  const hojasCalculoT1 = calcularHojas(totalT1, 50);
 
   return (
     <PantallaConTabs scrollable contentStyle={styles.contenido}>
@@ -158,11 +194,18 @@ export function CicloScreen({ rol }: CicloScreenProps): JSX.Element {
         <>
           <PasoCiclo
             titulo="Paso 1 · 1er Conteo General"
-            descripcion="100% del catálogo, comparado contra el stock de Dynamics."
-            calculo={textoCalculo(hojasT1, 50)}
-            pct={pctT1}
-            textoOk={`${nf.format(cuadradosT1)} cuadrados (${formatoPct(pctT1)}%)`}
-            textoFalta={`${nf.format(observadosT2)} observados, pasan al 2do conteo (${formatoPct(100 - pctT1)}%)`}
+            descripcion="100% del catálogo. El comparativo contra el stock de Dynamics (cuántos cuadran y cuántos pasan al 2do conteo) se calcula al cerrar este paso."
+            estado={estadoT1}
+            calculo={textoCalculo(hojasCalculoT1, 50)}
+            avance={
+              avanceT1 && hojasT1 && hojasT1.length > 0
+                ? {
+                    pct: pctAvanceT1,
+                    texto: `${nf.format(avanceT1.itemsContados)} de ${nf.format(avanceT1.totalItems)} ítems contados (${formatoPct(pctAvanceT1)}%)`,
+                  }
+                : undefined
+            }
+            notaSinDato={!hojasT1 || hojasT1.length === 0 ? 'Todavía no hay hojas del 1er conteo creadas para esta sucursal.' : undefined}
           />
 
           <View style={styles.tarjeta}>
@@ -200,37 +243,22 @@ export function CicloScreen({ rol }: CicloScreenProps): JSX.Element {
 
           <PasoCiclo
             titulo="Paso 2 · 2do Reconteo"
-            descripcion={`Solo los ${nf.format(observadosT2)} ítems observados en el 1er conteo.`}
-            calculo={textoCalculo(hojasT2, tamanoReconteo)}
-            pct={pctT2}
-            textoOk={`${nf.format(cuadradosT2)} cuadrados en 2da pasada (${formatoPct(pctT2, 0)}%)`}
-            textoFalta={`${nf.format(persistentesT3)} persisten, pasan al 3er conteo (${formatoPct(100 - pctT2, 0)}%)`}
+            descripcion="Solo los ítems que no coincidieron con el stock de Dynamics en el 1er conteo."
+            estado="sin-hojas"
+            notaSinDato="Sin datos todavía: falta el comparativo contra Dynamics del 1er conteo y un puerto que traiga las hojas de esta ronda (hoy el front solo pide siempre la 1ra)."
           />
 
-          <View style={styles.tarjeta}>
-            <View style={styles.tarjetaCabecera}>
-              <Text style={styles.tarjetaTitulo}>Paso 3 · 3er Reconteo Definitivo</Text>
-              <Badge label="Finalizada" variant="ok" />
-            </View>
-            <Text style={styles.tarjetaTexto}>
-              Los ítems que persistieron tras la 2da pasada, auditados directamente
-              {rol === 'auditor' ? ' por vos.' : '.'} Las cantidades resultantes quedan fijas para la
-              liquidación — no hay un 4to conteo.
-            </Text>
-            <Text style={styles.tarjetaTexto}>{textoCalculo(hojasT3, tamanoReconteo)}</Text>
-            <Badge label="Sincronizada" variant="ok" />
-          </View>
+          <PasoCiclo
+            titulo="Paso 3 · 3er Reconteo Definitivo"
+            descripcion={`Los ítems que persistieron tras la 2da pasada, auditados directamente${rol === 'auditor' ? ' por vos' : ''}. Las cantidades resultantes quedan fijas para la liquidación — no hay un 4to conteo.`}
+            estado="sin-hojas"
+            notaSinDato="Sin datos todavía: depende de que exista el Paso 2 primero."
+          />
 
           <View style={styles.resumen}>
-            <View style={styles.resumenFila}>
-              <Check size={14} color={colors.ok} />
-              <Text style={styles.resumenTexto}>
-                {nf.format(cuadradosFinal)} de {nf.format(totalT1)} ítems cuadraron en 3 pasadas ({formatoPct(pctFinal)}%)
-              </Text>
-            </View>
             <Text style={styles.tarjetaTexto}>
-              Los {nf.format(persistentesT3)} ítems restantes son la diferencia definitiva
-              {rol === 'auditor' ? ': pasan a la matriz de auditoría para valorizarse en soles.' : '.'}
+              El resultado final de las 3 pasadas (cuántos ítems cuadraron y cuántos quedan como diferencia definitiva)
+              todavía no tiene datos reales — depende del mismo comparativo que falta en los Pasos 2 y 3.
             </Text>
           </View>
 
@@ -269,9 +297,9 @@ const styles = StyleSheet.create({
 
   embudoBarra: { height: 8, borderRadius: radius.full, backgroundColor: colors.procesoSuave, overflow: 'hidden' },
   embudoOk: { height: '100%', borderRadius: radius.full, backgroundColor: colors.ok },
-  embudoCifras: { gap: 4 },
   embudoFila: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   embudoTexto: { fontSize: 12.5, fontFamily: fonts.semibold },
+  notaSinDato: { fontSize: 12, lineHeight: 17, color: colors.grisClaro, fontFamily: fonts.regular, fontStyle: 'italic' },
 
   segmentado: {
     flexDirection: 'row',
@@ -295,9 +323,6 @@ const styles = StyleSheet.create({
     borderColor: colors.borde,
     borderRadius: 13,
   },
-  resumenFila: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-  resumenTexto: { fontSize: 12.5, fontWeight: '600', color: colors.gris, fontFamily: fonts.semibold },
-
   ctaAuditoria: {
     flexDirection: 'row',
     alignItems: 'center',

@@ -10,6 +10,7 @@ import { repositorioHojas, repositorioInventario } from '../../lib/contenedor';
 // contenedor.ts el día de mañana es un cambio de una sola línea.
 import { tiendasMemoria as repositorioTiendas } from '../../lib/adaptadores/tiendas-memoria';
 import { usuariosMemoria as repositorioUsuarios } from '../../lib/adaptadores/usuarios-memoria';
+import { avanceConjunto, estadoConjunto } from '../../lib/dominio/hoja';
 import type { HojaConteo, Rol } from '../../lib/dominio/tipos';
 import { useSesion } from '../../lib/sesion-contexto';
 import { colors, fonts, fontSize, spacing } from '../../lib/theme';
@@ -49,6 +50,13 @@ function pct(parte: number, total: number): string {
   return total === 0 ? '0%' : `${Math.round((parte / total) * 100)}%`;
 }
 
+const ETIQUETA_ESTADO_1ER_CONTEO: Record<ReturnType<typeof estadoConjunto>, string> = {
+  finalizada: '1er conteo finalizado',
+  'en-proceso': '1er conteo en curso',
+  pendiente: '1er conteo pendiente',
+  'sin-hojas': 'sin hojas todavía',
+};
+
 /**
  * Pantalla de Inicio — una sola implementación para los 3 roles (igual
  * que mobile/design/home.html). La usan app/coordinador/index.tsx,
@@ -60,8 +68,12 @@ export function InicioScreen(): JSX.Element {
   const { sesion, cerrar } = useSesion();
   const [cargando, setCargando] = useState(true);
   const [inventario, setInventario] = useState<InventarioActivo | null>(null);
-  // Solo se llena para el rol que corresponde — nunca los dos a la vez.
-  const [hojasCoordinador, setHojasCoordinador] = useState<HojaConteo[] | null>(null);
+  // `todas()` del inventario -- Coordinador y Auditor ven el MISMO dato
+  // (los dos pueden pedir alcance=todas, ver backend/README.md), nunca
+  // dos cálculos distintos: es lo que garantiza que Inicio y Ciclo
+  // cuenten la misma historia (ver el comentario largo en
+  // CicloScreen.tsx sobre el hallazgo I-4 de la auditoría).
+  const [hojasRonda1, setHojasRonda1] = useState<HojaConteo[] | null>(null);
   const [misHojas, setMisHojas] = useState<HojaConteo[] | null>(null);
   const [estadoSistema, setEstadoSistema] = useState<EstadoSistema | null>(null);
 
@@ -105,9 +117,9 @@ export function InicioScreen(): JSX.Element {
         }
         setInventario({ inventarioId: activo.inventarioId, items: activo.items, totalHojas: activo.totalHojas });
 
-        if (sesion!.colaborador.rol === 'coordinador') {
+        if (sesion!.colaborador.rol === 'coordinador' || sesion!.colaborador.rol === 'auditor') {
           const todas = await repositorioHojas.todas(activo.inventarioId);
-          if (vigente) setHojasCoordinador(todas);
+          if (vigente) setHojasRonda1(todas);
         } else if (sesion!.colaborador.rol === 'conteo') {
           // mias(), NUNCA todas(): un Contador no puede ver el lote entero.
           const mias = await repositorioHojas.mias(activo.inventarioId);
@@ -155,11 +167,11 @@ export function InicioScreen(): JSX.Element {
 
   if (rol === 'coordinador') {
     tituloEstado = 'Estado del inventario';
-    if (inventario && hojasCoordinador) {
-      const asignadas = hojasCoordinador.filter((h) => h.asignados.length > 0).length;
-      const finalizadas = hojasCoordinador.filter((h) => h.estado === 'finalizada').length;
+    if (inventario && hojasRonda1) {
+      const asignadas = hojasRonda1.filter((h) => h.asignados.length > 0).length;
+      const finalizadas = hojasRonda1.filter((h) => h.estado === 'finalizada').length;
       const contando = new Set(
-        hojasCoordinador.filter((h) => h.estado !== 'pendiente').flatMap((h) => h.asignados),
+        hojasRonda1.filter((h) => h.estado !== 'pendiente').flatMap((h) => h.asignados),
       ).size;
       cifras = `${inventario.totalHojas} hojas · ${formatoMiles(inventario.items)} ítems · ${asignadas} asignadas`;
       filasEstado = [
@@ -172,7 +184,7 @@ export function InicioScreen(): JSX.Element {
         },
         { etiqueta: 'Contando ahora', valor: String(contando), pct: 'colaboradores' },
       ];
-      sync = sincronizacionDeHojas(hojasCoordinador);
+      sync = sincronizacionDeHojas(hojasRonda1);
     }
   } else if (rol === 'conteo') {
     tituloEstado = 'Tu avance';
@@ -197,25 +209,29 @@ export function InicioScreen(): JSX.Element {
     }
   } else if (rol === 'auditor') {
     tituloEstado = 'Estado de la auditoría';
-    if (inventario) {
-      // Mismo dato local fijo que components/pantallas/CicloScreen.tsx (ver
-      // el comentario ahí): no existe todavía un RepositorioCiclo que
-      // modele rondas de conteo (1er/2do/3er) ni comparación contra stock
-      // ERP, así que "persisten tras 3 pasadas" no sale de ningún puerto.
-      // El total de ítems SÍ es real (repositorioInventario.activo()).
-      const persistentesT3 = 130;
-      const cuadradosFinal = inventario.items - persistentesT3;
-      const pctFinal = inventario.items > 0 ? (cuadradosFinal / inventario.items) * 100 : 0;
-      cifras = `${inventario.totalHojas} hojas · ${formatoMiles(inventario.items)} ítems · 3er conteo cerrado`;
+    if (inventario && hojasRonda1) {
+      // El Auditor todavía solo tiene datos reales del 1er conteo (mismo
+      // límite que components/pantallas/CicloScreen.tsx: no existe un
+      // puerto que traiga las rondas 2/3 ni el comparativo contra
+      // Dynamics — ver el comentario largo ahí). Antes acá se mostraba
+      // "3er conteo cerrado" y "130 por auditar" como datos fijos: LA
+      // MISMA sesión decía en Ciclo que faltaba terminar el 1er conteo y
+      // acá que el ciclo entero ya había cerrado. Ahora las dos pantallas
+      // usan la misma función sobre las mismas hojas.
+      const estado1 = estadoConjunto(hojasRonda1);
+      const avance1 = avanceConjunto(hojasRonda1);
+      const pct1 = avance1.totalItems > 0 ? (avance1.itemsContados / avance1.totalItems) * 100 : 0;
+      const etiquetaEstado1 = ETIQUETA_ESTADO_1ER_CONTEO[estado1];
+      cifras = `${inventario.totalHojas} hojas · ${formatoMiles(inventario.items)} ítems · ${etiquetaEstado1}`;
       filasEstado = [
-        { etiqueta: 'Ciclo de conteos', valor: '3er conteo', pct: 'cerrado', color: colors.ok },
+        { etiqueta: 'Ciclo de conteos', valor: etiquetaEstado1, color: estado1 === 'finalizada' ? colors.ok : colors.proceso },
         {
-          etiqueta: 'Cuadrado tras 3 pasadas',
-          valor: formatoMiles(cuadradosFinal),
-          pct: `/ ${formatoMiles(inventario.items)} (${formatoPct(pctFinal)}%)`,
+          etiqueta: 'Ítems contados (1er conteo)',
+          valor: formatoMiles(avance1.itemsContados),
+          pct: `/ ${formatoMiles(avance1.totalItems)} (${formatoPct(pct1)}%)`,
           color: colors.ok,
         },
-        { etiqueta: 'Por auditar', valor: String(persistentesT3), pct: 'ítems', color: colors.proceso },
+        { etiqueta: '2do y 3er conteo', valor: 'Sin datos todavía' },
       ];
     }
   } else {

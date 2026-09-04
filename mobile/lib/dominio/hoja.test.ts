@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { avance, finalizar, puedeEditar, puedeFinalizar } from './hoja';
+import { avance, avanceConjunto, estadoConjunto, finalizar, puedeEditar, puedeFinalizar } from './hoja';
 import type { Conteo, EstadoHoja, HojaConteo, Producto } from './tipos';
 
 function producto(id: number): Producto {
@@ -112,6 +112,43 @@ describe('puedeFinalizar', () => {
       conteos: [conteoDe(1)],
     });
     expect(puedeFinalizar(h)).toEqual({ puede: false, faltantes: 1 });
+  });
+});
+
+describe('estadoConjunto', () => {
+  it('sin hojas: "sin-hojas" (el paso ni arrancó, no es "pendiente")', () => {
+    expect(estadoConjunto([])).toBe('sin-hojas');
+  });
+
+  it('todas pendientes: "pendiente"', () => {
+    expect(estadoConjunto([hoja({ estado: 'pendiente' }), hoja({ estado: 'pendiente' })])).toBe('pendiente');
+  });
+
+  it('todas finalizadas: "finalizada"', () => {
+    expect(estadoConjunto([hoja({ estado: 'finalizada' }), hoja({ estado: 'finalizada' })])).toBe('finalizada');
+  });
+
+  it('una sola sin terminar mantiene el conjunto "en-proceso", aunque el resto ya cerró', () => {
+    const hojas = [hoja({ estado: 'finalizada' }), hoja({ estado: 'finalizada' }), hoja({ estado: 'en-proceso' })];
+    expect(estadoConjunto(hojas)).toBe('en-proceso');
+  });
+
+  it('mezcla de pendiente y finalizada (sin ninguna en-proceso todavia) tambien es "en-proceso"', () => {
+    expect(estadoConjunto([hoja({ estado: 'pendiente' }), hoja({ estado: 'finalizada' })])).toBe('en-proceso');
+  });
+});
+
+describe('avanceConjunto', () => {
+  it('suma contados/total de items y cuenta hojas finalizadas sobre el total de hojas', () => {
+    const hojas = [
+      hoja({ estado: 'finalizada', productos: [producto(1), producto(2)], conteos: [conteoDe(1), conteoDe(2)] }),
+      hoja({ estado: 'en-proceso', productos: [producto(3), producto(4), producto(5)], conteos: [conteoDe(3)] }),
+    ];
+    expect(avanceConjunto(hojas)).toEqual({ hojasFinalizadas: 1, totalHojas: 2, itemsContados: 3, totalItems: 5 });
+  });
+
+  it('sin hojas: todo en cero, no NaN', () => {
+    expect(avanceConjunto([])).toEqual({ hojasFinalizadas: 0, totalHojas: 0, itemsContados: 0, totalItems: 0 });
   });
 });
 
