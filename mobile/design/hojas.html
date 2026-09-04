@@ -337,6 +337,47 @@ body {
 .rol:last-child { border-right: 0; }
 .rol.activo { background: var(--rojo); color: #fff; }
 
+/* ---------- Paso 1: tipo de inventario ----------
+   El mensual cuenta ~6.300 items y el anual ~11.800. No es una preferencia
+   de vista: define QUE UNIVERSO se cuenta. Por eso se elige ANTES de traer
+   el catalogo y la explicacion va debajo, sin tecnicismos -- que alguien
+   cuente el anual creyendo que cuenta el mensual es una jornada de once
+   personas perdida. */
+.campo-tipo { display: flex; flex-direction: column; gap: 6px; }
+.campo-tipo > label { font-size: 13.5px; font-weight: 600; color: var(--app-tinta); }
+.ayuda-tipo { margin: 0; font-size: 12px; line-height: 1.4; color: var(--app-gris); }
+
+/* ---------- Paso 1: de donde sale el numero ----------
+   Lo que el coordinador mira el dia que alguien pregunta "por que esta
+   hoja no tiene tal producto". */
+.resumen-snapshot {
+  display: flex; flex-direction: column; gap: 5px;
+  padding: 11px; border-radius: 10px;
+  border: 1px solid var(--app-borde);
+}
+.resumen-snapshot[hidden] { display: none; }
+.resumen-fila { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+.resumen-fila dt { flex: 1; font-size: 12px; color: var(--app-gris); }
+.resumen-fila dd { margin: 0; font-size: 13.5px; font-weight: 700; color: var(--app-tinta); font-variant-numeric: tabular-nums; }
+.resumen-fila dd.tenue { font-size: 12.5px; font-weight: 600; color: var(--app-gris); }
+.resumen-subtitulo {
+  margin: 4px 0 0; font-size: 10.5px; font-weight: 600;
+  letter-spacing: .12em; text-transform: uppercase; color: var(--app-gris-cl);
+}
+
+/* ---------- Paso 1: sucursal sin almacen ----------
+   Mismo criterio que "Elegi primero la sucursal" en el login: el motivo
+   escrito y la salida a mano. Un boton gris sin explicacion obliga a
+   adivinar. Paleta "proceso" (algo pendiente), nunca el rojo de marca. */
+.aviso-bloqueo {
+  display: flex; flex-direction: column; gap: 10px;
+  padding: 11px; border-radius: 10px;
+  background: var(--proceso-suave); color: var(--proceso);
+  font-size: 12.5px; line-height: 1.4; font-weight: 500;
+}
+.aviso-bloqueo[hidden] { display: none; }
+.aviso-bloqueo p { margin: 0; }
+
 /* El selector de tamano de hoja (paso 2) reusa .roles/.rol pero con
    boton real (button, no div): no hay estado inerte, el coordinador
    elige de una vez entre las 4 opciones (20 / 30 / 50 / Otro). Solo se
@@ -618,7 +659,23 @@ button.rol {
           <h2>Catálogo de Dynamics</h2>
           <span class="badge" id="badge-paso1" aria-live="polite">Pendiente</span>
         </div>
-        <p class="tarjeta-texto" id="texto-paso1">Trae el catálogo completo de la sucursal desde Dynamics: es la foto contra la que se compara todo el inventario. Es una lectura del catálogo — no escribe ni ajusta nada en Dynamics.</p>
+        <p class="tarjeta-texto" id="texto-paso1">Trae de Dynamics los productos con stock en el almacén de esta sucursal: es la foto contra la que se compara todo el inventario. Es una lectura — no escribe ni ajusta nada en Dynamics.</p>
+
+        <div class="aviso-bloqueo" id="aviso-almacen" hidden>
+          <p>Esta sucursal todavía no tiene asociado un almacén de Dynamics. Sin almacén no hay stock, y sin stock no se puede armar el inventario: el stock no vive en el catálogo de productos, se consulta por almacén.</p>
+          <p id="aviso-almacen-salida"></p>
+        </div>
+
+        <div class="campo-tipo" id="campo-tipo">
+          <label id="lbl-tipo">Tipo de inventario</label>
+          <div class="roles" id="tipos" role="group" aria-labelledby="lbl-tipo">
+            <button type="button" class="rol activo" data-tipo="mensual" aria-pressed="true">Mensual</button>
+            <button type="button" class="rol" data-tipo="anual" aria-pressed="false">Anual</button>
+          </div>
+          <p class="ayuda-tipo" id="ayuda-tipo"></p>
+        </div>
+
+        <dl class="resumen-snapshot" id="resumen-snapshot" hidden></dl>
       </div>
 
       <div class="tarjeta bloqueada" id="tarjeta-paso2">
@@ -675,8 +732,10 @@ button.rol {
 
   <section class="pruebas">
     <h3>Atajos para validar</h3>
-    <p>Los 3 pasos son reales y en orden: traé la foto del catálogo, elegí el tamaño de hoja (20, 30, 50 o una cantidad personalizada de ítems) para crearlas y repartilas entre los 8 contadores presentes. La foto y la creación se simulan con un pequeño retardo.</p>
-    <div class="atajos" id="atajos"></div>
+    <p>Los 3 pasos son reales y en orden. En el paso 1 elegí el <strong>tipo de inventario</strong> antes de traer el catálogo: el mensual cuenta solo lo que es responsabilidad del personal, el anual cuenta todo &mdash; y el número de ítems cambia bastante entre uno y otro. Al traerlo vas a ver de dónde sale ese número: cuántos entraron y cuántos quedaron afuera, por motivo. Después elegí el tamaño de hoja (20, 30, 50 o una cantidad personalizada) y repartilas entre los 8 contadores presentes. Con el atajo de abajo podés ver qué pasa cuando la sucursal <strong>no tiene almacén de Dynamics</strong>: sin almacén no hay stock, y el paso 1 no deja avanzar.</p>
+    <div class="atajos" id="atajos">
+      <button type="button" class="atajo" id="btn-atajo-almacen">Simular sucursal SIN almacén</button>
+    </div>
   </section>
 
 </div>
@@ -703,7 +762,33 @@ button.rol {
   /* El catalogo es plano: no hay agrupacion por zona fisica (no existe
      esa funcionalidad en el negocio). Un total fijo de items alcanza
      para generar hojas numeradas de forma contigua. */
-  var TOTAL_ITEMS = 8000;
+  /* Medido contra el tenant real de Dynamics (backend/README.md #Dynamics):
+     el universo cambia MUCHO segun el tipo, y despues el filtro de stock por
+     almacen lo recorta todavia mas. Ya no hay un "8.000" fijo: el numero
+     sale del snapshot. */
+  var TIPOS = {
+    mensual: {
+      etiqueta: 'Mensual',
+      explicacion: 'Cuenta solo los productos que son responsabilidad del personal. Es el de todos los meses.',
+      /* Del catalogo del tenant real, tras filtrar activos + responsabilidad
+         del empleado + CON stock en el almacen de la sucursal. */
+      items: 1500,
+      fuera: { sinStock: 4797, deEmpresa: 5103, noActivos: 435 }
+    },
+    anual: {
+      etiqueta: 'Anual',
+      explicacion: 'Cuenta todo el catálogo, incluido lo que asume la empresa. Son bastantes más ítems y lleva más tiempo.',
+      items: 3180,
+      fuera: { sinStock: 8220, noActivos: 435 }
+    }
+  };
+
+  /* La sucursal de la sesion. `almacen: null` seria una sucursal sin
+     almacen configurado -- se puede probar con el atajo de abajo. */
+  var sucursal = { nombre: 'Market Central Luzuriaga', almacen: 'MD01_LUZ' };
+  var rolSesion = 'coordinador';
+
+  var TOTAL_ITEMS = TIPOS.mensual.items;
 
   /* Los 8 contadores presentes de los 11 colaboradores de Luzuriaga.
      Los otros 3 son el coordinador y los dos auditores: no cuentan. */
@@ -730,7 +815,11 @@ button.rol {
      asignacion sin hojas. Cada paso se habilita solo cuando el anterior
      termino. */
   var estado = {
-    snapshot: null,       // { items, fecha, hora } una vez traido
+    snapshot: null,       // { items, fecha, hora, fuera } una vez traido
+    /* 'mensual' | 'anual' -- QUE UNIVERSO se cuenta, no una preferencia de
+       vista. Default mensual: es el de todos los meses, el anual hay que
+       pedirlo. Se congela al traer el catalogo. */
+    tipo: 'mensual',
     hojasCreadas: false,
     tamano: null,         // entero > 0 -- se elige en el paso 2, nunca preseleccionado
     /* 'preset' | 'personalizado' -- de que MODO viene tamano, no se infiere
@@ -839,8 +928,13 @@ button.rol {
       fijar(ICONO_DESCARGA, 'Trayendo la foto del catálogo...', true, 'Esperá a que termine de traer la foto del catálogo de Dynamics');
     } else if (estado.cargando === 'hojas') {
       fijar(ICONO_CREAR, 'Creando hojas...', true, 'Esperá a que termine de crear las hojas de conteo');
+    } else if (!sucursal.almacen) {
+      /* No se deja avanzar Y el propio label dice por que: un boton gris sin
+         motivo obliga a la persona a adivinar. */
+      fijar(ICONO_DESCARGA, 'Falta configurar el almacén', true,
+        'Esta sucursal no tiene un almacén de Dynamics asociado; sin almacén no hay stock que traer');
     } else if (!estado.snapshot) {
-      fijar(ICONO_DESCARGA, 'Traer foto del catálogo de Dynamics', false, null);
+      fijar(ICONO_DESCARGA, 'Traer catálogo ' + TIPOS[estado.tipo].etiqueta.toLowerCase() + ' de Dynamics', false, null);
     } else if (!estado.tamano && estado.modoTamano === 'personalizado') {
       fijar(ICONO_CREAR, 'Ingresá la cantidad de ítems', true,
         'Ingresá un número entero entre 1 y ' + nf.format(TOTAL_ITEMS) + ' ítems por hoja');
@@ -937,27 +1031,101 @@ button.rol {
      en Dynamics. El ajuste automatico hacia Dynamics queda para una
      fase 2 futura (acordado por Gilmer y Fernando en la reunion). */
   function traerSnapshot() {
+    if (!sucursal.almacen) return;
     estado.cargando = 'snapshot';
     pintarAccionPrincipal();
 
     setTimeout(function () {
-      estado.snapshot = { items: TOTAL_ITEMS, fecha: '01/09/2026', hora: '09:41' };
+      var t = TIPOS[estado.tipo];
+      TOTAL_ITEMS = t.items;
+      estado.snapshot = { items: t.items, fecha: '01/09/2026', hora: '09:41', fuera: t.fuera };
       estado.cargando = null;
 
       $('badge-paso1').className = 'badge ok';
       $('badge-paso1').textContent = 'Hecho';
 
+      /* El tipo ya no se puede cambiar: cambiarlo despues de traer el
+         catalogo cambiaria el universo del inventario a mitad de camino. */
+      $('campo-tipo').hidden = true;
+
       var texto = $('texto-paso1');
       texto.className = 'resultado';
       texto.textContent = nf.format(estado.snapshot.items) +
-        ' ítems traídos de Dynamics · ' + estado.snapshot.fecha + ', ' + estado.snapshot.hora +
+        ' ítems traídos de Dynamics (inventario ' + t.etiqueta.toLowerCase() + ') · ' +
+        estado.snapshot.fecha + ', ' + estado.snapshot.hora +
         '. Es una lectura del catálogo: no escribe ni ajusta nada en Dynamics.';
+
+      pintarResumenSnapshot();
 
       desbloquearPaso2();
       pintarCifras();
       pintarPasos();
       mostrarToast(nf.format(estado.snapshot.items) + ' ítems traídos de Dynamics');
     }, 1100);
+  }
+
+  /* De donde salio el numero: cuantos entraron y cuantos quedaron afuera,
+     por motivo. Sin esto, la unica respuesta posible a "por que esta hoja no
+     tiene tal producto" es "no se" -- y un inventario que no puede explicar
+     su propio universo no se puede auditar. */
+  function pintarResumenSnapshot() {
+    var cont = $('resumen-snapshot');
+    cont.innerHTML = '';
+    if (!estado.snapshot) { cont.hidden = true; return; }
+
+    function fila(etiqueta, valor, tenue) {
+      var d = document.createElement('div');
+      d.className = 'resumen-fila';
+      var dt = document.createElement('dt');
+      dt.textContent = etiqueta;
+      var dd = document.createElement('dd');
+      if (tenue) dd.className = 'tenue';
+      dd.textContent = valor;
+      d.appendChild(dt);
+      d.appendChild(dd);
+      return d;
+    }
+
+    cont.appendChild(fila('Entraron al inventario', nf.format(estado.snapshot.items) + ' ítems', false));
+
+    var fuera = estado.snapshot.fuera || {};
+    var motivos = [
+      ['sin stock en el almacén', fuera.sinStock],
+      ['no activos en Dynamics', fuera.noActivos],
+      ['a cargo de la empresa', fuera.deEmpresa]
+    ].filter(function (m) { return typeof m[1] === 'number'; });
+
+    if (motivos.length) {
+      var sub = document.createElement('p');
+      sub.className = 'resumen-subtitulo';
+      sub.textContent = 'Quedaron afuera';
+      cont.appendChild(sub);
+      motivos.forEach(function (m) { cont.appendChild(fila(m[0], nf.format(m[1]), true)); });
+    }
+    cont.hidden = false;
+  }
+
+  /* El tipo define QUE se trae, no como se muestra: se elige antes del
+     snapshot y despues desaparece. */
+  function pintarTipos() {
+    Array.prototype.forEach.call($('tipos').querySelectorAll('.rol'), function (b) {
+      var activo = b.getAttribute('data-tipo') === estado.tipo;
+      b.classList.toggle('activo', activo);
+      b.setAttribute('aria-pressed', String(activo));
+      b.disabled = !!estado.snapshot || !sucursal.almacen;
+    });
+    $('ayuda-tipo').textContent = TIPOS[estado.tipo].explicacion;
+  }
+
+  /* Sin almacen no se avanza, y el motivo va escrito: mismo criterio que
+     "Elegi primero la sucursal" en el login. */
+  function pintarAvisoAlmacen() {
+    var falta = !sucursal.almacen;
+    $('aviso-almacen').hidden = !falta;
+    $('campo-tipo').hidden = falta || !!estado.snapshot;
+    $('aviso-almacen-salida').textContent = rolSesion === 'administrador'
+      ? 'Podés asociárselo desde Tiendas.'
+      : 'Pedile a un Administrador que le asocie el almacén de Dynamics a esta tienda.';
   }
 
   function desbloquearPaso2() {
@@ -1100,6 +1268,33 @@ button.rol {
 
   $('btn-salir').addEventListener('click', function () { mostrarToast('Cerrando la sesión de José Tarazona'); });
 
+  Array.prototype.forEach.call($('tipos').querySelectorAll('.rol'), function (b) {
+    b.addEventListener('click', function () {
+      if (estado.snapshot) return;   /* ya se trajo: el universo esta congelado */
+      estado.tipo = b.getAttribute('data-tipo');
+      pintarTipos();
+      pintarAccionPrincipal();
+    });
+  });
+
+  /* Atajo de la maqueta, no de la app: en la app el almacen sale de la
+     sucursal de la sesion. Aca se puede sacar para ver el bloqueo. */
+  function pintarAtajoAlmacen() {
+    var b = $('btn-atajo-almacen');
+    b.textContent = sucursal.almacen ? 'Simular sucursal SIN almacén' : 'Devolver el almacén a la sucursal';
+  }
+  $('btn-atajo-almacen').addEventListener('click', function () {
+    sucursal.almacen = sucursal.almacen ? null : 'MD01_LUZ';
+    pintarAtajoAlmacen();
+    pintarAvisoAlmacen();
+    pintarTipos();
+    pintarAccionPrincipal();
+    mostrarToast(sucursal.almacen ? 'Almacén MD01_LUZ asociado' : 'Sucursal sin almacén configurado');
+  });
+
+  pintarTipos();
+  pintarAvisoAlmacen();
+  pintarAtajoAlmacen();
   pintarPasos();
   pintarCifras();
 })();

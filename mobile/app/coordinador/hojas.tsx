@@ -4,15 +4,32 @@ import { useEffect, useMemo, useRef, useState, type JSX, type ReactNode } from '
 import { ActivityIndicator, Alert, Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { PantallaConTabs } from '../../components/navegacion/PantallaConTabs';
-import { AvanceFila, BarraApp, Badge, Button, type BadgeVariant } from '../../components/ui';
+import { AvanceFila, BarraApp, Badge, Button, formatoFechaHora, formatoMiles, type BadgeVariant } from '../../components/ui';
 import { repositorioHojas, repositorioInventario, repositorioSesion } from '../../lib/contenedor';
 import { partirEnHojas } from '../../lib/dominio/lote';
 import { TAMANOS_HOJA, type Colaborador, type HojaConteo, type TamanoHoja } from '../../lib/dominio/tipos';
-import { ErrorSnapshot, type AvanceSnapshot } from '../../lib/puertos/repositorios';
+import { ErrorSnapshot, type AvanceSnapshot, type DesgloseSnapshot, type TipoInventario } from '../../lib/puertos/repositorios';
 import { useSesion } from '../../lib/sesion-contexto';
 import { colors, fonts, fontSize, radius, spacing } from '../../lib/theme';
 
-const nf = new Intl.NumberFormat('es-PE');
+
+/**
+ * Los dos universos, con la explicación que ve el Coordinador. El orden
+ * importa: mensual primero porque es el default y el que se hace todos los
+ * meses; el anual es la excepción de fin de año.
+ */
+const TIPOS_INVENTARIO: { id: TipoInventario; etiqueta: string; explicacion: string }[] = [
+  {
+    id: 'mensual',
+    etiqueta: 'Mensual',
+    explicacion: 'Cuenta solo los productos que son responsabilidad del personal. Es el de todos los meses.',
+  },
+  {
+    id: 'anual',
+    etiqueta: 'Anual',
+    explicacion: 'Cuenta todo el catálogo, incluido lo que asume la empresa. Son bastantes más ítems y lleva más tiempo.',
+  },
+];
 
 type EstadoPaso = 'bloqueado' | 'pendiente' | 'hecho';
 
@@ -84,6 +101,101 @@ function SelectorTamano({ valor, onElegir, disabled }: SelectorTamanoProps): JSX
   );
 }
 
+interface SelectorTipoProps {
+  valor: TipoInventario;
+  onElegir: (tipo: TipoInventario) => void;
+  disabled: boolean;
+}
+
+/**
+ * Qué universo se cuenta. Es `.segmentado` y no `.roles` porque acá SÍ hay
+ * una elección real — y de las más caras del sistema: el mensual mide ~6.300
+ * ítems y el anual ~11.800. Que alguien cuente el anual creyendo que cuenta
+ * el mensual es una jornada de once personas perdida.
+ *
+ * Se elige ANTES de traer el catálogo, no después: el tipo define qué se
+ * trae, no cómo se muestra.
+ */
+function SelectorTipo({ valor, onElegir, disabled }: SelectorTipoProps): JSX.Element {
+  return (
+    <View style={styles.campoTipo}>
+      <Text style={styles.etiquetaTipo}>Tipo de inventario</Text>
+      <View style={[styles.segmentado, disabled && styles.segmentadoDeshabilitado]}>
+        {TIPOS_INVENTARIO.map((tipo, i) => {
+          const activo = valor === tipo.id;
+          return (
+            <Pressable
+              key={tipo.id}
+              onPress={() => onElegir(tipo.id)}
+              disabled={disabled}
+              accessibilityRole="button"
+              accessibilityState={{ selected: activo, disabled }}
+              style={[styles.segmento, i < TIPOS_INVENTARIO.length - 1 && styles.segmentoConBorde, activo && styles.segmentoActivo]}
+            >
+              <Text style={[styles.segmentoTexto, activo && styles.segmentoTextoActivo]}>{tipo.etiqueta}</Text>
+            </Pressable>
+          );
+        })}
+      </View>
+      {/* La diferencia, en una línea y sin tecnicismos: es lo único que
+          separa contar 6.300 ítems de contar 11.800. */}
+      <Text style={styles.ayudaTipo}>{TIPOS_INVENTARIO.find((t) => t.id === valor)?.explicacion}</Text>
+    </View>
+  );
+}
+
+interface ResumenSnapshotProps {
+  items: number | null;
+  desglose: DesgloseSnapshot | null;
+  tipo: TipoInventario;
+}
+
+/**
+ * De dónde salió el número. Es lo que el Coordinador va a mirar el día que
+ * alguien pregunte "¿por qué esta hoja no tiene tal producto?".
+ *
+ * Si el servidor no informó el desglose, se muestra solo el total y una
+ * línea que dice qué criterio se aplicó — nunca ceros inventados: "0 sin
+ * stock" y "no sé cuántos quedaron sin stock" son afirmaciones distintas, y
+ * en un inventario esa diferencia se paga.
+ */
+function ResumenSnapshot({ items, desglose, tipo }: ResumenSnapshotProps): JSX.Element | null {
+  if (items === null) return null;
+
+  const fuera: { etiqueta: string; valor: number }[] = [];
+  if (desglose?.sinStock !== undefined) fuera.push({ etiqueta: 'sin stock en el almacén', valor: desglose.sinStock });
+  if (desglose?.noActivos !== undefined) fuera.push({ etiqueta: 'no activos en Dynamics', valor: desglose.noActivos });
+  if (desglose?.deEmpresa !== undefined) fuera.push({ etiqueta: 'a cargo de la empresa', valor: desglose.deEmpresa });
+  if (desglose?.sinResponsable !== undefined) fuera.push({ etiqueta: 'sin responsable asignado', valor: desglose.sinResponsable });
+
+  return (
+    <View style={styles.resumenSnapshot}>
+      <View style={styles.resumenFila}>
+        <Text style={styles.resumenEtiqueta}>Entraron al inventario</Text>
+        <Text style={styles.resumenValor}>{formatoMiles(items)} ítems</Text>
+      </View>
+
+      {fuera.length > 0 ? (
+        <>
+          <Text style={styles.resumenSubtitulo}>Quedaron afuera</Text>
+          {fuera.map((f) => (
+            <View key={f.etiqueta} style={styles.resumenFila}>
+              <Text style={styles.resumenEtiqueta}>{f.etiqueta}</Text>
+              <Text style={styles.resumenValorTenue}>{formatoMiles(f.valor)}</Text>
+            </View>
+          ))}
+        </>
+      ) : (
+        <Text style={styles.resumenNota}>
+          {tipo === 'mensual'
+            ? 'Se contaron los productos activos, con stock en el almacén de la sucursal y que son responsabilidad del personal. El resto quedó afuera.'
+            : 'Se contó todo el catálogo activo con stock en el almacén de la sucursal, incluido lo que asume la empresa.'}
+        </Text>
+      )}
+    </View>
+  );
+}
+
 /**
  * Panel del Coordinador — 3 pasos en orden, cada uno bloqueado hasta que
  * el anterior termina (mobile/design/hojas.html, ya validada). Un solo
@@ -107,6 +219,8 @@ export default function HojasScreen(): JSX.Element {
   const [tamanoCreado, setTamanoCreado] = useState<TamanoHoja | null>(null);
   const [contadores, setContadores] = useState<Colaborador[]>([]);
 
+  const [tipoElegido, setTipoElegido] = useState<TipoInventario>('mensual');
+  const [desglose, setDesglose] = useState<DesgloseSnapshot | null>(null);
   const [tamanoElegido, setTamanoElegido] = useState<TamanoHoja | null>(null);
   const [trayendoSnapshot, setTrayendoSnapshot] = useState(false);
   const [avanceSnapshot, setAvanceSnapshot] = useState<AvanceSnapshot | null>(null);
@@ -147,6 +261,22 @@ export default function HojasScreen(): JSX.Element {
       vigente = false;
     };
   }, [sesion]);
+
+  /**
+   * ¿Sabemos que esta sucursal NO tiene almacén de Dynamics asociado?
+   *
+   * `null` es el backend diciendo explícitamente "no tiene". `undefined` es
+   * "el dato no vino" — y esa diferencia decide si se bloquea o no: hoy
+   * `POST /api/sesion/ingresar` todavía NO manda el almacén en
+   * `sesion.sucursal`, así que casi siempre llega `undefined`. Bloquear por
+   * `undefined` dejaría muertas también las sucursales que SÍ tienen
+   * almacén, que es peor que el problema que se quiere evitar.
+   *
+   * Así, cuando el login empiece a mandar el campo, el bloqueo empieza a
+   * funcionar solo. Y mientras tanto la red de seguridad es el código de
+   * error `sin-almacen`, que llega igual — solo que después de intentar.
+   */
+  const sinAlmacen = sesion?.sucursal?.almacenId === null;
 
   const paso1Hecho = inventarioId !== null;
   const paso2Hecho = hojas.length > 0;
@@ -204,6 +334,21 @@ export default function HojasScreen(): JSX.Element {
           Alert.alert('Dynamics no está configurado', `${error.message} Pedile a un Administrador que cargue las credenciales.`);
         }
         return;
+      case 'sin-almacen':
+        // Distinto de "faltan credenciales": esto se arregla en Tiendas, no
+        // en Configuración, y solo lo puede hacer un Administrador.
+        if (sesion!.colaborador.rol === 'administrador') {
+          Alert.alert('La sucursal no tiene almacén', error.message, [
+            { text: 'Cerrar', style: 'cancel' },
+            { text: 'Ir a Tiendas', onPress: () => router.push('/administrador/tiendas') },
+          ]);
+        } else {
+          Alert.alert(
+            'La sucursal no tiene almacén',
+            `${error.message} Pedile a un Administrador que le asocie el almacén de Dynamics a esta tienda.`,
+          );
+        }
+        return;
       case 'credenciales-rechazadas':
         Alert.alert(
           'Dynamics rechazó las credenciales',
@@ -230,12 +375,17 @@ export default function HojasScreen(): JSX.Element {
     controladorSnapshotRef.current = controlador;
     try {
       const resultado = await repositorioInventario.traerSnapshot(sesion!.sucursal!.id, {
+        tipo: tipoElegido,
         onAvance: setAvanceSnapshot,
         signal: controlador.signal,
       });
       setInventarioId(resultado.inventarioId);
       setItems(resultado.items);
       setTomadoEn(resultado.tomadoEn);
+      // `?? null`: si el servidor no informó el desglose, se guarda la
+      // ausencia. La pantalla calla en vez de mostrar ceros que se leerían
+      // como "no se excluyó ninguno".
+      setDesglose(resultado.desglose ?? null);
     } catch (error) {
       manejarErrorSnapshot(error);
     } finally {
@@ -280,7 +430,7 @@ export default function HojasScreen(): JSX.Element {
   }
 
   const cifras = items
-    ? `${nf.format(hojas.length || (previa?.total ?? 0))} hojas · ${nf.format(items)} ítems`
+    ? `${formatoMiles(hojas.length || (previa?.total ?? 0))} hojas · ${formatoMiles(items)} ítems`
     : undefined;
 
   return (
@@ -297,13 +447,45 @@ export default function HojasScreen(): JSX.Element {
             titulo="Catálogo de Dynamics"
             estado={paso1Hecho ? 'hecho' : 'pendiente'}
             texto={
-              paso1Hecho && items && tomadoEn
-                ? `${nf.format(items)} ítems traídos de Dynamics · ${new Date(tomadoEn).toLocaleString('es-PE')}. Es una lectura del catálogo — no escribe ni ajusta nada en Dynamics.`
-                : trayendoSnapshot
-                  ? 'Trayendo el catálogo por páginas — con la WiFi de la tienda puede tardar varios minutos, no te vayas de la pantalla.'
-                  : 'Trae el catálogo completo de la sucursal desde Dynamics: es la foto contra la que se compara todo el inventario. Es una lectura del catálogo — no escribe ni ajusta nada en Dynamics.'
+              sinAlmacen
+                ? 'Esta sucursal todavía no tiene asociado un almacén de Dynamics, y sin almacén no hay stock contra el cual contar. Un Administrador se lo asigna en Tiendas.'
+                : paso1Hecho && items && tomadoEn
+                  ? `${formatoMiles(items)} ítems traídos de Dynamics · ${formatoFechaHora(tomadoEn)}. Es una lectura del catálogo — no escribe ni ajusta nada en Dynamics.`
+                  : trayendoSnapshot
+                    ? 'Trayendo el catálogo por páginas — con la WiFi de la tienda puede tardar varios minutos, no te vayas de la pantalla.'
+                    : 'Trae de Dynamics los productos con stock en el almacén de esta sucursal: es la foto contra la que se compara todo el inventario. Es una lectura — no escribe ni ajusta nada en Dynamics.'
             }
           >
+            {/* El motivo escrito y la salida, como en "Elegí primero la
+                sucursal" del login: un botón deshabilitado sin explicación
+                obliga a adivinar. */}
+            {sinAlmacen ? (
+              <View style={styles.avisoBloqueo}>
+                <Text style={styles.avisoBloqueoTexto}>
+                  Sin almacén configurado no se puede armar el inventario: el stock no vive en el catálogo de
+                  productos, se consulta por almacén.
+                </Text>
+                {sesion.colaborador.rol === 'administrador' ? (
+                  <Button
+                    label="Ir a configurar el almacén"
+                    variant="outline"
+                    size="sm"
+                    onPress={() => router.push('/administrador/tiendas')}
+                  />
+                ) : (
+                  <Text style={styles.avisoBloqueoTexto}>Pedile a un Administrador que la configure.</Text>
+                )}
+              </View>
+            ) : null}
+
+            {/* Antes de traer: qué universo. Después, ya no se puede cambiar
+                sin rehacer el snapshot, así que desaparece. */}
+            {!paso1Hecho && !sinAlmacen ? (
+              <SelectorTipo valor={tipoElegido} onElegir={setTipoElegido} disabled={trayendoSnapshot} />
+            ) : null}
+
+            {paso1Hecho ? <ResumenSnapshot items={items} desglose={desglose} tipo={tipoElegido} /> : null}
+
             {trayendoSnapshot ? (
               <>
                 <AvanceFila
@@ -311,8 +493,8 @@ export default function HojasScreen(): JSX.Element {
                     !avanceSnapshot
                       ? 'Conectando con Dynamics…'
                       : avanceSnapshot.total !== null
-                        ? `${nf.format(avanceSnapshot.traidos)} de ${nf.format(avanceSnapshot.total)} ítems`
-                        : `${nf.format(avanceSnapshot.traidos)} ítems traídos…`
+                        ? `${formatoMiles(avanceSnapshot.traidos)} de ${formatoMiles(avanceSnapshot.total)} ítems`
+                        : `${formatoMiles(avanceSnapshot.traidos)} ítems traídos…`
                   }
                   // Sin total todavía (Dynamics no lo contestó aún): barra al
                   // mínimo visible en vez de en 0, para que no parezca trabada.
@@ -332,7 +514,7 @@ export default function HojasScreen(): JSX.Element {
               !paso1Hecho
                 ? 'Traé primero el catálogo de Dynamics para poder crear las hojas.'
                 : paso2Hecho
-                  ? `${nf.format(hojas.length)} hojas creadas de ${tamanoCreado} ítems (${nf.format(items ?? 0)} ítems en total)${
+                  ? `${formatoMiles(hojas.length)} hojas creadas de ${tamanoCreado} ítems (${formatoMiles(items ?? 0)} ítems en total)${
                       hojas[hojas.length - 1] && hojas[hojas.length - 1].tamano !== tamanoCreado
                         ? ` · la última con ${hojas[hojas.length - 1].tamano} ítems`
                         : ''
@@ -345,7 +527,7 @@ export default function HojasScreen(): JSX.Element {
                 <SelectorTamano valor={tamanoElegido} onElegir={setTamanoElegido} disabled={creandoHojas} />
                 {previa ? (
                   <Text style={styles.previaTexto}>
-                    → {nf.format(previa.total)} hojas de {tamanoElegido} ítems
+                    → {formatoMiles(previa.total)} hojas de {tamanoElegido} ítems
                     {previa.parcial > 0 ? ` · la última con ${previa.parcial} ítems` : ''}
                   </Text>
                 ) : null}
@@ -362,18 +544,20 @@ export default function HojasScreen(): JSX.Element {
               !paso2Hecho
                 ? 'Creá primero las hojas de conteo para poder asignarlas.'
                 : paso3Hecho && resultadoReparto
-                  ? `Las ${nf.format(hojas.length)} hojas ya están repartidas entre los ${contadores.length} contadores presentes, en bloques contiguos (${resultadoReparto}).`
-                  : `Repartí las ${nf.format(hojas.length)} hojas entre los ${contadores.length} contadores presentes, en bloques contiguos. Contar es caminar la góndola, no saltar de punta a punta.`
+                  ? `Las ${formatoMiles(hojas.length)} hojas ya están repartidas entre los ${contadores.length} contadores presentes, en bloques contiguos (${resultadoReparto}).`
+                  : `Repartí las ${formatoMiles(hojas.length)} hojas entre los ${contadores.length} contadores presentes, en bloques contiguos. Contar es caminar la góndola, no saltar de punta a punta.`
             }
           />
 
           <Button
             label={
               !paso1Hecho
-                ? 'Traer catálogo de Dynamics'
+                ? sinAlmacen
+                  ? 'Falta configurar el almacén'
+                  : `Traer catálogo ${tipoElegido === 'anual' ? 'anual' : 'mensual'} de Dynamics`
                 : !paso2Hecho
                   ? tamanoElegido
-                    ? `Crear ${previa ? nf.format(previa.total) : ''} hojas de ${tamanoElegido} ítems`
+                    ? `Crear ${previa ? formatoMiles(previa.total) : ''} hojas de ${tamanoElegido} ítems`
                     : 'Elegí el tamaño de hoja'
                   : !paso3Hecho
                     ? 'Repartir automáticamente'
@@ -382,7 +566,9 @@ export default function HojasScreen(): JSX.Element {
             icon={!paso1Hecho ? CloudDownload : !paso2Hecho ? LayoutGrid : !paso3Hecho ? Users : Check}
             size="lg"
             loading={trayendoSnapshot || creandoHojas || asignando}
-            disabled={(paso1Hecho && !paso2Hecho && !tamanoElegido) || paso3Hecho}
+            // Sin almacén no se deja avanzar, y el propio label dice por qué:
+            // un botón gris sin motivo obliga a la persona a adivinar.
+            disabled={sinAlmacen || (paso1Hecho && !paso2Hecho && !tamanoElegido) || paso3Hecho}
             onPress={!paso1Hecho ? traerSnapshot : !paso2Hecho ? crearHojasAhora : !paso3Hecho ? asignarAhora : undefined}
           />
         </>
@@ -433,5 +619,38 @@ const styles = StyleSheet.create({
   segmentoActivo: { backgroundColor: colors.rojo },
   segmentoTexto: { fontSize: fontSize.sm - 0.5, color: colors.tinta, fontFamily: fonts.bold },
   segmentoTextoActivo: { color: colors.blanco },
+  campoTipo: { gap: 6 },
+  etiquetaTipo: { fontSize: 13.5, color: colors.tinta, fontFamily: fonts.semibold },
+  ayudaTipo: { fontSize: 12, lineHeight: 16.5, color: colors.gris, fontFamily: fonts.regular },
+
+  avisoBloqueo: {
+    gap: 10,
+    padding: 11,
+    borderRadius: radius.md,
+    backgroundColor: colors.procesoSuave,
+  },
+  avisoBloqueoTexto: { fontSize: 12.5, lineHeight: 17, color: colors.proceso, fontFamily: fonts.medium },
+
+  resumenSnapshot: {
+    gap: 5,
+    padding: 11,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: colors.borde,
+  },
+  resumenFila: { flexDirection: 'row', alignItems: 'baseline', justifyContent: 'space-between', gap: 10 },
+  resumenEtiqueta: { flex: 1, fontSize: 12, color: colors.gris, fontFamily: fonts.regular },
+  resumenValor: { fontSize: 13.5, color: colors.tinta, fontFamily: fonts.bold },
+  resumenValorTenue: { fontSize: 12.5, color: colors.gris, fontFamily: fonts.semibold },
+  resumenSubtitulo: {
+    marginTop: 4,
+    fontSize: 10.5,
+    letterSpacing: 1.2,
+    textTransform: 'uppercase',
+    color: colors.grisClaro,
+    fontFamily: fonts.semibold,
+  },
+  resumenNota: { fontSize: 11.5, lineHeight: 16, color: colors.gris, fontFamily: fonts.regular },
+
   previaTexto: { fontSize: 12.5, fontWeight: '600', color: colors.proceso, fontFamily: fonts.semibold },
 });

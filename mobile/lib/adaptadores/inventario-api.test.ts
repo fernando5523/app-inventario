@@ -73,7 +73,34 @@ describe('traerSnapshot — camino feliz', () => {
 
     const llamada = fn.mock.calls.find((c) => c[0].includes('/snapshot'))!;
     expect(llamada[0]).toBe(`${BASE}/api/d365/snapshot`);
-    expect(JSON.parse(llamada[1].body as string)).toEqual({ sucursalId: 1 });
+    // `tipo` viaja SIEMPRE explícito aunque coincida con el default del
+    // servidor: el universo que se cuenta es una decisión del Coordinador y
+    // tiene que ir dicha, no asumida.
+    expect(JSON.parse(llamada[1].body as string)).toEqual({ sucursalId: 1, tipo: 'mensual' });
+  });
+
+  it('el default es MENSUAL: contar el anual sin pedirlo es una jornada de once personas perdida', async () => {
+    const fn = fetchPorRuta({ '/api/d365/estado': CONFIGURADO, '/api/d365/snapshot': SNAPSHOT_OK });
+    await inventarioApi.traerSnapshot(1);
+    const cuerpo = JSON.parse(fn.mock.calls.find((c) => c[0].includes('/snapshot'))![1].body as string);
+    expect(cuerpo.tipo).toBe('mensual');
+  });
+
+  it('manda el tipo ANUAL cuando el Coordinador lo elige', async () => {
+    const fn = fetchPorRuta({ '/api/d365/estado': CONFIGURADO, '/api/d365/snapshot': SNAPSHOT_OK });
+    await inventarioApi.traerSnapshot(1, { tipo: 'anual' });
+    const cuerpo = JSON.parse(fn.mock.calls.find((c) => c[0].includes('/snapshot'))![1].body as string);
+    expect(cuerpo.tipo).toBe('anual');
+  });
+
+  it('traduce "sin almacén" a su propio código: se arregla en Tiendas, no en Configuración', async () => {
+    // Es una salida DISTINTA de `dynamics-no-configurado`: ahí falta cargar
+    // credenciales; acá falta asociarle el almacén de Dynamics a la tienda.
+    fetchPorRuta({
+      '/api/d365/estado': CONFIGURADO,
+      '/api/d365/snapshot': json({ error: 'La sucursal no tiene un almacen de Dynamics asociado.' }, 400),
+    });
+    await expect(inventarioApi.traerSnapshot(1)).rejects.toMatchObject({ codigo: 'sin-almacen' });
   });
 
   it('nunca pide modo "ejemplo": sustituir datos reales en silencio arruina un inventario', async () => {

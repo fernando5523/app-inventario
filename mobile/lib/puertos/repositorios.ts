@@ -120,6 +120,11 @@ export interface AvanceSnapshot {
  *   - `sin-red`: no hay conexión con la tienda — no se rompió nada, se reintenta solo.
  *   - `dynamics-no-configurado`: faltan credenciales (tenant/client id/secret/URL) —
  *     un Administrador las carga en app/administrador/config.tsx.
+ *   - `sin-almacen`: la sucursal no tiene almacén de Dynamics asociado. El
+ *     stock NO viene del catálogo de productos: vive en `WarehousesOnHandV2`
+ *     y se consulta POR ALMACÉN. Sin almacén no hay stock, y sin stock no se
+ *     puede armar el inventario — se cuenta contra nada. Lo configura un
+ *     Administrador en app/administrador/tiendas.tsx.
  *   - `credenciales-rechazadas`: la red anduvo, Azure devolvió 401 — las
  *     credenciales configuradas están mal, no es un problema de red.
  *   - `timeout`: se cortó a mitad de camino — se puede reintentar sin
@@ -128,7 +133,14 @@ export interface AvanceSnapshot {
  *     muestra ninguna alerta.
  *   - `desconocido`: cualquier otra falla no prevista arriba.
  */
-export type CodigoErrorSnapshot = 'sin-red' | 'dynamics-no-configurado' | 'credenciales-rechazadas' | 'timeout' | 'cancelado' | 'desconocido';
+export type CodigoErrorSnapshot =
+  | 'sin-red'
+  | 'dynamics-no-configurado'
+  | 'sin-almacen'
+  | 'credenciales-rechazadas'
+  | 'timeout'
+  | 'cancelado'
+  | 'desconocido';
 
 export class ErrorSnapshot extends Error {
   readonly codigo: CodigoErrorSnapshot;
@@ -139,7 +151,63 @@ export class ErrorSnapshot extends Error {
   }
 }
 
+/**
+ * Qué UNIVERSO se cuenta. No es una preferencia de vista: cambia el
+ * conjunto de productos del inventario entero.
+ *
+ *  - `mensual` — solo lo que es responsabilidad del EMPLEADO. Lo que asume
+ *    la empresa queda afuera. Es el que se hace todos los meses.
+ *  - `anual` — todo el catálogo activo, empresa incluida ("en el anual ya
+ *    cuentan todo", reunión de requisitos).
+ *
+ * Medido contra el tenant real (backend/README.md §Dynamics): 6.297 ítems
+ * el mensual contra 11.835 el anual. Que alguien cuente 11.835 creyendo que
+ * cuenta 6.297 es una jornada perdida, así que el default es `mensual` y el
+ * anual hay que pedirlo explícito.
+ */
+export type TipoInventario = 'mensual' | 'anual';
+
+/**
+ * De dónde salió el número final de ítems: cuántos entraron y cuántos
+ * quedaron afuera, por motivo.
+ *
+ * Es lo que el Coordinador va a mirar el día que alguien pregunte "por qué
+ * esta hoja no tiene tal producto". Sin esto, la única respuesta posible es
+ * "no sé", y un inventario que no puede explicar su propio universo no se
+ * puede auditar.
+ *
+ * Todos los motivos son opcionales porque el servidor informa los que
+ * calculó: mostrar un `0` donde el dato no vino diría "no se excluyó
+ * ninguno", que es una afirmación distinta de "no lo sé".
+ */
+export interface DesgloseSnapshot {
+  /** Los que quedaron dentro del inventario. Coincide con `items`. */
+  incluidos: number;
+  /** Descartados por no tener stock en el almacén de la sucursal. */
+  sinStock?: number;
+  /** Descartados por no estar activos en Dynamics. */
+  noActivos?: number;
+  /** Descartados por ser responsabilidad de la EMPRESA — solo aplica al mensual. */
+  deEmpresa?: number;
+  /** Descartados por no tener responsable asignado: sin responsable no hay a quién liquidarle una diferencia. */
+  sinResponsable?: number;
+}
+
+export interface ResultadoSnapshot {
+  inventarioId: number;
+  items: number;
+  tomadoEn: string;
+  /**
+   * Presente solo si el servidor lo informa. Se deja opcional a propósito:
+   * la pantalla muestra el desglose cuando existe y calla cuando no, en vez
+   * de inventar los números que faltan.
+   */
+  desglose?: DesgloseSnapshot;
+}
+
 export interface OpcionesTraerSnapshot {
+  /** Qué universo contar. Default `mensual` — ver TipoInventario. */
+  tipo?: TipoInventario;
   /** Se llama cada vez que llega una página nueva del catálogo. */
   onAvance?: (avance: AvanceSnapshot) => void;
   /** Mismo AbortSignal que usa `fetch` — el adaptador HTTP lo pasa derecho a cada request, sin traducir nada. */
@@ -170,10 +238,7 @@ export interface RepositorioInventario {
    * `ErrorSnapshot` (ver más arriba), nunca con un `Error` genérico —
    * la pantalla necesita distinguir el motivo para dar la salida correcta.
    */
-  traerSnapshot(
-    sucursalId: number,
-    opciones?: OpcionesTraerSnapshot,
-  ): Promise<{ inventarioId: number; items: number; tomadoEn: string }>;
+  traerSnapshot(sucursalId: number, opciones?: OpcionesTraerSnapshot): Promise<ResultadoSnapshot>;
   /**
    * Paso 2: parte el snapshot en hojas del tamaño elegido. Reemplaza
    * cualquier hoja previa de ese inventario (y su reparto): es

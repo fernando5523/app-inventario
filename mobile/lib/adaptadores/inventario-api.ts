@@ -62,6 +62,7 @@ import type { HojaConteo, TamanoHoja } from '../dominio/tipos';
 import {
   ErrorSnapshot,
   type CodigoErrorSnapshot,
+  type DesgloseSnapshot,
   type OpcionesTraerSnapshot,
   type RepositorioInventario,
 } from '../puertos/repositorios';
@@ -77,10 +78,18 @@ const RUTAS = {
   asignarHojas: (inventarioId: number) => `/api/inventarios/${inventarioId}/hojas/asignar`,
 };
 
+/**
+ * El desglose todavía NO lo devuelve el servidor (verificado con curl el
+ * 2026-09-04: la respuesta es `{inventarioId, items, tomadoEn}`). min3 lo
+ * está dejando registrado del lado de Dynamics. Se declara opcional acá
+ * para que el día que aparezca la pantalla lo muestre sin tocar una línea
+ * — y mientras tanto no se inventa ningún número.
+ */
 interface SnapshotDto {
   inventarioId: number;
   items: number;
   tomadoEn: string;
+  desglose?: DesgloseSnapshot;
 }
 
 interface InventarioActivoDto extends SnapshotDto {
@@ -122,6 +131,14 @@ function comoErrorSnapshot(error: unknown): ErrorSnapshot {
     return new ErrorSnapshot('dynamics-no-configurado', error.message);
   }
 
+  // Sucursal sin almacén de Dynamics asociado. Sin almacén no hay stock
+  // (vive en `WarehousesOnHandV2`, se consulta por almacén), y sin stock no
+  // hay contra qué contar. Es una salida DISTINTA de "faltan credenciales":
+  // esto lo arregla un Administrador en Tiendas, no en Configuración.
+  if (/almac[ée]n|warehouse/i.test(crudo)) {
+    return new ErrorSnapshot('sin-almacen', crudo);
+  }
+
   // 502 = "Dynamics respondió con error o no se pudo autenticar" (README).
   // Son dos cosas distintas bajo un mismo código, y solo el mensaje las
   // separa. Si el backend expusiera un código propio esto dejaría de ser
@@ -138,7 +155,7 @@ function comoErrorSnapshot(error: unknown): ErrorSnapshot {
 
 export const inventarioApi: RepositorioInventario = {
   async traerSnapshot(sucursalId: number, opciones: OpcionesTraerSnapshot = {}) {
-    const { onAvance, signal } = opciones;
+    const { onAvance, signal, tipo = 'mensual' } = opciones;
 
     try {
       // Arranca honesto: todavía no llegó nada y no sabemos cuántos son.
@@ -166,9 +183,19 @@ export const inventarioApi: RepositorioInventario = {
       // puerto dice que ante `sin-red` "se reintenta solo" DESDE LA PANTALLA.
       // Que reintenten las dos capas es cómo una espera de minutos se
       // convierte en tres.
+      // `tipo` SIEMPRE explícito, aunque el default del backend coincida:
+      // el universo que se cuenta es una decisión del Coordinador y tiene
+      // que viajar dicha, no asumida. El día que el default del servidor
+      // cambie, esta pantalla no cambia de comportamiento sin que nadie lo
+      // haya pedido.
+      //
+      // `almacen` NO se manda: el backend lo resuelve de la sucursal
+      // (`Sucursal.almacenId`, ya verificado contra el ERP al guardarlo).
+      // Mandarlo desde el teléfono sería dejar que el cliente elija contra
+      // qué almacén se cuenta.
       const resultado = await pedir<SnapshotDto>(RUTAS.d365Snapshot, {
         metodo: 'POST',
-        cuerpo: { sucursalId },
+        cuerpo: { sucursalId, tipo },
         msTimeout: TIMEOUT_LARGO_MS,
         senal: signal,
       });
