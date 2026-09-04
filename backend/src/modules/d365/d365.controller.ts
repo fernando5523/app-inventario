@@ -1,0 +1,15 @@
+import type { Response } from 'express';
+import { asyncHandler } from '../../shared/asyncHandler';
+import type { RequestAutenticado } from '../../shared/tipos';
+import { d365AuthService } from './d365-auth.service';
+import * as catalogoService from './d365-catalogo.service';
+import type { CrearSnapshotInput } from './d365.schema';
+
+export const estado = asyncHandler(async (_req: RequestAutenticado, res: Response) => {
+  res.json({ configurado: d365AuthService.isConfigured() });
+});
+
+export const snapshot = asyncHandler(async (req: RequestAutenticado, res: Response) => {
+  const { sucursalId, modo } = req.body as CrearSnapshotInput;
+  res.json(await catalogoService.crearSnapshot(sucursalId, modo));
+});

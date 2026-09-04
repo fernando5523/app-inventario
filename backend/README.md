@@ -290,11 +290,51 @@ Errores: `400` valor fuera de rango para esa clave · `404` clave desconocida.
 
 ---
 
+### Dynamics 365 — `/api/d365` (requiere sesión)
+
+Integración de **solo lectura** con D365 Finance & Operations (OAuth2 `client_credentials` contra Azure AD). No hay, ni va a haber en esta fase, ningún endpoint que escriba de vuelta a Dynamics — el ajuste automático es fase 2, decisión del cliente (ver `app/auditor/lacrado.tsx`). Patrón portado del proyecto hermano `monorepo/inventario/backend/src/modules/d365/`, adaptado a nuestro dominio (`Producto`/`Empaque` de `mobile/lib/dominio/tipos.ts`, no el suyo).
+
+**Entidades OData que se consultan:**
+- `ReleasedProducts` — catálogo maestro (`ItemNumber`, `ProductName`, `ProductDescription`, `InventoryUnitSymbol`, etc.)
+- `ProductBarcodes` — códigos de barra por producto. Cada producto puede tener varios: uno con `ProductQuantity=1` (la unidad suelta) y otros con `ProductQuantity>1` (un empaque: Caja, Pack, Plancha...). Esto es lo que alimenta el escáner y `Producto.empaque`.
+
+**Mapeo a nuestro dominio** (`d365-catalogo.service.ts#mapearProducto`):
+- `codigoBarras` (unidad suelta) = el barcode marcado `IsDefaultDisplayedBarcode="Yes"`, si no el de `ProductQuantity=1`, si no el primero que haya. Si el producto no tiene ningún barcode, se usa el `ItemNumber` como último recurso (nunca queda vacío: el escáner necesita algo para matchear).
+- `empaque` = el primer barcode con `ProductQuantity>1` (`nombre` = `ProductQuantityUnitSymbol`, `factor` = `ProductQuantity`, `codigoBarras` = ese mismo barcode). Si no hay ninguno, el empaque queda con `factor: 1` y la unidad de inventario de D365.
+- **Limitación documentada**: nuestro `Producto` modela un solo `Empaque` (a diferencia del proyecto hermano, que admite varias "unidades alternas" por producto). Si D365 trae más de un barcode de empaque para el mismo ítem, se toma solo el de menor `ProductQuantity` y el resto se descarta.
+
+**Paginación**: `d365-entity.service.ts` primero pide `$count`, arma los lotes con `calcularPaginas(total, tamanoLote)` (500 por defecto) y trae cada lote con `$skip`/`$top` — con 8.000 ítems no es opcional. El token OAuth2 se cachea en memoria y se renueva solo si vence en menos de 5 minutos; si Dynamics responde `401` con el token cacheado, se pide uno nuevo una sola vez y se reintenta.
+
+#### `GET /api/d365/estado`
+Cualquier rol autenticado. `{ "configurado": true | false }` — si `false`, faltan una o más `D365_*` en el entorno (ver `.env.example`).
+
+#### `POST /api/d365/snapshot`
+Rol `administrador` o `coordinador` — es el paso 1 del wizard del Coordinador (`mobile/lib/puertos/repositorios.ts#RepositorioInventario.traerSnapshot`).
+
+Body:
+```json
+{ "sucursalId": 1, "modo": "real" }
+```
+- `modo` es opcional, default `"real"`. `"ejemplo"` nunca toca red ni exige credenciales: devuelve siempre los mismos 4 productos ya validados en `mobile/design/conteo.html` (Aceite Vegetal Primor, Cerveza Cusqueña, Leche Evaporada, Fideos Canuto), cada uno con su empaque. Nunca se sustituye `"real"` por datos de ejemplo en silencio — si no hay credenciales y se pide `"real"`, es un `400`, no un fallback automático.
+
+Respuesta `200`:
+```json
+{ "inventarioId": 7, "items": 8000, "tomadoEn": "2026-09-03T14:00:00.000Z" }
+```
+
+**Idempotente**: si la sucursal ya tiene un `Inventario`, se devuelve ese mismo (mismo `inventarioId`/`items`/`tomadoEn`) en vez de crear uno nuevo ni volver a golpear Dynamics — mismo contrato que el puerto del front. *Simplificación documentada*: como todavía no existe en este backend un módulo de hojas/inventario, "ya tiene un inventario" se resuelve como "existe al menos una fila para esa sucursal", no "hay uno en curso sin cerrar" — cuando exista ese módulo, esta regla se va a tener que afinar.
+
+El catálogo mapeado (con barcode y empaque de cada ítem) se guarda en `CatalogoItem`, colgado del `Inventario` — es el catálogo crudo del snapshot, antes de partirse en hojas. Todavía no hay un endpoint para leerlo (el paso 2, "crear hojas", que consumiría esto, no está construido en este backend); queda ahí esperando ese módulo.
+
+Errores: `400` `sucursalId` inválido, o `modo="real"` sin credenciales configuradas · `502` Dynamics respondió con error o no se pudo autenticar.
+
+---
+
 ## Desarrollo
 
 ```bash
 npm install
 npm run typecheck
-npm test          # tests de codigo puro (Zod, permisos, hasheo de PIN), no requieren Postgres
+npm test          # tests de codigo puro (Zod, permisos, hasheo de PIN, mapeo/paginacion/token D365), no requieren Postgres ni red
 npm run dev        # requiere backend/.env con DATABASE_URL apuntando a Postgres corriendo
 ```

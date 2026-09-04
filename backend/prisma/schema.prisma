@@ -199,16 +199,47 @@ model SesionToken {
 /// una corrida de conteo en una sucursal y guarda el snapshot de Dynamics
 /// (RepositorioInventario.traerSnapshot).
 model Inventario {
-  id               Int          @id @default(autoincrement())
-  sucursalId       Int          @map("sucursal_id")
-  sucursal         Sucursal     @relation(fields: [sucursalId], references: [id])
-  snapshotItems    Int?         @map("snapshot_items")
-  snapshotTomadoEn DateTime?    @map("snapshot_tomado_en")
+  id               Int            @id @default(autoincrement())
+  sucursalId       Int            @map("sucursal_id")
+  sucursal         Sucursal       @relation(fields: [sucursalId], references: [id])
+  snapshotItems    Int?           @map("snapshot_items")
+  snapshotTomadoEn DateTime?      @map("snapshot_tomado_en")
   hojas            HojaConteo[]
+  catalogo         CatalogoItem[]
 
   createdAt DateTime @default(now()) @map("created_at")
 
   @@map("inventarios")
+}
+
+/// Catalogo crudo del snapshot de Dynamics (modules/d365/), ANTES de
+/// partirse en hojas -- por eso cuelga de Inventario y no de HojaConteo
+/// como Producto. Cuando exista un modulo de hojas real en este backend,
+/// "crear hojas" (paso 2 del Coordinador) lee de aca para poblar cada
+/// HojaConteo.productos; hasta entonces es solo el destino del snapshot.
+/// Mismas columnas que Producto (mismo Empaque embebido, ver ese
+/// comentario) para no tener dos formas distintas de guardar "un producto
+/// con su empaque" en el mismo schema.
+model CatalogoItem {
+  id           Int        @id @default(autoincrement())
+  inventarioId Int        @map("inventario_id")
+  inventario   Inventario @relation(fields: [inventarioId], references: [id])
+
+  /// ItemNumber de Dynamics.
+  codigo       String
+  /// codigo de barras de la unidad SUELTA.
+  codigoBarras String @map("codigo_barras")
+  descripcion  String
+
+  empaqueNombre       String  @map("empaque_nombre")
+  empaqueFactor       Int     @map("empaque_factor")
+  empaqueCodigoBarras String? @map("empaque_codigo_barras")
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@unique([inventarioId, codigo])
+  @@index([inventarioId, codigoBarras])
+  @@map("catalogo_items")
 }
 
 /// tipos.ts#HojaConteo. `numeroConteo` es la ronda (1, 2 o 3): el schema
