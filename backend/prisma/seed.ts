@@ -5,12 +5,34 @@
  * memoria de mobile/ porque ese rol no tiene pantallas todavia) y las 3
  * configuraciones default del sistema.
  *
- * El PIN real de cada colaborador no existe en ningun lado todavia (el
- * adaptador en memoria acepta cualquier PIN de 6 digitos): este seed usa un
- * PIN de desarrollo DETERMINISTICO y placeholder (el id repetido hasta
- * completar 6 digitos) solo para poder probar /ingresar en local. Se
- * hashea igual que en produccion (argon2) -- nunca se guarda en claro.
- * Hay que rotarlo antes de cualquier uso real.
+ * ==========================================================================
+ * !! PIN DE DESARROLLO -- NO SALE A LA TIENDA ASI !!
+ * ==========================================================================
+ *
+ * El PIN de cada colaborador es SU PROPIO ID CON CEROS ADELANTE:
+ *   Maria Rojas (102)   -> 000102
+ *   Jose Tarazona (101) -> 000101
+ *   Admin Sistema (1000)-> 001000
+ *
+ * Por que eso es una puerta abierta y no solo "un placeholder feo": la
+ * pantalla de login LISTA a todas las personas de la sucursal con nombre y
+ * rol (GET /api/sesion/sucursales/:id/colaboradores). Cualquiera que abra
+ * la app ve la lista, y de la lista se deduce el PIN de todos -- incluido
+ * el del administrador, que gestiona cuentas de las 4 sucursales.
+ *
+ * Es DELIBERADO que sean predecibles: sin esto no se puede probar /ingresar
+ * en local. NO cambiar el algoritmo -- lo que hay que hacer es ROTARLOS
+ * antes de cualquier uso real, uno por uno, con:
+ *
+ *   POST /api/usuarios/:id/resetear-pin   { "pin": "<6 digitos>" }
+ *
+ * (rol administrador o auditor; el auditor solo sobre su propia sucursal).
+ * Probado contra la base real: cambia el hash argon2, el PIN viejo deja de
+ * servir y el nuevo entra. Ver backend/README.md, seccion "PIN de
+ * desarrollo".
+ *
+ * El PIN se hashea igual que en produccion (argon2) y nunca se guarda en
+ * claro: el problema no es como se almacena, es que se puede ADIVINAR.
  */
 
 import { PrismaClient } from '@prisma/client';

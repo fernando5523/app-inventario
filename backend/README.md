@@ -90,6 +90,43 @@ Consecuencia en sesión: `POST /api/sesion/ingresar` devuelve `sucursal: null` c
 
 ---
 
+## ⚠️ PIN de desarrollo — hay que rotarlo antes de la tienda
+
+El seed genera el PIN de cada colaborador como **su propio id con ceros
+adelante**:
+
+| Persona | id | PIN |
+|---|---|---|
+| José Tarazona (coordinador) | 101 | `000101` |
+| María Rojas (conteo) | 102 | `000102` |
+| Admin Sistema (administrador) | 1000 | `001000` |
+
+**Por qué esto es una puerta abierta, no solo un placeholder feo:** la
+pantalla de login **lista a todas las personas** de la sucursal con nombre y
+rol (`GET /api/sesion/sucursales/:id/colaboradores`, público). Cualquiera que
+abra la app ve la lista y de ahí deduce el PIN de todos — incluido el del
+administrador, que gestiona las cuentas de las 4 sucursales.
+
+Que sean predecibles es **deliberado**: sin eso no se puede probar `/ingresar`
+en local. El algoritmo del seed **no se cambia**. Lo que hay que hacer es
+rotarlos antes de cualquier uso real.
+
+### Cómo rotarlos
+
+```bash
+curl -X POST http://localhost:3000/api/usuarios/102/resetear-pin   -H "Authorization: Bearer <token de administrador o auditor>"   -H "Content-Type: application/json"   -d '{"pin":"418293"}'
+```
+
+`204` sin body. El PIN nuevo nunca se devuelve ni se audita en claro.
+Verificado contra la base real: el PIN viejo pasa a dar `401 PIN incorrecto.`
+y el nuevo entra.
+
+Lo puede hacer un `administrador` (cualquier cuenta) o un `auditor` (solo
+`coordinador`/`conteo` de su propia sucursal). El hasheo es argon2 en los dos
+casos — el problema nunca fue **cómo se guarda**, es que se puede **adivinar**.
+
+---
+
 ## Autenticación
 
 Todas las rutas bajo `/api/usuarios`, `/api/tiendas` y `/api/config` exigen el header:
