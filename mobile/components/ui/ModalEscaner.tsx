@@ -5,6 +5,7 @@ import { useCallback, useEffect, useRef, useState, type JSX } from 'react';
 import { ActivityIndicator, LayoutChangeEvent, Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { colors, fonts, fontSize, radius, shadow, spacing } from '../../lib/theme';
+import { centroDeLectura, dentroDelMarco, MARCO_ALTO, MARCO_ANCHO } from './escaner-geometria';
 
 /**
  * Escáner de código de barras con la cámara real (expo-camera / ML Kit).
@@ -46,22 +47,6 @@ import { colors, fonts, fontSize, radius, shadow, spacing } from '../../lib/them
  */
 const FORMATOS = ['ean13', 'ean8', 'code128', 'upc_a', 'upc_e'] as const;
 
-/** Proporción del visor que ocupa el recuadro. Es la MISMA constante que
- *  dibuja el marco y que filtra las lecturas: si se separaran, el marco
- *  volvería a mentir sobre qué zona lee de verdad. */
-const MARCO_ANCHO = 0.82;
-const MARCO_ALTO = 0.4;
-
-/**
- * Margen de tolerancia sobre el recuadro dibujado, en proporción del visor.
- * Existe porque `bounds` es aproximado por contrato: la doc de expo-camera
- * avisa que "no tiene por qué acotar el código entero" y que a veces
- * representa el área que usó el escáner. Sin un poco de aire, un código bien
- * apuntado se rechazaría por unos píxeles. Es el número a ajustar si en
- * campo se cuela un vecino (bajarlo) o cuesta capturar (subirlo).
- */
-const TOLERANCIA = 0.06;
-
 /** Dos lecturas iguales seguidas antes de aceptar. Ver el comentario de arriba. */
 const LECTURAS_PARA_CONFIRMAR = 2;
 
@@ -75,48 +60,26 @@ const MS_ANTIRREBOTE = 1500;
  */
 const LECTURAS_SIN_GEOMETRIA_PARA_AVISAR = 45;
 
+/**
+ * Rechazo de una lectura, con un `intento` que cambia en CADA rechazo.
+ *
+ * El contador no es ceremonia: el modal se rehabilita al recibir un
+ * rechazo, y si eso dependiera solo del mensaje, dos códigos ajenos
+ * seguidos producirían el MISMO string, React no volvería a correr el
+ * efecto y el escáner quedaría mudo hasta cerrar y reabrir el modal. En
+ * góndola, dos lecturas ajenas seguidas es el caso NORMAL, no el raro.
+ */
+export interface RechazoEscaneo {
+  mensaje: string;
+  intento: number;
+}
+
 export interface ModalEscanerProps {
   visible: boolean;
-  /** Mensaje cuando el código leído no pertenece a la hoja. null = sin error. */
-  error: string | null;
+  /** Rechazo de la última lectura (no pertenece a la hoja, o falló la consulta). null = sin error. */
+  error: RechazoEscaneo | null;
   onEscanear: (codigo: string) => void;
   onCerrar: () => void;
-}
-
-interface Punto {
-  x: number;
-  y: number;
-}
-
-/**
- * Dónde apareció el código dentro del visor.
- *
- * Se prefieren los `cornerPoints` sobre `bounds` porque son los cuatro
- * vértices reales del código; `bounds` es el rectángulo que los envuelve y,
- * según la doc, "puede representar un rectángulo vacío". Si ninguno de los
- * dos sirve, devuelve null — y una lectura sin ubicación NO se acepta: no
- * poder ubicarla es exactamente el caso que este filtro existe para atajar.
- */
-function centroDeLectura(resultado: BarcodeScanningResult): Punto | null {
-  const puntos = resultado.cornerPoints;
-  if (puntos && puntos.length >= 3) {
-    const xs = puntos.map((p) => p.x);
-    const ys = puntos.map((p) => p.y);
-    const ancho = Math.max(...xs) - Math.min(...xs);
-    const alto = Math.max(...ys) - Math.min(...ys);
-    // Extensión cero = polígono degenerado (algunos dispositivos devuelven
-    // los cuatro puntos en 0,0 en vez de omitir el campo).
-    if (ancho > 0 && alto > 0) {
-      return { x: xs.reduce((a, b) => a + b, 0) / xs.length, y: ys.reduce((a, b) => a + b, 0) / ys.length };
-    }
-  }
-
-  const b = resultado.bounds;
-  if (b?.size && b.size.width > 0 && b.size.height > 0) {
-    return { x: b.origin.x + b.size.width / 2, y: b.origin.y + b.size.height / 2 };
-  }
-
-  return null;
 }
 
 export function ModalEscaner({ visible, error, onEscanear, onCerrar }: ModalEscanerProps): JSX.Element | null {
@@ -191,12 +154,7 @@ export function ModalEscaner({ visible, error, onEscanear, onCerrar }: ModalEsca
       sinGeometria.current = 0;
 
       // EL FILTRO: mismo rectángulo que se dibuja, más la tolerancia.
-      const medioAncho = (MARCO_ANCHO / 2 + TOLERANCIA) * visor.ancho;
-      const medioAlto = (MARCO_ALTO / 2 + TOLERANCIA) * visor.alto;
-      const dentro =
-        Math.abs(centro.x - visor.ancho / 2) <= medioAncho && Math.abs(centro.y - visor.alto / 2) <= medioAlto;
-
-      if (!dentro) {
+      if (!dentroDelMarco(centro, visor)) {
         // Silencio deliberado: el código del vecino entrando y saliendo de
         // cuadro dispararía un cartel intermitente que no ayuda a nadie.
         candidato.current = null;
@@ -229,14 +187,16 @@ export function ModalEscaner({ visible, error, onEscanear, onCerrar }: ModalEsca
     [onEscanear, visor.alto, visor.ancho],
   );
 
-  // Un código que no pertenece a la hoja llega como `error` desde la
+  // Un código que no pertenece a la hoja llega como rechazo desde la
   // pantalla: se vibra distinto y se rehabilita la lectura para que pueda
   // volver a intentar sin cerrar y abrir el modal.
+  //
+  // La dependencia es `error?.intento`, NO el mensaje: ver RechazoEscaneo.
   useEffect(() => {
     if (!error) return;
     entregado.current = false;
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning).catch(() => undefined);
-  }, [error]);
+  }, [error?.intento]);
 
   if (!visible) return null;
 
@@ -255,8 +215,15 @@ export function ModalEscaner({ visible, error, onEscanear, onCerrar }: ModalEsca
             </Pressable>
           </View>
 
+          {/* Lo que el escáner PUEDE prometer, dicho sin adornos. Los códigos
+              que trae Dynamics son todos de unidad suelta (ProductQuantity 0,
+              unidad "U" en los 15 de la muestra): ninguno identifica una caja
+              ni un pack. O sea que leer el código dice QUÉ producto es, y
+              nada sobre cuánto hay. Si la pantalla insinuara otra cosa, el
+              operario confiaría en un dato que el escáner no tiene. */}
           <Text style={styles.nota}>
-            El escáner confirma que el producto que tenés en la mano es el de la lista — no reemplaza ingresar la cantidad.
+            El escáner dice QUÉ producto es, no cuánto hay: el código es el mismo para una unidad que para una caja.
+            Después de confirmarlo, la cantidad y el empaque los cargás vos.
           </Text>
 
           {!permiso ? (
@@ -323,7 +290,7 @@ export function ModalEscaner({ visible, error, onEscanear, onCerrar }: ModalEsca
             </Text>
           ) : null}
 
-          {error ? <Text style={styles.error}>{error}</Text> : null}
+          {error ? <Text style={styles.error}>{error.mensaje}</Text> : null}
         </View>
       </View>
     </View>

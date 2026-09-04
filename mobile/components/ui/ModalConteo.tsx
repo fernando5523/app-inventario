@@ -1,4 +1,4 @@
-import { Minus, Plus, X } from 'lucide-react-native';
+import { Minus, Plus, ScanLine, X } from 'lucide-react-native';
 import { useEffect, useState, type JSX } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
@@ -151,6 +151,25 @@ export function ModalConteo({
               </Text>
             </View>
 
+            {/* Encadena el escaneo con este modal. Sin esta banda, el
+                operario escanea, se le abre un formulario en cero y parece
+                que faltó un paso: no queda claro que el escáner YA hizo lo
+                suyo (decir qué producto es) y que lo que sigue —cuánto y en
+                qué presentación— es suyo por diseño, no por una limitación
+                que alguien olvidó resolver. Los códigos de Dynamics son
+                todos de unidad suelta: ninguno puede decir si hay una caja
+                en la mano. */}
+            {confirmadoPorEscaner ? (
+              <View style={styles.confirmadoBanda}>
+                <ScanLine size={15} color={colors.ok} />
+                <Text style={styles.confirmadoTexto}>
+                  {empaquePreseleccionado
+                    ? `Producto confirmado con la cámara, y el código era el del empaque ${empaquePreseleccionado}. Ajustá la cantidad si tenés más de uno.`
+                    : 'Producto confirmado con la cámara. El código no dice cuántas hay: indicá abajo cuántos empaques cerrados y cuántas unidades sueltas tenés.'}
+                </Text>
+              </View>
+            ) : null}
+
             {producto.empaques.map((empaque) => (
               <View key={empaque.nombre} style={styles.campo}>
                 <View style={styles.campoEtiquetaFila}>
@@ -268,6 +287,16 @@ const styles = StyleSheet.create({
   empaqueBadgeTexto: { fontSize: 10.5, letterSpacing: 0.5, color: colors.gris, fontFamily: fonts.bold },
   nombreProducto: { marginTop: 4, fontSize: 14, color: colors.tinta, fontFamily: fonts.bold },
   meta: { marginTop: 2, fontSize: fontSize.xs, color: colors.gris, fontFamily: fonts.regular },
+  confirmadoBanda: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 8,
+    marginBottom: 12,
+    padding: 10,
+    borderRadius: radius.sm,
+    backgroundColor: colors.okSuave,
+  },
+  confirmadoTexto: { flex: 1, fontSize: 12, lineHeight: 16.5, color: colors.ok, fontFamily: fonts.medium },
   campo: { marginBottom: 12, gap: 6 },
   campoEtiquetaFila: { flexDirection: 'row', alignItems: 'baseline', justifyContent: 'space-between', gap: 8 },
   campoEtiqueta: { fontSize: 13, color: colors.tinta, fontFamily: fonts.semibold },

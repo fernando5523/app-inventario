@@ -1,6 +1,6 @@
 import { router, useFocusEffect, useLocalSearchParams } from 'expo-router';
 import { ClipboardList, ScanLine, Search } from 'lucide-react-native';
-import { useCallback, useEffect, useState, type JSX } from 'react';
+import { useCallback, useEffect, useRef, useState, type JSX } from 'react';
 import { ActivityIndicator, Alert, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 
 import {
@@ -12,6 +12,7 @@ import {
   ModalEscaner,
   TarjetaProducto,
   sincronizacionDeHojas,
+  type RechazoEscaneo,
 } from '../../components/ui';
 import { PantallaConTabs } from '../../components/navegacion/PantallaConTabs';
 import { repositorioCatalogo, repositorioHojas, repositorioInventario } from '../../lib/contenedor';
@@ -52,23 +53,34 @@ export default function ContarScreen(): JSX.Element {
 
   const [modalProducto, setModalProducto] = useState<Producto | null>(null);
   /**
-   * Qué presentación se leyó en el último escaneo: la unidad suelta o
-   * alguno de los empaques (ver manejarEscaneo). Dato real de Dynamics
-   * (min-1, catálogo real, 2026-09): los barcodes que trae son de la
-   * unidad suelta — NINGÚN empaque trae código propio hoy. El campo
-   * `empaque` sigue existiendo para el día que eso cambie; mientras
-   * tanto, `presentacion` casi siempre va a dar 'unidad'.
+   * El último producto confirmado con la cámara, y —si algún día un código
+   * llegara a identificar un empaque— cuál.
    *
-   * Ya no queda pendiente: ModalConteo ahora sí recibe este dato
-   * (`empaquePreseleccionado`) para pre-cargar "1" en ESE empaque en vez
-   * de dejar todo en cero — antes esto estaba anotado como fuera de
-   * alcance porque ModalConteo pertenecía a otra tarea.
+   * DATO REAL DE DYNAMICS (min-1, catálogo real, 2026-09): los 15 productos
+   * de la muestra traen código de barras, pero TODOS con ProductQuantity 0
+   * y unidad "U". Ninguno identifica una caja ni un pack. O sea que
+   * `empaque` hoy es SIEMPRE null y el escáner nunca sabe qué presentación
+   * hay en la mano: solo qué producto es.
+   *
+   * El campo se mantiene porque el día que Dynamics traiga códigos de
+   * empaque el flujo ya está resuelto (ModalConteo pre-carga "1" en ESE
+   * empaque vía `empaquePreseleccionado`). Lo que NO puede pasar es que la
+   * pantalla hable como si hoy lo supiera — ver la banda de abajo.
    */
   const [ultimoEscaneo, setUltimoEscaneo] = useState<{ producto: Producto; presentacion: 'unidad' | 'empaque'; empaque: Empaque | null } | null>(
     null,
   );
   const [modalScanVisible, setModalScanVisible] = useState(false);
-  const [scanError, setScanError] = useState<string | null>(null);
+  // Rechazo con contador: dos códigos ajenos seguidos dan el MISMO mensaje,
+  // y sin el contador el modal no se rehabilitaría la segunda vez (ver
+  // RechazoEscaneo en ModalEscaner.tsx). En góndola eso es lo normal.
+  const [scanError, setScanError] = useState<RechazoEscaneo | null>(null);
+  const intentoFallido = useRef(0);
+
+  function rechazarEscaneo(mensaje: string): void {
+    intentoFallido.current++;
+    setScanError({ mensaje, intento: intentoFallido.current });
+  }
   const [modalFinalizarVisible, setModalFinalizarVisible] = useState(false);
   const [finalizando, setFinalizando] = useState(false);
 
@@ -210,7 +222,18 @@ export default function ContarScreen(): JSX.Element {
   // catálogo duplicada: es desambiguar QUÉ presentación se escaneó, y la
   // pantalla ya tiene el dato sin pedir nada.
   async function manejarEscaneo(codigo: string): Promise<void> {
-    const porUnidad = await repositorioCatalogo.porCodigoBarras(hoja!.id, codigo);
+    let porUnidad: Producto | null;
+    try {
+      porUnidad = await repositorioCatalogo.porCodigoBarras(hoja!.id, codigo);
+    } catch (error) {
+      // La consulta sale a la red (catalogo-api.ts) y el WiFi de tienda se
+      // cae: sin este catch la promesa quedaba colgada, el modal nunca se
+      // rehabilitaba y el escáner moría en silencio, sin decir por qué.
+      rechazarEscaneo(
+        error instanceof Error && error.message ? `No se pudo verificar el código: ${error.message}` : 'No se pudo verificar el código. Revisá la conexión y probá de nuevo.',
+      );
+      return;
+    }
 
     let productoPorEmpaque: Producto | null = null;
     let empaqueEscaneado: Empaque | null = null;
@@ -227,7 +250,10 @@ export default function ContarScreen(): JSX.Element {
     const producto = porUnidad ?? productoPorEmpaque;
 
     if (!producto) {
-      setScanError(`Este código no pertenece a la hoja #${hoja!.numero}.`);
+      // Con el código a la vista: el operario puede comparar contra la
+      // etiqueta y darse cuenta de que apuntó al vecino de góndola, que es
+      // justo el error que este aviso existe para atajar.
+      rechazarEscaneo(`El código ${codigo} no pertenece a la hoja #${hoja!.numero}. No se registró nada.`);
       return;
     }
 
@@ -302,9 +328,13 @@ export default function ContarScreen(): JSX.Element {
       {ultimoEscaneo ? (
         <View style={styles.notaEscaneo}>
           <Text style={styles.notaEscaneoTexto}>
-            {ultimoEscaneo.presentacion === 'empaque' && ultimoEscaneo.empaque
-              ? `Leiste el codigo del EMPAQUE (${ultimoEscaneo.empaque.nombre} x${ultimoEscaneo.empaque.factor}) de ${ultimoEscaneo.producto.descripcion}.`
-              : `Leiste el codigo de la UNIDAD suelta de ${ultimoEscaneo.producto.descripcion}.`}
+            {/* Se dice lo que el código probó (qué producto es) y nada más.
+                "Leíste el código de la UNIDAD suelta" sonaba a que el
+                sistema sabía que había una unidad en la mano, y no lo sabe:
+                el mismo código está impreso en la unidad y en la caja. */}
+            {ultimoEscaneo.empaque
+              ? `Confirmado con la cámara: ${ultimoEscaneo.producto.descripcion} · ${ultimoEscaneo.empaque.nombre} ×${ultimoEscaneo.empaque.factor}.`
+              : `Confirmado con la cámara: ${ultimoEscaneo.producto.descripcion}. El código no dice cuántas hay — la cantidad y el empaque los cargás vos.`}
           </Text>
         </View>
       ) : null}

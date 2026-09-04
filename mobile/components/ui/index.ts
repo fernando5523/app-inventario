@@ -31,7 +31,7 @@ export type { TarjetaHojaProps } from './TarjetaHoja';
 export { ModalConteo } from './ModalConteo';
 export type { ModalConteoProps } from './ModalConteo';
 export { ModalEscaner } from './ModalEscaner';
-export type { ModalEscanerProps } from './ModalEscaner';
+export type { ModalEscanerProps, RechazoEscaneo } from './ModalEscaner';
 export { TarjetaProducto } from './TarjetaProducto';
 export type { TarjetaProductoProps } from './TarjetaProducto';
 export { ChipsFiltro } from './ChipsFiltro';

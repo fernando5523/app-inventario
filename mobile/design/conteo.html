@@ -778,10 +778,50 @@ body {
 
 /* ---------- Modal: escaner ---------- */
 .visor-camara {
+  position: relative;
   display: flex; align-items: center; justify-content: center;
   height: 100px; border-radius: 12px;
   background: var(--app-tinta); color: rgba(255,255,255,.55);
 }
+/* El recuadro NO es decoracion: es exactamente la zona que se acepta.
+   En gondola los codigos estan pegados uno al lado del otro y la camara
+   lee el FRAME COMPLETO, asi que el del producto de al lado entra en
+   cuadro y se lee perfecto -- pero es del producto equivocado. Toda
+   lectura cuyo centro caiga afuera del marco se descarta. Un marco que
+   acotara una zona distinta a la que se filtra seria peor que no tenerlo:
+   le mentiria al operario sobre donde apuntar. */
+.marco-scan {
+  position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+  /* 60% x 40%: MISMOS valores que MARCO_ANCHO/MARCO_ALTO en
+     components/ui/escaner-geometria.ts. El ancho bajo de 82% a 60% porque
+     con 82% la zona aceptada llegaba al 94% del visor y en gondola los
+     codigos estan uno AL LADO del otro: el filtro no filtraba en el eje
+     que importa. */
+  width: 60%; height: 40%;
+  border: 2px solid #FFFFFF; border-radius: 6px;
+  pointer-events: none;
+}
+.marco-scan.error { border-color: var(--rojo); }
+
+/* Confirmacion del escaner dentro del modal de conteo. Encadena los dos
+   pasos: sin esto, el operario escanea, se le abre un formulario en cero y
+   parece que falto algo. */
+.banda-confirmado {
+  display: flex; align-items: flex-start; gap: 8px;
+  padding: 10px; border-radius: 8px;
+  background: var(--ok-suave); color: var(--ok);
+  font-size: 12px; line-height: 1.4; font-weight: 500;
+}
+.banda-confirmado[hidden] { display: none; }
+.banda-confirmado svg { flex: none; margin-top: 1px; }
+
+/* Aviso bajo el buscador con el ultimo producto confirmado. */
+.nota-escaneo {
+  margin: 0; padding: 9px 11px; border-radius: 8px;
+  background: var(--ok-suave); color: var(--ok);
+  font-size: 12px; line-height: 1.4; font-weight: 500;
+}
+.nota-escaneo[hidden] { display: none; }
 .atajos-scan { display: flex; flex-direction: column; gap: 8px; }
 .atajo-scan {
   display: flex; align-items: center; justify-content: space-between; gap: 8px;
@@ -852,6 +892,8 @@ body {
         </button>
       </div>
 
+      <p class="nota-escaneo" id="nota-escaneo" role="status" aria-live="polite" hidden></p>
+
       <div class="productos" id="productos"></div>
 
       <div class="pie-lista" id="pie-lista-bloque">
@@ -885,6 +927,11 @@ body {
           <span class="empaque-badge" id="mc-empaque"></span>
           <h4 id="mc-nombre" style="margin:2px 0 0;font-size:14px;font-weight:700;color:var(--app-tinta);"></h4>
           <p class="modal-meta" id="mc-meta"></p>
+        </div>
+
+        <div class="banda-confirmado" id="mc-confirmado" hidden>
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7V5a2 2 0 0 1 2-2h2M3 17v2a2 2 0 0 0 2 2h2m14-14V5a2 2 0 0 0-2-2h-2m4 14v2a2 2 0 0 1-2 2h-2M3 12h18"/></svg>
+          <span>Producto confirmado con la cámara. El código no dice cuántas hay: indicá abajo cuántos empaques cerrados y cuántas unidades sueltas tenés.</span>
         </div>
 
         <div class="contador-campo">
@@ -931,10 +978,16 @@ body {
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg>
           </button>
         </div>
-        <p class="modal-nota">El escáner confirma que el producto que tenés en la mano es el de la lista — no reemplaza ingresar la cantidad.</p>
+        <!-- Lo que el escaner PUEDE prometer, sin adornos. Los codigos que
+             trae Dynamics son todos de unidad suelta (ProductQuantity 0,
+             unidad "U"): ninguno identifica una caja ni un pack. Leer el
+             codigo dice QUE producto es, y nada sobre cuanto hay. -->
+        <p class="modal-nota">El escáner dice QUÉ producto es, no cuánto hay: el código es el mismo para una unidad que para una caja. Después de confirmarlo, la cantidad y el empaque los cargás vos.</p>
         <div class="visor-camara" aria-hidden="true">
           <svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 8V6a2 2 0 0 1 2-2h2M4 16v2a2 2 0 0 0 2 2h2m12-12V6a2 2 0 0 0-2-2h-2m4 12v2a2 2 0 0 1-2 2h-2"/><rect x="8.5" y="9" width="7" height="6" rx="1.3"/></svg>
+          <div class="marco-scan" id="marco-scan"></div>
         </div>
+        <p class="modal-nota">Poné el código DENTRO del recuadro. Lo que quede afuera no se lee, para no tomar por error el código del producto de al lado.</p>
         <p class="modal-nota">Simulá una lectura:</p>
         <div class="atajos-scan" id="atajos-scan"></div>
         <p class="scan-resultado" id="scan-resultado"></p>
@@ -963,7 +1016,7 @@ body {
 
   <section class="pruebas">
     <h3>Atajos para validar</h3>
-    <p>Buscá o filtrá los 50 ítems (sin paginador, con scroll), tocá un ítem ya contado para corregirlo, escaneá un código que sí y uno que no pertenece a la hoja, y simulá la pérdida de WiFi antes de finalizar.</p>
+    <p>Buscá o filtrá los 50 ítems (sin paginador, con scroll) y tocá un ítem ya contado para corregirlo. Probá el escáner con un código que sí pertenece a la hoja y con uno que no: el que pertenece <strong>confirma el producto y abre el registro</strong> &mdash; no cuenta solo, la cantidad la cargás vos. Los códigos que da Dynamics son todos de unidad suelta, así que el escáner nunca sabe si tenés una caja o una unidad en la mano: por eso el empaque se elige acá. El que no pertenece avisa con el código a la vista y no registra nada. Después simulá la pérdida de WiFi antes de finalizar.</p>
     <div class="atajos" id="atajos"></div>
   </section>
 
@@ -1065,6 +1118,7 @@ body {
   var online = true;
   var pendientesSync = 0;
   var confirmados = {};   // id -> true, cuando el escaner confirmo el codigo
+  var ultimoConfirmado = null;   // ultimo producto confirmado con la camara
   var idEnEdicion = null;
 
   /* ---------- Cabecera: avance ----------
@@ -1234,6 +1288,10 @@ body {
     $('mc-factor').textContent = 'Factor: ' + emp.factor + ' und/' + emp.label.toLowerCase();
     $('mc-cajas').value = p.cajas || 0;
     $('mc-sueltas').value = p.sueltas || 0;
+    /* Ningun campo viene precargado por el escaneo: el codigo no dice
+       cuantas hay, y un default que nadie mira es un dato que nadie
+       verifica (regla del design system). */
+    $('mc-confirmado').hidden = !confirmados[p.id];
     actualizarTotalVivo();
 
     $('modal-contar').hidden = false;
@@ -1291,6 +1349,7 @@ body {
   function abrirModalScan() {
     $('scan-resultado').className = 'scan-resultado';
     $('scan-resultado').textContent = '';
+    $('marco-scan').className = 'marco-scan';
 
     var cont = $('atajos-scan');
     cont.innerHTML = '';
@@ -1316,21 +1375,34 @@ body {
     var encontrados = PRODUCTOS.filter(function (p) { return p.barcode === codigo; });
     var p = encontrados[0];
     if (!p) {
+      /* Con el codigo A LA VISTA: el operario compara contra la etiqueta y
+         se da cuenta de que apunto al vecino de gondola, que es justo el
+         error que este aviso existe para atajar. No se registra nada. */
       $('scan-resultado').className = 'scan-resultado error';
-      $('scan-resultado').textContent = 'Este código no pertenece a la hoja #' + HOJA_NUM + '.';
+      $('scan-resultado').textContent = 'El código ' + codigo + ' no pertenece a la hoja #' + HOJA_NUM + '. No se registró nada.';
+      $('marco-scan').className = 'marco-scan error';
       return;
     }
     confirmados[p.id] = true;
+    ultimoConfirmado = p;
     cerrarModal('modal-scan');
     renderProductos();
+    pintarNotaEscaneo();
 
-    var el = document.querySelector('.producto[data-codigo="' + p.id + '"]');
-    if (el) {
-      el.scrollIntoView({ behavior: 'smooth', block: 'center' });
-      el.classList.add('confirmado-flash');
-      setTimeout(function () { el.classList.remove('confirmado-flash'); }, 1100);
-    }
-    mostrarToast('Código confirmado: coincide con ' + p.nombre + ' (#' + p.id + ')');
+    /* El escaner NO cuenta: confirma el producto y abre el registro para
+       que la persona cargue la cantidad. Es el mismo flujo que
+       app/conteo/contar.tsx#manejarEscaneo. */
+    abrirModalContar(p.id);
+  }
+
+  function pintarNotaEscaneo() {
+    var nota = $('nota-escaneo');
+    if (!ultimoConfirmado) { nota.hidden = true; return; }
+    /* Se dice lo que el codigo probo (que producto es) y nada mas: el
+       mismo codigo esta impreso en la unidad y en la caja. */
+    nota.textContent = 'Confirmado con la cámara: ' + ultimoConfirmado.nombre +
+      '. El código no dice cuántas hay — la cantidad y el empaque los cargás vos.';
+    nota.hidden = false;
   }
 
   $('btn-scan').addEventListener('click', abrirModalScan);
