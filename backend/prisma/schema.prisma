@@ -414,6 +414,21 @@ model CatalogoItem {
   codigoBarras String @map("codigo_barras")
   descripcion  String
 
+  /// Categoria de "Catalogo Ventas" en Dynamics (ProductCategoryAssignments):
+  /// "FIDEOS Y PASTAS", "GALLETAS", "DETERGENTES EN POLVO".
+  ///
+  /// NO es decoracion: es el ORDEN en que se arman las hojas de conteo. Sin
+  /// esto, las hojas salen ordenadas por codigo de item -- y el codigo de
+  /// Dynamics no sigue el recorrido fisico de la tienda, asi que el operario
+  /// arranca con un shampoo, sigue con una gaseosa y despues una lata de
+  /// atun, cruzando el local en cada renglon. Agrupando por categoria barre
+  /// un sector y pasa al siguiente. Mismo criterio que usa el proyecto de
+  /// reportes del cliente (app_inventarioautomatico).
+  ///
+  /// Nullable porque un producto puede no tener asignacion en el ERP: esos
+  /// van al final, juntos, en vez de quedar afuera del inventario.
+  categoria String? @map("categoria")
+
   /// SIEMPRE al menos uno (ver Producto.empaques). D365 (Market Trujillo)
   /// puede traer mas de un empaque alterno para el mismo producto en
   /// ProductSpecificUnitOfMeasureConversions -- antes se descartaban todos
@@ -531,6 +546,11 @@ model Producto {
   codigoBarras String @map("codigo_barras")
   descripcion  String
   ubicacion    String?
+  /// La categoria de Dynamics con la que se agrupo la hoja (ver
+  /// CatalogoItem.categoria). Se copia al materializar la hoja para que el
+  /// operario vea EN QUE SECTOR esta parado sin tener que deducirlo de los
+  /// nombres. No viola el conteo ciego: es ubicacion, no stock ni precio.
+  categoria    String?
 
   /// SIEMPRE al menos uno (tipos.ts#Producto.empaques, "[0] = el que se
   /// ofrece primero al abrir el modal") -- lo exige la capa de aplicacion,

@@ -4,6 +4,8 @@
  * hojas.calculos.ts, testeadas sin base.
  */
 
+import { Prisma } from '@prisma/client';
+
 import { prisma } from '../../config/database';
 import { Conflicto, NoEncontrado } from '../../shared/errores';
 import type { ColaboradorAutenticado } from '../../shared/tipos';
@@ -36,6 +38,20 @@ export interface ProductoDto {
    */
   empaques: EmpaqueDto[];
   ubicacion?: string;
+  /**
+   * Categoria de Dynamics ("GALLETAS", "DETERGENTES EN POLVO"). Es UBICACION,
+   * no stock: dice en que sector de la tienda esta el producto, y por eso no
+   * viola el conteo ciego.
+   *
+   * Se omite cuando el ERP no la tiene, nunca se manda null -- mismo criterio
+   * que `ubicacion`.
+   *
+   * SIN ESTO la hoja se rotula con su categoria dominante pero cada renglon
+   * no dice de cual es, y en una hoja que cruza el limite entre dos sectores
+   * el operario no sabe donde cambia. Estuvo guardandose en la base y sin
+   * llegar a la pantalla hasta que se probo con el catalogo real.
+   */
+  categoria?: string;
 }
 
 /** tipos.ts#LineaEmpaque. */
@@ -80,6 +96,7 @@ function aProductoDto(p: {
   codigoBarras: string;
   descripcion: string;
   ubicacion: string | null;
+  categoria: string | null;
   empaques: { nombre: string; factor: number; codigoBarras: string | null }[];
 }): ProductoDto {
   return {
@@ -97,6 +114,7 @@ function aProductoDto(p: {
       ...(e.codigoBarras === null ? {} : { codigoBarras: e.codigoBarras }),
     })),
     ...(p.ubicacion === null ? {} : { ubicacion: p.ubicacion }),
+    ...(p.categoria === null ? {} : { categoria: p.categoria }),
   };
 }
 
@@ -132,7 +150,13 @@ type HojaCompleta = {
   conteos: Parameters<typeof aConteoDto>[0][];
 };
 
-function aHojaDto(h: HojaCompleta): HojaDto {
+/**
+ * Exportada para `inventarios.service.ts` (pasos 2 y 3 del wizard): ese
+ * modulo devuelve las MISMAS hojas despues de crearlas o repartirlas, y
+ * duplicar el mapeo significaria que el dia que se agregue un campo al DTO,
+ * la pantalla lo vea al listar y no al crear.
+ */
+export function aHojaDto(h: HojaCompleta): HojaDto {
   return {
     id: h.id,
     inventarioId: h.inventarioId,
@@ -150,15 +174,42 @@ function aHojaDto(h: HojaCompleta): HojaDto {
   };
 }
 
-const INCLUIR_TODO = {
+export const INCLUIR_TODO = Prisma.validator<Prisma.HojaConteoInclude>()({
   asignadoA: { select: { nombre: true } },
   asignadoA2: { select: { nombre: true } },
-  // `orden: 'asc'` en ambas relaciones: Postgres no garantiza ningun orden
-  // estable entre filas sin un ORDER BY explicito, y `[0]` importa (es el
-  // empaque que se ofrece primero al abrir el modal).
-  productos: { orderBy: { codigo: 'asc' }, include: { empaques: { orderBy: { orden: 'asc' } } } },
+  /**
+   * ORDEN DE LOS PRODUCTOS DENTRO DE LA HOJA: por CATEGORIA y despues por
+   * codigo. No es cosmetico -- es el recorrido que hace la persona.
+   *
+   * Estuvo ordenado solo por `codigo` y se veia bien, porque los codigos de
+   * Dynamics agrupan por familia CASI siempre. Casi. Medido sobre el
+   * catalogo real (hoja 006 de MARKET BOLIVAR): 8 categorias y **11 vueltas
+   * a un sector ya barrido** -- detergentes, desinfectantes, chocolates,
+   * y de nuevo detergentes. El operario cruzaba el local once veces dentro
+   * de UNA hoja.
+   *
+   * Las hojas se CREAN ordenadas por categoria (inventarios.service.ts), asi
+   * que sin este orderBy el trabajo de ordenarlas se perdia al leerlas.
+   *
+   * `nulls: 'last'`: los que el ERP no clasifico van al final, juntos, igual
+   * que en dominio/lote.ts#ordenarParaContar. Sin esto Postgres los pone
+   * PRIMERO en ASC, y la hoja arrancaria por lo que nadie sabe donde esta.
+   *
+   * `orden: 'asc'` en empaques por otra razon: Postgres no garantiza orden
+   * estable sin ORDER BY, y `[0]` importa (es el empaque que se ofrece
+   * primero al abrir el modal).
+   */
+  productos: {
+    orderBy: [{ categoria: { sort: 'asc', nulls: 'last' } }, { codigo: 'asc' }],
+    include: { empaques: { orderBy: { orden: 'asc' } } },
+  },
   conteos: { include: { empaques: true } },
-} as const;
+  // `Prisma.validator` y no `as const`: con `as const` el `orderBy` queda
+  // `readonly` y Prisma pide un array mutable; sin nada, TypeScript infiere
+  // `string` donde hacen falta los literales `'asc'`. El validator da las
+  // dos cosas -- literales y mutable -- y ademas valida la forma contra el
+  // schema en tiempo de compilacion.
+});
 
 // ---------------------------------------------------------------------------
 // Lectura

@@ -60,6 +60,15 @@ export interface Producto {
   /** Al menos uno. `[0]` = el que se ofrece primero al abrir el modal. */
   empaques: Empaque[];
   ubicacion?: string;      // "Gondola A2 - Nivel 3"
+  /**
+   * Categoria de Dynamics: "GALLETAS", "DETERGENTES EN POLVO". Es lo que
+   * agrupa la hoja (ver el backend: las hojas se arman ordenadas por esto) y
+   * lo que le dice al operario en que sector esta parado.
+   *
+   * UBICACION, no stock — por eso puede estar acá sin romper el conteo ciego.
+   * Opcional: el ERP no clasifica todos los productos.
+   */
+  categoria?: string;
 }
 
 // ---------------------------------------------------------------------------
