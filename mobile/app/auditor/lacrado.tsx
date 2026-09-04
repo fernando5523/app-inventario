@@ -1,17 +1,33 @@
 import { router } from 'expo-router';
 import { Check, Cloud, Lock, ShieldCheck } from 'lucide-react-native';
 import { useEffect, useState, type JSX } from 'react';
-import { ActivityIndicator, Alert, Modal, Pressable, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Alert, Modal, StyleSheet, Text, View } from 'react-native';
 
 import { PantallaConTabs } from '../../components/navegacion/PantallaConTabs';
-import { BandaSync, Badge, BarraApp, Button } from '../../components/ui';
+import { BandaSync, Badge, BarraApp, Button, formatoMiles } from '../../components/ui';
 import { repositorioInventario, repositorioLacrado, repositorioSesion } from '../../lib/contenedor';
 import type { Colaborador } from '../../lib/dominio/tipos';
 import type { EstadoLacrado } from '../../lib/puertos/repositorios';
 import { useSesion } from '../../lib/sesion-contexto';
 import { colors, fonts, spacing } from '../../lib/theme';
 
-const nf = new Intl.NumberFormat('es-PE');
+/**
+ * "2026-09-03T21:08:00.000Z" -> "03/09 21:08".
+ *
+ * A mano, sin `toLocaleString`, por el mismo motivo por el que
+ * components/ui/formato.ts no usa `Intl`: en Hermes no está garantizado
+ * que la build traiga los datos ICU de es-PE, y si no los trae cae en
+ * formato inglés en silencio. Vive acá y no en formato.ts porque hasta
+ * ahora ninguna otra pantalla necesitó mostrar una hora.
+ */
+function fechaHoraCorta(iso: string): string {
+  const d = new Date(iso);
+  const dd = String(d.getDate()).padStart(2, '0');
+  const mm = String(d.getMonth() + 1).padStart(2, '0');
+  const hh = String(d.getHours()).padStart(2, '0');
+  const mi = String(d.getMinutes()).padStart(2, '0');
+  return `${dd}/${mm} ${hh}:${mi}`;
+}
 
 /**
  * Lacrado digital (mobile/design/lacrado.html) — acceso del Auditor, el
@@ -35,7 +51,7 @@ export default function LacradoScreen(): JSX.Element {
   const [auditores, setAuditores] = useState<Colaborador[]>([]);
   const [estado, setEstado] = useState<EstadoLacrado | null>(null);
 
-  const [aprobando, setAprobando] = useState<number | null>(null);
+  const [aprobando, setAprobando] = useState(false);
   const [lacrando, setLacrando] = useState(false);
   const [registrando, setRegistrando] = useState(false);
   const [modalVisible, setModalVisible] = useState(false);
@@ -75,16 +91,21 @@ export default function LacradoScreen(): JSX.Element {
     router.replace('/');
   }
 
-  async function aprobar(colaboradorId: number): Promise<void> {
+  /**
+   * Sin argumento a propósito: la única firma que esta pantalla puede
+   * registrar es la de quien está en sesión, y el adaptador la resuelve
+   * solo. No hay forma de pedirle que apruebe por otro.
+   */
+  async function aprobar(): Promise<void> {
     if (!inventarioId) return;
-    setAprobando(colaboradorId);
+    setAprobando(true);
     try {
-      const nuevo = await repositorioLacrado.aprobar(inventarioId, colaboradorId);
+      const nuevo = await repositorioLacrado.aprobar(inventarioId);
       setEstado(nuevo);
     } catch (error) {
       Alert.alert('No se pudo aprobar', error instanceof Error ? error.message : 'Intentá de nuevo.');
     } finally {
-      setAprobando(null);
+      setAprobando(false);
     }
   }
 
@@ -120,22 +141,49 @@ export default function LacradoScreen(): JSX.Element {
   const todasAprobadas = aprobacionesHechas >= aprobacionesRequeridas;
   const puedeLacrar = !!estado && !estado.lacrado && todasAprobadas && estado.todoSincronizado;
 
+  // Quién está firmando: la ÚNICA fila con botón es la de esta persona.
+  const yo = sesion.colaborador.id;
+  const miFirma = estado?.aprobaciones.find((a) => a.colaboradorId === yo);
+  const otrosAuditores = auditores.filter((a) => a.id !== yo);
+  const pendientes = otrosAuditores.filter((a) => !estado?.aprobaciones.some((x) => x.colaboradorId === a.id));
+  const nombresPendientes = pendientes.map((a) => a.nombre).join(' y ');
+
+  /**
+   * El aviso más importante de la pantalla: dice con todas las letras que
+   * la segunda firma la tiene que poner OTRA persona en OTRA sesión. Sin
+   * esto, el auditor logueado ve una fila que no puede tocar y no sabe si
+   * está roto o si le falta un permiso.
+   */
+  const avisoFirmas = !estado
+    ? null
+    : estado.lacrado
+      ? null
+      : otrosAuditores.length === 0
+        ? 'Esta sucursal tiene una sola cuenta de Auditor cargada, así que la doble validación no se puede completar: hace falta una segunda cuenta de Auditor (se da de alta en Usuarios). El lacrado necesita dos personas distintas, no dos toques.'
+        : todasAprobadas
+          ? 'Las dos firmas quedaron registradas. Ya se puede ejecutar el lacrado.'
+          : !miFirma && pendientes.length === otrosAuditores.length
+            ? `Todavía no hay ninguna firma. Podés registrar la tuya ahora; la segunda la tiene que registrar ${nombresPendientes}, ingresando con su propio PIN.`
+            : !miFirma
+              ? 'La otra firma ya está registrada. Falta la tuya para completar la doble validación.'
+              : `Tu firma ya quedó registrada. Falta la de ${nombresPendientes}, y solo esa persona puede ponerla: tiene que ingresar con su propio PIN, desde otro equipo o cerrando esta sesión con el botón de arriba a la derecha.`;
+
   const textoLacrado = !estado
     ? ''
     : estado.lacrado
       ? undefined // se muestra el resultado, no este texto
       : !todasAprobadas
-        ? 'Aprobá las dos validaciones y confirmá que hay sincronización con Dynamics para poder lacrar.'
+        ? `Faltan firmas de auditoría (${aprobacionesHechas} de ${aprobacionesRequeridas}). El lacrado se habilita recién con las dos, y también hace falta sincronización con Dynamics.`
         : !estado.todoSincronizado
-          ? 'Las dos validaciones están aprobadas, pero falta sincronización con Dynamics (WiFi de tienda) para poder lacrar.'
-          : 'Todo listo: las dos validaciones están aprobadas y hay sincronización con Dynamics.';
+          ? 'Las dos firmas están registradas, pero falta sincronización con Dynamics (WiFi de tienda) para poder lacrar.'
+          : 'Todo listo: las dos firmas están registradas y hay sincronización con Dynamics.';
 
   return (
     <PantallaConTabs scrollable contentStyle={styles.contenido}>
       <BarraApp
         rotulo="Auditoría · Lacrado digital"
         sede={sesion.sucursal!.nombre}
-        cifras={items ? `${nf.format(items)} ítems auditados` : undefined}
+        cifras={items ? `${formatoMiles(items)} ítems auditados` : undefined}
         onSalir={salir}
       />
 
@@ -162,30 +210,42 @@ export default function LacradoScreen(): JSX.Element {
             <View style={styles.tarjetaCabecera}>
               <ShieldCheck size={18} color={colors.rojo} />
               <Text style={styles.tarjetaTitulo}>Doble validación</Text>
-              <Badge label={`${aprobacionesHechas} / ${aprobacionesRequeridas} aprobado`} variant={todasAprobadas ? 'ok' : 'default'} />
+              <Badge label={`${aprobacionesHechas} / ${aprobacionesRequeridas} firmado`} variant={todasAprobadas ? 'ok' : 'default'} />
             </View>
+
+            <Text style={styles.tarjetaTexto}>
+              Hacen falta las firmas de <Text style={styles.negrita}>dos auditores distintos</Text>, cada uno desde su
+              propia sesión. Nadie puede aprobar en nombre de otro: la única fila con botón es la de quien está
+              logueado.
+            </Text>
+
             {auditores.map((auditor) => {
-              const aprobado = estado?.aprobaciones.some((a) => a.colaboradorId === auditor.id) ?? false;
+              const aprobacion = estado?.aprobaciones.find((a) => a.colaboradorId === auditor.id);
+              const esMiFila = auditor.id === yo;
               return (
-                <View key={auditor.id} style={styles.validacionFila}>
+                <View key={auditor.id} style={[styles.validacionFila, esMiFila && styles.validacionFilaPropia]}>
                   <View style={styles.personaDatos}>
                     <Text style={styles.personaNombre}>{auditor.nombre}</Text>
-                    <Text style={styles.personaSub}>Auditor</Text>
+                    <Text style={styles.personaSub}>
+                      {aprobacion ? `Firmó el ${fechaHoraCorta(aprobacion.fecha)}` : 'Auditor'}
+                      {esMiFila ? ' · sesión actual' : ''}
+                    </Text>
                   </View>
-                  {aprobado ? (
+                  {aprobacion ? (
                     <Badge label="Aprobado" variant="ok" />
+                  ) : esMiFila ? (
+                    <Button label="Aprobar" size="sm" loading={aprobando} disabled={!!estado?.lacrado} onPress={aprobar} />
                   ) : (
-                    <Button
-                      label="Aprobar"
-                      size="sm"
-                      loading={aprobando === auditor.id}
-                      disabled={!!estado?.lacrado}
-                      onPress={() => aprobar(auditor.id)}
-                    />
+                    // Sin botón, y a propósito: la fila se ve para que se
+                    // entienda que faltan dos firmas, pero esta no es
+                    // tocable por quien no es esa persona.
+                    <Badge label="Falta su firma" variant="default" />
                   )}
                 </View>
               );
             })}
+
+            {avisoFirmas ? <Text style={styles.avisoFirmas}>{avisoFirmas}</Text> : null}
           </View>
 
           <View style={styles.tarjeta}>
@@ -199,7 +259,7 @@ export default function LacradoScreen(): JSX.Element {
                 <Check size={14} color={colors.ok} />
                 <Text style={styles.resultadoTexto}>
                   Inventario lacrado. Hash ID: <Text style={styles.resultadoHash}>{estado.hash}</Text>. Los{' '}
-                  {items ? nf.format(items) : ''} ítems quedan grabados de forma inmutable; cualquier ajuste entra en
+                  {items ? formatoMiles(items) : ''} ítems quedan grabados de forma inmutable; cualquier ajuste entra en
                   el período siguiente.
                 </Text>
               </View>
@@ -248,7 +308,7 @@ export default function LacradoScreen(): JSX.Element {
             <Text style={styles.modalTitulo}>Confirmar lacrado</Text>
             <Text style={styles.modalTexto}>
               Se va a lacrar el inventario de <Text style={styles.negrita}>{sesion.sucursal!.nombre}</Text>
-              {items ? ` (${nf.format(items)} ítems)` : ''}. A partir de este momento el inventario del mes queda{' '}
+              {items ? ` (${formatoMiles(items)} ítems)` : ''}. A partir de este momento el inventario del mes queda{' '}
               <Text style={styles.negrita}>congelado de forma inmutable</Text>: no hay forma de deshacerlo ni de
               editar los conteos. Cualquier ajuste posterior entra en el período siguiente.
             </Text>
@@ -294,6 +354,21 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: colors.borde,
     borderRadius: 12,
+  },
+  /**
+   * La fila propia se distingue por el borde, no por el rojo de marca: el
+   * rojo es la acción (el botón "Aprobar" que ya está adentro). Si además
+   * tiñera la fila, competirían.
+   */
+  validacionFilaPropia: { borderColor: colors.tinta, borderWidth: 1.5 },
+  avisoFirmas: {
+    fontSize: 12.5,
+    lineHeight: 18,
+    color: colors.proceso,
+    fontFamily: fonts.medium,
+    backgroundColor: colors.procesoSuave,
+    padding: 11,
+    borderRadius: 10,
   },
   personaDatos: { gap: 2 },
   personaNombre: { fontSize: 13.5, color: colors.tinta, fontFamily: fonts.bold },

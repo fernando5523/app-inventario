@@ -212,9 +212,23 @@ export interface RepositorioLiquidacion {
 // ---------------------------------------------------------------------------
 
 /** Quién ya aprobó y si el inventario quedó lacrado (pantalla 7, punto de no retorno). */
+/**
+ * Una de las dos firmas de la doble validación de auditoría.
+ *
+ * Lleva `fecha` porque una firma sin cuándo no es auditable: el acto que
+ * cierra el inventario del mes tiene que poder responder "quién y a qué
+ * hora", no solo "sí".
+ */
+export interface AprobacionLacrado {
+  colaboradorId: number;
+  nombre: string;
+  /** ISO 8601. */
+  fecha: string;
+}
+
 export interface EstadoLacrado {
   inventarioId: number;
-  aprobaciones: { colaboradorId: number; nombre: string }[];
+  aprobaciones: AprobacionLacrado[];
   /** Cuántas aprobaciones distintas hacen falta antes de poder lacrar. Hoy: 2 (doble validación de auditoría). */
   aprobacionesRequeridas: number;
   /** Si hay hojas del inventario todavía sin sincronizar — no se puede lacrar con datos que no llegaron a Dynamics. */
@@ -232,8 +246,21 @@ export interface EstadoLacrado {
 /** Solo lo usa el Auditor (cierre definitivo del inventario, pantalla 7). */
 export interface RepositorioLacrado {
   estado(inventarioId: number): Promise<EstadoLacrado>;
-  /** Rechaza si `colaboradorId` no es auditor de la sucursal del inventario, o si ya había aprobado. */
-  aprobar(inventarioId: number, colaboradorId: number): Promise<EstadoLacrado>;
+  /**
+   * Registra la aprobación de QUIEN ESTÁ EN SESIÓN. A propósito NO recibe
+   * un `colaboradorId`: mientras la firma venía por parámetro, el auditor
+   * logueado podía aprobar en nombre del otro — dos firmas registradas,
+   * una sola persona — y la doble validación quedaba en un botón doble.
+   * El único que puede firmar es el dueño de la sesión, y eso no puede
+   * depender de que la pantalla esconda un botón.
+   *
+   * Espeja el backend, donde la aprobación se registra contra el
+   * colaborador del token y nunca contra un id del body.
+   *
+   * Rechaza si: no hay sesión, quien firma no es auditor, no es auditor de
+   * la sucursal del inventario, ya había firmado, o ya está lacrado.
+   */
+  aprobar(inventarioId: number): Promise<EstadoLacrado>;
   /**
    * Punto de no retorno: congela el inventario del mes. Rechaza si faltan
    * aprobaciones o si hay hojas sin sincronizar — nunca confía en que la
