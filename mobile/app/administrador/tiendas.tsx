@@ -1,28 +1,67 @@
 import { useFocusEffect } from 'expo-router';
-import { MapPin, Store } from 'lucide-react-native';
+import { MapPin, Store, TriangleAlert, Warehouse } from 'lucide-react-native';
 import { useCallback, useState, type JSX } from 'react';
 import { ActivityIndicator, Alert, StyleSheet, Text, TextInput, View } from 'react-native';
 
 import { PantallaConTabs } from '../../components/navegacion/PantallaConTabs';
-import { Badge, BarraApp, Button, Card, EmptyState } from '../../components/ui';
+import { Badge, BarraApp, Button, Card, EmptyState, Select, type SelectOpcion } from '../../components/ui';
 // Del contenedor: las sucursales salen de Postgres con el backend vivo.
 import { repositorioTiendas } from '../../lib/contenedor';
-import type { Sucursal } from '../../lib/dominio/tipos';
+import type { Almacen, Sucursal } from '../../lib/dominio/tipos';
 import { colors, fonts, fontSize, radius, spacing } from '../../lib/theme';
+
+/**
+ * `Almacen` -> `SelectOpcion`. `codigo` hace de id porque es lo único que
+ * el ERP necesita para filtrar stock — no hay otro identificador.
+ */
+function almacenAOpcion(a: Almacen): SelectOpcion {
+  return { id: a.codigo, titulo: a.nombre, subtitulo: a.codigo };
+}
+
+/**
+ * El almacén YA asignado a una tienda, para preseleccionar el `Select` al
+ * editar. Se arma con `almacenId`/`almacenNombre` de la propia
+ * `Sucursal` — el backend los guarda juntos y verificados (ver
+ * `Sucursal.almacenNombre`) — no hace falta cruzar contra la lista viva
+ * de `listarAlmacenes()` solo para mostrar el nombre, y así el formulario
+ * sigue funcionando aunque Dynamics esté caído en este momento.
+ */
+function opcionDeAlmacen(tienda: Sucursal): SelectOpcion | null {
+  if (!tienda.almacenId) return null;
+  return { id: tienda.almacenId, titulo: tienda.almacenNombre ?? tienda.almacenId, subtitulo: tienda.almacenId };
+}
 
 export default function TiendasScreen(): JSX.Element {
   const [cargando, setCargando] = useState(true);
   const [tiendas, setTiendas] = useState<Sucursal[]>([]);
+  // Se carga una sola vez con las tiendas: son los almacenes del ERP, no
+  // cambian mientras el Administrador está parado en esta pantalla.
+  const [almacenes, setAlmacenes] = useState<Almacen[]>([]);
 
   const [formularioAbierto, setFormularioAbierto] = useState(false);
   const [editando, setEditando] = useState<Sucursal | null>(null);
   const [nombre, setNombre] = useState('');
   const [direccion, setDireccion] = useState('');
+  const [almacenSeleccionado, setAlmacenSeleccionado] = useState<SelectOpcion | null>(null);
+  // Tres estados posibles al guardar (ver DatosTienda.almacenId): sin
+  // tocar (no se manda nada, PATCH deja el almacén como está), elegido
+  // (se manda el código) o vaciado a propósito (se manda `null`). Sin
+  // este flag no hay forma de distinguir "no lo toqué" de "lo vacié".
+  const [almacenTocado, setAlmacenTocado] = useState(false);
+  const [selectAlmacenAbierto, setSelectAlmacenAbierto] = useState(false);
   const [guardando, setGuardando] = useState(false);
 
   const cargar = useCallback(async () => {
-    const lista = await repositorioTiendas.listar();
+    const [lista, listaAlmacenes] = await Promise.all([
+      repositorioTiendas.listar(),
+      // Si Dynamics no responde, la pantalla de tiendas no se puede quedar
+      // en blanco por eso: se sigue viendo y gestionando la lista, solo
+      // que el selector de almacén queda vacío (con su propio aviso, ver
+      // más abajo) en vez de tirar toda la pantalla abajo.
+      repositorioTiendas.listarAlmacenes().catch(() => []),
+    ]);
     setTiendas(lista);
+    setAlmacenes(listaAlmacenes);
     setCargando(false);
   }, []);
 
@@ -36,6 +75,13 @@ export default function TiendasScreen(): JSX.Element {
     setEditando(null);
     setNombre('');
     setDireccion('');
+    // Ningún campo viene preseleccionado (criterio del cliente, ver
+    // trujillo-ui/SKILL.md): un default que nadie mira es un dato que
+    // nadie verifica. El almacén queda sin elegir a propósito, y ESO es
+    // válido — no bloquea el alta (ver el aviso de la lista, más abajo).
+    setAlmacenSeleccionado(null);
+    setAlmacenTocado(false);
+    setSelectAlmacenAbierto(false);
     setFormularioAbierto(true);
   }
 
@@ -43,6 +89,9 @@ export default function TiendasScreen(): JSX.Element {
     setEditando(tienda);
     setNombre(tienda.nombre);
     setDireccion(tienda.direccion ?? '');
+    setAlmacenSeleccionado(opcionDeAlmacen(tienda));
+    setAlmacenTocado(false);
+    setSelectAlmacenAbierto(false);
     setFormularioAbierto(true);
   }
 
@@ -51,12 +100,40 @@ export default function TiendasScreen(): JSX.Element {
     setEditando(null);
     setNombre('');
     setDireccion('');
+    setAlmacenSeleccionado(null);
+    setAlmacenTocado(false);
+    setSelectAlmacenAbierto(false);
+  }
+
+  function elegirAlmacen(opcion: SelectOpcion): void {
+    setAlmacenSeleccionado(opcion);
+    setAlmacenTocado(true);
+  }
+
+  /** Desasocia el almacén — ver DatosTienda.almacenId: un almacén mal asignado es peor que ninguno. */
+  function quitarAlmacen(): void {
+    setAlmacenSeleccionado(null);
+    setAlmacenTocado(true);
+    setSelectAlmacenAbierto(false);
   }
 
   async function guardar(): Promise<void> {
     setGuardando(true);
     try {
-      const datos = { nombre: nombre.trim(), direccion: direccion.trim() || undefined };
+      // Al crear NUNCA se manda `null` (crearTiendaSchema.almacenId solo
+      // acepta string u omitido, no hay almacén previo que desasociar en
+      // un alta) — al editar, si se tocó el campo y quedó sin elegir, se
+      // manda `null` a propósito para desasociarlo.
+      const almacenId = editando
+        ? almacenTocado
+          ? (almacenSeleccionado ? String(almacenSeleccionado.id) : null)
+          : undefined
+        : (almacenSeleccionado ? String(almacenSeleccionado.id) : undefined);
+      const datos = {
+        nombre: nombre.trim(),
+        direccion: direccion.trim() || undefined,
+        almacenId,
+      };
       if (editando) {
         await repositorioTiendas.editar(editando.id, datos);
       } else {
@@ -129,6 +206,31 @@ export default function TiendasScreen(): JSX.Element {
             </View>
           </View>
 
+          {/* SELECTOR de la lista real de Dynamics, nunca texto libre: un
+              código mal tipeado no falla, trae el stock de OTRA tienda, y
+              la auditoría compara contra números que parecen válidos sin
+              que nadie se entere hasta que no cuadra a fin de mes. */}
+          <View style={styles.campo}>
+            <Text style={styles.label}>Almacén de Dynamics</Text>
+            <Select
+              icon={Warehouse}
+              valor={almacenSeleccionado}
+              placeholder={almacenes.length === 0 ? 'No se pudo traer la lista de Dynamics' : 'Elegí un almacén'}
+              opciones={almacenes.map(almacenAOpcion)}
+              onSeleccionar={elegirAlmacen}
+              disabled={almacenes.length === 0}
+              accessibilityLabel="Almacén de Dynamics"
+              abierto={selectAlmacenAbierto}
+              onCambiarAbierto={setSelectAlmacenAbierto}
+            />
+            {almacenSeleccionado ? (
+              // Un almacén mal asignado es peor que ninguno (decisión del
+              // cliente, reflejada del lado del backend): tiene que poder
+              // vaciarse, no solo reemplazarse por otro de la lista.
+              <Button label="Quitar almacén" variant="outline" size="sm" onPress={quitarAlmacen} />
+            ) : null}
+          </View>
+
           <Button label={editando ? 'Guardar cambios' : 'Crear tienda'} onPress={guardar} disabled={!puedeGuardar} loading={guardando} />
         </Card>
       ) : null}
@@ -156,8 +258,27 @@ export default function TiendasScreen(): JSX.Element {
                       {tienda.direccion ?? 'Sin dirección registrada'} · {tienda.colaboradores} colaborador
                       {tienda.colaboradores === 1 ? '' : 'es'}
                     </Text>
+                    {tienda.almacenId ? (
+                      <Text style={styles.filaMeta}>
+                        Almacén: {tienda.almacenNombre ?? tienda.almacenId} ({tienda.almacenId})
+                      </Text>
+                    ) : (
+                      // NO se esconde: sin almacén no hay stock del ERP, y sin
+                      // stock la auditoría no puede comparar nada — el
+                      // Administrador tiene que verlo acá, no descubrirlo
+                      // cuando el mes no cierre.
+                      <View style={styles.avisoAlmacen}>
+                        <TriangleAlert size={13} color={colors.falta} />
+                        <Text style={styles.avisoAlmacenTexto}>
+                          Sin almacén configurado: sin stock de Dynamics, la auditoría no va a poder comparar esta tienda.
+                        </Text>
+                      </View>
+                    )}
                   </View>
-                  <Badge label={activa ? 'Activa' : 'Inactiva'} variant={activa ? 'ok' : 'espera'} />
+                  <View style={styles.filaBadges}>
+                    <Badge label={activa ? 'Activa' : 'Inactiva'} variant={activa ? 'ok' : 'espera'} />
+                    {!tienda.almacenId ? <Badge label="Sin almacén" variant="falta" /> : null}
+                  </View>
                 </View>
                 <View style={styles.filaAcciones}>
                   <Button label="Editar" variant="outline" size="sm" onPress={() => abrirFormularioEditar(tienda)} style={styles.filaBoton} />
@@ -207,6 +328,9 @@ const styles = StyleSheet.create({
   filaTextos: { flex: 1, minWidth: 0 },
   filaNombre: { fontSize: 13.5, color: colors.tinta, fontFamily: fonts.bold },
   filaMeta: { marginTop: 2, fontSize: 11.5, color: colors.gris, fontFamily: fonts.regular },
+  filaBadges: { flex: 0, alignItems: 'flex-end', gap: 6 },
+  avisoAlmacen: { flexDirection: 'row', alignItems: 'flex-start', gap: 6, marginTop: 4 },
+  avisoAlmacenTexto: { flex: 1, fontSize: 11, lineHeight: 15, color: colors.falta, fontFamily: fonts.regular },
   filaAcciones: { flexDirection: 'row', gap: 8 },
   filaBoton: { flex: 1 },
 });

@@ -15,6 +15,7 @@
  */
 
 import type {
+  Almacen,
   Colaborador,
   ConfigSistema,
   Conteo,
@@ -340,10 +341,24 @@ export interface RepositorioUsuarios {
   resetearPin(usuarioId: number, nuevoPin: string): Promise<void>;
 }
 
-/** Datos editables de una tienda — alta y edición comparten forma. */
+/**
+ * Datos editables de una tienda — alta y edición comparten forma.
+ * `almacenId` es opcional (una sucursal puede crearse sin almacén
+ * todavía, ver `Sucursal.almacenId`) — pero cuando VIENE, tiene que ser
+ * uno de los códigos que devolvió `listarAlmacenes()`, nunca texto
+ * libre: eso lo hace cumplir la pantalla usando `Select`, no este tipo
+ * (el backend además lo verifica contra Dynamics, doble resguardo).
+ *
+ * Tres estados posibles, no dos — por eso `string | null | undefined`:
+ *   - `undefined` (ausente): no tocar el almacén actual (PATCH parcial).
+ *   - `null`: DESASOCIAR el almacén a propósito — un almacén mal
+ *     asignado es peor que ninguno, así que tiene que poder vaciarse.
+ *   - `string`: asignar/cambiar a ese código.
+ */
 export interface DatosTienda {
   nombre: string;
   direccion?: string;
+  almacenId?: string | null;
 }
 
 /** Gestión de sucursales (solo Administrador). */
@@ -353,6 +368,14 @@ export interface RepositorioTiendas {
   editar(sucursalId: number, datos: DatosTienda): Promise<Sucursal>;
   /** Nunca se borra una tienda (mismo criterio que Usuarios): se activa o desactiva. */
   cambiarActiva(sucursalId: number, activa: boolean): Promise<Sucursal>;
+  /**
+   * Los almacenes reales de Dynamics, para el `Select` de `crear`/`editar`
+   * — NUNCA un campo de texto: un código mal tipeado no falla, trae el
+   * stock de OTRA tienda, y la auditoría compara contra números que
+   * parecen válidos sin que nadie se entere hasta que no cuadra a fin de
+   * mes. Si la lista sale del ERP, ese error deja de ser posible.
+   */
+  listarAlmacenes(): Promise<Almacen[]>;
 }
 
 /** Configuración global del sistema (solo Administrador). */

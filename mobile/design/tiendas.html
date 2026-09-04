@@ -837,6 +837,16 @@ body {
 /* ---------- Pantalla 10 ---------- */
 .boton-sec.ancho { width: 100%; min-height: 46px; font-size: 14.5px; font-weight: 700; }
 
+/* Aviso de consecuencia cuando falta el almacen: no un badge solo --
+   el badge dice QUE falta, esta linea dice QUE PASA si no se completa.
+   Decision del cliente: "al crear el sitio, se debe asociar el almacen" --
+   sin el, no hay stock de Dynamics contra el que auditar. */
+.ficha-aviso {
+  display: flex; align-items: flex-start; gap: 7px;
+  margin-top: 2px; font-size: 11.5px; line-height: 1.4; color: var(--falta);
+}
+.ficha-aviso svg { flex: none; margin-top: 1px; }
+
 </style>
 
 <div class="lienzo">
@@ -900,6 +910,22 @@ body {
               <input type="text" id="in-direccion" placeholder="Ej. Jr. Comercio 450" autocomplete="off">
             </div>
           </div>
+
+          <!-- Almacen de Dynamics: SELECTOR de la lista real, nunca texto
+               libre -- un codigo mal tipeado trae el stock de otra tienda y
+               nadie se entera (la auditoria compara contra numeros que
+               parecen validos). Mismo control .campo/.control/.lista que
+               Sucursal en login.html. -->
+          <div class="campo">
+            <label id="lbl-almacen">Almacén de Dynamics</label>
+            <button type="button" class="control" id="btn-almacen"
+                    aria-labelledby="lbl-almacen" aria-expanded="false" aria-haspopup="listbox">
+              <svg class="icono" width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m3 9 9-6 9 6v11a1 1 0 0 1-1 1h-4v-7H9v7H5a1 1 0 0 1-1-1Z"/></svg>
+              <span class="valor vacio" id="val-almacen">Elegí un almacén</span>
+              <svg class="chevron" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
+            </button>
+            <div class="lista" id="lista-almacen" role="listbox" aria-labelledby="lbl-almacen" hidden></div>
+          </div>
         </div>
 
         <button type="button" class="accion" id="btn-guardar" disabled>Crear tienda</button>
@@ -961,11 +987,19 @@ body {
   /* Mismas 4 sucursales que lib/adaptadores/tiendas-memoria.ts, que a su
      vez arranca del padron de sesion-memoria.ts. Ninguna trae direccion:
      el padron original no la tenia, y el campo se sumo con la gestion. */
+  /* Codigos y nombres reales del ERP -- salen de GET /api/d365/almacenes
+     (backend/src/modules/d365, min3), no se inventan aca. Es la MISMA
+     razon por la que el campo es un selector y no texto libre. */
+  var ALMACENES = [
+    { codigo: 'AD04_TCE',  nombre: 'Tienda Carhuaz' },
+    { codigo: 'MD11_CENT', nombre: 'Almacén Central' }
+  ];
+
   var tiendas = [
-    { id: 1, nombre: 'Market Central Luzuriaga', direccion: null, colaboradores: 11, activa: true },
-    { id: 2, nombre: 'Market Carhuaz',           direccion: null, colaboradores: 6,  activa: true },
-    { id: 3, nombre: 'Market Bol\u00edvar',           direccion: null, colaboradores: 7,  activa: true },
-    { id: 4, nombre: 'Market Sucre',             direccion: null, colaboradores: 5,  activa: true }
+    { id: 1, nombre: 'Market Central Luzuriaga', direccion: null, colaboradores: 11, activa: true,  almacen: ALMACENES[1] },
+    { id: 2, nombre: 'Market Carhuaz',           direccion: null, colaboradores: 6,  activa: true,  almacen: ALMACENES[0] },
+    { id: 3, nombre: 'Market Bol\u00edvar',           direccion: null, colaboradores: 7,  activa: true,  almacen: null },
+    { id: 4, nombre: 'Market Sucre',             direccion: null, colaboradores: 5,  activa: true,  almacen: null }
   ];
   var proximoId = 5;
 
@@ -982,8 +1016,53 @@ body {
     config: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.6 1.6 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.6 1.6 0 0 0-2.7 1.1v.3a2 2 0 1 1-4 0v-.2a1.6 1.6 0 0 0-2.8-1.1l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1A1.6 1.6 0 0 0 3.5 15H3a2 2 0 1 1 0-4h.2A1.6 1.6 0 0 0 4.3 8.2l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.6 1.6 0 0 0 2.7-1.1V4a2 2 0 1 1 4 0v.2a1.6 1.6 0 0 0 2.8 1.1l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.6 1.6 0 0 0 1.1 2.7h.3a2 2 0 1 1 0 4h-.2a1.6 1.6 0 0 0-1.2 1Z"/></svg>'
   };
 
+  var btnAlmacen = $('btn-almacen'), listaAlmacen = $('lista-almacen'), valAlmacen = $('val-almacen');
+
   var abierto = false;
   var editando = null;     /* la tienda que se esta editando, o null si es alta */
+  var almacenSeleccionado = null;   /* null = todavia sin elegir -- valido, no bloquea el alta */
+
+  function cerrarListaAlmacen() {
+    listaAlmacen.hidden = true;
+    btnAlmacen.setAttribute('aria-expanded', 'false');
+  }
+
+  function alternarListaAlmacen() {
+    var abrir = listaAlmacen.hidden;
+    listaAlmacen.hidden = !abrir;
+    btnAlmacen.setAttribute('aria-expanded', String(abrir));
+  }
+
+  function pintarAlmacen() {
+    if (!almacenSeleccionado) {
+      valAlmacen.className = 'valor vacio';
+      valAlmacen.textContent = 'Elegí un almacén';
+      return;
+    }
+    valAlmacen.className = 'valor';
+    valAlmacen.innerHTML = almacenSeleccionado.nombre +
+      '<span class="sub">' + almacenSeleccionado.codigo + '</span>';
+  }
+
+  function pintarListaAlmacen() {
+    listaAlmacen.innerHTML = '';
+    ALMACENES.forEach(function (a) {
+      var b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'opcion';
+      b.setAttribute('role', 'option');
+      b.setAttribute('aria-selected', String(!!almacenSeleccionado && a.codigo === almacenSeleccionado.codigo));
+      b.innerHTML = '<span>' + a.nombre + '<span class="meta">' + a.codigo + '</span></span>';
+      b.addEventListener('click', function () {
+        almacenSeleccionado = a;
+        pintarAlmacen();
+        pintarListaAlmacen();
+        cerrarListaAlmacen();
+        btnAlmacen.focus();
+      });
+      listaAlmacen.appendChild(b);
+    });
+  }
 
   function puedeGuardar() { return $('in-nombre').value.trim().length > 0; }
 
@@ -992,6 +1071,8 @@ body {
     abierto = true;
     $('in-nombre').value = '';
     $('in-direccion').value = '';
+    almacenSeleccionado = null;
+    cerrarListaAlmacen();
     render();
   }
 
@@ -1000,6 +1081,8 @@ body {
     abierto = true;
     $('in-nombre').value = t.nombre;
     $('in-direccion').value = t.direccion || '';
+    almacenSeleccionado = t.almacen || null;
+    cerrarListaAlmacen();
     render();
     $('in-nombre').focus();
   }
@@ -1009,11 +1092,15 @@ body {
     abierto = false;
     $('in-nombre').value = '';
     $('in-direccion').value = '';
+    almacenSeleccionado = null;
+    cerrarListaAlmacen();
     render();
   }
 
   function pintarFormulario() {
     $('formulario').hidden = !abierto;
+    pintarAlmacen();
+    pintarListaAlmacen();
     $('txt-nueva').textContent = abierto ? 'Cancelar' : 'Nueva tienda';
     $('btn-nueva').className = abierto ? 'boton-sec ancho' : 'accion';
     $('titulo-formulario').textContent = editando ? 'Editar ' + editando.nombre : 'Nueva tienda';
@@ -1040,6 +1127,21 @@ body {
     textos.appendChild(h);
     textos.appendChild(meta);
 
+    if (t.almacen) {
+      var almacenTexto = document.createElement('p');
+      almacenTexto.className = 'ficha-meta';
+      almacenTexto.textContent = 'Almac\u00e9n: ' + t.almacen.nombre + ' (' + t.almacen.codigo + ')';
+      textos.appendChild(almacenTexto);
+    } else {
+      /* NO se esconde: sin almacen no hay stock del ERP, y sin stock la
+         auditoria no puede comparar nada -- el administrador tiene que
+         verlo, no adivinarlo cuando el mes no cierre. */
+      var aviso = document.createElement('p');
+      aviso.className = 'ficha-aviso';
+      aviso.innerHTML = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 9v4m0 4h.01M10.3 3.86 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.86a2 2 0 0 0-3.4 0Z"/></svg><span>Sin almac\u00e9n configurado: sin stock de Dynamics, la auditor\u00eda no va a poder comparar esta tienda.</span>';
+      textos.appendChild(aviso);
+    }
+
     /* Estado con la paleta semantica, nunca con el rojo de marca: el rojo
        de esta pantalla es "Nueva tienda", la accion. */
     var badge = document.createElement('span');
@@ -1049,6 +1151,13 @@ body {
     var badges = document.createElement('div');
     badges.className = 'ficha-badges';
     badges.appendChild(badge);
+
+    if (!t.almacen) {
+      var badgeAlmacen = document.createElement('span');
+      badgeAlmacen.className = 'badge falta';
+      badgeAlmacen.textContent = 'Sin almac\u00e9n';
+      badges.appendChild(badgeAlmacen);
+    }
 
     cab.appendChild(textos);
     cab.appendChild(badges);
@@ -1128,6 +1237,11 @@ body {
           pintarFormulario();
         } },
       { etiqueta: 'Editar Market Carhuaz', accion: function () { abrirEdicion(tiendas[1]); } },
+      { etiqueta: 'Asignar almac\u00e9n a Market Bol\u00edvar', accion: function () {
+          tiendas[2].almacen = ALMACENES[0];
+          render();
+          mostrarToast('Market Bol\u00edvar: almac\u00e9n asignado (' + ALMACENES[0].codigo + ').');
+        } },
       { etiqueta: 'Desactivar Market Sucre', accion: function () {
           tiendas[3].activa = false;
           render();
@@ -1135,9 +1249,10 @@ body {
         } },
       { etiqueta: 'Reponer el estado inicial', accion: function () {
           tiendas.length = 0;
-          [['Market Central Luzuriaga', 11], ['Market Carhuaz', 6], ['Market Bol\u00edvar', 7], ['Market Sucre', 5]]
+          [['Market Central Luzuriaga', 11, ALMACENES[1]], ['Market Carhuaz', 6, ALMACENES[0]],
+           ['Market Bol\u00edvar', 7, null], ['Market Sucre', 5, null]]
             .forEach(function (par, i) {
-              tiendas.push({ id: i + 1, nombre: par[0], direccion: null, colaboradores: par[1], activa: true });
+              tiendas.push({ id: i + 1, nombre: par[0], direccion: null, colaboradores: par[1], activa: true, almacen: par[2] });
             });
           proximoId = 5;
           cerrarFormulario();
@@ -1168,6 +1283,7 @@ body {
   });
 
   $('in-nombre').addEventListener('input', pintarFormulario);
+  btnAlmacen.addEventListener('click', alternarListaAlmacen);
 
   $('btn-guardar').addEventListener('click', function () {
     if (!puedeGuardar()) return;
@@ -1176,11 +1292,14 @@ body {
     if (editando) {
       editando.nombre = nombre;
       editando.direccion = direccion;
+      editando.almacen = almacenSeleccionado;
       mostrarToast('Cambios guardados en ' + nombre + '.');
     } else {
       /* Una tienda nueva arranca en 0 colaboradores: las cuentas se dan de
-         alta despues, desde Usuarios. */
-      tiendas.push({ id: proximoId++, nombre: nombre, direccion: direccion, colaboradores: 0, activa: true });
+         alta despues, desde Usuarios. El almacen puede quedar sin elegir --
+         no bloquea el alta, pero la ficha lo va a mostrar sin tapar nada
+         (ver ficha()). */
+      tiendas.push({ id: proximoId++, nombre: nombre, direccion: direccion, colaboradores: 0, activa: true, almacen: almacenSeleccionado });
       mostrarToast('Tienda ' + nombre + ' creada.');
     }
     cerrarFormulario();
@@ -1190,8 +1309,15 @@ body {
     mostrarToast('Cerrar\u00eda la sesi\u00f3n y volver\u00eda al login.');
   });
 
+  document.addEventListener('click', function (e) {
+    if (!e.target.closest('.campo')) cerrarListaAlmacen();
+  });
+
   document.addEventListener('keydown', function (e) {
-    if (e.key === 'Escape' && abierto) cerrarFormulario();
+    if (e.key === 'Escape') {
+      cerrarListaAlmacen();
+      if (abierto) cerrarFormulario();
+    }
   });
 
   render();

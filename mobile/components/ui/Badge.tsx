@@ -4,7 +4,7 @@ import { StyleSheet, Text, View, type StyleProp, type ViewStyle } from 'react-na
 import { colors, fonts, fontSize, radius, spacing } from '../../lib/theme';
 
 /** Paleta semántica de estados (ver SKILL.md): nunca usar rojo para esto. */
-export type BadgeVariant = 'default' | 'ok' | 'proceso' | 'espera' | 'outline';
+export type BadgeVariant = 'default' | 'ok' | 'proceso' | 'espera' | 'outline' | 'falta';
 
 export interface BadgeProps {
   label: string;
@@ -63,5 +63,15 @@ const styles = StyleSheet.create({
   },
   outlineText: {
     color: colors.tinta,
+  },
+  // No es un estado del ciclo de conteo (ok/proceso/espera) -- es una
+  // ADVERTENCIA de configuración incompleta con consecuencia real (ej.
+  // sucursal sin almacén de Dynamics: sin stock, la auditoría no puede
+  // comparar nada). Mismo criterio que BandaSync's 'error'.
+  falta: {
+    backgroundColor: colors.faltaSuave,
+  },
+  faltaText: {
+    color: colors.falta,
   },
 });

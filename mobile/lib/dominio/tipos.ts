@@ -152,6 +152,18 @@ export interface Colaborador {
   rol: Rol;
 }
 
+/**
+ * Un almacén de Dynamics (`WarehouseId`/`WarehouseName`), tal como los
+ * expone `GET /api/d365/almacenes` (backend/src/modules/d365) — no un
+ * dato que este dominio invente. Solo `codigo` es lo que el ERP necesita
+ * para filtrar stock (`InventoryWarehouseId eq '<codigo>'`); `nombre` es
+ * para que la persona elija sin memorizar códigos.
+ */
+export interface Almacen {
+  codigo: string; // "MD11_CENT", "AD04_TCE"
+  nombre: string;
+}
+
 export interface Sucursal {
   id: number;
   nombre: string;
@@ -165,6 +177,31 @@ export interface Sucursal {
   direccion?: string;
   /** Opcional por la misma razón que `direccion` — default `true` cuando no está. */
   activa?: boolean;
+  /**
+   * Decisión del cliente: "al crear el sitio, se debe asociar el
+   * almacén" — de acá sale el stock del ERP contra el que se audita todo
+   * el inventario. `WarehouseId` de Dynamics (ej. "MD11_CENT") — el
+   * backend lo verifica contra el ERP real al guardar (nunca confía en
+   * el formato solo, ver backend/src/modules/tiendas/tiendas.service.ts),
+   * así que si está presente acá es porque ya se confirmó que existe.
+   *
+   * `undefined`/`null` es un estado LEGÍTIMO, no un error: una sucursal
+   * puede existir sin almacén todavía configurado — a propósito no se
+   * exige al crear, porque bloquear el alta no ayuda a nadie más que a
+   * quien complete el dato después. Lo que NO puede pasar es que la
+   * ausencia quede escondida: sin almacén no hay stock del ERP, y sin
+   * stock la auditoría no puede comparar nada (ver TiendasScreen).
+   */
+  almacenId?: string | null;
+  /**
+   * Nombre legible, copiado del ERP en el momento de elegir el almacén
+   * (mismo criterio que `DiferenciaItem.descripcion` del backend: si
+   * Dynamics renombra el almacén después, esta tienda sigue diciendo con
+   * qué nombre se lo asoció). Siempre presente junto con `almacenId`,
+   * nunca por separado — no hace falta cruzar contra
+   * `listarAlmacenes()` solo para mostrar el nombre.
+   */
+  almacenNombre?: string | null;
 }
 
 export interface Sesion {
