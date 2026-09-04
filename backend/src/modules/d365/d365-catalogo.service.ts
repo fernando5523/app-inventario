@@ -11,6 +11,7 @@ import { d365Config } from '../../config/d365.config';
 import { mensajeSinAlmacen } from '../tiendas/tiendas.almacen';
 import { factorDesdeSimbolo } from '../../dominio/empaque';
 import { prisma } from '../../config/database';
+import { registrarAuditoria } from '../../shared/auditoria';
 import { ErrorHttp } from '../../shared/errores';
 import { d365EntityService } from './d365-entity.service';
 import type {
@@ -179,6 +180,46 @@ export function agruparStockPorItem(filas: D365StockAlmacen[]): Map<string, numb
   return mapa;
 }
 
+/**
+ * SOLO SE CUENTA LO QUE TIENE EXISTENCIA. Decision del cliente, confirmada.
+ *
+ * Misma condicion que el desarrollo que ya usa la empresa en produccion
+ * (app_inventarioautomatico, report.service.ts#buildReportRows:
+ * `if (qty === undefined || qty <= 0) continue`). Descarta DOS cosas
+ * distintas y por eso se cuentan por separado:
+ *
+ *   - `null`  -> el ERP no tiene registro de ese item en ese almacen.
+ *   - `<= 0`  -> el ERP dice explicitamente que hay cero.
+ *
+ * La distincion no es academica: "no se" y "hay cero" llevan a
+ * conversaciones distintas el dia que alguien pregunte por que una hoja no
+ * trae tal producto. Por eso `resumirDescartes` los separa y el snapshot los
+ * deja en el registro de auditoria.
+ *
+ * OJO con el riesgo, que existe y hay que tenerlo presente: un producto que
+ * ESTA en la gondola pero que el ERP cree en cero nunca se va a contar. El
+ * inventario deja de poder descubrir ese caso. Es la contrapartida de la
+ * decision, no un efecto no deseado.
+ */
+export function tieneExistencia(stockErp: number | null): boolean {
+  return stockErp !== null && stockErp > 0;
+}
+
+export interface DescartesPorStock {
+  sinRegistro: number;
+  stockCero: number;
+}
+
+export function resumirDescartes(items: { stockErp: number | null }[]): DescartesPorStock {
+  let sinRegistro = 0;
+  let stockCero = 0;
+  for (const item of items) {
+    if (item.stockErp === null) sinRegistro++;
+    else if (item.stockErp <= 0) stockCero++;
+  }
+  return { sinRegistro, stockCero };
+}
+
 export function mapearProducto(
   producto: D365ReleasedProduct,
   barcodesDelItem: D365ProductBarcode[],
@@ -251,6 +292,7 @@ export function mapearCatalogo(
   responsables: D365ResponsableItem[] = [],
   tipo: TipoInventario = 'mensual',
   stockPorItem: Map<string, number> = new Map(),
+  filtrarPorStock = false,
 ): CatalogoItemDto[] {
   const barcodesPorItem = agruparBarcodesPorItem(barcodes);
   const conversionesPorItem = agruparConversionesPorProducto(conversiones);
@@ -283,10 +325,19 @@ export function mapearCatalogo(
    * queda mapeado igual -- la auditoria necesita saber de quien es cada
    * faltante aunque los cuente a todos.
    */
-  if (tipo === 'anual') return listos;
+  const porResponsable =
+    tipo === 'anual' || responsablePorItem.size === 0
+      ? listos
+      : listos.filter((_, i) => seCuenta(responsablePorItem.get(productos[i]!.ItemNumber)));
 
-  if (responsablePorItem.size === 0) return listos;
-  return listos.filter((_, i) => seCuenta(responsablePorItem.get(productos[i]!.ItemNumber)));
+  /**
+   * `filtrarPorStock` es explicito y no "hay mapa de stock, filtro": si la
+   * consulta de stock falla y vuelve vacia, filtrar dejaria el inventario en
+   * CERO items y el Coordinador no podria arrancar. Prefiero un catalogo de
+   * mas, que se ve, a uno vacio por un error de red.
+   */
+  if (!filtrarPorStock) return porResponsable;
+  return porResponsable.filter((item) => tieneExistencia(item.stockErp));
 }
 
 /** modo='ejemplo': nunca toca red, siempre disponible sin credenciales. */
@@ -302,7 +353,10 @@ export function obtenerCatalogoEjemplo(): CatalogoItemDto[] {
  * (confirmado contra el tenant real), asi que se trae completa y se
  * agrupa localmente por ProductNumber en vez de filtrar por item.
  */
-async function obtenerCatalogoReal(tipo: TipoInventario, almacen?: string): Promise<CatalogoItemDto[]> {
+async function obtenerCatalogoReal(
+  tipo: TipoInventario,
+  almacen?: string,
+): Promise<{ catalogo: CatalogoItemDto[]; descartes: DescartesPorStock }> {
   const filtroCompania = d365Config.dataAreaId ? `dataAreaId eq '${d365Config.dataAreaId}'` : undefined;
 
   const [productos, barcodes, conversiones, responsables, stock] = await Promise.all([
@@ -345,7 +399,18 @@ async function obtenerCatalogoReal(tipo: TipoInventario, almacen?: string): Prom
       : Promise.resolve([] as D365StockAlmacen[]),
   ]);
 
-  return mapearCatalogo(productos, barcodes, conversiones, responsables, tipo, agruparStockPorItem(stock));
+  /**
+   * Se mapea SIN filtrar para poder contar por que quedo afuera cada item, y
+   * recien despues se filtra. Contar primero es lo que permite responder "por
+   * que esta hoja no trae tal producto" sin volver a golpear Dynamics.
+   */
+  const sinFiltrar = mapearCatalogo(productos, barcodes, conversiones, responsables, tipo, agruparStockPorItem(stock));
+  const descartes = resumirDescartes(sinFiltrar);
+
+  // Solo se filtra si de verdad se consulto stock: sin almacen no hay dato y
+  // filtrar dejaria el inventario vacio.
+  const catalogo = almacen ? sinFiltrar.filter((item) => tieneExistencia(item.stockErp)) : sinFiltrar;
+  return { catalogo, descartes };
 }
 
 // ---------------------------------------------------------------------------
@@ -386,8 +451,11 @@ export async function listarAlmacenes(): Promise<AlmacenDto[]> {
 
 export interface SnapshotDto {
   inventarioId: number;
+  /** Items CONTABLES: los que quedaron tras el filtro de existencia. */
   items: number;
   tomadoEn: string;
+  /** Cuantos quedaron afuera y por que. Ausente en un inventario ya existente. */
+  descartados?: DescartesPorStock;
 }
 
 /**
@@ -402,6 +470,7 @@ export async function crearSnapshot(
   modo: ModoCatalogo,
   tipo: TipoInventario = 'mensual',
   almacenOverride?: string,
+  actorId = 0,
 ): Promise<SnapshotDto> {
   const sucursal = await prisma.sucursal.findUnique({
     where: { id: sucursalId },
@@ -448,7 +517,11 @@ export async function crearSnapshot(
     );
   }
 
-  const catalogo = modo === 'ejemplo' ? obtenerCatalogoEjemplo() : await obtenerCatalogoReal(tipo, almacen);
+  const resultado =
+    modo === 'ejemplo'
+      ? { catalogo: obtenerCatalogoEjemplo(), descartes: { sinRegistro: 0, stockCero: 0 } }
+      : await obtenerCatalogoReal(tipo, almacen);
+  const { catalogo, descartes } = resultado;
   const tomadoEn = new Date();
 
   const inventario = await prisma.inventario.create({
@@ -492,5 +565,30 @@ export async function crearSnapshot(
     );
   }
 
-  return { inventarioId: inventario.id, items: catalogo.length, tomadoEn: tomadoEn.toISOString() };
+  /**
+   * Queda registrado CUANTOS quedaron afuera y por que. No es telemetria:
+   * es la respuesta a "por que esta hoja no trae tal producto", que alguien
+   * va a preguntar, y sin esto habria que volver a correr el snapshot para
+   * contestarla.
+   */
+  await registrarAuditoria({
+    actorId,
+    accion: 'inventario.snapshot',
+    entidad: 'inventario',
+    entidadId: inventario.id,
+    detalle: {
+      tipo,
+      almacen: almacen ?? null,
+      itemsContables: catalogo.length,
+      descartadosSinRegistro: descartes.sinRegistro,
+      descartadosStockCero: descartes.stockCero,
+    },
+  });
+
+  return {
+    inventarioId: inventario.id,
+    items: catalogo.length,
+    tomadoEn: tomadoEn.toISOString(),
+    descartados: descartes,
+  };
 }

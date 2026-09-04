@@ -10,6 +10,8 @@ import { describe, expect, it } from 'vitest';
 import {
   agruparResponsablesPorItem,
   agruparStockPorItem,
+  resumirDescartes,
+  tieneExistencia,
   esDeLaEmpresa,
   mapearCatalogo,
   seCuenta,
@@ -134,5 +136,35 @@ describe('stock del ERP: null NO es cero', () => {
   it('sin ninguna consulta de stock, TODO queda en null', () => {
     const catalogo = mapearCatalogo(productos, [], [], [], 'anual');
     expect(catalogo.every((c) => c.stockErp === null)).toBe(true);
+  });
+});
+
+describe('filtro por existencia: solo lo que tiene stock', () => {
+  it('descarta null Y cero, igual que el proyecto que ya usa la empresa', () => {
+    // Condicion de referencia: `if (qty === undefined || qty <= 0) continue`
+    expect(tieneExistencia(null)).toBe(false);
+    expect(tieneExistencia(0)).toBe(false);
+    expect(tieneExistencia(-3)).toBe(false);
+    expect(tieneExistencia(1)).toBe(true);
+  });
+
+  it('cuenta los descartes POR MOTIVO, no en una sola bolsa', () => {
+    // "No se" y "hay cero" llevan a conversaciones distintas el dia que
+    // alguien pregunte por que una hoja no trae tal producto.
+    const items = [{ stockErp: null }, { stockErp: null }, { stockErp: 0 }, { stockErp: 5 }];
+    expect(resumirDescartes(items)).toEqual({ sinRegistro: 2, stockCero: 1 });
+  });
+
+  it('filtra el catalogo cuando se lo piden explicitamente', () => {
+    const stock = new Map([['A1', 4]]);
+    const catalogo = mapearCatalogo([prod('A1'), prod('A2')], [], [], [], 'anual', stock, true);
+    expect(catalogo.map((c) => c.codigo)).toEqual(['A1']);
+  });
+
+  it('NO filtra si no se lo piden: sin stock consultado, el catalogo entero', () => {
+    // Si la consulta de stock falla y vuelve vacia, filtrar dejaria el
+    // inventario en CERO items y el Coordinador no podria arrancar.
+    const catalogo = mapearCatalogo([prod('A1'), prod('A2')], [], [], [], 'anual', new Map(), false);
+    expect(catalogo).toHaveLength(2);
   });
 });

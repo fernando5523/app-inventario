@@ -386,6 +386,14 @@ Body:
   El filtro sale de `TRU_InventoryManagerPEEntities` (entidad CUSTOM del tenant): `ModuleType eq 'Invent'`, campo `TRU_InventoryManagerPE` con valores `Employee`/`Company`/`None`. Los `None` y los que no tienen fila NO se cuentan en el mensual: sin responsable asignado no hay a quien liquidarle una diferencia.
 
   ⚠️ **El tipo NO se persiste todavia**: `Inventario` no tiene columna para el. Ver la nota de limitaciones abajo.
+- **Solo se cuentan los productos CON EXISTENCIA en el almacen de la sucursal.** Decision del cliente, misma condicion que el desarrollo que la empresa ya usa en produccion (`qty === undefined || qty <= 0`): se descartan tanto los que el ERP no registra como los que declara en cero.
+
+  La respuesta trae `descartados: { sinRegistro, stockCero }` y el snapshot lo deja ademas en `RegistroAuditoria` (`accion: "inventario.snapshot"`). Es la respuesta a "por que esta hoja no trae tal producto" sin volver a correr el snapshot.
+
+  Medido con almacen `MD11_CENT`: **6.297 activos → 1.506 contables**, 4.749 sin registro y 42 en cero.
+
+  ⚠️ Contrapartida a tener presente: un producto que ESTA en la gondola pero que el ERP cree en cero **nunca se va a contar**. El inventario deja de poder descubrir ese caso.
+
 - `almacen` es opcional (`WarehouseId` de Dynamics, ej. `"MD11_CENT"`). **El stock NO viene del catalogo de productos**: vive en la data entity `WarehousesOnHandV2` y se consulta POR ALMACEN (`$filter: InventoryWarehouseId eq '<codigo>'`). Sin este parametro no se consulta stock y `stockErp` queda en **null**.
 
   `null` NO es `0`, y la diferencia importa: "no se cuanto hay" y "hay cero" llevan a conclusiones opuestas. Un 0 falso hace que la auditoria reporte un faltante que no existe y que alguien lo pague.

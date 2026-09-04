@@ -11,7 +11,7 @@ export const estado = asyncHandler(async (_req: RequestAutenticado, res: Respons
 
 export const snapshot = asyncHandler(async (req: RequestAutenticado, res: Response) => {
   const { sucursalId, modo, tipo, almacen } = req.body as CrearSnapshotInput;
-  res.json(await catalogoService.crearSnapshot(sucursalId, modo, tipo, almacen));
+  res.json(await catalogoService.crearSnapshot(sucursalId, modo, tipo, almacen, req.colaborador!.colaboradorId));
 });
 
 /**
