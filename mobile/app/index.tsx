@@ -131,109 +131,111 @@ export default function LoginScreen(): JSX.Element {
 
   return (
     <ScreenContainer scrollable contentStyle={styles.contenido}>
-      <View style={styles.marca}>
-        {/* eslint-disable-next-line @typescript-eslint/no-require-imports */}
-        <Image source={require('../assets/logo-trujillo.png')} style={styles.logo} resizeMode="contain" />
-      </View>
-
-      <View style={styles.saludo}>
-        <View style={styles.saludoFila}>
-          <EstrellaMarca size={19} color={colors.dorado} />
-          <Text style={styles.saludoTitulo}>Bienvenido</Text>
+      <View style={styles.formulario}>
+        <View style={styles.marca}>
+          {/* eslint-disable-next-line @typescript-eslint/no-require-imports */}
+          <Image source={require('../assets/logo-trujillo.png')} style={styles.logo} resizeMode="contain" />
         </View>
-        <Text style={styles.saludoSub}>Ingresa para continuar</Text>
-      </View>
 
-      <View style={styles.campos}>
-        {!modoAdmin && (
+        <View style={styles.saludo}>
+          <View style={styles.saludoFila}>
+            <EstrellaMarca size={19} color={colors.dorado} />
+            <Text style={styles.saludoTitulo}>Bienvenido</Text>
+          </View>
+          <Text style={styles.saludoSub}>Ingresa para continuar</Text>
+        </View>
+
+        <View style={styles.campos}>
+          {!modoAdmin && (
+            <View style={styles.campo}>
+              <Text style={styles.label}>Sucursal</Text>
+              <Select
+                icon={MapPin}
+                valor={valorSucursal}
+                placeholder="Selecciona una sucursal"
+                opciones={opcionesSucursal}
+                accessibilityLabel="Sucursal"
+                abierto={campoAbierto === 'sucursal'}
+                onCambiarAbierto={(abierto) => setCampoAbierto(abierto ? 'sucursal' : null)}
+                onSeleccionar={(opcion) => {
+                  const elegida = sucursales.find((s) => s.id === opcion.id) ?? null;
+                  setSucursal(elegida);
+                  setPersona(null);
+                }}
+              />
+            </View>
+          )}
+
           <View style={styles.campo}>
-            <Text style={styles.label}>Sucursal</Text>
+            <Text style={styles.label}>Persona</Text>
             <Select
-              icon={MapPin}
-              valor={valorSucursal}
-              placeholder="Selecciona una sucursal"
-              opciones={opcionesSucursal}
-              accessibilityLabel="Sucursal"
-              abierto={campoAbierto === 'sucursal'}
-              onCambiarAbierto={(abierto) => setCampoAbierto(abierto ? 'sucursal' : null)}
+              icon={User}
+              valor={valorPersona}
+              placeholder={modoAdmin ? 'Selecciona un administrador' : 'Selecciona una persona'}
+              opciones={opcionesPersona}
+              disabled={!modoAdmin && !sucursal}
+              disabledHint="Elegí primero la sucursal"
+              accessibilityLabel="Persona"
+              abierto={campoAbierto === 'persona'}
+              onCambiarAbierto={(abierto) => setCampoAbierto(abierto ? 'persona' : null)}
               onSeleccionar={(opcion) => {
-                const elegida = sucursales.find((s) => s.id === opcion.id) ?? null;
-                setSucursal(elegida);
-                setPersona(null);
+                const disponibles = modoAdmin ? administradores : colaboradoresDisponibles;
+                const elegida = disponibles.find((p) => p.id === opcion.id) ?? null;
+                setPersona(elegida);
               }}
             />
+            <Pressable onPress={alternarModoAdmin} accessibilityRole="button">
+              <Text style={styles.olvide}>
+                {modoAdmin ? '← Volver al ingreso de tienda' : '¿Sos administrador del sistema? Ingresá acá'}
+              </Text>
+            </Pressable>
           </View>
-        )}
 
-        <View style={styles.campo}>
-          <Text style={styles.label}>Persona</Text>
-          <Select
-            icon={User}
-            valor={valorPersona}
-            placeholder={modoAdmin ? 'Selecciona un administrador' : 'Selecciona una persona'}
-            opciones={opcionesPersona}
-            disabled={!modoAdmin && !sucursal}
-            disabledHint="Elegí primero la sucursal"
-            accessibilityLabel="Persona"
-            abierto={campoAbierto === 'persona'}
-            onCambiarAbierto={(abierto) => setCampoAbierto(abierto ? 'persona' : null)}
-            onSeleccionar={(opcion) => {
-              const disponibles = modoAdmin ? administradores : colaboradoresDisponibles;
-              const elegida = disponibles.find((p) => p.id === opcion.id) ?? null;
-              setPersona(elegida);
-            }}
-          />
-          <Pressable onPress={alternarModoAdmin} accessibilityRole="button">
-            <Text style={styles.olvide}>
-              {modoAdmin ? '← Volver al ingreso de tienda' : '¿Sos administrador del sistema? Ingresá acá'}
-            </Text>
-          </Pressable>
-        </View>
-
-        <View style={styles.campo}>
-          <Text style={styles.label}>Clave</Text>
-          <Pressable
-            style={styles.controlClave}
-            accessibilityRole="button"
-            accessibilityLabel="Clave"
-            onPress={() => {
-              setCampoAbierto(null);
-              setModalPinVisible(true);
-            }}
-          >
-            <Lock size={19} color={colors.grisClaro} />
-            {pin.length > 0 ? (
-              <PinPuntos valor={pin} longitud={LARGO_PIN} revelado={pinVisible} />
-            ) : (
-              <Text style={styles.valorVacio}>Ingresa tu clave</Text>
-            )}
-          </Pressable>
-          <Pressable
-            onPress={() => Alert.alert('Recuperar clave', 'Todavía no está disponible en esta versión.')}
-            accessibilityRole="button"
-          >
-            <Text style={styles.olvide}>¿Olvidaste tu clave?</Text>
-          </Pressable>
-        </View>
-
-        <View style={styles.campo}>
-          <View style={styles.rolCabecera}>
-            <Text style={styles.label}>Rol</Text>
-            <Text style={styles.rolNota}>Lo define la persona</Text>
+          <View style={styles.campo}>
+            <Text style={styles.label}>Clave</Text>
+            <Pressable
+              style={styles.controlClave}
+              accessibilityRole="button"
+              accessibilityLabel="Clave"
+              onPress={() => {
+                setCampoAbierto(null);
+                setModalPinVisible(true);
+              }}
+            >
+              <Lock size={19} color={colors.grisClaro} />
+              {pin.length > 0 ? (
+                <PinPuntos valor={pin} longitud={LARGO_PIN} revelado={pinVisible} />
+              ) : (
+                <Text style={styles.valorVacio}>Ingresa tu clave</Text>
+              )}
+            </Pressable>
+            <Pressable
+              onPress={() => Alert.alert('Recuperar clave', 'Todavía no está disponible en esta versión.')}
+              accessibilityRole="button"
+            >
+              <Text style={styles.olvide}>¿Olvidaste tu clave?</Text>
+            </Pressable>
           </View>
-          <GrupoRol activo={persona?.rol ?? null} />
+
+          <View style={styles.campo}>
+            <View style={styles.rolCabecera}>
+              <Text style={styles.label}>Rol</Text>
+              <Text style={styles.rolNota}>Lo define la persona</Text>
+            </View>
+            <GrupoRol activo={persona?.rol ?? null} />
+          </View>
         </View>
+
+        <Button
+          label="Ingresar"
+          icon={ArrowRight}
+          iconPosition="right"
+          size="lg"
+          disabled={!puedeIngresar}
+          loading={ingresando}
+          onPress={manejarIngreso}
+        />
       </View>
-
-      <Button
-        label="Ingresar"
-        icon={ArrowRight}
-        iconPosition="right"
-        size="lg"
-        disabled={!puedeIngresar}
-        loading={ingresando}
-        onPress={manejarIngreso}
-      />
 
       <View style={styles.pie}>
         <View style={styles.taglineFila}>
@@ -258,9 +260,13 @@ export default function LoginScreen(): JSX.Element {
 
 const styles = StyleSheet.create({
   contenido: {
+    flexGrow: 1,
+    justifyContent: 'space-between',
     paddingHorizontal: spacing.xxl,
     paddingTop: spacing.sm,
     paddingBottom: spacing.xxl,
+  },
+  formulario: {
     gap: spacing.xl,
   },
   marca: { alignItems: 'center', paddingTop: spacing.md, paddingBottom: spacing.xs },
@@ -287,7 +293,7 @@ const styles = StyleSheet.create({
   olvide: { alignSelf: 'flex-start', marginTop: 2, fontSize: 13.5, color: colors.rojo, fontFamily: fonts.regular },
   rolCabecera: { flexDirection: 'row', alignItems: 'baseline', justifyContent: 'space-between', gap: spacing.sm },
   rolNota: { fontSize: fontSize.xs, color: colors.grisClaro, fontFamily: fonts.medium },
-  pie: { alignItems: 'center', gap: 5 },
+  pie: { alignItems: 'center', gap: 5, paddingTop: spacing.xl },
   taglineFila: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm + 2 },
   taglineTexto: { fontSize: 13.5, color: colors.rojo, fontFamily: fonts.marca },
   version: { fontSize: fontSize.xs, color: colors.grisClaro, fontFamily: fonts.medium },

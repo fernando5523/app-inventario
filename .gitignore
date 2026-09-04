@@ -24,6 +24,11 @@ build/
 .env.*
 _env_nuevo.txt
 
-# Editor / SO.
+# Editor / SO / Temporales.
 .DS_Store
 Thumbs.db
+*.log
+_*.xml
+mobile/design/_*
+.claude/*.lock
+
