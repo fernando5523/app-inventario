@@ -1,13 +1,14 @@
 import { router } from 'expo-router';
 import { Check, CloudDownload, LayoutGrid, Users } from 'lucide-react-native';
-import { useEffect, useMemo, useState, type JSX, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type JSX, type ReactNode } from 'react';
 import { ActivityIndicator, Alert, Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { PantallaConTabs } from '../../components/navegacion/PantallaConTabs';
-import { BarraApp, Badge, Button, type BadgeVariant } from '../../components/ui';
+import { AvanceFila, BarraApp, Badge, Button, type BadgeVariant } from '../../components/ui';
 import { repositorioHojas, repositorioInventario, repositorioSesion } from '../../lib/contenedor';
 import { partirEnHojas } from '../../lib/dominio/lote';
 import { TAMANOS_HOJA, type Colaborador, type HojaConteo, type TamanoHoja } from '../../lib/dominio/tipos';
+import { ErrorSnapshot, type AvanceSnapshot } from '../../lib/puertos/repositorios';
 import { useSesion } from '../../lib/sesion-contexto';
 import { colors, fonts, fontSize, radius, spacing } from '../../lib/theme';
 
@@ -108,8 +109,14 @@ export default function HojasScreen(): JSX.Element {
 
   const [tamanoElegido, setTamanoElegido] = useState<TamanoHoja | null>(null);
   const [trayendoSnapshot, setTrayendoSnapshot] = useState(false);
+  const [avanceSnapshot, setAvanceSnapshot] = useState<AvanceSnapshot | null>(null);
   const [creandoHojas, setCreandoHojas] = useState(false);
   const [asignando, setAsignando] = useState(false);
+
+  // AbortController, no un booleano "cancelado": es lo mismo que va a usar
+  // el adaptador HTTP real para cortar un fetch de OData en vuelo — el
+  // puerto (RepositorioInventario.traerSnapshot) toma el mismo `signal`.
+  const controladorSnapshotRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
     if (!sesion) return;
@@ -175,18 +182,71 @@ export default function HojasScreen(): JSX.Element {
     router.replace('/');
   }
 
+  function manejarErrorSnapshot(error: unknown): void {
+    if (!(error instanceof ErrorSnapshot)) {
+      Alert.alert('No se pudo traer el catálogo', error instanceof Error ? error.message : 'Intentá de nuevo.');
+      return;
+    }
+    switch (error.codigo) {
+      case 'cancelado':
+        // Lo pidió la propia persona — no es un error, no hay nada que avisar.
+        return;
+      case 'sin-red':
+        Alert.alert('Sin conexión con la tienda', 'Revisá el WiFi de la tienda y volvé a intentar cuando vuelva.');
+        return;
+      case 'dynamics-no-configurado':
+        if (sesion!.colaborador.rol === 'administrador') {
+          Alert.alert('Dynamics no está configurado', error.message, [
+            { text: 'Cerrar', style: 'cancel' },
+            { text: 'Ir a configurar', onPress: () => router.push('/administrador/config') },
+          ]);
+        } else {
+          Alert.alert('Dynamics no está configurado', `${error.message} Pedile a un Administrador que cargue las credenciales.`);
+        }
+        return;
+      case 'credenciales-rechazadas':
+        Alert.alert(
+          'Dynamics rechazó las credenciales',
+          'La conexión con la tienda anduvo bien, pero Dynamics no aceptó las credenciales configuradas. Avisale a un Administrador.',
+        );
+        return;
+      case 'timeout':
+        Alert.alert('Se cortó a mitad de camino', 'Podés reintentar: no quedó nada a medio hacer.');
+        return;
+      default:
+        Alert.alert('No se pudo traer el catálogo', error.message);
+    }
+  }
+
   async function traerSnapshot(): Promise<void> {
+    // Cinturón de seguridad además de `loading` en el botón (ver más
+    // abajo): dos snapshots en simultáneo duplican trabajo y pueden
+    // dejar dos inventarios activos.
+    if (trayendoSnapshot) return;
+
     setTrayendoSnapshot(true);
+    setAvanceSnapshot(null);
+    const controlador = new AbortController();
+    controladorSnapshotRef.current = controlador;
     try {
-      const resultado = await repositorioInventario.traerSnapshot(sesion!.sucursal.id);
+      const resultado = await repositorioInventario.traerSnapshot(sesion!.sucursal.id, {
+        onAvance: setAvanceSnapshot,
+        signal: controlador.signal,
+      });
       setInventarioId(resultado.inventarioId);
       setItems(resultado.items);
       setTomadoEn(resultado.tomadoEn);
     } catch (error) {
-      Alert.alert('No se pudo traer el catálogo', error instanceof Error ? error.message : 'Intentá de nuevo.');
+      manejarErrorSnapshot(error);
     } finally {
       setTrayendoSnapshot(false);
+      setAvanceSnapshot(null);
+      controladorSnapshotRef.current = null;
     }
+  }
+
+  function cancelarSnapshot(): void {
+    controladorSnapshotRef.current?.abort();
   }
 
   async function crearHojasAhora(): Promise<void> {
@@ -239,9 +299,21 @@ export default function HojasScreen(): JSX.Element {
             texto={
               paso1Hecho && items && tomadoEn
                 ? `${nf.format(items)} ítems traídos de Dynamics · ${new Date(tomadoEn).toLocaleString('es-PE')}. Es una lectura del catálogo — no escribe ni ajusta nada en Dynamics.`
-                : 'Trae el catálogo completo de la sucursal desde Dynamics: es la foto contra la que se compara todo el inventario. Es una lectura del catálogo — no escribe ni ajusta nada en Dynamics.'
+                : trayendoSnapshot
+                  ? 'Trayendo el catálogo por páginas — con la WiFi de la tienda puede tardar varios minutos, no te vayas de la pantalla.'
+                  : 'Trae el catálogo completo de la sucursal desde Dynamics: es la foto contra la que se compara todo el inventario. Es una lectura del catálogo — no escribe ni ajusta nada en Dynamics.'
             }
-          />
+          >
+            {trayendoSnapshot ? (
+              <>
+                <AvanceFila
+                  texto={avanceSnapshot ? `${nf.format(avanceSnapshot.traidos)} de ${nf.format(avanceSnapshot.total)} ítems` : 'Conectando con Dynamics…'}
+                  porcentaje={avanceSnapshot ? (avanceSnapshot.traidos / avanceSnapshot.total) * 100 : 0}
+                />
+                <Button label="Cancelar" variant="outline" size="sm" onPress={cancelarSnapshot} />
+              </>
+            ) : null}
+          </PasoTarjeta>
 
           <PasoTarjeta
             numero={2}

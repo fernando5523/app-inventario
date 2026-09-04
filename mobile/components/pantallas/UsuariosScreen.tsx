@@ -1,7 +1,6 @@
-import type { LucideIcon } from 'lucide-react-native';
 import { KeyRound, Lock, MapPin, User, UserPlus, Users } from 'lucide-react-native';
 import { useCallback, useMemo, useState, type JSX } from 'react';
-import { ActivityIndicator, Alert, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import { ActivityIndicator, Alert, Pressable, StyleSheet, Text, View } from 'react-native';
 import { useFocusEffect } from 'expo-router';
 
 // TEMPORAL: no vienen de lib/contenedor.ts a propósito — esta tarea no lo
@@ -15,7 +14,7 @@ import type { Rol, Sucursal, Usuario } from '../../lib/dominio/tipos';
 import { useSesion } from '../../lib/sesion-contexto';
 import { colors, fonts, fontSize, radius, spacing } from '../../lib/theme';
 import { PantallaConTabs } from '../navegacion/PantallaConTabs';
-import { Badge, type BadgeVariant, BarraApp, Button, Card, EmptyState, PinPuntos, Select, TecladoPin, type SelectOpcion } from '../ui';
+import { Badge, type BadgeVariant, BarraApp, Button, CampoTexto, Card, EmptyState, PinPuntos, Select, TecladoPin, type SelectOpcion } from '../ui';
 
 const LARGO_PIN = 6;
 
@@ -164,8 +163,8 @@ export function UsuariosScreen({ rol }: UsuariosScreenProps): JSX.Element {
         <Card style={styles.formulario}>
           <Text style={styles.formularioTitulo}>Nueva cuenta</Text>
 
-          <TextField label="Nombre completo" valor={nombre} onCambiar={setNombre} icon={User} placeholder="Ej. Ana Villanueva" />
-          <TextField label="DNI" valor={dni} onCambiar={setDni} icon={User} placeholder="Ej. 4410" keyboardType="number-pad" />
+          <CampoTexto label="Nombre completo" valor={nombre} onCambiar={setNombre} icon={User} placeholder="Ej. Ana Villanueva" />
+          <CampoTexto label="DNI" valor={dni} onCambiar={setDni} icon={User} placeholder="Ej. 4410" keyboardType="number-pad" />
 
           <View style={styles.campo}>
             <Text style={styles.label}>Rol</Text>
@@ -299,40 +298,6 @@ export function UsuariosScreen({ rol }: UsuariosScreenProps): JSX.Element {
   );
 }
 
-interface TextFieldProps {
-  label: string;
-  valor: string;
-  onCambiar: (v: string) => void;
-  icon: LucideIcon;
-  placeholder: string;
-  keyboardType?: 'default' | 'number-pad';
-}
-
-/**
- * Campo de texto simple, mismo estilo visual que `Select`/el campo de
- * Clave del login (icono + borde + radio), pero editable de verdad — acá
- * sí hace falta un `TextInput`, a diferencia del resto de los campos del
- * design system que son selección, no tipeo libre.
- */
-function TextField({ label, valor, onCambiar, icon: Icon, placeholder, keyboardType = 'default' }: TextFieldProps): JSX.Element {
-  return (
-    <View style={styles.campo}>
-      <Text style={styles.label}>{label}</Text>
-      <View style={styles.inputFila}>
-        <Icon size={19} color={colors.grisClaro} />
-        <TextInput
-          style={styles.input}
-          value={valor}
-          onChangeText={onCambiar}
-          placeholder={placeholder}
-          placeholderTextColor={colors.grisClaro}
-          keyboardType={keyboardType}
-        />
-      </View>
-    </View>
-  );
-}
-
 const styles = StyleSheet.create({
   contenido: { paddingHorizontal: 14, paddingTop: 8, gap: 14 },
   cargando: { marginTop: 24 },
@@ -340,18 +305,6 @@ const styles = StyleSheet.create({
   formularioTitulo: { fontSize: 14.5, color: colors.tinta, fontFamily: fonts.bold },
   campo: { gap: 6 },
   label: { fontSize: 13.5, color: colors.tinta, fontFamily: fonts.semibold },
-  inputFila: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing.md,
-    minHeight: 54,
-    paddingHorizontal: 15,
-    backgroundColor: colors.campo,
-    borderWidth: 1,
-    borderColor: colors.borde,
-    borderRadius: radius.md,
-  },
-  input: { flex: 1, fontSize: fontSize.base, color: colors.tinta, fontFamily: fonts.regular, padding: 0 },
   controlClave: {
     flexDirection: 'row',
     alignItems: 'center',

@@ -90,6 +90,50 @@ export interface RepositorioAuditoria {
 }
 
 /**
+ * Cuántos ítems del catálogo ya llegaron, de un total conocido — el paso
+ * 1 real son 8.000 ítems por OData paginado desde Azure sobre la WiFi de
+ * la tienda, minutos, no milisegundos. Sin esto, una pantalla que solo
+ * sabe "cargando sí/no" hace que el Coordinador crea que se colgó.
+ */
+export interface AvanceSnapshot {
+  traidos: number;
+  total: number;
+}
+
+/**
+ * Motivo por el que `traerSnapshot` no pudo terminar. Cada uno tiene un
+ * mensaje y una salida DISTINTOS en la pantalla (ver
+ * app/coordinador/hojas.tsx):
+ *   - `sin-red`: no hay conexión con la tienda — no se rompió nada, se reintenta solo.
+ *   - `dynamics-no-configurado`: faltan credenciales (tenant/client id/secret/URL) —
+ *     un Administrador las carga en app/administrador/config.tsx.
+ *   - `credenciales-rechazadas`: la red anduvo, Azure devolvió 401 — las
+ *     credenciales configuradas están mal, no es un problema de red.
+ *   - `timeout`: se cortó a mitad de camino — se puede reintentar sin
+ *     quedar en un estado raro (el inventario, si ya se creó, es idempotente).
+ *   - `cancelado`: lo canceló la propia persona — no es un error, no se
+ *     muestra ninguna alerta.
+ *   - `desconocido`: cualquier otra falla no prevista arriba.
+ */
+export type CodigoErrorSnapshot = 'sin-red' | 'dynamics-no-configurado' | 'credenciales-rechazadas' | 'timeout' | 'cancelado' | 'desconocido';
+
+export class ErrorSnapshot extends Error {
+  readonly codigo: CodigoErrorSnapshot;
+  constructor(codigo: CodigoErrorSnapshot, mensaje: string) {
+    super(mensaje);
+    this.name = 'ErrorSnapshot';
+    this.codigo = codigo;
+  }
+}
+
+export interface OpcionesTraerSnapshot {
+  /** Se llama cada vez que llega una página nueva del catálogo. */
+  onAvance?: (avance: AvanceSnapshot) => void;
+  /** Mismo AbortSignal que usa `fetch` — el adaptador HTTP lo pasa derecho a cada request, sin traducir nada. */
+  signal?: AbortSignal;
+}
+
+/**
  * El wizard de 3 pasos (traerSnapshot/crearHojas/asignarHojas) lo usa
  * solo el Coordinador (pantalla 2). `activo` es de lectura y la puede
  * llamar cualquier pantalla que necesite resolver "cual es el
@@ -105,8 +149,18 @@ export interface RepositorioInventario {
    *
    * Devuelve `inventarioId`: sin este dato no hay forma de encadenar
    * `crearHojas`/`asignarHojas`, que lo piden como primer argumento.
+   *
+   * `opciones` es nueva (antes no existía): 8.000 ítems por OData
+   * paginado tardan minutos reales, no milisegundos simulados — la
+   * pantalla necesita `onAvance` para no parecer colgada y `signal` para
+   * poder cancelar una operación de minutos sin salida. Rechaza con
+   * `ErrorSnapshot` (ver más arriba), nunca con un `Error` genérico —
+   * la pantalla necesita distinguir el motivo para dar la salida correcta.
    */
-  traerSnapshot(sucursalId: number): Promise<{ inventarioId: number; items: number; tomadoEn: string }>;
+  traerSnapshot(
+    sucursalId: number,
+    opciones?: OpcionesTraerSnapshot,
+  ): Promise<{ inventarioId: number; items: number; tomadoEn: string }>;
   /**
    * Paso 2: parte el snapshot en hojas del tamaño elegido. Reemplaza
    * cualquier hoja previa de ese inventario (y su reparto): es
@@ -266,4 +320,49 @@ export interface RepositorioTiendas {
 export interface RepositorioConfig {
   obtener(): Promise<ConfigSistema>;
   actualizar(datos: ConfigSistema): Promise<ConfigSistema>;
+}
+
+/**
+ * Lo que se puede LEER de la configuración de Dynamics — nunca el
+ * `clientSecret`. Un secreto que la pantalla puede mostrar de vuelta es
+ * un secreto que alguien puede fotografiar; `secretoConfigurado` es lo
+ * único que dice si ya hay uno guardado.
+ */
+export interface EstadoConfigDynamics {
+  tenantId: string;
+  clientId: string;
+  urlBase: string;
+  secretoConfigurado: boolean;
+}
+
+/**
+ * Lo que se puede ESCRIBIR. `clientSecret` es opcional a propósito: sin
+ * él, `guardar` actualiza tenant/clientId/urlBase y deja el secreto ya
+ * guardado tal cual — así se puede corregir el tenant sin forzar a
+ * re-tipear el secreto entero.
+ */
+export interface DatosConfigDynamics {
+  tenantId: string;
+  clientId: string;
+  urlBase: string;
+  clientSecret?: string;
+}
+
+export interface ResultadoPruebaDynamics {
+  ok: boolean;
+  mensaje: string;
+}
+
+/**
+ * Credenciales de la integración con Dynamics (solo Administrador) — que
+ * `traerSnapshot` (RepositorioInventario) necesita para funcionar. Puerto
+ * aparte de RepositorioConfig: el manejo del secreto (nunca se lee de
+ * vuelta) y `probarConexion` (una llamada de red real, no una lectura
+ * local) son razones concretas para aislarlo, no una config más.
+ */
+export interface RepositorioConfigDynamics {
+  obtener(): Promise<EstadoConfigDynamics>;
+  guardar(datos: DatosConfigDynamics): Promise<EstadoConfigDynamics>;
+  /** Prueba las credenciales YA guardadas contra Azure AD, sin traer los 8.000 ítems del catálogo. */
+  probarConexion(): Promise<ResultadoPruebaDynamics>;
 }

@@ -39,3 +39,5 @@ export type { ChipsFiltroProps, OpcionChip } from './ChipsFiltro';
 export { TarjetaItemAuditoria } from './TarjetaItemAuditoria';
 export type { TarjetaItemAuditoriaProps } from './TarjetaItemAuditoria';
 export { formatoMiles, formatoPct, formatoMoneda } from './formato';
+export { CampoTexto } from './CampoTexto';
+export type { CampoTextoProps } from './CampoTexto';

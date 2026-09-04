@@ -1,15 +1,17 @@
 import { useFocusEffect } from 'expo-router';
-import { Minus, Plus, Settings } from 'lucide-react-native';
+import { Cloud, KeyRound, Link2, Minus, Plus, Settings, ShieldCheck } from 'lucide-react-native';
 import { useCallback, useState, type JSX } from 'react';
 import { ActivityIndicator, Alert, Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { PantallaConTabs } from '../../components/navegacion/PantallaConTabs';
-import { BarraApp, Button, Card, formatoPct } from '../../components/ui';
-// TEMPORAL: no viene de lib/contenedor.ts a propósito — esta tarea no lo
+import { Badge, BarraApp, Button, CampoTexto, Card, formatoPct } from '../../components/ui';
+// TEMPORAL: no vienen de lib/contenedor.ts a propósito — esta tarea no lo
 // toca (lo cambia el agente de integración al enchufar el HTTP real). La
 // pantalla solo conoce el tipo del puerto, no el adaptador concreto.
+import { configDynamicsMemoria as repositorioConfigDynamics } from '../../lib/adaptadores/config-dynamics-memoria';
 import { configMemoria as repositorioConfig } from '../../lib/adaptadores/config-memoria';
 import { TAMANOS_HOJA, type ConfigSistema, type TamanoHoja } from '../../lib/dominio/tipos';
+import type { EstadoConfigDynamics } from '../../lib/puertos/repositorios';
 import { colors, fonts, fontSize, radius } from '../../lib/theme';
 
 const PASO_UMBRAL = 0.05;
@@ -21,9 +23,26 @@ export default function ConfiguracionScreen(): JSX.Element {
   const [config, setConfig] = useState<ConfigSistema | null>(null);
   const [guardando, setGuardando] = useState(false);
 
+  const [dynamics, setDynamics] = useState<EstadoConfigDynamics | null>(null);
+  const [tenantId, setTenantId] = useState('');
+  const [clientId, setClientId] = useState('');
+  const [urlBase, setUrlBase] = useState('');
+  const [reemplazandoSecreto, setReemplazandoSecreto] = useState(false);
+  const [nuevoSecreto, setNuevoSecreto] = useState('');
+  const [guardandoDynamics, setGuardandoDynamics] = useState(false);
+  const [probando, setProbando] = useState(false);
+
   const cargar = useCallback(async () => {
-    const actual = await repositorioConfig.obtener();
+    const [actual, dynamicsActual] = await Promise.all([repositorioConfig.obtener(), repositorioConfigDynamics.obtener()]);
     setConfig(actual);
+    setDynamics(dynamicsActual);
+    setTenantId(dynamicsActual.tenantId);
+    setClientId(dynamicsActual.clientId);
+    setUrlBase(dynamicsActual.urlBase);
+    // Sin nada guardado todavía, no hay "configurado" que mostrar: se
+    // arranca directo en modo edición del secreto.
+    setReemplazandoSecreto(!dynamicsActual.secretoConfigurado);
+    setNuevoSecreto('');
     setCargando(false);
   }, []);
 
@@ -44,6 +63,41 @@ export default function ConfiguracionScreen(): JSX.Element {
       Alert.alert('No se pudo guardar', error instanceof Error ? error.message : 'Intentá de nuevo.');
     } finally {
       setGuardando(false);
+    }
+  }
+
+  const puedeGuardarDynamics =
+    tenantId.trim().length > 0 && clientId.trim().length > 0 && urlBase.trim().length > 0 && (!reemplazandoSecreto || nuevoSecreto.length > 0);
+
+  async function guardarDynamics(): Promise<void> {
+    setGuardandoDynamics(true);
+    try {
+      const actualizado = await repositorioConfigDynamics.guardar({
+        tenantId,
+        clientId,
+        urlBase,
+        clientSecret: reemplazandoSecreto ? nuevoSecreto : undefined,
+      });
+      setDynamics(actualizado);
+      setReemplazandoSecreto(false);
+      setNuevoSecreto('');
+      Alert.alert('Credenciales guardadas', 'El Coordinador ya puede traer el catálogo de esta tienda.');
+    } catch (error) {
+      Alert.alert('No se pudo guardar', error instanceof Error ? error.message : 'Intentá de nuevo.');
+    } finally {
+      setGuardandoDynamics(false);
+    }
+  }
+
+  async function probarConexionDynamics(): Promise<void> {
+    setProbando(true);
+    try {
+      const resultado = await repositorioConfigDynamics.probarConexion();
+      Alert.alert(resultado.ok ? 'Conexión correcta' : 'No se pudo conectar', resultado.mensaje);
+    } catch (error) {
+      Alert.alert('No se pudo probar la conexión', error instanceof Error ? error.message : 'Intentá de nuevo.');
+    } finally {
+      setProbando(false);
     }
   }
 
@@ -124,6 +178,72 @@ export default function ConfiguracionScreen(): JSX.Element {
           </Card>
 
           <Button label="Guardar cambios" icon={Settings} onPress={guardar} loading={guardando} />
+
+          <Card style={styles.tarjeta}>
+            <View style={styles.tituloFila}>
+              <Text style={styles.titulo}>Integración con Dynamics</Text>
+              {dynamics?.secretoConfigurado ? <Badge label="Configurado" variant="ok" /> : <Badge label="Sin configurar" variant="espera" /> }
+            </View>
+            <Text style={styles.texto}>
+              Credenciales de Azure AD para que el paso 1 del Coordinador ("Catálogo de Dynamics") traiga los ítems reales. Solo lectura del
+              catálogo — nunca escribe ni ajusta nada en Dynamics.
+            </Text>
+
+            <CampoTexto label="Tenant ID" valor={tenantId} onCambiar={setTenantId} icon={Cloud} placeholder="00000000-0000-0000-0000-000000000000" autoCapitalize="none" />
+            <CampoTexto label="Client ID" valor={clientId} onCambiar={setClientId} icon={KeyRound} placeholder="00000000-0000-0000-0000-000000000000" autoCapitalize="none" />
+            <CampoTexto label="URL base" valor={urlBase} onCambiar={setUrlBase} icon={Link2} placeholder="https://org.crm.dynamics.com" autoCapitalize="none" />
+
+            {reemplazandoSecreto ? (
+              <View style={styles.campo}>
+                <CampoTexto
+                  label="Client secret"
+                  valor={nuevoSecreto}
+                  onCambiar={setNuevoSecreto}
+                  icon={ShieldCheck}
+                  placeholder="Pegá el secreto nuevo"
+                  autoCapitalize="none"
+                  secureTextEntry
+                />
+                {dynamics?.secretoConfigurado ? (
+                  <Pressable
+                    onPress={() => {
+                      setReemplazandoSecreto(false);
+                      setNuevoSecreto('');
+                    }}
+                  >
+                    <Text style={styles.cancelarSecreto}>Cancelar — dejar el secreto ya guardado</Text>
+                  </Pressable>
+                ) : null}
+              </View>
+            ) : (
+              <View style={styles.campo}>
+                <Text style={styles.label}>Client secret</Text>
+                <View style={styles.secretoFila}>
+                  <View style={styles.secretoConfiguradoFila}>
+                    <ShieldCheck size={18} color={colors.ok} />
+                    {/* NUNCA el valor real — un secreto que la pantalla puede
+                        mostrar de vuelta es un secreto que alguien puede
+                        fotografiar. Esto es lo único que se lee: si HAY uno. */}
+                    <Text style={styles.secretoConfiguradoTexto}>Configurado — no se muestra por seguridad</Text>
+                  </View>
+                  <Button label="Reemplazar" variant="outline" size="sm" onPress={() => setReemplazandoSecreto(true)} />
+                </View>
+              </View>
+            )}
+
+            <View style={styles.accionesDynamics}>
+              <Button label="Guardar credenciales" onPress={guardarDynamics} disabled={!puedeGuardarDynamics} loading={guardandoDynamics} style={styles.accionDynamics} />
+              <Button
+                label="Probar conexión"
+                icon={ShieldCheck}
+                variant="outline"
+                onPress={probarConexionDynamics}
+                disabled={!dynamics?.secretoConfigurado}
+                loading={probando}
+                style={styles.accionDynamics}
+              />
+            </View>
+          </Card>
         </>
       )}
     </PantallaConTabs>
@@ -160,4 +280,14 @@ const styles = StyleSheet.create({
     borderRadius: radius.sm,
   },
   stepperValor: { flex: 1, textAlign: 'center', fontSize: 18, color: colors.tinta, fontFamily: fonts.bold },
+
+  tituloFila: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10 },
+  campo: { gap: 6 },
+  label: { fontSize: 13.5, color: colors.tinta, fontFamily: fonts.semibold },
+  secretoFila: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10 },
+  secretoConfiguradoFila: { flex: 1, minWidth: 0, flexDirection: 'row', alignItems: 'center', gap: 8 },
+  secretoConfiguradoTexto: { flex: 1, minWidth: 0, fontSize: 12.5, color: colors.ok, fontFamily: fonts.semibold },
+  cancelarSecreto: { fontSize: 12.5, color: colors.rojo, fontFamily: fonts.regular },
+  accionesDynamics: { flexDirection: 'row', gap: 10 },
+  accionDynamics: { flex: 1 },
 });
