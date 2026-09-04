@@ -5,16 +5,18 @@ import { ActivityIndicator, Alert, Pressable, StyleSheet, Text, View } from 'rea
 
 import { PantallaConTabs } from '../../components/navegacion/PantallaConTabs';
 import { Badge, BarraApp, Button, CampoTexto, Card, formatoPct } from '../../components/ui';
-// TEMPORAL: no vienen de lib/contenedor.ts a propósito — esta tarea no lo
-// toca (lo cambia el agente de integración al enchufar el HTTP real). La
-// pantalla solo conoce el tipo del puerto, no el adaptador concreto.
-import { configDynamicsMemoria as repositorioConfigDynamics } from '../../lib/adaptadores/config-dynamics-memoria';
-import { configMemoria as repositorioConfig } from '../../lib/adaptadores/config-memoria';
+// Del contenedor: los parámetros del ciclo salen de Postgres; las
+// credenciales de Dynamics siguen en memoria porque no hay endpoint (y un
+// endpoint que devuelva un client secret es lo que esta pantalla promete
+// que nunca va a existir). Cuál es cuál lo decide contenedor.ts, no acá.
+import { repositorioConfig, repositorioConfigDynamics } from '../../lib/contenedor';
 import { TAMANOS_HOJA, type ConfigSistema, type TamanoHoja } from '../../lib/dominio/tipos';
 import type { EstadoConfigDynamics } from '../../lib/puertos/repositorios';
 import { colors, fonts, fontSize, radius } from '../../lib/theme';
 
 const PASO_UMBRAL = 0.05;
+const MIN_UMBRAL = 0.05;
+const MAX_UMBRAL = 1;
 const MIN_CONTEOS = 1;
 const MAX_CONTEOS = 5;
 
@@ -134,20 +136,25 @@ export default function ConfiguracionScreen(): JSX.Element {
             <Text style={styles.titulo}>Conteos del ciclo</Text>
             <Text style={styles.texto}>Cuántas pasadas tiene el ciclo de conteo (hoy: 1er conteo + 2 reconteos = 3).</Text>
             <View style={styles.stepper}>
+              {/* Deshabilitado en el límite, no silenciosamente inerte: un
+                  botón que se puede tocar y no hace nada se lee como que la
+                  pantalla se colgó. */}
               <Pressable
-                style={styles.stepperBtn}
+                style={[styles.stepperBtn, config.conteosDelCiclo <= MIN_CONTEOS && styles.stepperBtnInerte]}
+                disabled={config.conteosDelCiclo <= MIN_CONTEOS}
                 onPress={() => setConfig({ ...config, conteosDelCiclo: Math.max(MIN_CONTEOS, config.conteosDelCiclo - 1) })}
                 accessibilityLabel="Restar un conteo"
               >
-                <Minus size={16} color={colors.tinta} />
+                <Minus size={16} color={config.conteosDelCiclo <= MIN_CONTEOS ? colors.grisClaro : colors.tinta} />
               </Pressable>
               <Text style={styles.stepperValor}>{config.conteosDelCiclo}</Text>
               <Pressable
-                style={styles.stepperBtn}
+                style={[styles.stepperBtn, config.conteosDelCiclo >= MAX_CONTEOS && styles.stepperBtnInerte]}
+                disabled={config.conteosDelCiclo >= MAX_CONTEOS}
                 onPress={() => setConfig({ ...config, conteosDelCiclo: Math.min(MAX_CONTEOS, config.conteosDelCiclo + 1) })}
                 accessibilityLabel="Sumar un conteo"
               >
-                <Plus size={16} color={colors.tinta} />
+                <Plus size={16} color={config.conteosDelCiclo >= MAX_CONTEOS ? colors.grisClaro : colors.tinta} />
               </Pressable>
             </View>
           </Card>
@@ -160,19 +167,21 @@ export default function ConfiguracionScreen(): JSX.Element {
             </Text>
             <View style={styles.stepper}>
               <Pressable
-                style={styles.stepperBtn}
-                onPress={() => setConfig({ ...config, umbralMediaUnidad: Math.max(PASO_UMBRAL, Number((config.umbralMediaUnidad - PASO_UMBRAL).toFixed(2))) })}
+                style={[styles.stepperBtn, config.umbralMediaUnidad <= MIN_UMBRAL && styles.stepperBtnInerte]}
+                disabled={config.umbralMediaUnidad <= MIN_UMBRAL}
+                onPress={() => setConfig({ ...config, umbralMediaUnidad: Math.max(MIN_UMBRAL, Number((config.umbralMediaUnidad - PASO_UMBRAL).toFixed(2))) })}
                 accessibilityLabel="Bajar el umbral"
               >
-                <Minus size={16} color={colors.tinta} />
+                <Minus size={16} color={config.umbralMediaUnidad <= MIN_UMBRAL ? colors.grisClaro : colors.tinta} />
               </Pressable>
               <Text style={styles.stepperValor}>{formatoPct(config.umbralMediaUnidad * 100, 0)}%</Text>
               <Pressable
-                style={styles.stepperBtn}
-                onPress={() => setConfig({ ...config, umbralMediaUnidad: Math.min(1, Number((config.umbralMediaUnidad + PASO_UMBRAL).toFixed(2))) })}
+                style={[styles.stepperBtn, config.umbralMediaUnidad >= MAX_UMBRAL && styles.stepperBtnInerte]}
+                disabled={config.umbralMediaUnidad >= MAX_UMBRAL}
+                onPress={() => setConfig({ ...config, umbralMediaUnidad: Math.min(MAX_UMBRAL, Number((config.umbralMediaUnidad + PASO_UMBRAL).toFixed(2))) })}
                 accessibilityLabel="Subir el umbral"
               >
-                <Plus size={16} color={colors.tinta} />
+                <Plus size={16} color={config.umbralMediaUnidad >= MAX_UMBRAL ? colors.grisClaro : colors.tinta} />
               </Pressable>
             </View>
           </Card>
@@ -279,6 +288,7 @@ const styles = StyleSheet.create({
     borderColor: colors.borde,
     borderRadius: radius.sm,
   },
+  stepperBtnInerte: { opacity: 0.5 },
   stepperValor: { flex: 1, textAlign: 'center', fontSize: 18, color: colors.tinta, fontFamily: fonts.bold },
 
   tituloFila: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10 },

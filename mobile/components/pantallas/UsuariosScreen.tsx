@@ -3,12 +3,12 @@ import { useCallback, useMemo, useState, type JSX } from 'react';
 import { ActivityIndicator, Alert, Pressable, StyleSheet, Text, View } from 'react-native';
 import { useFocusEffect } from 'expo-router';
 
-// TEMPORAL: no vienen de lib/contenedor.ts a propósito — esta tarea no lo
-// toca (lo cambia el agente de integración al enchufar el HTTP real). La
-// pantalla solo conoce el tipo del puerto, no el adaptador concreto —
-// mover este import a contenedor.ts el día de mañana es de una línea.
-import { tiendasMemoria as repositorioTiendas } from '../../lib/adaptadores/tiendas-memoria';
-import { usuariosMemoria as repositorioUsuarios } from '../../lib/adaptadores/usuarios-memoria';
+// Del contenedor, no de un adaptador concreto: con el backend vivo
+// (2026-09-04) esto es lo que hace que la pantalla liste las cuentas
+// REALES de Postgres. Mientras importaba `usuariosMemoria` directo, la
+// perilla del contenedor no la alcanzaba y seguía mostrando el mock en
+// RAM aunque el servidor respondiera.
+import { repositorioTiendas, repositorioUsuarios } from '../../lib/contenedor';
 import { rolesQuePuedeCrear } from '../../lib/dominio/roles';
 import type { Rol, Sucursal, Usuario } from '../../lib/dominio/tipos';
 import { useSesion } from '../../lib/sesion-contexto';
@@ -76,7 +76,16 @@ export function UsuariosScreen({ rol }: UsuariosScreenProps): JSX.Element {
     // TODAS las cuentas — una fuga de privacidad, no un detalle visual.
     // Mejor que truene acá a que un auditor vea cuentas de otra sucursal.
     const sucursalId = rol === 'auditor' ? sesion.sucursal!.id : undefined;
-    const [listaUsuarios, listaTiendas] = await Promise.all([repositorioUsuarios.listar(sucursalId), repositorioTiendas.listar()]);
+    // Las tiendas SOLO las pide el Administrador. `GET /api/tiendas` está
+    // detrás de requiereRol('administrador'): con el backend real, pedirlas
+    // como Auditor devuelve 403 y dejaría esta pantalla cargando para
+    // siempre. Y no le hacen falta — el Auditor no elige sucursal al crear
+    // (crea para la suya) ni muestra el nombre de sucursal en las fichas,
+    // porque todas las que ve son de la misma.
+    const [listaUsuarios, listaTiendas] = await Promise.all([
+      repositorioUsuarios.listar(sucursalId),
+      rol === 'administrador' ? repositorioTiendas.listar() : Promise.resolve<Sucursal[]>([]),
+    ]);
     setUsuarios(listaUsuarios);
     setTiendas(listaTiendas);
     setCargando(false);
@@ -167,7 +176,10 @@ export function UsuariosScreen({ rol }: UsuariosScreenProps): JSX.Element {
 
       {formularioAbierto ? (
         <Card style={styles.formulario}>
-          <Text style={styles.formularioTitulo}>Nueva cuenta</Text>
+          <View style={styles.formularioCabecera}>
+            <UserPlus size={17} color={colors.rojo} />
+            <Text style={styles.formularioTitulo}>Nueva cuenta</Text>
+          </View>
 
           <CampoTexto label="Nombre completo" valor={nombre} onCambiar={setNombre} icon={User} placeholder="Ej. Ana Villanueva" />
           <CampoTexto label="DNI" valor={dni} onCambiar={setDni} icon={User} placeholder="Ej. 4410" keyboardType="number-pad" />
@@ -231,6 +243,15 @@ export function UsuariosScreen({ rol }: UsuariosScreenProps): JSX.Element {
         <EmptyState icon={Users} title="Todavía no hay cuentas" subtitle="Creá la primera con el botón de arriba." />
       ) : (
         <View style={styles.lista}>
+          {/* Encabezado de sección: separa el formulario de la lista y dice
+              cuántas cuentas alcanza a ver ESTA sesión — para el Auditor no
+              son las mismas que ve el Administrador. */}
+          <View style={styles.seccion}>
+            <Text style={styles.seccionTitulo}>Cuentas</Text>
+            <Text style={styles.seccionTotal}>
+              {usuarios.length} cuenta{usuarios.length === 1 ? '' : 's'}
+            </Text>
+          </View>
           {usuarios.map((usuario) => (
             <Card key={usuario.id} style={styles.fila}>
               <View style={styles.filaCabecera}>
@@ -308,7 +329,13 @@ const styles = StyleSheet.create({
   contenido: { paddingHorizontal: 14, paddingTop: 8, gap: 14 },
   cargando: { marginTop: 24 },
   formulario: { gap: 12 },
-  formularioTitulo: { fontSize: 14.5, color: colors.tinta, fontFamily: fonts.bold },
+  formularioCabecera: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  formularioTitulo: { flex: 1, fontSize: 14.5, color: colors.tinta, fontFamily: fonts.bold },
+  // Encabezado de sección del design system (.seccion en controles.css):
+  // versalita gris a la izquierda, total tenue a la derecha.
+  seccion: { flexDirection: 'row', alignItems: 'baseline', justifyContent: 'space-between', gap: 10 },
+  seccionTitulo: { fontSize: 11, letterSpacing: 1.3, textTransform: 'uppercase', color: colors.gris, fontFamily: fonts.semibold },
+  seccionTotal: { fontSize: 11.5, color: colors.grisClaro, fontFamily: fonts.regular },
   campo: { gap: 6 },
   label: { fontSize: 13.5, color: colors.tinta, fontFamily: fonts.semibold },
   controlClave: {

@@ -5,10 +5,8 @@ import { ActivityIndicator, Alert, StyleSheet, Text, TextInput, View } from 'rea
 
 import { PantallaConTabs } from '../../components/navegacion/PantallaConTabs';
 import { Badge, BarraApp, Button, Card, EmptyState } from '../../components/ui';
-// TEMPORAL: no viene de lib/contenedor.ts a propósito — esta tarea no lo
-// toca (lo cambia el agente de integración al enchufar el HTTP real). La
-// pantalla solo conoce el tipo del puerto, no el adaptador concreto.
-import { tiendasMemoria as repositorioTiendas } from '../../lib/adaptadores/tiendas-memoria';
+// Del contenedor: las sucursales salen de Postgres con el backend vivo.
+import { repositorioTiendas } from '../../lib/contenedor';
 import type { Sucursal } from '../../lib/dominio/tipos';
 import { colors, fonts, fontSize, radius, spacing } from '../../lib/theme';
 
@@ -98,7 +96,10 @@ export default function TiendasScreen(): JSX.Element {
 
       {formularioAbierto ? (
         <Card style={styles.formulario}>
-          <Text style={styles.formularioTitulo}>{editando ? `Editar ${editando.nombre}` : 'Nueva tienda'}</Text>
+          <View style={styles.formularioCabecera}>
+            <Store size={17} color={colors.rojo} />
+            <Text style={styles.formularioTitulo}>{editando ? `Editar ${editando.nombre}` : 'Nueva tienda'}</Text>
+          </View>
 
           <View style={styles.campo}>
             <Text style={styles.label}>Nombre</Text>
@@ -138,6 +139,12 @@ export default function TiendasScreen(): JSX.Element {
         <EmptyState icon={Store} title="Todavía no hay tiendas" subtitle="Creá la primera con el botón de arriba." />
       ) : (
         <View style={styles.lista}>
+          <View style={styles.seccion}>
+            <Text style={styles.seccionTitulo}>Sucursales</Text>
+            <Text style={styles.seccionTotal}>
+              {tiendas.length} sucursal{tiendas.length === 1 ? '' : 'es'}
+            </Text>
+          </View>
           {tiendas.map((tienda) => {
             const activa = tienda.activa !== false;
             return (
@@ -175,7 +182,11 @@ const styles = StyleSheet.create({
   contenido: { paddingHorizontal: 14, paddingTop: 8, gap: 14 },
   cargando: { marginTop: 24 },
   formulario: { gap: 12 },
-  formularioTitulo: { fontSize: 14.5, color: colors.tinta, fontFamily: fonts.bold },
+  formularioCabecera: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  formularioTitulo: { flex: 1, fontSize: 14.5, color: colors.tinta, fontFamily: fonts.bold },
+  seccion: { flexDirection: 'row', alignItems: 'baseline', justifyContent: 'space-between', gap: 10 },
+  seccionTitulo: { fontSize: 11, letterSpacing: 1.3, textTransform: 'uppercase', color: colors.gris, fontFamily: fonts.semibold },
+  seccionTotal: { fontSize: 11.5, color: colors.grisClaro, fontFamily: fonts.regular },
   campo: { gap: 6 },
   label: { fontSize: 13.5, color: colors.tinta, fontFamily: fonts.semibold },
   inputFila: {

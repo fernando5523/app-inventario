@@ -11,6 +11,7 @@ import type {
   RepositorioAuditoria,
   RepositorioCatalogo,
   RepositorioConfig,
+  RepositorioConfigDynamics,
   RepositorioHojas,
   RepositorioInventario,
   RepositorioLacrado,
@@ -22,6 +23,7 @@ import type {
 
 import { auditoriaMemoria } from './adaptadores/auditoria-memoria';
 import { catalogoMemoria } from './adaptadores/catalogo-memoria';
+import { configDynamicsMemoria } from './adaptadores/config-dynamics-memoria';
 import { configMemoria } from './adaptadores/config-memoria';
 import { hojasMemoria } from './adaptadores/hojas-memoria';
 import { hojasSqlite } from './adaptadores/hojas-sqlite';
@@ -207,3 +209,18 @@ export const repositorioInventario: RepositorioInventario = inventarioMemoria;
 export const repositorioAuditoria: RepositorioAuditoria = auditoriaMemoria;
 export const repositorioLiquidacion: RepositorioLiquidacion = liquidacionMemoria;
 export const repositorioLacrado: RepositorioLacrado = lacradoMemoria;
+
+/**
+ * ── CREDENCIALES DE DYNAMICS: en memoria, y por ahora está bien ──
+ *
+ * No hay `config-dynamics-api.ts` todavía: el backend guarda las
+ * credenciales de Dynamics en su propio `.env`, no las expone por HTTP (y
+ * un endpoint que devuelva un client secret es exactamente lo que esta
+ * pantalla promete que nunca va a existir).
+ *
+ * Igual sale de acá y no de un import directo en la pantalla: el día que
+ * haya endpoint, se cambia esta línea. Una pantalla que importa un
+ * adaptador concreto es una pantalla que hay que editar para cambiar de
+ * implementación, que es justo lo que este archivo existe para evitar.
+ */
+export const repositorioConfigDynamics: RepositorioConfigDynamics = configDynamicsMemoria;

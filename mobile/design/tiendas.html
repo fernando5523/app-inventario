@@ -905,7 +905,7 @@ body {
         <button type="button" class="accion" id="btn-guardar" disabled>Crear tienda</button>
       </div>
 
-      <div class="seccion">
+      <div class="seccion" id="seccion-sucursales">
         <h2>Sucursales</h2>
         <span class="total" id="total-tiendas"></span>
       </div>
@@ -1087,6 +1087,9 @@ body {
     cont.innerHTML = '';
     tiendas.forEach(function (t) { cont.appendChild(ficha(t)); });
     cont.hidden = tiendas.length === 0;
+    // El encabezado de seccion se va con la lista: "CUENTAS - 0" encima de
+    // un cartel que ya dice que no hay ninguna es ruido, no informacion.
+    $('seccion-sucursales').hidden = tiendas.length === 0;
     $('sin-tiendas').hidden = tiendas.length !== 0;
     $('total-tiendas').textContent = tiendas.length + (tiendas.length === 1 ? ' sucursal' : ' sucursales');
   }

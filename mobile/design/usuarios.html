@@ -952,7 +952,7 @@ body {
         <button type="button" class="accion" id="btn-crear" disabled>Crear cuenta</button>
       </div>
 
-      <div class="seccion">
+      <div class="seccion" id="seccion-cuentas">
         <h2>Cuentas</h2>
         <span class="total" id="total-cuentas"></span>
       </div>
@@ -1435,6 +1435,9 @@ body {
     cont.innerHTML = '';
     lista.forEach(function (c) { cont.appendChild(ficha(c)); });
     cont.hidden = lista.length === 0;
+    // El encabezado de seccion se va con la lista: "CUENTAS - 0" encima de
+    // un cartel que ya dice que no hay ninguna es ruido, no informacion.
+    $('seccion-cuentas').hidden = lista.length === 0;
     $('sin-cuentas').hidden = lista.length !== 0;
     $('total-cuentas').textContent = lista.length + (lista.length === 1 ? ' cuenta' : ' cuentas');
   }
