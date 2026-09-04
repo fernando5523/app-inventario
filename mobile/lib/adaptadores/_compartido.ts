@@ -119,11 +119,22 @@ function armarZonasYGondolas(tamano: TamanoHoja): EspecificacionHoja[] {
 // Productos reales de la Hoja #002 (validado: mobile/design/conteo.html)
 // ---------------------------------------------------------------------------
 
-const BASE_PRODUCTOS: Array<{ descripcion: string; empaque: keyof typeof EMPAQUES; codigoBarras: string }> = [
-  { descripcion: 'Aceite Vegetal Primor 1L', empaque: 'caja', codigoBarras: '7750123051' },
-  { descripcion: 'Cerveza Cusqueña Trigo 310ml', empaque: 'pack', codigoBarras: '7750999015' },
-  { descripcion: 'Leche Evaporada Gloria Azul 400g', empaque: 'plancha', codigoBarras: '7750123088' },
-  { descripcion: 'Fideos Canuto Lavaggi 500g', empaque: 'fardo', codigoBarras: '7750123054' },
+/**
+ * `empaques` es una lista (decisión del cliente: un producto puede venir
+ * en más de una presentación — ver lib/dominio/tipos.ts#Producto). El
+ * Aceite Vegetal Primor tiene DOS a propósito (Caja Y Pack), como
+ * catálogo de ejemplo real de ese caso — los otros tres se quedan con
+ * uno solo, sin inventar una segunda presentación que ningún dato
+ * respalda. Ninguno trae `codigoBarras` por empaque: dato real de
+ * Dynamics (min-1, catálogo real) es que los barcodes que trae son de la
+ * unidad suelta, ninguno identifica un empaque — no se inventa uno acá
+ * para que el escáner "funcione mejor" de lo que funciona de verdad.
+ */
+const BASE_PRODUCTOS: Array<{ descripcion: string; empaques: Array<keyof typeof EMPAQUES>; codigoBarras: string }> = [
+  { descripcion: 'Aceite Vegetal Primor 1L', empaques: ['caja', 'pack'], codigoBarras: '7750123051' },
+  { descripcion: 'Cerveza Cusqueña Trigo 310ml', empaques: ['pack'], codigoBarras: '7750999015' },
+  { descripcion: 'Leche Evaporada Gloria Azul 400g', empaques: ['plancha'], codigoBarras: '7750123088' },
+  { descripcion: 'Fideos Canuto Lavaggi 500g', empaques: ['fardo'], codigoBarras: '7750123054' },
 ];
 const NIVELES = ['Nivel 1', 'Nivel 2', 'Nivel 3'];
 const CODIGO_DESDE_HOJA_002 = 51; // Hoja #002 = códigos 0051-0100
@@ -144,12 +155,13 @@ function armarProductosYConteosHoja002(fechaDemo: string): { productos: Producto
     const codigo = String(CODIGO_DESDE_HOJA_002 + i).padStart(4, '0');
     const base = BASE_PRODUCTOS[i % BASE_PRODUCTOS.length];
     const codigoBarras = i < BASE_PRODUCTOS.length ? base.codigoBarras : `${base.codigoBarras.slice(0, 6)}${codigo}`;
+    const empaquesDelProducto = base.empaques.map((k) => EMPAQUES[k]);
     const producto: Producto = {
       id: i + 1,
       codigo,
       codigoBarras,
       descripcion: base.descripcion,
-      empaque: EMPAQUES[base.empaque],
+      empaques: empaquesDelProducto,
       ubicacion: `Góndola A2 · ${NIVELES[i % NIVELES.length]}`,
     };
     productos.push(producto);
@@ -160,25 +172,29 @@ function armarProductosYConteosHoja002(fechaDemo: string): { productos: Producto
     const contado = i < 3 || (i >= 4 && i < 33);
     if (!contado) continue;
 
-    let empaques: number;
+    // Los 3 casos validados contra el mockup cuentan UN solo empaque
+    // (el [0] de la lista) — una segunda presentación en el catálogo no
+    // cambia lo que YA se contó para estos índices puntuales.
+    const empaqueDefault = empaquesDelProducto[0];
+    let cantidadEmpaque: number;
     let sueltas: number;
     if (i === 0) {
-      empaques = 2;
+      cantidadEmpaque = 2;
       sueltas = 0; // 2 Cajas x12 + 0 = 24
     } else if (i === 1) {
-      empaques = 5;
+      cantidadEmpaque = 5;
       sueltas = 2; // 5 Packs x6 + 2 = 32
     } else if (i === 2) {
-      empaques = 2;
+      cantidadEmpaque = 2;
       sueltas = 5; // 2 Planchas x24 + 5 = 53
     } else {
-      empaques = 1 + (i % 3);
-      sueltas = (i * 3) % producto.empaque.factor;
+      cantidadEmpaque = 1 + (i % 3);
+      sueltas = (i * 3) % empaqueDefault.factor;
     }
 
     conteos.push({
       productoId: producto.id,
-      empaques,
+      empaques: [{ empaqueNombre: empaqueDefault.nombre, cantidad: cantidadEmpaque }],
       sueltas,
       confirmadoPorEscaner: i < 3,
       contadoEn: fechaDemo,

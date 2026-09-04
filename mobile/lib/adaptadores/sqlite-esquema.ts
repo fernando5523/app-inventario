@@ -64,6 +64,52 @@ export const MIGRACIONES_SQLITE: string[] = [
     UNIQUE (hoja_id, tipo, producto_id)
   );
   `,
+  /**
+   * v2 — decisión del cliente: un producto puede tener MÁS de un empaque
+   * (Caja Y Pack del mismo producto). `conteos.empaques` deja de ser un
+   * número (cuántos del ÚNICO empaque) y pasa a ser `lineas`, JSON con
+   * una entrada por cada empaque cargado (ver
+   * lib/dominio/tipos.ts#LineaEmpaque). `cola_sync` NO cambia: nunca
+   * guardó el valor del conteo, solo qué falta mandar — el valor se
+   * relee siempre de `conteos` al momento de enviar.
+   *
+   * Los conteos v1 ya guardados (`empaques` INTEGER) no dicen A CUÁL
+   * empaque correspondía esa cantidad — v1 solo conocía uno por
+   * producto, así que nunca hizo falta guardar el nombre. Esta
+   * migración SQL no inventa uno: copia la cantidad tal cual bajo un
+   * empaque marcador `__LEGADO__` — hojas-sqlite.ts#repararLineaLegado
+   * lo resuelve al nombre real la primera vez que relee esa fila (ahí sí
+   * hay acceso al catálogo del producto) y lo deja corregido en la base,
+   * no en cada lectura.
+   */
+  `
+  ALTER TABLE conteos RENAME TO conteos_v1_legado;
+
+  CREATE TABLE conteos (
+    hoja_id INTEGER NOT NULL,
+    producto_id INTEGER NOT NULL,
+    lineas TEXT NOT NULL,
+    sueltas INTEGER NOT NULL,
+    confirmado_por_escaner INTEGER NOT NULL,
+    contado_en TEXT NOT NULL,
+    PRIMARY KEY (hoja_id, producto_id)
+  );
+
+  INSERT INTO conteos (hoja_id, producto_id, lineas, sueltas, confirmado_por_escaner, contado_en)
+    SELECT
+      hoja_id,
+      producto_id,
+      CASE WHEN empaques > 0
+        THEN '[{"empaqueNombre":"__LEGADO__","cantidad":' || empaques || '}]'
+        ELSE '[]'
+      END,
+      sueltas,
+      confirmado_por_escaner,
+      contado_en
+    FROM conteos_v1_legado;
+
+  DROP TABLE conteos_v1_legado;
+  `,
 ];
 
 export async function migrarSqlite(db: DbMigrable): Promise<void> {

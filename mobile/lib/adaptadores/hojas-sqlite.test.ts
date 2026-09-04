@@ -134,7 +134,7 @@ describe('recuperación: el conteo sobrevive a cerrar y reabrir la app', () => {
 
     await hojasSqlite.guardarConteo(hojaId, {
       productoId: sinContar.id,
-      empaques: 1,
+      empaques: [{ empaqueNombre: sinContar.empaques[0].nombre, cantidad: 1 }],
       sueltas: 0,
       confirmadoPorEscaner: false,
       contadoEn: '2026-09-05T10:00:00.000Z',
@@ -153,7 +153,9 @@ describe('recuperación: el conteo sobrevive a cerrar y reabrir la app', () => {
     expect(avance(despuesDeReabrir!).contados).toBe(33);
     expect(despuesDeReabrir!.estado).toBe('en-proceso');
     expect(despuesDeReabrir!.sync).toBe('local');
-    expect(despuesDeReabrir!.conteos.find((c) => c.productoId === sinContar.id)?.empaques).toBe(1);
+    expect(despuesDeReabrir!.conteos.find((c) => c.productoId === sinContar.id)?.empaques).toEqual([
+      { empaqueNombre: sinContar.empaques[0].nombre, cantidad: 1 },
+    ]);
   });
 });
 
@@ -165,25 +167,25 @@ describe('no se duplican conteos al reintentar', () => {
 
     await hojasSqlite.guardarConteo(hojaId, {
       productoId,
-      empaques: 3,
+      empaques: [{ empaqueNombre: 'Caja', cantidad: 3 }],
       sueltas: 1,
       confirmadoPorEscaner: false,
       contadoEn: '2026-09-05T10:01:00.000Z',
     });
     await hojasSqlite.guardarConteo(hojaId, {
       productoId,
-      empaques: 5,
+      empaques: [{ empaqueNombre: 'Caja', cantidad: 5 }],
       sueltas: 0,
       confirmadoPorEscaner: false,
       contadoEn: '2026-09-05T10:02:00.000Z',
     });
 
-    const filas = await db.getAllAsync<{ empaques: number }>('SELECT empaques FROM conteos WHERE hoja_id = ? AND producto_id = ?', [
+    const filas = await db.getAllAsync<{ lineas: string }>('SELECT lineas FROM conteos WHERE hoja_id = ? AND producto_id = ?', [
       hojaId,
       productoId,
     ]);
     expect(filas).toHaveLength(1);
-    expect(filas[0].empaques).toBe(5); // el valor MÁS NUEVO, no el primero.
+    expect(JSON.parse(filas[0].lineas)).toEqual([{ empaqueNombre: 'Caja', cantidad: 5 }]); // el valor MÁS NUEVO, no el primero.
   });
 
   it('reintentar el mismo conteo no deja dos items pendientes en la cola de sincronización', async () => {
@@ -191,8 +193,20 @@ describe('no se duplican conteos al reintentar', () => {
     const db = await obtenerDbDeTest();
     const productoId = 52;
 
-    await hojasSqlite.guardarConteo(hojaId, { productoId, empaques: 1, sueltas: 0, confirmadoPorEscaner: false, contadoEn: 't1' });
-    await hojasSqlite.guardarConteo(hojaId, { productoId, empaques: 2, sueltas: 0, confirmadoPorEscaner: false, contadoEn: 't2' });
+    await hojasSqlite.guardarConteo(hojaId, {
+      productoId,
+      empaques: [{ empaqueNombre: 'Caja', cantidad: 1 }],
+      sueltas: 0,
+      confirmadoPorEscaner: false,
+      contadoEn: 't1',
+    });
+    await hojasSqlite.guardarConteo(hojaId, {
+      productoId,
+      empaques: [{ empaqueNombre: 'Caja', cantidad: 2 }],
+      sueltas: 0,
+      confirmadoPorEscaner: false,
+      contadoEn: 't2',
+    });
 
     const filasCola = await db.getAllAsync<{ id: number }>("SELECT id FROM cola_sync WHERE hoja_id = ? AND tipo = 'conteo' AND producto_id = ?", [
       hojaId,
@@ -213,10 +227,10 @@ describe('la escritura es atómica: si se interrumpe, no queda nada a medias', (
     // de matar el proceso de verdad.
     await expect(
       db.withTransactionAsync(async () => {
-        await db.runAsync('INSERT OR REPLACE INTO conteos (hoja_id, producto_id, empaques, sueltas, confirmado_por_escaner, contado_en) VALUES (?,?,?,?,?,?)', [
+        await db.runAsync('INSERT OR REPLACE INTO conteos (hoja_id, producto_id, lineas, sueltas, confirmado_por_escaner, contado_en) VALUES (?,?,?,?,?,?)', [
           hojaId,
           productoId,
-          9,
+          JSON.stringify([{ empaqueNombre: 'Caja', cantidad: 9 }]),
           9,
           0,
           'x',
@@ -237,7 +251,13 @@ describe('un conteo rechazado por el servidor no queda en un limbo silencioso', 
     const { hojaId } = await hoja002();
     const productoId = 54;
 
-    await hojasSqlite.guardarConteo(hojaId, { productoId, empaques: 1, sueltas: 0, confirmadoPorEscaner: false, contadoEn: 't' });
+    await hojasSqlite.guardarConteo(hojaId, {
+      productoId,
+      empaques: [{ empaqueNombre: 'Caja', cantidad: 1 }],
+      sueltas: 0,
+      confirmadoPorEscaner: false,
+      contadoEn: 't',
+    });
 
     await procesarColaDeSincronizacion(async (item) => {
       if (item.hojaId === hojaId && item.productoId === productoId) {
@@ -267,7 +287,13 @@ describe('un conteo rechazado por el servidor no queda en un limbo silencioso', 
     const { hojaId } = await hoja002();
     const productoId = 55;
 
-    await hojasSqlite.guardarConteo(hojaId, { productoId, empaques: 1, sueltas: 0, confirmadoPorEscaner: false, contadoEn: 't' });
+    await hojasSqlite.guardarConteo(hojaId, {
+      productoId,
+      empaques: [{ empaqueNombre: 'Caja', cantidad: 1 }],
+      sueltas: 0,
+      confirmadoPorEscaner: false,
+      contadoEn: 't',
+    });
     await procesarColaDeSincronizacion(async () => ({ ok: true }));
 
     const db = await obtenerDbDeTest();

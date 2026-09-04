@@ -8,14 +8,14 @@ function producto(id: number): Producto {
     codigo: String(id).padStart(4, '0'),
     codigoBarras: `775000${id}`,
     descripcion: `Producto ${id}`,
-    empaque: { nombre: 'Caja', factor: 12 },
+    empaques: [{ nombre: 'Caja', factor: 12 }],
   };
 }
 
 function conteoDe(productoId: number): Conteo {
   return {
     productoId,
-    empaques: 1,
+    empaques: [{ empaqueNombre: 'Caja', cantidad: 1 }],
     sueltas: 0,
     confirmadoPorEscaner: false,
     contadoEn: '2026-09-01T10:00:00.000Z',
@@ -56,7 +56,7 @@ describe('avance', () => {
   it('no cuenta dos veces un conteo repetido para el mismo producto (correccion, no duplicado)', () => {
     const h = hoja({
       productos: [producto(1), producto(2)],
-      conteos: [conteoDe(1), { ...conteoDe(1), empaques: 2 }],
+      conteos: [conteoDe(1), { ...conteoDe(1), empaques: [{ empaqueNombre: 'Caja', cantidad: 2 }] }],
     });
     expect(avance(h)).toEqual({ contados: 1, total: 2, porcentaje: 50 });
   });

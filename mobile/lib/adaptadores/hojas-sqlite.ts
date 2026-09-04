@@ -35,8 +35,16 @@ import { buscarHojaPorId, finalizarDominio, obtenerInventario, puedeEditar } fro
 import { obtenerDb } from './_sqlite';
 import { aplicarResultadoEnvio, ordenarCola, estadoSyncDeHoja, type ItemCola, type ResultadoEnvio } from './sqlite-cola';
 import { sesionMemoria } from './sesion-memoria';
-import type { Conteo, EstadoHoja, EstadoSync, HojaConteo } from '../dominio/tipos';
+import type { Conteo, EstadoHoja, EstadoSync, HojaConteo, LineaEmpaque, Producto } from '../dominio/tipos';
 import type { RepositorioHojas } from '../puertos/repositorios';
+
+/**
+ * Marcador de v1→v2 (ver sqlite-esquema.ts): una línea legada no dice a
+ * cuál empaque correspondía su cantidad porque v1 solo conocía uno por
+ * producto. `repararLineasLegado` la resuelve la primera vez que se
+ * relee esa fila, con el producto real a mano.
+ */
+const EMPAQUE_LEGADO = '__LEGADO__';
 
 // ---------------------------------------------------------------------------
 // Filas <-> tipos de dominio
@@ -51,7 +59,8 @@ interface FilaEstadoLocal {
 interface FilaConteo {
   hoja_id: number;
   producto_id: number;
-  empaques: number;
+  /** JSON de LineaEmpaque[] — ver sqlite-esquema.ts (migración v2). */
+  lineas: string;
   sueltas: number;
   confirmado_por_escaner: number;
   contado_en: string;
@@ -70,11 +79,33 @@ interface FilaCola {
 function filaAConteo(f: FilaConteo): Conteo {
   return {
     productoId: f.producto_id,
-    empaques: f.empaques,
+    empaques: JSON.parse(f.lineas) as LineaEmpaque[],
     sueltas: f.sueltas,
     confirmadoPorEscaner: f.confirmado_por_escaner === 1,
     contadoEn: f.contado_en,
   };
+}
+
+/**
+ * Resuelve las líneas `__LEGADO__` de un conteo (ver el comentario de la
+ * constante, arriba) al empaque por defecto del producto REAL — y deja
+ * la corrección escrita en la base, para no repetir el trabajo en cada
+ * lectura de la misma fila. Sin líneas legadas, no toca la base.
+ */
+async function repararLineasLegado(hojaId: number, conteo: Conteo, producto: Producto): Promise<Conteo> {
+  if (!conteo.empaques.some((l) => l.empaqueNombre === EMPAQUE_LEGADO)) return conteo;
+
+  const nombreDefault = producto.empaques[0]?.nombre ?? EMPAQUE_LEGADO;
+  const lineasReparadas = conteo.empaques.map((l) => (l.empaqueNombre === EMPAQUE_LEGADO ? { ...l, empaqueNombre: nombreDefault } : l));
+
+  const db = await obtenerDb();
+  await db.runAsync('UPDATE conteos SET lineas = ? WHERE hoja_id = ? AND producto_id = ?', [
+    JSON.stringify(lineasReparadas),
+    hojaId,
+    conteo.productoId,
+  ]);
+
+  return { ...conteo, empaques: lineasReparadas };
 }
 
 function filaAItemCola(f: FilaCola): ItemCola {
@@ -106,8 +137,8 @@ async function asegurarSembrada(hojaBase: HojaConteo): Promise<void> {
     ]);
     for (const c of hojaBase.conteos) {
       await db.runAsync(
-        'INSERT OR REPLACE INTO conteos (hoja_id, producto_id, empaques, sueltas, confirmado_por_escaner, contado_en) VALUES (?, ?, ?, ?, ?, ?)',
-        [hojaBase.id, c.productoId, c.empaques, c.sueltas, c.confirmadoPorEscaner ? 1 : 0, c.contadoEn],
+        'INSERT OR REPLACE INTO conteos (hoja_id, producto_id, lineas, sueltas, confirmado_por_escaner, contado_en) VALUES (?, ?, ?, ?, ?, ?)',
+        [hojaBase.id, c.productoId, JSON.stringify(c.empaques), c.sueltas, c.confirmadoPorEscaner ? 1 : 0, c.contadoEn],
       );
     }
   });
@@ -123,11 +154,20 @@ async function hojaConEstadoLocal(hojaBase: HojaConteo): Promise<HojaConteo> {
     db.getAllAsync<FilaConteo>('SELECT * FROM conteos WHERE hoja_id = ?', [hojaBase.id]),
   ]);
 
+  const productosPorId = new Map(hojaBase.productos.map((p) => [p.id, p] as const));
+  const conteos = await Promise.all(
+    filasConteo.map((f) => {
+      const conteo = filaAConteo(f);
+      const producto = productosPorId.get(f.producto_id);
+      return producto ? repararLineasLegado(hojaBase.id, conteo, producto) : conteo;
+    }),
+  );
+
   return {
     ...hojaBase,
     estado: (estadoLocal?.estado as EstadoHoja | undefined) ?? hojaBase.estado,
     sync: (estadoLocal?.sync as EstadoSync | undefined) ?? hojaBase.sync,
-    conteos: filasConteo.map(filaAConteo),
+    conteos,
   };
 }
 
@@ -184,8 +224,8 @@ export const hojasSqlite: RepositorioHojas = {
     // cambios, o ninguno.
     await db.withTransactionAsync(async () => {
       await db.runAsync(
-        'INSERT OR REPLACE INTO conteos (hoja_id, producto_id, empaques, sueltas, confirmado_por_escaner, contado_en) VALUES (?, ?, ?, ?, ?, ?)',
-        [hojaId, conteo.productoId, conteo.empaques, conteo.sueltas, conteo.confirmadoPorEscaner ? 1 : 0, conteo.contadoEn],
+        'INSERT OR REPLACE INTO conteos (hoja_id, producto_id, lineas, sueltas, confirmado_por_escaner, contado_en) VALUES (?, ?, ?, ?, ?, ?)',
+        [hojaId, conteo.productoId, JSON.stringify(conteo.empaques), conteo.sueltas, conteo.confirmadoPorEscaner ? 1 : 0, conteo.contadoEn],
       );
       await db.runAsync('UPDATE hoja_estado_local SET estado = ?, sync = ? WHERE hoja_id = ?', [nuevoEstado, 'local', hojaId]);
       // ON CONFLICT en (hoja_id, tipo, producto_id): un conteo nuevo del

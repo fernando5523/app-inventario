@@ -3,7 +3,7 @@ import { useEffect, useState, type JSX } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import { totalUnidades, validarConteo } from '../../lib/dominio/empaque';
-import type { Conteo, Producto } from '../../lib/dominio/tipos';
+import type { Conteo, LineaEmpaque, Producto } from '../../lib/dominio/tipos';
 import { colors, fonts, fontSize, radius, shadow, spacing } from '../../lib/theme';
 
 export interface ModalConteoProps {
@@ -13,47 +13,102 @@ export interface ModalConteoProps {
   conteoInicial: Conteo | null;
   /** Viene de un escaneo pendiente que todavía no se guardó. */
   confirmadoPorEscaner: boolean;
+  /**
+   * Nombre del empaque que confirmó el escáner (si escaneó un código de
+   * EMPAQUE, no de unidad — hoy poco común: ver el comentario de
+   * `ultimoEscaneo` en app/conteo/contar.tsx). Solo pre-carga "1" en ese
+   * empaque para un registro NUEVO — nunca pisa un conteo que ya existía.
+   */
+  empaquePreseleccionado?: string;
   onGuardar: (conteo: Conteo) => void;
   onCerrar: () => void;
 }
 
+/** Pluraliza un nombre de empaque agregando "s" — alcanza para los cuatro que hoy existen (Caja/Pack/Plancha/Fardo, todos terminan en vocal). */
+function plural(nombre: string, cantidad: number): string {
+  return cantidad === 1 ? nombre : `${nombre}s`;
+}
+
 /**
- * Modal de registro de conteo — empaques cerrados + unidades sueltas, con
- * el total calculado en vivo. `totalUnidades()` es la ÚNICA fuente de esa
- * cuenta (lib/dominio/empaque.ts): nunca se hace `cajas * factor + sueltas`
- * a mano acá.
+ * Modal de registro de conteo — una fila de stepper por cada empaque
+ * cerrado que el producto puede traer (decisión del cliente: puede
+ * tener más de uno, Caja Y Pack del mismo producto) más las unidades
+ * sueltas, con el total calculado en vivo. `totalUnidades()` es la
+ * ÚNICA fuente de esa cuenta (lib/dominio/empaque.ts): nunca se suma a
+ * mano acá.
+ *
+ * Con UN solo empaque (el caso común) se ve exactamente tan simple como
+ * antes de este cambio: una fila de stepper, los mismos atajos rápidos.
+ * Con más de uno, cada empaque extra sí suma su propia fila — pero los
+ * atajos de "+1"/"+5" siguen siendo solo para el PRIMERO (`empaques[0]`,
+ * el más común): que el formulario crezca con la cantidad de empaques
+ * sería justo lo que no puede pasar, el operario cuenta con las manos
+ * ocupadas.
  */
 export function ModalConteo({
   visible,
   producto,
   conteoInicial,
   confirmadoPorEscaner,
+  empaquePreseleccionado,
   onGuardar,
   onCerrar,
 }: ModalConteoProps): JSX.Element | null {
-  const [cajas, setCajas] = useState(0);
+  const [cantidades, setCantidades] = useState<Record<string, number>>({});
   const [sueltas, setSueltas] = useState(0);
 
   useEffect(() => {
     if (!visible) return;
-    setCajas(conteoInicial?.empaques ?? 0);
+    const iniciales: Record<string, number> = {};
+    for (const linea of conteoInicial?.empaques ?? []) {
+      iniciales[linea.empaqueNombre] = linea.cantidad;
+    }
+    // Solo para un registro NUEVO: si ya había un conteo guardado, lo que
+    // el escáner acaba de confirmar es "esto es lo que tenés en la mano",
+    // no una razón para pisar un valor que la persona ya había cargado.
+    if (!conteoInicial && empaquePreseleccionado && !(empaquePreseleccionado in iniciales)) {
+      iniciales[empaquePreseleccionado] = 1;
+    }
+    setCantidades(iniciales);
     setSueltas(conteoInicial?.sueltas ?? 0);
-  }, [visible, producto?.id, conteoInicial]);
+  }, [visible, producto?.id, conteoInicial, empaquePreseleccionado]);
 
   if (!visible || !producto) return null;
 
+  const empaqueDefault = producto.empaques[0];
+
+  function cambiarCantidad(empaqueNombre: string, delta: number): void {
+    setCantidades((actual) => ({ ...actual, [empaqueNombre]: Math.max(0, (actual[empaqueNombre] ?? 0) + delta) }));
+  }
+
+  // Solo las líneas con algo cargado: un conteo no lista un empaque en 0
+  // nada más porque el producto lo ofrece (ver tipos.ts#Conteo).
+  const lineas: LineaEmpaque[] = producto.empaques
+    .map((e) => ({ empaqueNombre: e.nombre, cantidad: cantidades[e.nombre] ?? 0 }))
+    .filter((l) => l.cantidad > 0);
+
   const conteoBorrador: Conteo = {
     productoId: producto.id,
-    empaques: cajas,
+    empaques: lineas,
     sueltas,
     confirmadoPorEscaner,
     contadoEn: conteoInicial?.contadoEn ?? '',
   };
-  const total = totalUnidades(conteoBorrador, producto.empaque);
-  const advertencias = validarConteo(conteoBorrador, producto.empaque);
+  const total = totalUnidades(conteoBorrador, producto.empaques);
+  const advertencias = validarConteo(conteoBorrador, producto.empaques);
+
+  const desglose = [
+    ...lineas.map((l) => `${l.cantidad} ${plural(l.empaqueNombre, l.cantidad)}`),
+    ...(sueltas > 0 || lineas.length === 0 ? [`${sueltas} Sueltas`] : []),
+  ].join(' + ');
 
   function guardar(): void {
     onGuardar({ ...conteoBorrador, contadoEn: new Date().toISOString() });
+  }
+
+  function borrarTodo(): void {
+    setCantidades({});
+    setSueltas(0);
   }
 
   return (
@@ -78,11 +133,17 @@ export function ModalConteo({
             </View>
 
             <View style={styles.productoBloque}>
-              <View style={styles.empaqueBadge}>
-                <Text style={styles.empaqueBadgeTexto}>
-                  {producto.empaque.nombre.toUpperCase()} ×{producto.empaque.factor}
-                </Text>
-              </View>
+              {producto.empaques.length > 0 ? (
+                <View style={styles.empaqueBadges}>
+                  {producto.empaques.map((e) => (
+                    <View key={e.nombre} style={styles.empaqueBadge}>
+                      <Text style={styles.empaqueBadgeTexto}>
+                        {e.nombre.toUpperCase()} ×{e.factor}
+                      </Text>
+                    </View>
+                  ))}
+                </View>
+              ) : null}
               <Text style={styles.nombreProducto}>{producto.descripcion}</Text>
               <Text style={styles.meta}>
                 Código {producto.codigoBarras}
@@ -90,27 +151,33 @@ export function ModalConteo({
               </Text>
             </View>
 
-            <View style={styles.campo}>
-              <View style={styles.campoEtiquetaFila}>
-                <Text style={styles.campoEtiqueta}>Empaques cerrados</Text>
-                <Text style={styles.factor}>
-                  Factor: {producto.empaque.factor} und/{producto.empaque.nombre.toLowerCase()}
-                </Text>
+            {producto.empaques.map((empaque) => (
+              <View key={empaque.nombre} style={styles.campo}>
+                <View style={styles.campoEtiquetaFila}>
+                  <Text style={styles.campoEtiqueta}>{empaque.nombre}</Text>
+                  <Text style={styles.factor}>
+                    Factor: {empaque.factor} und/{empaque.nombre.toLowerCase()}
+                  </Text>
+                </View>
+                <View style={styles.stepper}>
+                  <Pressable
+                    style={styles.stepperBtn}
+                    onPress={() => cambiarCantidad(empaque.nombre, -1)}
+                    accessibilityLabel={`Restar un(a) ${empaque.nombre}`}
+                  >
+                    <Minus size={16} color={colors.tinta} />
+                  </Pressable>
+                  <Text style={styles.stepperValor}>{cantidades[empaque.nombre] ?? 0}</Text>
+                  <Pressable
+                    style={styles.stepperBtn}
+                    onPress={() => cambiarCantidad(empaque.nombre, 1)}
+                    accessibilityLabel={`Sumar un(a) ${empaque.nombre}`}
+                  >
+                    <Plus size={16} color={colors.tinta} />
+                  </Pressable>
+                </View>
               </View>
-              <View style={styles.stepper}>
-                <Pressable
-                  style={styles.stepperBtn}
-                  onPress={() => setCajas((v) => Math.max(0, v - 1))}
-                  accessibilityLabel="Restar una caja"
-                >
-                  <Minus size={16} color={colors.tinta} />
-                </Pressable>
-                <Text style={styles.stepperValor}>{cajas}</Text>
-                <Pressable style={styles.stepperBtn} onPress={() => setCajas((v) => v + 1)} accessibilityLabel="Sumar una caja">
-                  <Plus size={16} color={colors.tinta} />
-                </Pressable>
-              </View>
-            </View>
+            ))}
 
             <View style={styles.campo}>
               <Text style={styles.campoEtiqueta}>Unidades sueltas</Text>
@@ -130,30 +197,28 @@ export function ModalConteo({
             </View>
 
             <View style={styles.atajos}>
-              <Pressable style={styles.atajoChip} onPress={() => setCajas((v) => v + 1)}>
-                <Text style={styles.atajoChipTexto}>+1 Caja</Text>
-              </Pressable>
-              <Pressable style={styles.atajoChip} onPress={() => setCajas((v) => v + 5)}>
-                <Text style={styles.atajoChipTexto}>+5 Cajas</Text>
-              </Pressable>
+              {empaqueDefault ? (
+                <>
+                  <Pressable style={styles.atajoChip} onPress={() => cambiarCantidad(empaqueDefault.nombre, 1)}>
+                    <Text style={styles.atajoChipTexto}>+1 {empaqueDefault.nombre}</Text>
+                  </Pressable>
+                  <Pressable style={styles.atajoChip} onPress={() => cambiarCantidad(empaqueDefault.nombre, 5)}>
+                    <Text style={styles.atajoChipTexto}>+5 {plural(empaqueDefault.nombre, 5)}</Text>
+                  </Pressable>
+                </>
+              ) : null}
               <Pressable style={styles.atajoChip} onPress={() => setSueltas((v) => v + 5)}>
                 <Text style={styles.atajoChipTexto}>+5 Und</Text>
               </Pressable>
-              <Pressable
-                style={[styles.atajoChip, styles.atajoChipBorrar]}
-                onPress={() => {
-                  setCajas(0);
-                  setSueltas(0);
-                }}
-              >
+              <Pressable style={[styles.atajoChip, styles.atajoChipBorrar]} onPress={borrarTodo}>
                 <Text style={styles.atajoChipBorrarTexto}>Borrar</Text>
               </Pressable>
             </View>
 
             {advertencias.length > 0 ? (
               <View style={styles.advertencias}>
-                {advertencias.map((a) => (
-                  <Text key={a.tipo} style={styles.advertenciaTexto}>
+                {advertencias.map((a, i) => (
+                  <Text key={`${a.tipo}-${i}`} style={styles.advertenciaTexto}>
                     {a.mensaje}
                   </Text>
                 ))}
@@ -163,9 +228,7 @@ export function ModalConteo({
             <View style={styles.totalVivo}>
               <Text style={styles.totalEtiqueta}>Total contado</Text>
               <Text style={styles.totalValor}>{total} und</Text>
-              <Text style={styles.totalDesglose}>
-                {cajas} {cajas === 1 ? 'Caja' : 'Cajas'} ({cajas * producto.empaque.factor} und) + {sueltas} Sueltas
-              </Text>
+              <Text style={styles.totalDesglose}>{desglose}</Text>
             </View>
 
             <Pressable style={styles.guardar} onPress={guardar}>
@@ -194,6 +257,7 @@ const styles = StyleSheet.create({
   titulo: { fontSize: 15, color: colors.tinta, fontFamily: fonts.bold },
   cerrar: { width: 30, height: 30, alignItems: 'center', justifyContent: 'center', borderRadius: radius.sm },
   productoBloque: { gap: 2, marginBottom: 14 },
+  empaqueBadges: { flexDirection: 'row', flexWrap: 'wrap', gap: 5 },
   empaqueBadge: {
     alignSelf: 'flex-start',
     paddingHorizontal: 9,

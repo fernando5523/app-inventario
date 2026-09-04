@@ -17,10 +17,15 @@
 /**
  * Presentacion en la que viene un producto. En el backend es `UnidadAlterna`.
  *
- * `codigoBarras` es opcional y propio del empaque: la caja de 12 puede tener
- * un codigo distinto al de la unidad suelta. Es lo que permite que el escaner
- * confirme "esto que tengo en la mano es una CAJA de este producto", no solo
- * el producto.
+ * `codigoBarras` es opcional DE VERDAD, no solo en el tipo: dato real de
+ * Dynamics (verificado por min-1 contra 15 productos reales) es que los
+ * barcodes que trae son de la UNIDAD SUELTA (`ProductQuantity 0`, unidad
+ * "U") — ninguno identifica un empaque especifico. La logica NUNCA puede
+ * asumir que un empaque va a traer codigo: el escaner confirma QUE
+ * PRODUCTO es (por `Producto.codigoBarras`), la persona elige a mano CON
+ * QUE empaque cuenta. Si algun dia Dynamics expone codigos por empaque,
+ * este campo ya esta listo para usarlos — pero no se disena asumiendo
+ * que van a estar.
  */
 export interface Empaque {
   nombre: string;          // "Caja", "Pack", "Plancha", "Fardo"
@@ -28,12 +33,32 @@ export interface Empaque {
   codigoBarras?: string;
 }
 
+/**
+ * Decision del cliente (2026-09-XX): un producto puede venir en MAS DE UN
+ * empaque a la vez (ej. Caja x12 Y Pack x6 del mismo producto) — antes se
+ * elegia uno solo al mapear el catalogo y se descartaban los demas en
+ * silencio, y eso estaba mal: el operario tiene que poder contar los dos.
+ *
+ * La UNIDAD SUELTA queda AFUERA de esta lista, a proposito, no como un
+ * "empaque de factor 1" mas: no es una presentacion empaquetada (la
+ * palabra lo dice), y ya tenia su propio lugar antes de este cambio
+ * (`Producto.codigoBarras`, el de la unidad — ver ahi). Meterla en la
+ * lista hubiera dejado DOS codigos de barra candidatos para la unidad
+ * (el de `Producto` y uno con factor 1 en `empaques`) sin que quede claro
+ * cual manda — mezclar los dos casos es exactamente como se cuelan los
+ * bugs de conteo.
+ *
+ * `empaques[0]` es el que se ofrece primero al abrir el modal de conteo
+ * (el mas comun/frecuente) — el ORDEN de la lista decide eso, no un
+ * campo aparte que se pueda desincronizar de cual es "el default".
+ */
 export interface Producto {
   id: number;
   codigo: string;          // codigo interno del item en la hoja: "0051"
   codigoBarras: string;    // el de la unidad suelta
   descripcion: string;
-  empaque: Empaque;
+  /** Al menos uno. `[0]` = el que se ofrece primero al abrir el modal. */
+  empaques: Empaque[];
   ubicacion?: string;      // "Gondola A2 - Nivel 3"
 }
 
@@ -42,14 +67,33 @@ export interface Producto {
 // ---------------------------------------------------------------------------
 
 /**
- * Lo que el operario cuenta de UN producto: cuantos empaques cerrados y
- * cuantas unidades sueltas. El total NO se guarda: se calcula (ver
- * `empaque.ts`). Guardar un total junto a sus partes es garantizar que algun
- * dia no coincidan.
+ * Cuantos empaques CERRADOS de un tipo cargo el operario — una linea por
+ * cada empaque de `Producto.empaques` que efectivamente contó (no hay una
+ * linea vacia por cada empaque que el producto podria tener y no se usó).
+ * `empaqueNombre` identifica CUAL de `Producto.empaques` es: dentro de un
+ * mismo producto los nombres no se repiten (no hay dos "Caja" del mismo
+ * producto), asi que no hace falta inventar un id aparte para esto — el
+ * empaque no lo tiene tampoco (ver el comentario de `Empaque`).
+ */
+export interface LineaEmpaque {
+  empaqueNombre: string;
+  cantidad: number;
+}
+
+/**
+ * Lo que el operario cuenta de UN producto: una linea por cada empaque
+ * cerrado que cargó (puede ser mas de uno — Caja Y Pack del mismo
+ * producto, ver `Producto.empaques`) mas las unidades sueltas, que son
+ * una sola cifra sin importar de que empaque "vendrian": una unidad
+ * suelta no esta empaquetada, no tiene sentido preguntarse a cual de los
+ * empaques pertenece. El total NO se guarda: se calcula (ver
+ * `empaque.ts`). Guardar un total junto a sus partes es garantizar que
+ * algun dia no coincidan.
  */
 export interface Conteo {
   productoId: number;
-  empaques: number;
+  /** Vacio = no cargó ningún empaque cerrado, solo sueltas. */
+  empaques: LineaEmpaque[];
   sueltas: number;
   /** Marcado por el escaner: el fisico coincide con lo que dice la linea. */
   confirmadoPorEscaner: boolean;

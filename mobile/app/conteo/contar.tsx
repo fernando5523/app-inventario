@@ -16,7 +16,7 @@ import {
 import { PantallaConTabs } from '../../components/navegacion/PantallaConTabs';
 import { repositorioCatalogo, repositorioHojas, repositorioInventario } from '../../lib/contenedor';
 import { avance, puedeEditar, puedeFinalizar } from '../../lib/dominio/hoja';
-import type { Conteo, HojaConteo, Producto } from '../../lib/dominio/tipos';
+import type { Conteo, Empaque, HojaConteo, Producto } from '../../lib/dominio/tipos';
 import { useSesion } from '../../lib/sesion-contexto';
 import { colors, fonts, fontSize, radius } from '../../lib/theme';
 
@@ -52,17 +52,19 @@ export default function ContarScreen(): JSX.Element {
 
   const [modalProducto, setModalProducto] = useState<Producto | null>(null);
   /**
-   * Qué presentacion se leyo en el ultimo escaneo: la unidad suelta o el
-   * empaque (la caja de 12 puede tener codigo propio, ver manejarEscaneo).
+   * Qué presentación se leyó en el último escaneo: la unidad suelta o
+   * alguno de los empaques (ver manejarEscaneo). Dato real de Dynamics
+   * (min-1, catálogo real, 2026-09): los barcodes que trae son de la
+   * unidad suelta — NINGÚN empaque trae código propio hoy. El campo
+   * `empaque` sigue existiendo para el día que eso cambie; mientras
+   * tanto, `presentacion` casi siempre va a dar 'unidad'.
    *
-   * PENDIENTE, y hay que decirlo: hoy este dato NO llega a ModalConteo, que
-   * es donde serviria para pre-cargar "1 empaque" en vez de "1 suelta".
-   * ModalConteo esta fuera del alcance de esta tarea y sus props no tienen
-   * por donde recibirlo. Falta agregarle uno (`presentacionEscaneada`) y
-   * pasarlo desde aca -- mientras tanto se muestra en la tarjeta del
-   * producto para que el operario vea que se reconocio el empaque.
+   * Ya no queda pendiente: ModalConteo ahora sí recibe este dato
+   * (`empaquePreseleccionado`) para pre-cargar "1" en ESE empaque en vez
+   * de dejar todo en cero — antes esto estaba anotado como fuera de
+   * alcance porque ModalConteo pertenecía a otra tarea.
    */
-  const [ultimoEscaneo, setUltimoEscaneo] = useState<{ producto: Producto; presentacion: 'unidad' | 'empaque' } | null>(
+  const [ultimoEscaneo, setUltimoEscaneo] = useState<{ producto: Producto; presentacion: 'unidad' | 'empaque'; empaque: Empaque | null } | null>(
     null,
   );
   const [modalScanVisible, setModalScanVisible] = useState(false);
@@ -198,10 +200,10 @@ export default function ContarScreen(): JSX.Element {
   // no pertenece, lo avisa claro y no registra nada.
   //
   // Un código puede ser el de la UNIDAD suelta (`Producto.codigoBarras`) o
-  // el del EMPAQUE (`Empaque.codigoBarras`, opcional): la caja de 12 puede
-  // traer un código distinto al de la unidad. Es lo que permite que el
-  // escaneo diga "esto que tengo en la mano es una CAJA de este producto",
-  // no solo de qué producto se trata.
+  // el de alguno de los EMPAQUES (`Empaque.codigoBarras`, opcional — y,
+  // con el catálogo real de Dynamics, casi siempre ausente: ver el
+  // comentario de `ultimoEscaneo`). Se busca en TODOS los empaques del
+  // producto, no en uno fijo: puede tener más de uno (Caja Y Pack).
   //
   // El puerto `porCodigoBarras` resuelve la unidad; el empaque se busca acá
   // sobre `hoja.productos`, que ya está cargada en memoria. No es lógica de
@@ -209,8 +211,20 @@ export default function ContarScreen(): JSX.Element {
   // pantalla ya tiene el dato sin pedir nada.
   async function manejarEscaneo(codigo: string): Promise<void> {
     const porUnidad = await repositorioCatalogo.porCodigoBarras(hoja!.id, codigo);
-    const porEmpaque = porUnidad ? null : hoja!.productos.find((p) => p.empaque.codigoBarras === codigo) ?? null;
-    const producto = porUnidad ?? porEmpaque;
+
+    let productoPorEmpaque: Producto | null = null;
+    let empaqueEscaneado: Empaque | null = null;
+    if (!porUnidad) {
+      for (const p of hoja!.productos) {
+        const empaque = p.empaques.find((e) => e.codigoBarras === codigo);
+        if (empaque) {
+          productoPorEmpaque = p;
+          empaqueEscaneado = empaque;
+          break;
+        }
+      }
+    }
+    const producto = porUnidad ?? productoPorEmpaque;
 
     if (!producto) {
       setScanError(`Este código no pertenece a la hoja #${hoja!.numero}.`);
@@ -220,7 +234,7 @@ export default function ContarScreen(): JSX.Element {
     setScanError(null);
     setModalScanVisible(false);
     setConfirmadosPendientes((prev) => new Set(prev).add(producto.id));
-    setUltimoEscaneo({ producto, presentacion: porEmpaque ? 'empaque' : 'unidad' });
+    setUltimoEscaneo({ producto, presentacion: empaqueEscaneado ? 'empaque' : 'unidad', empaque: empaqueEscaneado });
     setModalProducto(producto);
   }
 
@@ -288,8 +302,8 @@ export default function ContarScreen(): JSX.Element {
       {ultimoEscaneo ? (
         <View style={styles.notaEscaneo}>
           <Text style={styles.notaEscaneoTexto}>
-            {ultimoEscaneo.presentacion === 'empaque'
-              ? `Leiste el codigo del EMPAQUE (${ultimoEscaneo.producto.empaque.nombre} x${ultimoEscaneo.producto.empaque.factor}) de ${ultimoEscaneo.producto.descripcion}.`
+            {ultimoEscaneo.presentacion === 'empaque' && ultimoEscaneo.empaque
+              ? `Leiste el codigo del EMPAQUE (${ultimoEscaneo.empaque.nombre} x${ultimoEscaneo.empaque.factor}) de ${ultimoEscaneo.producto.descripcion}.`
               : `Leiste el codigo de la UNIDAD suelta de ${ultimoEscaneo.producto.descripcion}.`}
           </Text>
         </View>
@@ -332,6 +346,9 @@ export default function ContarScreen(): JSX.Element {
         producto={modalProducto}
         conteoInicial={modalProducto ? conteoDe(modalProducto) : null}
         confirmadoPorEscaner={modalProducto ? confirmadoDe(modalProducto) : false}
+        empaquePreseleccionado={
+          ultimoEscaneo && modalProducto && ultimoEscaneo.producto.id === modalProducto.id ? ultimoEscaneo.empaque?.nombre : undefined
+        }
         onGuardar={guardarConteo}
         onCerrar={() => setModalProducto(null)}
       />

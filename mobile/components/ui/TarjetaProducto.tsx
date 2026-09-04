@@ -25,7 +25,12 @@ export interface TarjetaProductoProps {
  */
 export function TarjetaProducto({ producto, conteo, confirmado, bloqueado, onPress }: TarjetaProductoProps): JSX.Element {
   const contado = conteo !== null;
-  const total = conteo ? totalUnidades(conteo, producto.empaque) : 0;
+  const total = conteo ? totalUnidades(conteo, producto.empaques) : 0;
+  // Badge del empaque por defecto (el [0], el más común) — la tarjeta es
+  // compacta a propósito, el detalle de TODOS los empaques cargados va
+  // en la línea de abajo, no acá arriba.
+  const empaqueDefault = producto.empaques[0];
+  const detalleEmpaques = conteo?.empaques.map((l) => `${l.cantidad} ${l.empaqueNombre}`).join(' + ') ?? '';
 
   return (
     <Pressable
@@ -36,11 +41,14 @@ export function TarjetaProducto({ producto, conteo, confirmado, bloqueado, onPre
       style={({ pressed }) => [styles.raiz, contado && styles.contado, bloqueado && styles.bloqueado, pressed && !bloqueado && styles.presionada]}
     >
       <View style={styles.cabecera}>
-        <View style={styles.empaqueBadge}>
-          <Text style={styles.empaqueBadgeTexto}>
-            {producto.empaque.nombre.toUpperCase()} ×{producto.empaque.factor}
-          </Text>
-        </View>
+        {empaqueDefault ? (
+          <View style={styles.empaqueBadge}>
+            <Text style={styles.empaqueBadgeTexto}>
+              {empaqueDefault.nombre.toUpperCase()} ×{empaqueDefault.factor}
+              {producto.empaques.length > 1 ? ` +${producto.empaques.length - 1}` : ''}
+            </Text>
+          </View>
+        ) : null}
         <Text style={styles.numero}>#{producto.codigo}</Text>
       </View>
 
@@ -58,7 +66,7 @@ export function TarjetaProducto({ producto, conteo, confirmado, bloqueado, onPre
       {contado && conteo ? (
         <View style={styles.pie}>
           <Text style={styles.detalle}>
-            Empaque: {conteo.empaques} {conteo.empaques === 1 ? 'Caja' : 'Cajas'} · Sueltas: {conteo.sueltas} und
+            {detalleEmpaques ? `${detalleEmpaques} · ` : ''}Sueltas: {conteo.sueltas} und
           </Text>
           <View style={styles.totalFila}>
             <Text style={styles.totalCifra}>{total}</Text>
