@@ -1,10 +1,11 @@
 import { CameraView, useCameraPermissions, type BarcodeScanningResult } from 'expo-camera';
 import * as Haptics from 'expo-haptics';
-import { Camera, Flashlight, FlashlightOff, X } from 'lucide-react-native';
+import { Camera, Flashlight, FlashlightOff, RefreshCw, X } from 'lucide-react-native';
 import { useCallback, useEffect, useRef, useState, type JSX } from 'react';
 import { ActivityIndicator, LayoutChangeEvent, Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { colors, fonts, fontSize, radius, shadow, spacing } from '../../lib/theme';
+import { ConfirmadorDeLecturas } from './escaner-confirmacion';
 import { centroDeLectura, dentroDelMarco, MARCO_ALTO, MARCO_ANCHO } from './escaner-geometria';
 
 /**
@@ -28,15 +29,42 @@ import { centroDeLectura, dentroDelMarco, MARCO_ALTO, MARCO_ANCHO } from './esca
  * lectura cuyo centro caiga afuera se descarta. El marco acota de verdad.
  *
  * ---------------------------------------------------------------------------
- * LO QUE REPORTÓ EL CLIENTE PROBANDO EN TRES TELÉFONOS
+ * LO QUE REPORTÓ EL CLIENTE PROBANDO EN TRES TELÉFONOS (primera ronda)
  * ---------------------------------------------------------------------------
  * - "Funciona bien y rápido" → no se toca el pipeline de decodificación.
- * - "No necesita estar enfocado" → ML Kit decodifica sin esperar autofocus;
- *   no se agrega ningún paso de enfoque manual que lo haría más lento.
  * - "Por ahí lee mal cuando se apresura en cuanto detecta el código" → por
- *   eso `LECTURAS_PARA_CONFIRMAR`: se exige leer el MISMO código dos veces
- *   seguidas antes de aceptarlo. A ~30fps son unos 60ms, imperceptible para
- *   la persona, pero descarta el mal decodificado de un frame suelto.
+ *   eso existe `LECTURAS_PARA_CONFIRMAR`: se exige leer el MISMO código
+ *   varias veces SEGUIDAS antes de aceptarlo (ver escaner-confirmacion.ts).
+ *   Un código distinto en el medio reinicia el conteo a cero.
+ *
+ * ---------------------------------------------------------------------------
+ * SEGUNDA RONDA, YA EN CAMPO (teléfono real, no emulador)
+ * ---------------------------------------------------------------------------
+ * - "Captura varias veces el código y muchas veces lo hace bien mal en un
+ *   segundo": `LECTURAS_PARA_CONFIRMAR` subió de 2 a 3. Con 2, dos frames
+ *   consecutivos (~66ms a 30fps) alcanzaban para aceptar un mal decodificado
+ *   que por azar se repitiera una sola vez; con 3 hace falta que se repita
+ *   dos veces seguidas, mucho menos probable. La máquina de estados en sí
+ *   —que un código distinto reinicia el contador— se auditó línea por línea
+ *   y ya funcionaba así antes de este cambio (ver escaner-confirmacion.test.ts,
+ *   caso "A,B,A no acepta A").
+ * - "No veo una opción de focalizar": expo-camera 55.x no expone foco por
+ *   toque en esta versión (sin `pointOfInterest` ni método de foco en el
+ *   ref). SÍ tiene `autofocus` (default `'off'`, que pese al nombre es
+ *   autofoco CONTINUO — `'on'` es foco único y bloqueo, lo que no queremos
+ *   acá) y `pausePreview()/resumePreview()` en el ref, que reinician el
+ *   pipeline de la cámara y con eso el ciclo de autofoco en la mayoría de
+ *   los dispositivos. Con eso se armó el botón "Reintentar enfoque".
+ * - El filtro por bounds YA estaba activo (ver EL PROBLEMA QUE RESUELVE EL
+ *   FILTRO POR BOUNDS, arriba): ninguna lectura llega al confirmador sin
+ *   pasar primero por `dentroDelMarco`. Lo que este código NO puede
+ *   verificar sin un teléfono físico es si `bounds`/`cornerPoints` llegan
+ *   realmente en coordenadas del visor en TODOS los Android reales del
+ *   cliente — la documentación de expo-camera lo promete, pero es una
+ *   plataforma con historial de reportar esto de forma inconsistente según
+ *   el fabricante. Si el umbral más alto no alcanza, el próximo paso es
+ *   loguear `resultado.bounds` crudo en un dispositivo real y comparar
+ *   contra `visor.ancho/alto`.
  */
 
 /**
@@ -47,8 +75,13 @@ import { centroDeLectura, dentroDelMarco, MARCO_ALTO, MARCO_ANCHO } from './esca
  */
 const FORMATOS = ['ean13', 'ean8', 'code128', 'upc_a', 'upc_e'] as const;
 
-/** Dos lecturas iguales seguidas antes de aceptar. Ver el comentario de arriba. */
-const LECTURAS_PARA_CONFIRMAR = 2;
+/**
+ * Lecturas iguales SEGUIDAS antes de aceptar. Subido de 2 a 3 (2026-09-04)
+ * tras el reporte del cliente en teléfono real: con 2, un mal decodificado
+ * que por azar se repitiera una sola vez alcanzaba para aceptarse. Ver el
+ * comentario de arriba y escaner-confirmacion.ts.
+ */
+const LECTURAS_PARA_CONFIRMAR = 3;
 
 /** Ventana de silencio tras aceptar un código, para no dispararlo en ráfaga. */
 const MS_ANTIRREBOTE = 1500;
@@ -94,18 +127,20 @@ export function ModalEscaner({ visible, error, onEscanear, onCerrar }: ModalEsca
    * recién re-renderiza en el tick siguiente. Con estado, varias lecturas del
    * mismo burst leen el valor VIEJO, pasan el filtro las tres, y el mismo
    * código termina contado tres veces. Ya lo pagamos una vez.
+   *
+   * La máquina de estados en sí (consecutivas, antirrebote) vive en
+   * escaner-confirmacion.ts — acá solo la instancia, mutable, en un ref.
    */
-  const ultimoAceptado = useRef<{ codigo: string; en: number } | null>(null);
-  const candidato = useRef<{ codigo: string; vistas: number } | null>(null);
+  const confirmador = useRef(new ConfirmadorDeLecturas(LECTURAS_PARA_CONFIRMAR, MS_ANTIRREBOTE));
   const sinGeometria = useRef(0);
   const entregado = useRef(false);
+  const camaraRef = useRef<CameraView>(null);
 
   // Cada vez que se abre el modal se limpia todo: si no, un código aceptado
   // en la apertura anterior sigue bloqueado por el anti-rebote.
   useEffect(() => {
     if (!visible) return;
-    ultimoAceptado.current = null;
-    candidato.current = null;
+    confirmador.current.reiniciar();
     sinGeometria.current = 0;
     entregado.current = false;
     setAvisoGeometria(false);
@@ -157,27 +192,17 @@ export function ModalEscaner({ visible, error, onEscanear, onCerrar }: ModalEsca
       if (!dentroDelMarco(centro, visor)) {
         // Silencio deliberado: el código del vecino entrando y saliendo de
         // cuadro dispararía un cartel intermitente que no ayuda a nadie.
-        candidato.current = null;
+        // `descartar()` rompe cualquier racha en curso — el vecino no puede
+        // "esperar su turno" para acumular vistas mientras no está en cuadro.
+        confirmador.current.descartar();
         return;
       }
 
       const codigo = resultado.data?.trim();
       if (!codigo) return;
 
-      const ahora = Date.now();
-      const previo = ultimoAceptado.current;
-      if (previo && previo.codigo === codigo && ahora - previo.en < MS_ANTIRREBOTE) return;
+      if (!confirmador.current.procesar(codigo, Date.now())) return;
 
-      // Confirmación por repetición: contra el "lee mal cuando se apresura".
-      if (candidato.current?.codigo === codigo) {
-        candidato.current.vistas++;
-      } else {
-        candidato.current = { codigo, vistas: 1 };
-      }
-      if (candidato.current.vistas < LECTURAS_PARA_CONFIRMAR) return;
-
-      ultimoAceptado.current = { codigo, en: ahora };
-      candidato.current = null;
       entregado.current = true;
 
       // El operario no mira la pantalla mientras escanea: escucha y siente.
@@ -186,6 +211,19 @@ export function ModalEscaner({ visible, error, onEscanear, onCerrar }: ModalEsca
     },
     [onEscanear, visor.alto, visor.ancho],
   );
+
+  const reintentarEnfoque = useCallback(() => {
+    // pausePreview()/resumePreview() reinician el pipeline de la cámara —
+    // no hay foco por toque en esta versión de expo-camera (ver el
+    // comentario grande de arriba), pero reiniciar el pipeline dispara un
+    // nuevo ciclo de autofoco en la mayoría de los dispositivos Android.
+    const camara = camaraRef.current;
+    if (!camara) return;
+    camara
+      .pausePreview()
+      .then(() => camara.resumePreview())
+      .catch(() => undefined);
+  }, []);
 
   // Un código que no pertenece a la hoja llega como rechazo desde la
   // pantalla: se vibra distinto y se rehabilita la lectura para que pueda
@@ -243,9 +281,16 @@ export function ModalEscaner({ visible, error, onEscanear, onCerrar }: ModalEsca
           ) : (
             <View style={styles.visor} onLayout={medirVisor}>
               <CameraView
+                ref={camaraRef}
                 style={StyleSheet.absoluteFill}
                 facing="back"
                 enableTorch={linterna}
+                // 'off' es, pese al nombre, autofoco CONTINUO ("should
+                // automatically focus when needed"); 'on' enfoca una vez y
+                // BLOQUEA el foco — lo que no queremos con el teléfono
+                // moviéndose entre productos. Es el default de expo-camera:
+                // explícito acá para que nadie lo "corrija" a 'on' sin saber.
+                autofocus="off"
                 barcodeScannerSettings={{ barcodeTypes: [...FORMATOS] }}
                 onBarcodeScanned={alLeer}
               />
@@ -272,6 +317,14 @@ export function ModalEscaner({ visible, error, onEscanear, onCerrar }: ModalEsca
                 ) : (
                   <Flashlight size={17} color={colors.tinta} />
                 )}
+              </Pressable>
+
+              {/* No hay foco por toque en esta versión de expo-camera (ver
+                  el comentario grande de arriba): esto es lo que hay en su
+                  lugar — reinicia el pipeline de la cámara, lo que dispara
+                  un nuevo ciclo de autofoco en la mayoría de los Android. */}
+              <Pressable style={styles.reenfocar} onPress={reintentarEnfoque} accessibilityLabel="Reintentar enfoque">
+                <RefreshCw size={17} color={colors.tinta} />
               </Pressable>
             </View>
           )}
@@ -327,6 +380,17 @@ const styles = StyleSheet.create({
   linterna: {
     position: 'absolute',
     right: 10,
+    bottom: 10,
+    width: 34,
+    height: 34,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: radius.full,
+    backgroundColor: colors.blanco,
+  },
+  reenfocar: {
+    position: 'absolute',
+    right: 52,
     bottom: 10,
     width: 34,
     height: 34,
