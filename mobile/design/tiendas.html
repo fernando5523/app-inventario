@@ -787,8 +787,96 @@ body {
 .ficha-nombre { margin: 0; font-size: 13.5px; font-weight: 700; color: var(--app-tinta); }
 .ficha-meta { margin: 2px 0 0; font-size: 11.5px; color: var(--app-gris); }
 .ficha-badges { flex: none; display: flex; flex-direction: column; align-items: flex-end; gap: 6px; }
-.ficha-acciones { display: flex; gap: 8px; }
-.ficha-acciones .boton-sec { flex: 1; }
+/* ---------- Speed Dial flotante de acciones ----------
+   Ver .claude/skills/trujillo-ui/SKILL.md: una tarjeta de lista con 2 o mas
+   acciones las pone ACA, nunca apiladas dentro de la card. Los botones
+   dentro de cada card multiplican el alto de la lista y compiten con el
+   contenido; el flotante deja la lista limpia y concentra las acciones en
+   una sola zona. */
+.speed-dial-contenedor {
+  position: absolute;
+  bottom: calc(var(--tabbar-alto) + 16px);
+  right: 16px;
+  z-index: 50;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 12px;
+}
+.speed-dial-contenedor[hidden] { display: none; }
+.speed-dial-acciones {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 12px;
+  opacity: 0;
+  transform: translateY(20px) scale(0.4);
+  transform-origin: bottom right;
+  pointer-events: none;
+  transition: all 0.25s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.speed-dial-contenedor.abierto .speed-dial-acciones {
+  opacity: 1;
+  transform: translateY(0) scale(1);
+  pointer-events: auto;
+}
+/* SOBRE QUE tienda se va a actuar. Con el menu abierto las opciones tapan
+   media pantalla y la tarjeta resaltada puede quedar fuera de vista --
+   desactivar la tienda equivocada arrastra sus colaboradores y su
+   inventario, asi que el nombre va al lado del boton que se toca. */
+.speed-dial-contexto {
+  background: var(--rojo-suave);
+  border: 1px solid var(--rojo);
+  color: var(--rojo);
+  padding: 6px 12px;
+  border-radius: 99px;
+  font-size: 12.5px;
+  font-weight: 700;
+  max-width: 240px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.speed-dial-fila {
+  display: flex; align-items: center; gap: 10px;
+  background: none; border: 0; padding: 0; cursor: pointer;
+}
+.speed-dial-etiqueta {
+  background: var(--app-campo);
+  padding: 6px 12px;
+  border-radius: 99px;
+  border: 1px solid var(--app-borde);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--app-tinta);
+  box-shadow: 0 2px 8px rgba(28,25,23,.12);
+  white-space: nowrap;
+}
+/* Opciones en gris neutro, nunca rojo: el rojo es del FAB y hay uno solo.
+   Desactivar es la destructiva de esta pantalla y lleva su matiz rojo. */
+.speed-dial-btn {
+  width: 44px; height: 44px; border-radius: 50%;
+  background: var(--riel); color: var(--app-tinta);
+  display: grid; place-items: center; border: 0;
+  box-shadow: 0 4px 12px rgba(28,25,23,.22);
+  transition: transform .12s ease;
+}
+.speed-dial-fila:hover .speed-dial-btn { transform: scale(1.05); }
+.speed-dial-btn svg { color: var(--app-tinta); stroke: var(--app-tinta); }
+.speed-dial-btn.destructivo svg { color: var(--rojo); stroke: var(--rojo); }
+.speed-dial-etiqueta.destructiva { color: var(--rojo); }
+.speed-dial-fab {
+  width: 56px; height: 56px; border-radius: 50%;
+  background: var(--rojo); color: #fff;
+  display: grid; place-items: center; border: 0;
+  box-shadow: 0 6px 16px rgba(28,25,23,.26); cursor: pointer;
+  transition: transform .25s cubic-bezier(.2,.8,.2,1), background .14s ease;
+}
+.speed-dial-fab:hover { background: var(--rojo-hover); transform: scale(1.05); }
+.speed-dial-fab svg { color: #fff; stroke: #fff; transition: transform .25s cubic-bezier(.2,.8,.2,1); }
+.speed-dial-contenedor.abierto .speed-dial-fab svg { transform: rotate(90deg); }
+/* La tarjeta seleccionada: ata el boton flotante a UNA fila. */
+.ficha.seleccionada { border-color: var(--rojo); border-width: 1.5px; background: var(--rojo-suave); }
 
 /* ---------- Boton secundario (outline) ----------
    Espeja Button variant="outline" de la app: borde neutro y tinta, NO
@@ -832,7 +920,7 @@ body {
    Mismo gotcha que .campo en hojas.html: el display propio le gana al
    [hidden] nativo, asi que hay que declararlo elemento por elemento. */
 .campo[hidden], .tarjeta[hidden], .gestion[hidden], .seccion[hidden],
-.ficha-acciones[hidden], .vacio-estado[hidden], .entrada[hidden] { display: none; }
+.vacio-estado[hidden], .entrada[hidden] { display: none; }
 
 /* ---------- Pantalla 10 ---------- */
 .boton-sec.ancho { width: 100%; min-height: 46px; font-size: 14.5px; font-weight: 700; }
@@ -951,6 +1039,34 @@ body {
         <span id="toast-texto"></span>
       </div>
 
+    </div>
+
+    <!-- Speed dial de acciones para la tienda SELECCIONADA. Cuelga del
+         telefono y no de .pantalla: position absolute dentro del scroll
+         quedaria recortado y se desplazaria con el contenido. -->
+    <div class="speed-dial-contenedor" id="speed-dial" hidden>
+      <div class="speed-dial-acciones" id="speed-dial-acciones">
+        <span class="speed-dial-contexto" id="speed-dial-nombre"></span>
+
+        <button type="button" class="speed-dial-fila" id="btn-sd-editar" aria-label="Editar tienda">
+          <span class="speed-dial-etiqueta">Editar tienda</span>
+          <span class="speed-dial-btn">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.375 2.625a1 1 0 0 1 3 3l-9.013 9.014a2 2 0 0 1-.853.505l-2.873.84a.5.5 0 0 1-.62-.62l.84-2.873a2 2 0 0 1 .506-.852z"/></svg>
+          </span>
+        </button>
+
+        <!-- No hay "Eliminar": una sucursal borrada deja hojas, conteos y
+             cuentas sin sede. Se desactiva, y el historial sigue en pie. -->
+        <button type="button" class="speed-dial-fila" id="btn-sd-activa" aria-label="Activar o desactivar tienda">
+          <span class="speed-dial-etiqueta destructiva" id="txt-sd-activa">Desactivar</span>
+          <span class="speed-dial-btn destructivo" id="btn-sd-activa-icono">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 2v10"/><path d="M18.4 6.6a9 9 0 1 1-12.77.04"/></svg>
+          </span>
+        </button>
+      </div>
+      <button type="button" class="speed-dial-fab" id="btn-sd-fab" aria-label="Acciones de tienda" aria-expanded="false">
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m2 7 4.41-4.41A2 2 0 0 1 7.83 2h8.34a2 2 0 0 1 1.42.59L22 7"/><path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8"/><path d="M2 7h20"/><path d="M12 22V12"/></svg>
+      </button>
     </div>
 
     <!-- Los modales cuelgan del TELEFONO, no de .pantalla ni de .campo -->
@@ -1162,33 +1278,47 @@ body {
     cab.appendChild(textos);
     cab.appendChild(badges);
 
-    var acciones = document.createElement('div');
-    acciones.className = 'ficha-acciones';
-
-    var bEditar = document.createElement('button');
-    bEditar.type = 'button';
-    bEditar.className = 'boton-sec';
-    bEditar.textContent = 'Editar';
-    bEditar.addEventListener('click', function () { abrirEdicion(t); });
-
-    /* No hay "Eliminar": una sucursal borrada deja hojas, conteos y
-       cuentas sin sede. Se desactiva, y el historial sigue en pie. */
-    var bAlternar = document.createElement('button');
-    bAlternar.type = 'button';
-    bAlternar.className = 'boton-sec';
-    bAlternar.textContent = t.activa ? 'Desactivar' : 'Activar';
-    bAlternar.addEventListener('click', function () {
-      t.activa = !t.activa;
+    /* SELECCIONAR y DESPUES actuar: las acciones salieron de la card al
+       speed dial flotante (ver SKILL.md). Tocar la ficha la selecciona,
+       tocarla de nuevo la deselecciona. */
+    art.setAttribute('role', 'button');
+    art.setAttribute('tabindex', '0');
+    art.setAttribute('aria-pressed', String(seleccionadaId === t.id));
+    if (seleccionadaId === t.id) art.classList.add('seleccionada');
+    art.addEventListener('click', function () {
+      seleccionadaId = seleccionadaId === t.id ? null : t.id;
+      cerrarSpeedDial();
       render();
-      mostrarToast(t.nombre + (t.activa ? ': tienda activada.' : ': tienda desactivada.'));
     });
 
-    acciones.appendChild(bEditar);
-    acciones.appendChild(bAlternar);
-
     art.appendChild(cab);
-    art.appendChild(acciones);
     return art;
+  }
+
+  /* Se guarda el ID y no el objeto: la lista se vuelve a pintar tras cada
+     accion, y un objeto guardado quedaria viejo. */
+  var seleccionadaId = null;
+
+  function tiendaSeleccionada() {
+    for (var i = 0; i < tiendas.length; i++) if (tiendas[i].id === seleccionadaId) return tiendas[i];
+    return null;
+  }
+
+  function cerrarSpeedDial() {
+    var cont = $('speed-dial');
+    if (cont) cont.classList.remove('abierto');
+  }
+
+  function pintarSpeedDial() {
+    var cont = $('speed-dial');
+    var t = tiendaSeleccionada();
+    /* Sin seleccion NO hay boton: asi no puede actuar sobre "nada". */
+    cont.hidden = !t;
+    if (!t) return;
+    $('speed-dial-nombre').textContent = t.nombre;
+    $('txt-sd-activa').textContent = t.activa ? 'Desactivar' : 'Activar';
+    $('txt-sd-activa').className = t.activa ? 'speed-dial-etiqueta destructiva' : 'speed-dial-etiqueta';
+    $('btn-sd-activa').className = t.activa ? 'speed-dial-btn destructivo' : 'speed-dial-btn';
   }
 
   function pintarLista() {
@@ -1201,7 +1331,31 @@ body {
     $('seccion-sucursales').hidden = tiendas.length === 0;
     $('sin-tiendas').hidden = tiendas.length !== 0;
     $('total-tiendas').textContent = tiendas.length + (tiendas.length === 1 ? ' sucursal' : ' sucursales');
+    pintarSpeedDial();
   }
+
+  (function cablearSpeedDial() {
+    var fab = $('btn-sd-fab');
+    fab.addEventListener('click', function (e) {
+      e.stopPropagation();
+      var cont = $('speed-dial');
+      var abierto = cont.classList.toggle('abierto');
+      fab.setAttribute('aria-expanded', String(abierto));
+    });
+    $('btn-sd-editar').addEventListener('click', function () {
+      var t = tiendaSeleccionada();
+      cerrarSpeedDial();
+      if (t) abrirEdicion(t);
+    });
+    $('btn-sd-activa').addEventListener('click', function () {
+      var t = tiendaSeleccionada();
+      cerrarSpeedDial();
+      if (!t) return;
+      t.activa = !t.activa;
+      render();
+      mostrarToast(t.nombre + (t.activa ? ': tienda activada.' : ': tienda desactivada.'));
+    });
+  })();
 
   function pintarBarra() {
     var activas = tiendas.filter(function (t) { return t.activa; }).length;

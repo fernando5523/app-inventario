@@ -1,9 +1,11 @@
 import { useFocusEffect } from 'expo-router';
-import { MapPin, Store, TriangleAlert, Warehouse } from 'lucide-react-native';
-import { useCallback, useState, type JSX } from 'react';
-import { ActivityIndicator, Alert, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import { MapPin, Power, SquarePen, Store, TriangleAlert, Warehouse, X } from 'lucide-react-native';
+import { useCallback, useRef, useState, type JSX } from 'react';
+import { ActivityIndicator, Alert, Animated, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { PantallaConTabs } from '../../components/navegacion/PantallaConTabs';
+import { ALTO_TAB_BAR } from '../../components/navegacion/tabs';
 import { Badge, BarraApp, Button, Card, EmptyState, Select, type SelectOpcion } from '../../components/ui';
 // Del contenedor: las sucursales salen de Postgres con el backend vivo.
 import { repositorioTiendas } from '../../lib/contenedor';
@@ -32,7 +34,19 @@ function opcionDeAlmacen(tienda: Sucursal): SelectOpcion | null {
 }
 
 export default function TiendasScreen(): JSX.Element {
+  const insets = useSafeAreaInsets();
   const [cargando, setCargando] = useState(true);
+  /**
+   * SELECCIONAR-Y-DESPUES-ACTUAR, el mismo patron ya aprobado en Usuarios.
+   *
+   * Se guarda el id y no el objeto: la lista se recarga tras cada accion
+   * (`cargar()`), asi que un objeto guardado quedaria viejo — con el id, la
+   * tienda seleccionada se vuelve a resolver contra la lista fresca y el
+   * speed dial siempre opera sobre el estado real.
+   */
+  const [tiendaSeleccionadaId, setTiendaSeleccionadaId] = useState<number | null>(null);
+  const [menuAbierto, setMenuAbierto] = useState(false);
+  const animacionMenu = useRef(new Animated.Value(0)).current;
   const [tiendas, setTiendas] = useState<Sucursal[]>([]);
   // Se carga una sola vez con las tiendas: son los almacenes del ERP, no
   // cambian mientras el Administrador está parado en esta pantalla.
@@ -187,11 +201,41 @@ export default function TiendasScreen(): JSX.Element {
     }
   }
 
+  // Se resuelve contra la lista viva, no contra una copia: ver el comentario
+  // de `tiendaSeleccionadaId`.
+  const seleccionada = tiendas.find((t) => t.id === tiendaSeleccionadaId) ?? null;
+
+  function alternarMenu(): void {
+    const destino = menuAbierto ? 0 : 1;
+    setMenuAbierto(!menuAbierto);
+    Animated.spring(animacionMenu, { toValue: destino, friction: 6, tension: 45, useNativeDriver: true }).start();
+  }
+
+  function cerrarMenu(): void {
+    setMenuAbierto(false);
+    Animated.timing(animacionMenu, { toValue: 0, duration: 180, useNativeDriver: true }).start();
+  }
+
+  /** Tocar una tarjeta la selecciona; tocarla de nuevo la deselecciona. */
+  function alternarSeleccion(tienda: Sucursal): void {
+    setMenuAbierto(false);
+    animacionMenu.setValue(0);
+    setTiendaSeleccionadaId((actual) => (actual === tienda.id ? null : tienda.id));
+  }
+
+  const rotacionIcono = animacionMenu.interpolate({ inputRange: [0, 1], outputRange: ['0deg', '90deg'] });
+  const escalaOpciones = animacionMenu.interpolate({ inputRange: [0, 1], outputRange: [0.4, 1] });
+  const desplazamientoOpciones = animacionMenu.interpolate({ inputRange: [0, 1], outputRange: [20, 0] });
+
   const activas = tiendas.filter((t) => t.activa !== false).length;
   const puedeGuardar = nombre.trim().length > 0 && !guardando;
 
   return (
-    <PantallaConTabs scrollable contentStyle={styles.contenido}>
+    // El speed dial va como HERMANO de PantallaConTabs, nunca adentro: dentro
+    // del ScrollView su `position: absolute` queda recortado por el contenido
+    // y se desplaza con el scroll en vez de quedarse fijo.
+    <>
+      <PantallaConTabs scrollable contentStyle={[styles.contenido, { paddingBottom: ALTO_TAB_BAR + insets.bottom + 120 }]}>
       <BarraApp rotulo="Tiendas" cifras={`${activas} de ${tiendas.length} activas`} />
 
       <Button
@@ -292,8 +336,16 @@ export default function TiendasScreen(): JSX.Element {
           </View>
           {tiendas.map((tienda) => {
             const activa = tienda.activa !== false;
+            const esSeleccionada = seleccionada?.id === tienda.id;
             return (
-              <Card key={tienda.id} style={styles.fila}>
+              <Pressable
+                key={tienda.id}
+                onPress={() => alternarSeleccion(tienda)}
+                accessibilityRole="button"
+                accessibilityState={{ selected: esSeleccionada }}
+                accessibilityLabel={`${tienda.nombre}. ${esSeleccionada ? 'Seleccionada' : 'Tocá para elegirla'}`}
+              >
+              <Card style={[styles.fila, esSeleccionada && styles.filaSeleccionada]}>
                 <View style={styles.filaCabecera}>
                   <View style={styles.filaTextos}>
                     <Text style={styles.filaNombre}>{tienda.nombre}</Text>
@@ -323,22 +375,94 @@ export default function TiendasScreen(): JSX.Element {
                     {!tienda.almacenId ? <Badge label="Sin almacén" variant="falta" /> : null}
                   </View>
                 </View>
-                <View style={styles.filaAcciones}>
-                  <Button label="Editar" variant="outline" size="sm" onPress={() => abrirFormularioEditar(tienda)} style={styles.filaBoton} />
-                  <Button
-                    label={activa ? 'Desactivar' : 'Activar'}
-                    variant="outline"
-                    size="sm"
-                    onPress={() => alternarActiva(tienda)}
-                    style={styles.filaBoton}
-                  />
-                </View>
               </Card>
+              </Pressable>
             );
           })}
         </View>
       )}
-    </PantallaConTabs>
+      </PantallaConTabs>
+
+      {/* Capa para cerrar tocando afuera, solo con el menu desplegado. */}
+      {seleccionada && menuAbierto ? (
+        <Pressable style={StyleSheet.absoluteFillObject} onPress={cerrarMenu} accessibilityLabel="Cerrar acciones" />
+      ) : null}
+
+      {/* SPEED DIAL: aparece SOLO con una tienda seleccionada. Sin seleccion no
+          hay boton, asi que nunca puede actuar sobre "nada". */}
+      {seleccionada ? (
+        <View style={[styles.speedDialContenedor, { bottom: ALTO_TAB_BAR + insets.bottom + 28 }]}>
+          <Animated.View
+            pointerEvents={menuAbierto ? 'auto' : 'none'}
+            style={[
+              styles.speedDialOpciones,
+              { opacity: animacionMenu, transform: [{ translateY: desplazamientoOpciones }, { scale: escalaOpciones }] },
+            ]}
+          >
+            {/* SOBRE QUE TIENDA. No esta en Usuarios y acá sí, a propósito:
+                allá la acción peor es deshabilitar UNA cuenta; acá es
+                desactivar una TIENDA entera, con sus colaboradores y su
+                inventario. La tarjeta resaltada se ve al seleccionar, pero
+                para cuando el menú está abierto tapa media pantalla — el
+                nombre tiene que estar al lado del botón que se va a tocar. */}
+            <View style={styles.speedDialEncabezado}>
+              <Text style={styles.speedDialEncabezadoTexto} numberOfLines={1}>
+                {seleccionada.nombre}
+              </Text>
+            </View>
+
+            <Pressable
+              style={styles.speedDialFila}
+              onPress={() => {
+                alternarMenu();
+                abrirFormularioEditar(seleccionada);
+              }}
+              accessibilityRole="button"
+              accessibilityLabel={`Editar ${seleccionada.nombre}`}
+            >
+              <View style={styles.speedDialPill}>
+                <Text style={styles.speedDialPillTexto}>Editar tienda</Text>
+              </View>
+              <View style={styles.speedDialBoton}>
+                <SquarePen size={20} color={colors.tinta} />
+              </View>
+            </Pressable>
+
+            {/* Desactivar es la accion destructiva de esta pantalla: va en rojo
+                (icono y etiqueta), como Eliminar en Usuarios. */}
+            <Pressable
+              style={styles.speedDialFila}
+              onPress={() => {
+                alternarMenu();
+                alternarActiva(seleccionada);
+              }}
+              accessibilityRole="button"
+              accessibilityLabel={`${seleccionada.activa !== false ? 'Desactivar' : 'Activar'} ${seleccionada.nombre}`}
+            >
+              <View style={styles.speedDialPill}>
+                <Text style={seleccionada.activa !== false ? styles.speedDialPillTextoDestructivo : styles.speedDialPillTexto}>
+                  {seleccionada.activa !== false ? 'Desactivar' : 'Activar'}
+                </Text>
+              </View>
+              <View style={styles.speedDialBoton}>
+                <Power size={20} color={seleccionada.activa !== false ? colors.rojo : colors.tinta} />
+              </View>
+            </Pressable>
+          </Animated.View>
+
+          <Pressable
+            style={styles.speedDialFab}
+            onPress={alternarMenu}
+            accessibilityRole="button"
+            accessibilityLabel={menuAbierto ? 'Cerrar acciones' : `Acciones de ${seleccionada.nombre}`}
+          >
+            <Animated.View style={{ transform: [{ rotate: rotacionIcono }] }}>
+              {menuAbierto ? <X size={24} color={colors.blanco} strokeWidth={2.5} /> : <Store size={24} color={colors.blanco} strokeWidth={2.3} />}
+            </Animated.View>
+          </Pressable>
+        </View>
+      ) : null}
+    </>
   );
 }
 
@@ -376,6 +500,63 @@ const styles = StyleSheet.create({
   filaBadges: { flex: 0, alignItems: 'flex-end', gap: 6 },
   avisoAlmacen: { flexDirection: 'row', alignItems: 'flex-start', gap: 6, marginTop: 4 },
   avisoAlmacenTexto: { flex: 1, fontSize: 11, lineHeight: 15, color: colors.falta, fontFamily: fonts.regular },
-  filaAcciones: { flexDirection: 'row', gap: 8 },
-  filaBoton: { flex: 1 },
+  // Misma senal que la tarjeta seleccionada en Usuarios: borde rojo y fondo
+  // suave. Es lo que ata el speed dial flotante a UNA fila de la lista.
+  filaSeleccionada: { borderColor: colors.rojo, borderWidth: 1.5, backgroundColor: colors.rojoSuave },
+  speedDialContenedor: { position: 'absolute', right: 16, alignItems: 'flex-end', gap: 12, zIndex: 50 },
+  speedDialOpciones: { alignItems: 'flex-end', gap: 12 },
+  // Pill de contexto: dice SOBRE QUE tienda se va a actuar. Rojo suave para
+  // separarla de las acciones (blancas) sin gritar mas que ellas.
+  speedDialEncabezado: {
+    backgroundColor: colors.rojoSuave,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: radius.full,
+    borderWidth: 1,
+    borderColor: colors.rojo,
+    maxWidth: 240,
+  },
+  speedDialEncabezadoTexto: { fontSize: 12.5, color: colors.rojo, fontFamily: fonts.bold },
+  speedDialFila: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  speedDialPill: {
+    backgroundColor: colors.blanco,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: radius.full,
+    borderWidth: 1,
+    borderColor: colors.borde,
+    elevation: 4,
+    shadowColor: colors.tinta,
+    shadowOpacity: 0.15,
+    shadowRadius: 6,
+    shadowOffset: { width: 0, height: 2 },
+  },
+  speedDialPillTexto: { fontSize: 13, color: colors.tinta, fontFamily: fonts.semibold },
+  speedDialPillTextoDestructivo: { fontSize: 13, color: colors.rojo, fontFamily: fonts.semibold },
+  speedDialBoton: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: colors.riel,
+    alignItems: 'center',
+    justifyContent: 'center',
+    elevation: 5,
+    shadowColor: colors.tinta,
+    shadowOpacity: 0.2,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 3 },
+  },
+  speedDialFab: {
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    backgroundColor: colors.rojo,
+    alignItems: 'center',
+    justifyContent: 'center',
+    elevation: 6,
+    shadowColor: colors.tinta,
+    shadowOpacity: 0.25,
+    shadowRadius: 10,
+    shadowOffset: { width: 0, height: 4 },
+  },
 });

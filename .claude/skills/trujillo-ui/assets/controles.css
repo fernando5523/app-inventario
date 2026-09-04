@@ -742,3 +742,124 @@ body {
 .persona-datos { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .persona-datos strong { font-size: 13.5px; color: var(--app-tinta); font-weight: 700; }
 .persona-datos span { font-size: 11.5px; color: var(--app-gris); }
+
+/* ---------- Boton flotante de acciones (speed dial) ----------
+   EL patron para las acciones de una tarjeta de lista. Ver SKILL.md para el
+   cuando: 2 o mas acciones por tarjeta van ACA, nunca apiladas dentro de la
+   card. Los botones dentro de cada card multiplican el alto de la lista y
+   compiten con el contenido; el flotante deja la lista limpia y concentra
+   las acciones en una sola zona, siempre en el mismo lugar del pulgar.
+
+   SELECCIONAR y DESPUES actuar: el contenedor esta `hidden` hasta que hay un
+   item seleccionado (.seleccionada en la tarjeta). Sin seleccion no hay
+   boton, asi que nunca puede actuar sobre "nada". */
+.speed-dial-contenedor {
+  position: absolute;
+  bottom: calc(var(--tabbar-alto) + 16px);
+  right: 16px;
+  z-index: 50;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 12px;
+}
+.speed-dial-contenedor[hidden] { display: none; }
+.speed-dial-acciones {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 12px;
+  opacity: 0;
+  transform: translateY(20px) scale(0.4);
+  transform-origin: bottom right;
+  pointer-events: none;
+  transition: all 0.25s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.speed-dial-contenedor.abierto .speed-dial-acciones {
+  opacity: 1;
+  transform: translateY(0) scale(1);
+  pointer-events: auto;
+}
+/* SOBRE QUE item se va a actuar. Obligatoria cuando la accion es grave
+   (desactivar una tienda entera): con el menu abierto las opciones tapan
+   media pantalla y la tarjeta resaltada puede quedar fuera de vista. Un
+   speed dial que no dice sobre que actua es como se desactiva la tienda
+   equivocada. */
+.speed-dial-contexto {
+  background: var(--rojo-suave);
+  border: 1px solid var(--rojo);
+  color: var(--rojo);
+  padding: 6px 12px;
+  border-radius: 99px;
+  font-size: 12.5px;
+  font-weight: 700;
+  max-width: 240px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.speed-dial-fila {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: none;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+  text-decoration: none;
+}
+.speed-dial-etiqueta {
+  background: var(--app-campo);
+  padding: 6px 12px;
+  border-radius: 99px;
+  border: 1px solid var(--app-borde);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--app-tinta);
+  box-shadow: 0 2px 8px rgba(28,25,23,.12);
+  white-space: nowrap;
+}
+/* Opciones desplegadas: gris neutro, nunca rojo — el rojo es del FAB
+   principal y hay uno solo. Si las opciones tambien fueran rojas, ninguna se
+   leeria como la accion principal. La destructiva es la excepcion: matiz
+   rojo en el icono y en la etiqueta, sin volver al circulo rojo completo. */
+.speed-dial-btn {
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  background: var(--riel);
+  color: var(--app-tinta);
+  display: grid;
+  place-items: center;
+  border: 0;
+  box-shadow: 0 4px 12px rgba(28,25,23,.22);
+  transition: transform .12s ease, background .12s ease;
+}
+.speed-dial-fila:hover .speed-dial-btn { transform: scale(1.05); }
+.speed-dial-btn svg { color: var(--app-tinta); stroke: var(--app-tinta); }
+.speed-dial-btn.destructivo svg { color: var(--rojo); stroke: var(--rojo); }
+.speed-dial-etiqueta.destructiva { color: var(--rojo); }
+.speed-dial-fab {
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  background: var(--rojo);
+  color: #fff;
+  display: grid;
+  place-items: center;
+  border: 0;
+  box-shadow: 0 6px 16px rgba(28,25,23,.26);
+  cursor: pointer;
+  transition: transform .25s cubic-bezier(.2,.8,.2,1), background .14s ease;
+}
+.speed-dial-fab:hover { background: var(--rojo-hover); transform: scale(1.05); }
+.speed-dial-fab svg { color: #fff; stroke: #fff; transition: transform .25s cubic-bezier(.2,.8,.2,1); }
+.speed-dial-contenedor.abierto .speed-dial-fab svg { transform: rotate(90deg); }
+
+/* La tarjeta seleccionada: es lo que ata el boton flotante a UNA fila. */
+.tarjeta.seleccionada,
+.ficha.seleccionada {
+  border-color: var(--rojo);
+  border-width: 1.5px;
+  background: var(--rojo-suave);
+}

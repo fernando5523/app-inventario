@@ -40,6 +40,7 @@ Reglas que salieron de bugs reales en la pantalla 1. No son preferencias.
 | El logo va como PNG real embebido en data URI | Nunca recrear el wordmark con fuentes parecidas |
 | El rojo de marca (`--rojo`) es la ACCIÓN, nunca un estado | Los estados usan la paleta semántica (`--ok`, `--proceso`, `--espera`); si el rojo también fuera "en proceso" competiría con el llamado a la acción |
 | El estado se comunica por **al menos dos vías** además del texto | En una lista de 160 filas el ojo escanea, no lee: badge + color del código de hoja (`.hoja-codigo`) + borde de la tarjeta (`.hoja.contada` / `.hoja.en-proceso`) refuerzan la misma señal |
+| Una tarjeta de lista con **2 o más acciones** las pone en un speed dial flotante, **nunca apiladas dentro de la card** | Las acciones dentro de cada card multiplican el alto de la lista (una fila de botones por ítem) y compiten con el contenido que uno vino a leer. El flotante deja la lista limpia y da **una sola zona de acción**, siempre en el mismo lugar del pulgar |
 | `--pad-lateral` es la única fuente del margen lateral | La leen `.pantalla`, `.toast`, `.chips` y `.accion-fija`. Una pantalla operativa usa `<div class="telefono denso">` (14px); el default es 26px |
 
 ### Paleta
@@ -286,6 +287,53 @@ Ejemplo: en `home.html` el acceso "Ir a Mis hojas" del Conteo dejó de ser `.acc
   </div>
 </div>
 ```
+
+**Botón flotante de acciones (speed dial)** — el patrón para las acciones de una tarjeta de lista. Validado por el cliente en `usuarios.html` y `tiendas.html`.
+
+**CUÁNDO usarlo**
+
+| Situación | Qué va |
+|---|---|
+| Una tarjeta de lista con **2 o más** acciones (editar, desactivar, resetear…) | **Speed dial flotante** |
+| Una sola acción por tarjeta, y es la razón de ser de la fila (ej. "Abrir hoja") | La tarjeta entera es el botón — no hace falta control aparte |
+| La acción es de la PANTALLA, no de un ítem (ej. "Nueva tienda", "Finalizar hoja") | `.accion` arriba o `.accion-fija` abajo, **no** el speed dial |
+
+**Por qué**, y no es estética: con los botones dentro de la card, cada ítem crece una fila entera de controles. En una lista de sucursales son 40px extra por tarjeta que empujan el contenido y hacen scrollear el doble para leer lo mismo; y los botones compiten visualmente con el dato que uno vino a mirar. El flotante saca las acciones de la lista y las concentra en **una sola zona**, siempre en el mismo lugar de la pantalla.
+
+**SELECCIONAR y DESPUÉS actuar.** El FAB **no existe** hasta que hay un ítem seleccionado: se toca la tarjeta (se marca con `.seleccionada`: borde `--rojo` y fondo `--rojo-suave`), y recién ahí aparece el botón. Tocarla de nuevo deselecciona. Sin selección no hay botón, así que **el speed dial nunca puede actuar sobre "nada"**.
+
+**Y tiene que decir SOBRE QUÉ actúa.** Con el menú abierto, las opciones tapan media pantalla y la tarjeta resaltada puede quedar fuera de vista. Si la acción es grave —desactivar una tienda con sus colaboradores y su inventario— el nombre del ítem va en una pill de contexto arriba de las opciones (`.speed-dial-contexto`). Un speed dial que no dice sobre qué actúa es como se desactiva la tienda equivocada.
+
+**Colores** — FAB rojo con icono **blanco**; cada acción es un círculo **gris** (`--riel`) con icono **negro** (`--app-tinta`) y una pill blanca al lado. Las opciones nunca son rojas: el rojo es del FAB y hay uno solo, si todas fueran rojas ninguna se leería como la principal. **La acción destructiva es la excepción**: icono y texto en `--rojo`, sin volver al círculo rojo completo.
+
+```html
+<div class="speed-dial-contenedor" id="speed-dial" hidden>
+  <div class="speed-dial-acciones">
+    <!-- Pill de contexto: SOBRE QUE item se va a actuar -->
+    <span class="speed-dial-contexto" id="speed-dial-nombre">Market Bolívar</span>
+
+    <button type="button" class="speed-dial-fila" aria-label="Editar tienda">
+      <span class="speed-dial-etiqueta">Editar tienda</span>
+      <span class="speed-dial-btn"><svg ...></svg></span>
+    </button>
+
+    <!-- Destructiva: etiqueta e icono en rojo -->
+    <button type="button" class="speed-dial-fila" aria-label="Desactivar tienda">
+      <span class="speed-dial-etiqueta destructiva">Desactivar</span>
+      <span class="speed-dial-btn destructivo"><svg ...></svg></span>
+    </button>
+  </div>
+  <button type="button" class="speed-dial-fab" aria-label="Acciones de tienda" aria-expanded="false">
+    <svg ...></svg>
+  </button>
+</div>
+```
+
+El contenedor se muestra al seleccionar (`hidden` mientras no haya selección) y se despliega con la clase `.abierto`. El icono del FAB rota 90° al abrir y cambia a una X. Fuera del menú abierto, una capa transparente a pantalla completa lo cierra al tocar afuera.
+
+En React Native es el mismo diseño con `Animated` (ver `components/pantallas/UsuariosScreen.tsx` y `app/administrador/tiendas.tsx`): `speedDialContenedor` en `position: absolute` con `bottom: ALTO_TAB_BAR + insets.bottom + 28`, y **como hermano del scroll, nunca adentro** — dentro del `ScrollView` el absoluto queda recortado y se desplaza con el contenido.
+
+Guardá el **id** del seleccionado, no el objeto: la lista se recarga después de cada acción, y un objeto guardado queda viejo.
 
 ### Trampas del listener global
 
