@@ -156,10 +156,30 @@ export class ErrorApi extends Error {
   readonly reintentable: boolean;
   /** Cuántos intentos se hicieron de verdad. 1 = no hubo reintento. */
   readonly intentos: number;
+  /**
+   * El mensaje CRUDO del backend, siempre, aunque no se muestre.
+   *
+   * Existe porque `message` y "lo que dijo el servidor" no son lo mismo: en
+   * un 5xx `message` se reemplaza por un texto genérico a propósito (el del
+   * servidor puede traer un stack o el nombre de una tabla). Pero un
+   * adaptador a veces NECESITA ese texto para decidir — el 502 de
+   * `/api/d365/snapshot` significa "Azure rechazó las credenciales" o
+   * "Dynamics falló", y hoy solo el mensaje los distingue.
+   *
+   * Regla: `message` es para la persona, `mensajeServidor` es para el código.
+   * Nunca mostrar este en pantalla sin filtrar.
+   */
+  readonly mensajeServidor: string | null;
 
   constructor(
     clase: ClaseErrorApi,
-    opciones: { mensaje?: string; estado?: number | null; detalles?: unknown; intentos?: number } = {},
+    opciones: {
+      mensaje?: string;
+      estado?: number | null;
+      detalles?: unknown;
+      intentos?: number;
+      mensajeServidor?: string | null;
+    } = {},
   ) {
     super(opciones.mensaje ?? MENSAJE_POR_CLASE[clase]);
     this.name = 'ErrorApi';
@@ -168,6 +188,7 @@ export class ErrorApi extends Error {
     this.detalles = opciones.detalles;
     this.reintentable = REINTENTABLES.has(clase);
     this.intentos = opciones.intentos ?? 1;
+    this.mensajeServidor = opciones.mensajeServidor ?? opciones.mensaje ?? null;
   }
 }
 
@@ -461,6 +482,9 @@ async function intentarUnaVez<T>(
     // es información útil para quien está parado frente a la góndola.
     throw new ErrorApi(clase, {
       mensaje: clase === 'servidor' ? undefined : mensaje,
+      // El crudo se conserva SIEMPRE, aunque no se muestre: es lo unico que
+      // distingue dos 5xx con significados distintos (ver mensajeServidor).
+      mensajeServidor: mensaje ?? null,
       estado: respuesta.status,
       detalles,
     });
@@ -541,6 +565,7 @@ export async function pedir<T>(ruta: string, opciones: OpcionesPedido = {}): Pro
   // de verdad. Un 401 que cortó en el primer intento reporta 1, no 3.
   throw new ErrorApi(ultimoError.clase, {
     mensaje: ultimoError.message,
+    mensajeServidor: ultimoError.mensajeServidor,
     estado: ultimoError.estado,
     detalles: ultimoError.detalles,
     intentos: intentosHechos,

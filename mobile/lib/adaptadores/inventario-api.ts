@@ -4,63 +4,74 @@
  * (pantalla 2) más la lectura de `activo`.
  *
  * ---------------------------------------------------------------------------
- * CONTRATO — NO VERIFICADO. El endpoint todavía no existe.
+ * PASO 1 (snapshot) — CONTRATO VERIFICADO contra backend/README.md §Dynamics
  * ---------------------------------------------------------------------------
- * `backend/src/config/app.ts` monta hoy `/api/sesion`, `/api/usuarios`,
- * `/api/tiendas` y `/api/config`. NO hay módulo de inventario ni de d365, y
- * backend/README.md no documenta ninguna de estas rutas todavía.
+ *   GET  /api/d365/estado    → { configurado: boolean }   (cualquier rol)
+ *   POST /api/d365/snapshot  → { inventarioId, items, tomadoEn }
+ *                              body { sucursalId, modo? }  (admin o coordinador)
  *
- * Las de abajo están DEDUCIDAS de la convención de los cuatro módulos que sí
- * existen y del módulo de referencia del proyecto hermano
- * (D:\Documentos\monorepo\inventario\backend\src\modules\d365\). Cuando
- * min-1 documente las reales, se corrigen todas en `RUTAS` — un solo lugar.
- *
- *   POST /api/sucursales/:sucursalId/inventarios/snapshot → traerSnapshot()
- *   GET  /api/sucursales/:sucursalId/inventarios/snapshot/estado → progreso
- *   GET  /api/sucursales/:sucursalId/inventarios/activo   → activo()
- *   POST /api/inventarios/:inventarioId/hojas             → crearHojas()
- *   POST /api/inventarios/:inventarioId/hojas/asignar     → asignarHojas()
+ * Todo lo que yo había deducido acá estaba MAL y quedó corregido: la ruta no
+ * cuelga de `/api/sucursales/:id/...` sino de `/api/d365`, el `sucursalId` va
+ * en el CUERPO y no en la URL, y sobre todo **no hay endpoint de estado de
+ * progreso** — el backend resuelve el snapshot en una sola respuesta.
  *
  * ---------------------------------------------------------------------------
- * SOLO LECTURA DE DYNAMICS. No se negocia.
+ * PASOS 2 y 3 — CONTRATO ADIVINADO. NO VERIFICADO.
  * ---------------------------------------------------------------------------
- * El snapshot LEE el catálogo del ERP y escribe únicamente en NUESTRA base.
- * El ajuste automático hacia Dynamics es fase 2 por decisión del cliente
- * (ver puertos/repositorios.ts#RepositorioLacrado, que solo registra que TI
- * lo cargó a mano).
- *
- * El módulo de referencia del proyecto hermano expone `POST /sync/export`
- * (→ `d365-sync.service.ts#exportInventoryCount`), que ESCRIBE conteos en
- * Dynamics. Este archivo NO lo consume y no debe hacerlo. Si el backend
- * llegara a exponer algo equivalente, no se enchufa acá sin decisión
- * explícita del cliente: un ajuste automático mal calculado corrige stock
- * real en el ERP de la empresa, y eso no se deshace con un botón.
+ * `crearHojas`, `asignarHojas` y `activo` siguen sin backend: el README dice
+ * textual que "el paso 2, crear hojas, no está construido en este backend".
+ * Sus rutas son deducción, igual que hojas-api.ts y catalogo-api.ts.
  *
  * ---------------------------------------------------------------------------
- * PROGRESO Y CANCELACIÓN
+ * SOLO LECTURA DE DYNAMICS
  * ---------------------------------------------------------------------------
- * `traerSnapshotConProgreso` es la versión completa: reporta avance y se
- * puede cancelar de verdad. `traerSnapshot` (el método del puerto tal como
- * está declarado HOY) delega en ella ignorando el progreso.
+ * Confirmado por el README: "No hay, ni va a haber en esta fase, ningún
+ * endpoint que escriba de vuelta a Dynamics". El `exportInventoryCount` del
+ * proyecto hermano (que SÍ escribe) no está portado y este archivo no lo
+ * consume. Si algún día aparece, no se enchufa acá sin decisión explícita del
+ * cliente: un ajuste automático mal calculado corrige stock real en el ERP.
  *
- * Cuando min-2 cambie la firma de `RepositorioInventario.traerSnapshot` para
- * aceptar avance y señal, el cambio acá es pasar los dos argumentos que ya
- * están implementados — no escribir nada nuevo.
+ * ---------------------------------------------------------------------------
+ * ⚠️ PROGRESO: el backend no lo expone. No se inventa.
+ * ---------------------------------------------------------------------------
+ * El puerto pide `onAvance` porque bajar 8.000 ítems tarda minutos. Pero
+ * `POST /api/d365/snapshot` devuelve UNA sola vez, al final: no hay stream ni
+ * endpoint de estado que consultar. No existe, hoy, de dónde sacar "1.200 de
+ * 8.000".
+ *
+ * Así que `onAvance` se llama dos veces y con la verdad: `{traidos: 0, total:
+ * null}` al arrancar y el total real al terminar. `total: null` es
+ * exactamente el caso que el puerto contempla para que la pantalla muestre un
+ * spinner honesto en vez de una barra que miente — el mismo criterio, ahora
+ * por una razón distinta (antes: Dynamics no contesta el total; ahora:
+ * nuestro backend no lo reporta).
+ *
+ * Para progreso REAL hace falta que el backend deje estado consultable
+ * mientras pagina (el módulo de referencia del proyecto hermano ya lo hace,
+ * `getCurrentSyncStatus()`). `_http.ts#sondear` está escrito y testeado
+ * esperando ese endpoint: el día que exista, se enchufa acá y nada más
+ * cambia.
  */
 
 import type { HojaConteo, TamanoHoja } from '../dominio/tipos';
-import type { RepositorioInventario } from '../puertos/repositorios';
-import { ErrorApi, pedir, sondear, TIMEOUT_LARGO_MS } from './_http';
+import {
+  ErrorSnapshot,
+  type CodigoErrorSnapshot,
+  type OpcionesTraerSnapshot,
+  type RepositorioInventario,
+} from '../puertos/repositorios';
+import { ErrorApi, pedir, TIMEOUT_LARGO_MS } from './_http';
 
 const RUTAS = {
-  snapshot: (sucursalId: number) => `/api/sucursales/${sucursalId}/inventarios/snapshot`,
-  snapshotEstado: (sucursalId: number) => `/api/sucursales/${sucursalId}/inventarios/snapshot/estado`,
+  // Verificadas contra el README.
+  d365Estado: '/api/d365/estado',
+  d365Snapshot: '/api/d365/snapshot',
+  // Adivinadas: el backend todavía no tiene módulo de hojas/inventario.
   activo: (sucursalId: number) => `/api/sucursales/${sucursalId}/inventarios/activo`,
   crearHojas: (inventarioId: number) => `/api/inventarios/${inventarioId}/hojas`,
   asignarHojas: (inventarioId: number) => `/api/inventarios/${inventarioId}/hojas/asignar`,
 };
 
-/** Lo que devuelven snapshot y activo. */
 interface SnapshotDto {
   inventarioId: number;
   items: number;
@@ -73,86 +84,95 @@ interface InventarioActivoDto extends SnapshotDto {
 }
 
 /**
- * Estado de una traída en curso. `total` puede ser null hasta que Dynamics
- * conteste cuántos items hay — no se inventa un total para poder dibujar una
- * barra: una barra que miente es peor que un spinner honesto.
+ * Traduce el error de transporte al vocabulario del puerto. La pantalla no
+ * conoce `ErrorApi` ni códigos HTTP — necesita saber qué SALIDA ofrecerle a
+ * la persona, y esa decisión se toma acá, una sola vez, en vez de en cada
+ * pantalla que llame al snapshot.
  */
-export interface AvanceSnapshot {
-  procesados: number;
-  total: number | null;
-  terminado: boolean;
-  /** Presente solo cuando `terminado` es true. */
-  resultado?: SnapshotDto;
-}
+function comoErrorSnapshot(error: unknown): ErrorSnapshot {
+  if (error instanceof ErrorSnapshot) return error;
 
-export interface OpcionesSnapshot {
-  /** Se llama en cada vuelta del sondeo: es el "1.200 de 8.000" de la pantalla. */
-  alAvanzar?: (avance: AvanceSnapshot) => void;
-  /** El botón "Cancelar". Aborta el sondeo de verdad, no deja de mirar. */
-  senal?: AbortSignal;
-}
-
-/**
- * Paso 1 del Coordinador, completo.
- *
- * Arranca la traída y después sondea el avance. El POST inicial va con
- * `TIMEOUT_LARGO_MS` igual — si el backend resuelve rápido y devuelve el
- * resultado de una, no hace falta sondear nada y se corta ahí.
- *
- * REINTENTOS: el POST no se reintenta solo (`_http.ts` nunca reintenta
- * escrituras). Pero el puerto declara esta operación IDEMPOTENTE — "si la
- * sucursal ya tiene un inventario en curso, lo devuelve tal cual en vez de
- * crear uno nuevo" — así que volver a invocarla desde la pantalla es seguro
- * y NO crea un segundo inventario. Esa garantía es del backend: si el
- * endpoint real no la cumple, este adaptador no puede arreglarlo desde acá y
- * hay que decirlo antes de poner un botón de "reintentar".
- */
-export async function traerSnapshotConProgreso(
-  sucursalId: number,
-  opciones: OpcionesSnapshot = {},
-): Promise<SnapshotDto> {
-  const { alAvanzar, senal } = opciones;
-
-  const arranque = await pedir<AvanceSnapshot | SnapshotDto>(RUTAS.snapshot(sucursalId), {
-    metodo: 'POST',
-    msTimeout: TIMEOUT_LARGO_MS,
-    senal,
-  });
-
-  // Camino corto: el backend ya devolvió el inventario armado.
-  if ('inventarioId' in arranque) {
-    alAvanzar?.({ procesados: arranque.items, total: arranque.items, terminado: true, resultado: arranque });
-    return arranque;
+  if (!(error instanceof ErrorApi)) {
+    return new ErrorSnapshot('desconocido', 'No se pudo traer el catálogo de Dynamics.');
   }
 
-  alAvanzar?.(arranque);
+  const directos: Partial<Record<string, CodigoErrorSnapshot>> = {
+    'sin-red': 'sin-red',
+    timeout: 'timeout',
+    cancelado: 'cancelado',
+  };
+  const directo = directos[error.clase];
+  if (directo) return new ErrorSnapshot(directo, error.message);
 
-  const final = await sondear<AvanceSnapshot>({
-    consultar: (senalDelSondeo) =>
-      pedir<AvanceSnapshot>(RUTAS.snapshotEstado(sucursalId), { senal: senalDelSondeo }),
-    termino: (estado) => estado.terminado,
-    alAvanzar,
-    senal,
-  });
+  // Se mira SIEMPRE el mensaje crudo del servidor, no `message`: en un 5xx
+  // `message` ya fue reemplazado por el texto genérico y no queda rastro de
+  // qué dijo el backend (ver _http.ts#mensajeServidor).
+  const crudo = error.mensajeServidor ?? error.message;
 
-  if (!final.resultado) {
-    // Terminó pero no trajo el inventario: no hay con qué encadenar
-    // crearHojas/asignarHojas, así que es un error del contrato, no un
-    // éxito a medias que rompe tres pantallas después.
-    throw new ErrorApi('respuesta-invalida', {
-      mensaje: 'El servidor dijo que terminó de traer el catálogo pero no devolvió el inventario.',
-    });
+  // 400 = `sucursalId` inválido O `modo="real"` sin credenciales (README).
+  // El pre-chequeo de `/api/d365/estado` ya cubre el caso normal de "faltan
+  // credenciales"; esto atrapa la carrera (se borraron entre el chequeo y el
+  // POST) mirando el mensaje del backend, que es lo único que las distingue.
+  if (error.clase === 'validacion' && /credencial|configurad|D365_/i.test(crudo)) {
+    return new ErrorSnapshot('dynamics-no-configurado', error.message);
   }
-  return final.resultado;
+
+  // 502 = "Dynamics respondió con error o no se pudo autenticar" (README).
+  // Son dos cosas distintas bajo un mismo código, y solo el mensaje las
+  // separa. Si el backend expusiera un código propio esto dejaría de ser
+  // adivinanza — vale la pena pedírselo.
+  if (error.estado === 502) {
+    const esAuth = /autentic|credencial|401|unauthorized/i.test(crudo);
+    return esAuth
+      ? new ErrorSnapshot('credenciales-rechazadas', 'Azure rechazó las credenciales de Dynamics configuradas.')
+      : new ErrorSnapshot('desconocido', 'Dynamics respondió con un error al pedirle el catálogo.');
+  }
+
+  return new ErrorSnapshot('desconocido', error.message);
 }
 
 export const inventarioApi: RepositorioInventario = {
-  async traerSnapshot(sucursalId) {
-    // La firma actual del puerto no acepta avance ni señal. Se delega igual
-    // en la implementación completa para no tener dos caminos distintos que
-    // mantener — el día que min-2 amplíe la firma, esto pasa los argumentos
-    // y nada más cambia.
-    return traerSnapshotConProgreso(sucursalId);
+  async traerSnapshot(sucursalId: number, opciones: OpcionesTraerSnapshot = {}) {
+    const { onAvance, signal } = opciones;
+
+    try {
+      // Arranca honesto: todavía no llegó nada y no sabemos cuántos son.
+      onAvance?.({ traidos: 0, total: null });
+
+      // Pre-chequeo. Sin esto, "faltan credenciales" llega como un 400
+      // genérico indistinguible de "sucursalId inválido", y la pantalla no
+      // podría mandar al Administrador a cargarlas — que es justamente la
+      // salida que el puerto pide para `dynamics-no-configurado`.
+      const estado = await pedir<{ configurado: boolean }>(RUTAS.d365Estado, { senal: signal });
+      if (!estado.configurado) {
+        throw new ErrorSnapshot(
+          'dynamics-no-configurado',
+          'Faltan las credenciales de Dynamics. Un Administrador las carga en Configuración.',
+        );
+      }
+
+      // `modo` se OMITE: el default del backend es "real". Nunca se manda
+      // "ejemplo" desde acá — sustituir datos reales por los 4 de muestra sin
+      // que nadie lo pida es exactamente la clase de silencio que arruina un
+      // inventario. Si hace falta demostrar sin credenciales, se usa el
+      // adaptador en memoria (ver contenedor.ts).
+      //
+      // NO se reintenta solo, aunque el backend garantice idempotencia: el
+      // puerto dice que ante `sin-red` "se reintenta solo" DESDE LA PANTALLA.
+      // Que reintenten las dos capas es cómo una espera de minutos se
+      // convierte en tres.
+      const resultado = await pedir<SnapshotDto>(RUTAS.d365Snapshot, {
+        metodo: 'POST',
+        cuerpo: { sucursalId },
+        msTimeout: TIMEOUT_LARGO_MS,
+        senal: signal,
+      });
+
+      onAvance?.({ traidos: resultado.items, total: resultado.items });
+      return resultado;
+    } catch (error) {
+      throw comoErrorSnapshot(error);
+    }
   },
 
   async crearHojas(inventarioId, tamano) {

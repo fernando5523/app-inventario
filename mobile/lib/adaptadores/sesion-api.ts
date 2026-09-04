@@ -15,22 +15,10 @@
  * Un 401 acá puede ser PIN incorrecto O cuenta deshabilitada; el mensaje
  * exacto lo pone el backend y este cliente lo respeta.
  *
- * ⚠️ CHOQUE ABIERTO — `sucursal: null` para el Administrador.
- * El README (§Sesión) dice: "`sucursal` es `null` si `colaborador.rol ===
- * "administrador"`" — porque un administrador es del sistema, no de una
- * tienda. Pero `Sesion.sucursal` en lib/dominio/tipos.ts está declarado
- * `Sucursal`, NO `Sucursal | null`.
- *
- * O sea que hoy, cuando ingrese un administrador, este adaptador va a
- * devolver un objeto que MIENTE sobre su propio tipo, y la primera pantalla
- * que lea `sesion.sucursal.nombre` va a reventar con un error que no dice
- * nada de esto.
- *
- * No lo tapo con una sucursal inventada (sería el mismo error que meter
- * basura en la base) ni lo convierto en un throw (bloquearía el login del
- * administrador por completo). Lo dejo pasar y lo hago RUIDOSO — ver
- * `avisarSiFaltaSucursal`. La corrección de fondo es de lib/dominio/tipos.ts:
- * `sucursal: Sucursal | null`, y las pantallas contemplando el caso.
+ * `sucursal` viene `null` cuando el rol es `administrador` (README §Sesión):
+ * un administrador es del sistema, no de una tienda. `Sesion.sucursal` en
+ * lib/dominio/tipos.ts ya está declarado `Sucursal | null`, así que el null
+ * pasa derecho y tipa bien — no hace falta traducir nada acá.
  *
  * Los tres son PÚBLICOS (el router no monta `requiereSesion`): son
  * justamente los que se necesitan ANTES de tener sesión. Por eso van con
@@ -116,22 +104,6 @@ registrarLectorDeToken(async () => (await leerSesionLocal())?.token ?? null);
 
 // ---------------------------------------------------------------------------
 
-/**
- * Convierte el choque de tipos de arriba en un aviso legible en vez de en un
- * `undefined is not an object` tres pantallas más adelante. No arregla nada
- * —no puede, el arreglo es del dominio— pero hace que quien pruebe el login
- * de administrador sepa en 5 segundos qué pasó, en vez de en media hora.
- */
-function avisarSiFaltaSucursal(sesion: Sesion): void {
-  if (sesion.sucursal == null) {
-    console.warn(
-      `[sesion-api] El backend devolvió sucursal: null para el rol "${sesion.colaborador?.rol}". ` +
-        'Sesion.sucursal está declarado NO nulable en lib/dominio/tipos.ts: cualquier pantalla que ' +
-        'lea sesion.sucursal.* va a fallar. Hay que cambiar el tipo a `Sucursal | null`.',
-    );
-  }
-}
-
 export const sesionApi: RepositorioSesion = {
   async sucursales() {
     return pedir<Sucursal[]>(`${RUTA}/sucursales`, { sinSesion: true });
@@ -147,7 +119,6 @@ export const sesionApi: RepositorioSesion = {
       cuerpo: { colaboradorId, pin },
       sinSesion: true,
     });
-    avisarSiFaltaSucursal(sesion);
     await guardarSesionLocal(sesion);
     recordarToken(sesion.token);
     return sesion;
