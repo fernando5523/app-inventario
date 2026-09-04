@@ -24,6 +24,7 @@ import {
   pedir,
   recordarToken,
   registrarLectorDeToken,
+  sondear,
   urlBase,
 } from './_http';
 
@@ -344,5 +345,98 @@ describe('reintentos', () => {
     fetchFalso(respuestaError(401));
     const error = (await pedir('/api/config').catch((e) => e)) as ErrorApi;
     expect(error.intentos).toBe(1);
+  });
+});
+
+describe('sondear (operaciones largas: snapshot de Dynamics)', () => {
+  interface Avance {
+    procesados: number;
+    terminado: boolean;
+  }
+
+  /** Devuelve los estados en orden; el último se repite si se pide de más. */
+  function consultasQueDevuelven(...estados: Array<Avance | Error>) {
+    let i = 0;
+    return vi.fn(async () => {
+      const actual = estados[Math.min(i, estados.length - 1)];
+      i++;
+      if (actual instanceof Error) throw actual;
+      return actual;
+    });
+  }
+
+  const opcionesBase = { termino: (e: Avance) => e.terminado, msIntervalo: 1 };
+
+  it('reporta el avance en cada vuelta hasta terminar', async () => {
+    const vistos: number[] = [];
+    const resultado = await sondear<Avance>({
+      ...opcionesBase,
+      consultar: consultasQueDevuelven(
+        { procesados: 1200, terminado: false },
+        { procesados: 5000, terminado: false },
+        { procesados: 8000, terminado: true },
+      ),
+      alAvanzar: (e) => vistos.push(e.procesados),
+    });
+
+    expect(vistos).toEqual([1200, 5000, 8000]);
+    expect(resultado.terminado).toBe(true);
+  });
+
+  it('un bache de red NO corta la operación: el servidor sigue trabajando', async () => {
+    // El teléfono entra a la cámara de frío, pierde señal, vuelve.
+    const resultado = await sondear<Avance>({
+      ...opcionesBase,
+      consultar: consultasQueDevuelven(
+        { procesados: 1200, terminado: false },
+        new ErrorApi('sin-red'),
+        new ErrorApi('sin-red'),
+        { procesados: 8000, terminado: true },
+      ),
+    });
+    expect(resultado.procesados).toBe(8000);
+  });
+
+  it('pero se rinde si la red no vuelve nunca', async () => {
+    const error = (await sondear<Avance>({
+      ...opcionesBase,
+      consultar: consultasQueDevuelven(new ErrorApi('sin-red')),
+    }).catch((e) => e)) as ErrorApi;
+    expect(error.clase).toBe('sin-red');
+  });
+
+  it('una sesión vencida corta ya: insistir no la va a revivir', async () => {
+    const consultar = consultasQueDevuelven(new ErrorApi('sesion-vencida'));
+    const error = (await sondear<Avance>({ ...opcionesBase, consultar }).catch((e) => e)) as ErrorApi;
+    expect(error.clase).toBe('sesion-vencida');
+    // Una sola consulta: no reintentó.
+    expect(consultar).toHaveBeenCalledTimes(1);
+  });
+
+  it('el botón Cancelar aborta de verdad, no deja de mirar', async () => {
+    const control = new AbortController();
+    const consultar = vi.fn(async () => {
+      control.abort(); // la persona toca Cancelar mientras corre
+      return { procesados: 10, terminado: false };
+    });
+
+    const error = (await sondear<Avance>({
+      ...opcionesBase,
+      consultar,
+      senal: control.signal,
+    }).catch((e) => e)) as ErrorApi;
+
+    expect(error.clase).toBe('cancelado');
+    // No siguió sondeando después del abort.
+    expect(consultar).toHaveBeenCalledTimes(1);
+  });
+
+  it('el presupuesto corta una operación que no termina nunca', async () => {
+    const error = (await sondear<Avance>({
+      ...opcionesBase,
+      consultar: consultasQueDevuelven({ procesados: 1, terminado: false }),
+      msPresupuesto: 30,
+    }).catch((e) => e)) as ErrorApi;
+    expect(error.clase).toBe('timeout');
   });
 });

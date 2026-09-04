@@ -551,3 +551,108 @@ export async function pedir<T>(ruta: string, opciones: OpcionesPedido = {}): Pro
 export async function pedirSinCuerpo(ruta: string, opciones: OpcionesPedido = {}): Promise<void> {
   await pedir<unknown>(ruta, opciones);
 }
+
+// ---------------------------------------------------------------------------
+// Operaciones largas: sondeo con progreso
+// ---------------------------------------------------------------------------
+
+/**
+ * Techo para operaciones que tardan MINUTOS, no segundos. El snapshot de
+ * Dynamics baja ~8.000 items paginados por OData: los 15s que sobran para un
+ * login lo matarían a la mitad, siempre.
+ *
+ * No es "el timeout largo por si acaso": es el de una clase distinta de
+ * operación, y por eso tiene nombre propio en vez de ser un número suelto en
+ * la llamada.
+ */
+export const TIMEOUT_LARGO_MS = 5 * 60_000;
+
+/** Cada cuánto se vuelve a preguntar "¿terminó?". */
+const INTERVALO_SONDEO_MS = 2_000;
+
+/**
+ * Cuántas consultas seguidas pueden fallar por RED antes de dar por perdida
+ * la operación. No es 1 a propósito: el teléfono entra a una cámara de frío,
+ * pierde señal 20 segundos y vuelve — el trabajo del servidor no se enteró
+ * de nada. Rendirse al primer fallo sería reportar un error que no ocurrió.
+ */
+const FALLAS_DE_RED_TOLERADAS = 5;
+
+export interface OpcionesSondeo<T> {
+  /** Una consulta de estado. Se la llama repetidamente hasta que `termino`. */
+  consultar: (senal?: AbortSignal) => Promise<T>;
+  /** Lee el estado y dice si la operación ya está completa. */
+  termino: (estado: T) => boolean;
+  /**
+   * Se llama en CADA vuelta con el último estado leído, haya cambiado o no.
+   * Es de donde sale el "1.200 de 8.000" de la pantalla.
+   */
+  alAvanzar?: (estado: T) => void;
+  /** Cancelación real desde la pantalla (el botón "Cancelar" de min-2). */
+  senal?: AbortSignal;
+  msIntervalo?: number;
+  /** Techo de TODA la espera. Default: `TIMEOUT_LARGO_MS`. */
+  msPresupuesto?: number;
+}
+
+/**
+ * Repite `consultar` hasta que `termino` diga que sí, reportando avance.
+ *
+ * Por qué sondeo y no una sola petición larga que devuelva al final:
+ *
+ *  1. Una conexión HTTP abierta cinco minutos sobre la WiFi de una tienda se
+ *     corta. Y cuando se corta, el teléfono no puede distinguir "el servidor
+ *     sigue trabajando" de "el servidor se murió": las dos cosas se ven
+ *     igual desde acá.
+ *  2. Con sondeo, perder señal 30 segundos es un bache, no un fracaso — el
+ *     trabajo sigue del lado del servidor y la próxima consulta lo reengancha.
+ *  3. Es la única forma de tener progreso real. El `fetch` de React Native no
+ *     expone el cuerpo como stream, así que "1.200 de 8.000" no puede salir
+ *     de leer la respuesta de a pedazos: tiene que venir de preguntar.
+ *
+ * Los fallos de RED de una consulta suelta NO cortan el sondeo (ver
+ * `FALLAS_DE_RED_TOLERADAS`). Los que sí cortan son los que no van a mejorar
+ * insistiendo: 401, 403, 404 — si la sesión venció o el trabajo no existe,
+ * seguir preguntando es quemar batería.
+ */
+export async function sondear<T>(opciones: OpcionesSondeo<T>): Promise<T> {
+  const {
+    consultar,
+    termino,
+    alAvanzar,
+    senal,
+    msIntervalo = INTERVALO_SONDEO_MS,
+    msPresupuesto = TIMEOUT_LARGO_MS,
+  } = opciones;
+
+  const comienzo = Date.now();
+  let fallasSeguidas = 0;
+
+  for (;;) {
+    if (senal?.aborted) throw new ErrorApi('cancelado');
+    if (Date.now() - comienzo >= msPresupuesto) throw new ErrorApi('timeout');
+
+    try {
+      const estado = await consultar(senal);
+      fallasSeguidas = 0;
+      alAvanzar?.(estado);
+      if (termino(estado)) return estado;
+    } catch (error) {
+      const apiError = error instanceof ErrorApi ? error : new ErrorApi('sin-red');
+
+      // Cancelar es una decisión de la persona, no una falla a tolerar.
+      if (apiError.clase === 'cancelado') throw apiError;
+
+      // Un error que no es de camino (sesión vencida, sin permiso, no
+      // existe) no mejora insistiendo: sale ya.
+      if (!apiError.reintentable) throw apiError;
+
+      fallasSeguidas++;
+      if (fallasSeguidas > FALLAS_DE_RED_TOLERADAS) throw apiError;
+    }
+
+    // La espera también es cancelable: sin esto, tocar "Cancelar" tarda
+    // hasta un intervalo entero en tener efecto.
+    await dormir(msIntervalo, senal);
+  }
+}
