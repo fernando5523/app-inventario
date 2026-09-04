@@ -96,6 +96,22 @@ const aMemoria = new Set(forzados);
  * pueda romper una pantalla: si un adaptador HTTP se desviara del contrato,
  * esto no compila.
  */
+/**
+ * Inverso de `elegir`: para los puertos cuyo default es LOCAL por una razón
+ * de negocio (no por falta de endpoint). Hay que pedir HTTP explícitamente
+ * con `EXPO_PUBLIC_PUERTOS_HTTP`, en vez de tener que acordarse de excluirlo.
+ */
+const pedidosHttp = new Set(
+  (entorno?.EXPO_PUBLIC_PUERTOS_HTTP ?? '')
+    .split(',')
+    .map((n) => n.trim().toLowerCase())
+    .filter(Boolean),
+);
+
+function elegirHttp<T>(puerto: PuertoConectable, local: T, api: T): T {
+  return pedidosHttp.has(puerto) ? api : local;
+}
+
 function elegir<T>(puerto: PuertoConectable, memoria: T, api: T): T {
   return TODO_A_MEMORIA || aMemoria.has(puerto) ? memoria : api;
 }
@@ -138,17 +154,26 @@ export const repositorioHojas: RepositorioHojas =
   entorno?.EXPO_PUBLIC_HOJAS_MEMORIA === '1' ? hojasMemoria : hojasSqlite;
 
 /**
- * ── CATÁLOGO: local, por COHERENCIA con hojas ──
+ * ── CATÁLOGO: pasa por el selector, pero por DEFECTO local ──
  *
- * El endpoint `/api/hojas/:id/productos` existe y está bien, pero el
- * catálogo tiene que salir de la MISMA fuente que la hoja. Si la hoja viene
- * de SQLite y los productos del backend, se le estarían pidiendo al servidor
- * los productos de una hoja que el servidor no tiene: 404 en la pantalla de
- * conteo, con la hoja abierta y vacía.
+ * El endpoint existe y está probado (`GET /api/hojas/:id/productos` devuelve
+ * `empaques: [...]` con la forma exacta del dominio). Lo que NO se puede hoy
+ * es enchufarlo, y la razón es de coherencia, no de contrato:
  *
- * Se mueve junto con `hojas`, no por separado.
+ * el catálogo tiene que salir de la MISMA fuente que la hoja. `hojas` viene
+ * de SQLite, con el dataset local (hoja #002, 50 productos). Si el catálogo
+ * viniera del backend, la pantalla abriría la hoja #002 de SQLite y le
+ * pediría al servidor los productos de una hoja que el servidor no tiene:
+ * 404, hoja abierta y vacía, con el operario parado frente a la góndola.
+ *
+ * Se mueve junto con `hojas`, no por separado — y `hojas` solo puede salir
+ * del backend cuando exista el módulo que CREA hojas (paso 2 del
+ * Coordinador), que hoy no existe.
+ *
+ * Ya no está clavado: `EXPO_PUBLIC_PUERTOS_HTTP=catalogo` lo enchufa el día
+ * que las hojas vengan del servidor.
  */
-export const repositorioCatalogo: RepositorioCatalogo = catalogoMemoria;
+export const repositorioCatalogo: RepositorioCatalogo = elegirHttp('catalogo', catalogoMemoria, catalogoApi);
 
 /**
  * ── INVENTARIO: en memoria, y NO es olvido ──

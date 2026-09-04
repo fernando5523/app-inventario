@@ -30,7 +30,17 @@ export interface ProductoDto {
   codigo: string;
   codigoBarras: string;
   descripcion: string;
-  empaque: EmpaqueDto;
+  /**
+   * SIEMPRE al menos uno (`mobile/lib/dominio/tipos.ts#Producto.empaques`).
+   *
+   * Hoy la base guarda UN empaque por producto en columnas planas
+   * (prisma/schema.prisma#Producto), asi que este array trae exactamente un
+   * elemento. Se sirve como array igual, y no como objeto suelto, porque el
+   * dominio del front ya modela varios: cuando el schema crezca a N empaques
+   * cambia el MAPEO de aca abajo y no la forma de la respuesta, que es lo
+   * que rompe pantallas.
+   */
+  empaques: EmpaqueDto[];
   ubicacion?: string;
 }
 
@@ -78,11 +88,17 @@ function aProductoDto(p: {
     codigo: p.codigo,
     codigoBarras: p.codigoBarras,
     descripcion: p.descripcion,
-    empaque: {
-      nombre: p.empaqueNombre,
-      factor: p.empaqueFactor,
-      ...(p.empaqueCodigoBarras === null ? {} : { codigoBarras: p.empaqueCodigoBarras }),
-    },
+    // `codigoBarras` del empaque se OMITE cuando no hay, nunca se manda null:
+    // el tipo del front lo declara opcional. Y va a faltar casi siempre --
+    // los codigos que devuelve Dynamics son todos de unidad suelta, ninguno
+    // identifica un empaque (verificado con el catalogo real).
+    empaques: [
+      {
+        nombre: p.empaqueNombre,
+        factor: p.empaqueFactor,
+        ...(p.empaqueCodigoBarras === null ? {} : { codigoBarras: p.empaqueCodigoBarras }),
+      },
+    ],
     ...(p.ubicacion === null ? {} : { ubicacion: p.ubicacion }),
   };
 }

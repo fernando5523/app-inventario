@@ -13,6 +13,18 @@
  *   GET /api/hojas/:hojaId/productos                       → deHoja()
  *   GET /api/hojas/:hojaId/productos/barras/:codigo        → porCodigoBarras()
  *
+ * EMPAQUES: el backend devuelve `empaques: Empaque[]` (siempre al menos uno),
+ * igual que `mobile/lib/dominio/tipos.ts#Producto`. Hoy trae exactamente uno
+ * porque la base guarda un empaque por producto en columnas planas — cuando
+ * el schema crezca a N, esta forma no cambia.
+ *
+ * Y `codigoBarras` DENTRO de cada empaque va a venir ausente casi siempre:
+ * los codigos que devuelve Dynamics son todos de unidad suelta, ninguno
+ * identifica un empaque (dato real del catalogo, traido por min-1). El
+ * adaptador no hace nada especial con eso porque no hace falta: el campo es
+ * opcional en el dominio y el backend lo OMITE en vez de mandar null. Un
+ * escaneo simplemente no va a matchear ningun empaque, que es la verdad.
+ *
  * `porCodigoBarras` se resuelve del lado del SERVIDOR y no bajando la hoja
  * entera para filtrar acá: el puerto exige que devuelva null cuando el
  * código no pertenece a esa hoja — el caso de la góndola, donde el producto
