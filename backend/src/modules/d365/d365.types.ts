@@ -110,6 +110,31 @@ export interface EmpaqueDto {
   codigoBarras?: string;
 }
 
+/**
+ * Responsabilidad del conteo de un item, de la entidad CUSTOM del tenant
+ * `TRU_InventoryManagerPEEntities`. Es lo que decide si un producto entra en
+ * el inventario del operario o lo asume la empresa.
+ *
+ * Descubierto leyendo el proyecto de referencia
+ * (D:\Documentos
+odepp_inventarioautomatico, sync.service.ts): filtra
+ * por `ModuleType === 'Invent'` y traduce `Employee`/`Company`/`None`.
+ */
+export interface D365ResponsableItem {
+  ItemId: string;
+  ModuleType: string;
+  TRU_InventoryManagerPE: string;
+}
+
+/** Stock por almacen -- `WarehousesOnHandV2` del tenant real. */
+export interface D365StockAlmacen {
+  ItemNumber: string;
+  InventoryWarehouseId: string;
+  OnHandQuantity: number;
+  AvailableOnHandQuantity?: number;
+  TotalAvailableQuantity?: number;
+}
+
 export interface CatalogoItemDto {
   /** ItemNumber de D365 -- es el "codigo interno" en nuestro dominio. */
   codigo: string;
@@ -118,4 +143,10 @@ export interface CatalogoItemDto {
   descripcion: string;
   /** Siempre al menos uno. `[0]` = el de mayor factor (ver elegirEmpaques). */
   empaques: EmpaqueDto[];
+  /**
+   * true = el faltante lo asume la EMPRESA, no se le descuenta al operario
+   * (mobile/lib/dominio/tipos.ts#ItemAuditoria.esEmpresa). Sale de
+   * `TRU_InventoryManagerPE`, no se calcula.
+   */
+  esEmpresa: boolean;
 }

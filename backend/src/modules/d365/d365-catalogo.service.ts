@@ -11,7 +11,14 @@ import { d365Config } from '../../config/d365.config';
 import { prisma } from '../../config/database';
 import { ErrorHttp } from '../../shared/errores';
 import { d365EntityService } from './d365-entity.service';
-import type { CatalogoItemDto, D365ProductBarcode, D365ReleasedProduct, D365UnitConversion, EmpaqueDto } from './d365.types';
+import type {
+  CatalogoItemDto,
+  D365ProductBarcode,
+  D365ReleasedProduct,
+  D365ResponsableItem,
+  D365UnitConversion,
+  EmpaqueDto,
+} from './d365.types';
 
 export type ModoCatalogo = 'real' | 'ejemplo';
 
@@ -83,10 +90,54 @@ export function elegirEmpaques(conversionesDelProducto: D365UnitConversion[], pr
  *     especifico por empaque en este tenant (ver D365ProductBarcode) --
  *     queda siempre undefined, a proposito.
  */
+/**
+ * SOLO SE CUENTA LO QUE ES RESPONSABILIDAD DEL EMPLEADO.
+ *
+ * `TRU_InventoryManagerPEEntities` es una entidad CUSTOM del tenant de
+ * Market Trujillo: por cada item dice quien responde por su faltante.
+ * Valores crudos `Employee` / `Company` / `None`.
+ *
+ * Se descubrio leyendo el desarrollo que el cliente ya usa
+ * (D:/Documentos/node/app_inventarioautomatico, sync.service.ts +
+ * report.service.ts#buildReportRows): ahi el reporte de conteo descarta
+ * todo lo que no sea `Employee`. No es una convencion nuestra -- es la
+ * regla que la empresa ya aplica hoy en papel.
+ *
+ * `ModuleType === 'Invent'` filtra las filas de inventario: la misma
+ * entidad guarda responsables de otros modulos.
+ */
+const RESPONSABLE_EMPLEADO = 'Employee';
+const RESPONSABLE_EMPRESA = 'Company';
+
+export function agruparResponsablesPorItem(responsables: D365ResponsableItem[]): Map<string, string> {
+  const mapa = new Map<string, string>();
+  for (const r of responsables) {
+    if (r.ModuleType === 'Invent' && r.ItemId) mapa.set(r.ItemId, r.TRU_InventoryManagerPE);
+  }
+  return mapa;
+}
+
+/**
+ * Un item entra al inventario solo si su responsable es el Empleado.
+ *
+ * Los `Company` no se cuentan (los asume la empresa) y los `None` o sin
+ * fila TAMPOCO: sin responsable asignado no hay a quien liquidarle una
+ * diferencia, y contar algo que despues nadie puede resolver solo agrega
+ * ruido a la auditoria. Mismo criterio que el reporte que el cliente ya usa.
+ */
+export function seCuenta(responsableCrudo: string | undefined): boolean {
+  return responsableCrudo === RESPONSABLE_EMPLEADO;
+}
+
+export function esDeLaEmpresa(responsableCrudo: string | undefined): boolean {
+  return responsableCrudo === RESPONSABLE_EMPRESA;
+}
+
 export function mapearProducto(
   producto: D365ReleasedProduct,
   barcodesDelItem: D365ProductBarcode[],
   conversionesDelItem: D365UnitConversion[],
+  responsableCrudo?: string,
 ): CatalogoItemDto {
   const suelto = barcodesDelItem.find((b) => b.IsDefaultDisplayedBarcode === 'Yes') ?? barcodesDelItem[0];
 
@@ -99,6 +150,7 @@ export function mapearProducto(
     codigoBarras: suelto?.Barcode || producto.ItemNumber,
     descripcion,
     empaques: elegirEmpaques(conversionesDelItem, producto),
+    esEmpresa: esDeLaEmpresa(responsableCrudo),
   };
 }
 
@@ -144,16 +196,37 @@ const CONVERSIONES_EJEMPLO: D365UnitConversion[] = [
   { ProductNumber: '0054', FromUnitSymbol: 'Emp.20', ToUnitSymbol: 'U', Factor: 20 },
 ];
 
-function mapearCatalogo(
+export function mapearCatalogo(
   productos: D365ReleasedProduct[],
   barcodes: D365ProductBarcode[],
   conversiones: D365UnitConversion[],
+  responsables: D365ResponsableItem[] = [],
 ): CatalogoItemDto[] {
   const barcodesPorItem = agruparBarcodesPorItem(barcodes);
   const conversionesPorItem = agruparConversionesPorProducto(conversiones);
-  return productos.map((producto) =>
-    mapearProducto(producto, barcodesPorItem.get(producto.ItemNumber) ?? [], conversionesPorItem.get(producto.ItemNumber) ?? []),
+  const responsablePorItem = agruparResponsablesPorItem(responsables);
+
+  /**
+   * El filtro se aplica ACA y no con un `$filter` de OData, y no es por
+   * comodidad: el responsable vive en OTRA entidad
+   * (TRU_InventoryManagerPEEntities), asi que OData no puede cruzarlo en la
+   * misma consulta. El proyecto de referencia hace exactamente lo mismo.
+   *
+   * Si no llego ningun responsable (la entidad fallo o el tenant no la
+   * tiene), NO se filtra nada: es preferible un catalogo de mas que uno
+   * vacio por un error de red. Se ve en `snapshotItems` y se puede revisar.
+   */
+  const listos = productos.map((producto) =>
+    mapearProducto(
+      producto,
+      barcodesPorItem.get(producto.ItemNumber) ?? [],
+      conversionesPorItem.get(producto.ItemNumber) ?? [],
+      responsablePorItem.get(producto.ItemNumber),
+    ),
   );
+
+  if (responsablePorItem.size === 0) return listos;
+  return listos.filter((_, i) => seCuenta(responsablePorItem.get(productos[i]!.ItemNumber)));
 }
 
 /** modo='ejemplo': nunca toca red, siempre disponible sin credenciales. */
@@ -172,7 +245,7 @@ export function obtenerCatalogoEjemplo(): CatalogoItemDto[] {
 async function obtenerCatalogoReal(): Promise<CatalogoItemDto[]> {
   const filtroCompania = d365Config.dataAreaId ? `dataAreaId eq '${d365Config.dataAreaId}'` : undefined;
 
-  const [productos, barcodes, conversiones] = await Promise.all([
+  const [productos, barcodes, conversiones, responsables] = await Promise.all([
     d365EntityService.obtenerTodos<D365ReleasedProduct>('ReleasedProductsV2', {
       $select: 'ItemNumber,SearchName,InventoryUnitSymbol,PurchaseUnitSymbol',
       ...(filtroCompania ? { $filter: filtroCompania } : {}),
@@ -184,9 +257,17 @@ async function obtenerCatalogoReal(): Promise<CatalogoItemDto[]> {
     d365EntityService.obtenerTodos<D365UnitConversion>('ProductSpecificUnitOfMeasureConversions', {
       $select: 'ProductNumber,FromUnitSymbol,ToUnitSymbol,Factor',
     }),
+    // Si esta entidad falla NO se cae el snapshot entero: se sigue sin
+    // filtro (ver mapearCatalogo). Un catalogo de mas es revisable; un
+    // snapshot que no existe deja al Coordinador sin poder arrancar.
+    d365EntityService
+      .obtenerTodos<D365ResponsableItem>('TRU_InventoryManagerPEEntities', {
+        $select: 'ItemId,ModuleType,TRU_InventoryManagerPE',
+      })
+      .catch(() => [] as D365ResponsableItem[]),
   ]);
 
-  return mapearCatalogo(productos, barcodes, conversiones);
+  return mapearCatalogo(productos, barcodes, conversiones, responsables);
 }
 
 // ---------------------------------------------------------------------------
@@ -243,6 +324,10 @@ export async function crearSnapshot(sucursalId: number, modo: ModoCatalogo): Pro
             codigo: item.codigo,
             codigoBarras: item.codigoBarras,
             descripcion: item.descripcion,
+            // Dato del ERP, no calculado: quien responde por el faltante de
+            // este item (ver seCuenta/esDeLaEmpresa). Hasta ahora quedaba
+            // NULL en la base y la auditoria no podia distinguirlos.
+            esEmpresa: item.esEmpresa,
             empaques: {
               // `exactOptionalPropertyTypes` no deja `codigoBarras: undefined`
               // explicito -- se omite la clave entera cuando no vino.
