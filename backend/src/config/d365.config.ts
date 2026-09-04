@@ -9,6 +9,7 @@ export const d365Config = {
   clientId: process.env.D365_CLIENT_ID ?? '',
   clientSecret: process.env.D365_CLIENT_SECRET ?? '',
   baseUrl: process.env.D365_BASE_URL ?? '',
+  /** "trv" -- CONFIRMADO por el cliente como Market Trujillo (ya no es un supuesto, ver README). */
   dataAreaId: process.env.D365_DATA_AREA_ID ?? '',
 
   /** Las 4 credenciales presentes -- sin esto no se puede ni pedir un token. */

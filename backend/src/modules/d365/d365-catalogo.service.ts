@@ -11,7 +11,7 @@ import { d365Config } from '../../config/d365.config';
 import { prisma } from '../../config/database';
 import { ErrorHttp } from '../../shared/errores';
 import { d365EntityService } from './d365-entity.service';
-import type { CatalogoItemDto, D365ProductBarcode, D365ReleasedProduct, EmpaqueDto } from './d365.types';
+import type { CatalogoItemDto, D365ProductBarcode, D365ReleasedProduct, D365UnitConversion, EmpaqueDto } from './d365.types';
 
 export type ModoCatalogo = 'real' | 'ejemplo';
 
@@ -19,50 +19,78 @@ export type ModoCatalogo = 'real' | 'ejemplo';
 // Mapeo (puro, sin red ni DB -- ver d365-catalogo.test.ts)
 // ---------------------------------------------------------------------------
 
-/** Agrupa los codigos de barra de ProductBarcodes por ItemNumber. */
-export function agruparBarcodesPorItem(barcodes: D365ProductBarcode[]): Map<string, D365ProductBarcode[]> {
-  const mapa = new Map<string, D365ProductBarcode[]>();
-  for (const barcode of barcodes) {
-    const existentes = mapa.get(barcode.ItemNumber) ?? [];
-    existentes.push(barcode);
-    mapa.set(barcode.ItemNumber, existentes);
+function agruparPor<T>(filas: T[], clave: (fila: T) => string): Map<string, T[]> {
+  const mapa = new Map<string, T[]>();
+  for (const fila of filas) {
+    const k = clave(fila);
+    const existentes = mapa.get(k) ?? [];
+    existentes.push(fila);
+    mapa.set(k, existentes);
   }
   return mapa;
 }
 
+/** Agrupa los codigos de barra de ProductBarcodesV2 por ItemNumber. */
+export function agruparBarcodesPorItem(barcodes: D365ProductBarcode[]): Map<string, D365ProductBarcode[]> {
+  return agruparPor(barcodes, (b) => b.ItemNumber);
+}
+
+/** Agrupa las conversiones de unidad de ProductSpecificUnitOfMeasureConversions por ProductNumber. */
+export function agruparConversionesPorProducto(conversiones: D365UnitConversion[]): Map<string, D365UnitConversion[]> {
+  return agruparPor(conversiones, (c) => c.ProductNumber);
+}
+
+/**
+ * El empaque de un producto sale de ProductSpecificUnitOfMeasureConversions,
+ * NO de ProductBarcodesV2.ProductQuantity (que en este tenant siempre es 0
+ * -- ver el comentario largo en d365.types.ts#D365ProductBarcode). Una fila
+ * con Factor=1 es solo la equivalencia entre "U" y "U." (misma unidad,
+ * distinta grafia) y no cuenta como empaque; el resto (Factor != 1) son
+ * empaques alternos de verdad, ej. `{FromUnitSymbol:'Emp.12', Factor:12}`.
+ *
+ * Nuestro dominio modela un Empaque por producto (no una lista, a
+ * diferencia de otros proyectos D365 de referencia que vimos con varios
+ * simultaneos) -- si D365 trae mas de un empaque alterno para el mismo
+ * producto, nos quedamos con el de mayor factor (el "mas grande", ej. Caja
+ * antes que Pack) y el resto se descarta. Esta limitacion queda
+ * documentada en el README para cuando se decida soportar varios.
+ */
+export function elegirEmpaque(conversionesDelProducto: D365UnitConversion[], producto: D365ReleasedProduct): EmpaqueDto {
+  const factoresPorUnidad = new Map<string, number>();
+  for (const conversion of conversionesDelProducto) {
+    if (conversion.Factor && conversion.Factor !== 1) {
+      factoresPorUnidad.set(conversion.FromUnitSymbol, conversion.Factor);
+    }
+  }
+
+  if (factoresPorUnidad.size === 0) {
+    return { nombre: producto.InventoryUnitSymbol || producto.PurchaseUnitSymbol || 'UND', factor: 1 };
+  }
+
+  const [nombre, factor] = [...factoresPorUnidad.entries()].sort((a, b) => b[1] - a[1])[0]!;
+  return { nombre, factor };
+}
+
 /**
  * Un producto de D365 a nuestro Producto (sin `id`/`ubicacion`, que salen
- * de la hoja, no del catalogo). Regla de mapeo:
- *   - codigoBarras (unidad SUELTA) = el barcode con ProductQuantity===1,
- *     o el marcado IsDefaultDisplayedBarcode, o el primero que haya.
- *   - empaque = el primer barcode con ProductQuantity>1 (nombre =
- *     ProductQuantityUnitSymbol, factor = ProductQuantity). Si D365 no
- *     tiene ningun barcode de empaque para ese item, el empaque queda en
- *     factor 1 con la unidad de inventario de D365 -- nuestro dominio
- *     exige un Empaque siempre, a diferencia del proyecto hermano, que
- *     admite VARIAS unidades alternas por producto; nosotros solo
- *     modelamos una, asi que si D365 trae mas de una se toma la primera
- *     y el resto se pierde (ver README para esta limitacion documentada).
+ * de la hoja, no del catalogo).
+ *   - codigoBarras (unidad SUELTA) = el barcode marcado
+ *     IsDefaultDisplayedBarcode, o el primero que haya (ProductQuantity no
+ *     sirve de desempate en este tenant: siempre es 0).
+ *   - descripcion = ProductBarcodesV2.ProductDescription (nombre legible de
+ *     verdad) y si no hay barcode, SearchName de ReleasedProductsV2.
+ *   - empaque.codigoBarras NUNCA se llena: no existe un barcode especifico
+ *     por empaque en este tenant (ver D365ProductBarcode) -- queda siempre
+ *     undefined, a proposito.
  */
-export function mapearProducto(producto: D365ReleasedProduct, barcodesDelItem: D365ProductBarcode[]): CatalogoItemDto {
-  const ordenados = [...barcodesDelItem].sort((a, b) => (a.ProductQuantity ?? 1) - (b.ProductQuantity ?? 1));
+export function mapearProducto(
+  producto: D365ReleasedProduct,
+  barcodesDelItem: D365ProductBarcode[],
+  conversionesDelItem: D365UnitConversion[],
+): CatalogoItemDto {
+  const suelto = barcodesDelItem.find((b) => b.IsDefaultDisplayedBarcode === 'Yes') ?? barcodesDelItem[0];
 
-  const suelto =
-    ordenados.find((b) => b.IsDefaultDisplayedBarcode === 'Yes') ??
-    ordenados.find((b) => (b.ProductQuantity ?? 1) === 1) ??
-    ordenados[0];
-
-  const alterno = ordenados.find((b) => b !== suelto && (b.ProductQuantity ?? 1) > 1);
-
-  const descripcion = producto.ProductName || producto.ProductDescription || producto.ItemNumber;
-
-  const empaque: EmpaqueDto = alterno
-    ? {
-        nombre: alterno.ProductQuantityUnitSymbol || `x${alterno.ProductQuantity}`,
-        factor: alterno.ProductQuantity ?? 1,
-        ...(alterno.Barcode ? { codigoBarras: alterno.Barcode } : {}),
-      }
-    : { nombre: producto.InventoryUnitSymbol || producto.PurchaseUnitSymbol || 'UND', factor: 1 };
+  const descripcion = suelto?.ProductDescription || producto.SearchName || producto.ItemNumber;
 
   return {
     codigo: producto.ItemNumber,
@@ -70,60 +98,86 @@ export function mapearProducto(producto: D365ReleasedProduct, barcodesDelItem: D
     // recurso -- nunca se deja vacio, el escaner necesita algo para matchear.
     codigoBarras: suelto?.Barcode || producto.ItemNumber,
     descripcion,
-    empaque,
+    empaque: elegirEmpaque(conversionesDelItem, producto),
   };
 }
 
 // ---------------------------------------------------------------------------
 // Datos de ejemplo -- mismos 4 productos/empaques/codigos de barra que ya
 // usa mobile/lib/adaptadores/_compartido.ts (BASE_PRODUCTOS): no se inventan
-// datos nuevos, se reusa lo que el cliente ya valido en la maqueta.
+// datos nuevos, se reusa lo que el cliente ya valido en la maqueta. Forma
+// alineada a como responde el tenant real (barcode SIEMPRE de unidad
+// suelta, factor en una conversion aparte).
 // ---------------------------------------------------------------------------
 
 const PRODUCTOS_EJEMPLO: D365ReleasedProduct[] = [
-  { ItemId: '0051', ItemNumber: '0051', ProductName: 'Aceite Vegetal Primor 1L', InventoryUnitSymbol: 'UND' },
-  { ItemId: '0052', ItemNumber: '0052', ProductName: 'Cerveza Cusqueña Trigo 310ml', InventoryUnitSymbol: 'UND' },
-  { ItemId: '0053', ItemNumber: '0053', ProductName: 'Leche Evaporada Gloria Azul 400g', InventoryUnitSymbol: 'UND' },
-  { ItemId: '0054', ItemNumber: '0054', ProductName: 'Fideos Canuto Lavaggi 500g', InventoryUnitSymbol: 'UND' },
+  { ItemNumber: '0051', SearchName: 'ACEITEVEGETALPRIMOR', InventoryUnitSymbol: 'U.', PurchaseUnitSymbol: 'Emp.12' },
+  { ItemNumber: '0052', SearchName: 'CERVEZACUSQUENATRIGO', InventoryUnitSymbol: 'U.', PurchaseUnitSymbol: 'Emp.6' },
+  { ItemNumber: '0053', SearchName: 'LECHEEVAPORADAGLORIA', InventoryUnitSymbol: 'U.', PurchaseUnitSymbol: 'Emp.24' },
+  { ItemNumber: '0054', SearchName: 'FIDEOSCANUTOLAVAGGI', InventoryUnitSymbol: 'U.', PurchaseUnitSymbol: 'Emp.20' },
 ];
 
 const BARCODES_EJEMPLO: D365ProductBarcode[] = [
-  { ItemNumber: '0051', Barcode: '7750123051', ProductQuantity: 1, ProductQuantityUnitSymbol: 'UND', IsDefaultDisplayedBarcode: 'Yes' },
-  { ItemNumber: '0051', Barcode: '7750123051012', ProductQuantity: 12, ProductQuantityUnitSymbol: 'Caja' },
-  { ItemNumber: '0052', Barcode: '7750999015', ProductQuantity: 1, ProductQuantityUnitSymbol: 'UND', IsDefaultDisplayedBarcode: 'Yes' },
-  { ItemNumber: '0052', Barcode: '7750999015006', ProductQuantity: 6, ProductQuantityUnitSymbol: 'Pack' },
-  { ItemNumber: '0053', Barcode: '7750123088', ProductQuantity: 1, ProductQuantityUnitSymbol: 'UND', IsDefaultDisplayedBarcode: 'Yes' },
-  { ItemNumber: '0053', Barcode: '7750123088024', ProductQuantity: 24, ProductQuantityUnitSymbol: 'Plancha' },
-  { ItemNumber: '0054', Barcode: '7750123054', ProductQuantity: 1, ProductQuantityUnitSymbol: 'UND', IsDefaultDisplayedBarcode: 'Yes' },
-  { ItemNumber: '0054', Barcode: '7750123054020', ProductQuantity: 20, ProductQuantityUnitSymbol: 'Fardo' },
+  { ItemNumber: '0051', Barcode: '7750123051', ProductDescription: 'Aceite Vegetal Primor 1L', ProductQuantityUnitSymbol: 'U', ProductQuantity: 0, IsDefaultDisplayedBarcode: 'Yes' },
+  { ItemNumber: '0052', Barcode: '7750999015', ProductDescription: 'Cerveza Cusqueña Trigo 310ml', ProductQuantityUnitSymbol: 'U', ProductQuantity: 0, IsDefaultDisplayedBarcode: 'Yes' },
+  { ItemNumber: '0053', Barcode: '7750123088', ProductDescription: 'Leche Evaporada Gloria Azul 400g', ProductQuantityUnitSymbol: 'U', ProductQuantity: 0, IsDefaultDisplayedBarcode: 'Yes' },
+  { ItemNumber: '0054', Barcode: '7750123054', ProductDescription: 'Fideos Canuto Lavaggi 500g', ProductQuantityUnitSymbol: 'U', ProductQuantity: 0, IsDefaultDisplayedBarcode: 'Yes' },
 ];
 
-function mapearCatalogo(productos: D365ReleasedProduct[], barcodes: D365ProductBarcode[]): CatalogoItemDto[] {
+const CONVERSIONES_EJEMPLO: D365UnitConversion[] = [
+  { ProductNumber: '0051', FromUnitSymbol: 'U', ToUnitSymbol: 'U.', Factor: 1 },
+  { ProductNumber: '0051', FromUnitSymbol: 'Emp.12', ToUnitSymbol: 'U', Factor: 12 },
+  { ProductNumber: '0052', FromUnitSymbol: 'U', ToUnitSymbol: 'U.', Factor: 1 },
+  { ProductNumber: '0052', FromUnitSymbol: 'Emp.6', ToUnitSymbol: 'U', Factor: 6 },
+  { ProductNumber: '0053', FromUnitSymbol: 'U', ToUnitSymbol: 'U.', Factor: 1 },
+  { ProductNumber: '0053', FromUnitSymbol: 'Emp.24', ToUnitSymbol: 'U', Factor: 24 },
+  { ProductNumber: '0054', FromUnitSymbol: 'U', ToUnitSymbol: 'U.', Factor: 1 },
+  { ProductNumber: '0054', FromUnitSymbol: 'Emp.20', ToUnitSymbol: 'U', Factor: 20 },
+];
+
+function mapearCatalogo(
+  productos: D365ReleasedProduct[],
+  barcodes: D365ProductBarcode[],
+  conversiones: D365UnitConversion[],
+): CatalogoItemDto[] {
   const barcodesPorItem = agruparBarcodesPorItem(barcodes);
-  return productos.map((producto) => mapearProducto(producto, barcodesPorItem.get(producto.ItemNumber) ?? []));
+  const conversionesPorItem = agruparConversionesPorProducto(conversiones);
+  return productos.map((producto) =>
+    mapearProducto(producto, barcodesPorItem.get(producto.ItemNumber) ?? [], conversionesPorItem.get(producto.ItemNumber) ?? []),
+  );
 }
 
 /** modo='ejemplo': nunca toca red, siempre disponible sin credenciales. */
 export function obtenerCatalogoEjemplo(): CatalogoItemDto[] {
-  return mapearCatalogo(PRODUCTOS_EJEMPLO, BARCODES_EJEMPLO);
+  return mapearCatalogo(PRODUCTOS_EJEMPLO, BARCODES_EJEMPLO, CONVERSIONES_EJEMPLO);
 }
 
-/** modo='real': trae ReleasedProducts + ProductBarcodes de Dynamics, paginado. */
+/**
+ * modo='real': trae ReleasedProductsV2 + ProductBarcodesV2 + las
+ * conversiones de unidad, paginado. `ReleasedProducts`/`ProductBarcodes`
+ * a secas (sin V2) dan 404 en el tenant real -- ver d365.types.ts.
+ * ProductSpecificUnitOfMeasureConversions no acepta filtro por dataAreaId
+ * (confirmado contra el tenant real), asi que se trae completa y se
+ * agrupa localmente por ProductNumber en vez de filtrar por item.
+ */
 async function obtenerCatalogoReal(): Promise<CatalogoItemDto[]> {
   const filtroCompania = d365Config.dataAreaId ? `dataAreaId eq '${d365Config.dataAreaId}'` : undefined;
 
-  const [productos, barcodes] = await Promise.all([
-    d365EntityService.obtenerTodos<D365ReleasedProduct>('ReleasedProducts', {
-      $select: 'ItemId,ItemNumber,ProductName,ProductDescription,ProductType,ItemModelGroupId,ProductGroupId,SearchName,InventoryUnitSymbol,PurchaseUnitSymbol',
+  const [productos, barcodes, conversiones] = await Promise.all([
+    d365EntityService.obtenerTodos<D365ReleasedProduct>('ReleasedProductsV2', {
+      $select: 'ItemNumber,SearchName,InventoryUnitSymbol,PurchaseUnitSymbol',
       ...(filtroCompania ? { $filter: filtroCompania } : {}),
     }),
-    d365EntityService.obtenerTodos<D365ProductBarcode>('ProductBarcodes', {
-      $select: 'ItemNumber,Barcode,ProductQuantityUnitSymbol,ProductQuantity,IsDefaultDisplayedBarcode',
+    d365EntityService.obtenerTodos<D365ProductBarcode>('ProductBarcodesV2', {
+      $select: 'ItemNumber,Barcode,ProductDescription,ProductQuantityUnitSymbol,ProductQuantity,IsDefaultDisplayedBarcode',
       ...(filtroCompania ? { $filter: filtroCompania } : {}),
+    }),
+    d365EntityService.obtenerTodos<D365UnitConversion>('ProductSpecificUnitOfMeasureConversions', {
+      $select: 'ProductNumber,FromUnitSymbol,ToUnitSymbol,Factor',
     }),
   ]);
 
-  return mapearCatalogo(productos, barcodes);
+  return mapearCatalogo(productos, barcodes, conversiones);
 }
 
 // ---------------------------------------------------------------------------
