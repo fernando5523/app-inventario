@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   aplicarFiltro,
   conteoFinal,
+  esAuditable,
   diferenciaUnidades,
   diferenciaValor,
   embudoDeConteos,
@@ -24,6 +25,82 @@ const item = (parcial: Partial<ItemAuditoria> = {}): ItemAuditoria => ({
   conteo3: null,
   esEmpresa: false,
   ...parcial,
+});
+
+// ---------------------------------------------------------------------------
+// "NO SE" NO ES "CERO" -- el caso que rompio contra datos reales
+// ---------------------------------------------------------------------------
+
+describe('items SIN stock del ERP', () => {
+  const sinErp = item({ stockErp: null, conteo1: null });
+
+  it('NO se reportan como cuadrados: se reportan como sin_erp', () => {
+    // Este es el bug que aparecio con los 11.835 productos reales sin stock
+    // cargado: `stockErp ?? 0` los hacia cuadrar en 0 y el resumen decia
+    // "100% cuadrados". Un falso "todo bien" en la pantalla donde se decide
+    // si el inventario cierra.
+    expect(veredicto(sinErp)).toBe('sin_erp');
+    expect(veredicto(sinErp)).not.toBe('cuadrado');
+  });
+
+  it('la diferencia es null, NO 0', () => {
+    // 0 significa "conte exactamente lo que decia el ERP", que es una
+    // afirmacion fuerte; no puede ser tambien el valor de "no tengo idea".
+    expect(diferenciaUnidades(sinErp)).toBeNull();
+    expect(diferenciaValor(sinErp)).toBeNull();
+  });
+
+  it('sigue siendo sin_erp aunque HAYA conteo: falta el otro lado', () => {
+    expect(veredicto(item({ stockErp: null, conteo1: 42 }))).toBe('sin_erp');
+    expect(diferenciaUnidades(item({ stockErp: null, conteo1: 42 }))).toBeNull();
+  });
+
+  it('sin_erp gana sobre esEmpresa: no se puede afirmar nada del item', () => {
+    expect(veredicto(item({ stockErp: null, conteo1: 10, esEmpresa: true }))).toBe('sin_erp');
+  });
+
+  it('esAuditable dice que no', () => {
+    expect(esAuditable(sinErp)).toBe(false);
+    expect(esAuditable(item({ stockErp: 100, conteo1: 100 }))).toBe(true);
+  });
+
+  it('el resumen de 11.835 items sin stock NO dice 100% cuadrados', () => {
+    const catalogoSinStock = Array.from({ length: 11835 }, (_, n) =>
+      item({ codigo: `IT-${n}`, stockErp: null, conteo1: null }),
+    );
+    const r = resumir(catalogoSinStock);
+    expect(r.cuadrados).toBe(0);
+    expect(r.sinDatoErp).toBe(11835);
+    expect(r.auditables).toBe(0);
+    expect(r.porcentajeAuditable).toBe(0);
+    // Sin nada auditable, el porcentaje de cuadrados es 0, no 100.
+    expect(r.porcentajeCuadrado).toBe(0);
+  });
+});
+
+describe('items CON stock del ERP pero sin contar', () => {
+  const sinContar = item({ stockErp: 100, conteo1: null });
+
+  it('tampoco se reportan como cuadrados', () => {
+    // Mismo error de fondo: afirmar que algo cuadra sin evidencia.
+    expect(veredicto(sinContar)).toBe('sin_contar');
+  });
+
+  it('la diferencia es null: falta el conteo, no es que se conto cero', () => {
+    expect(diferenciaUnidades(sinContar)).toBeNull();
+  });
+
+  it('un conteo de CERO si es un dato real y se compara', () => {
+    // Contar 0 es una afirmacion ("no hay ninguno en gondola"), muy
+    // distinta de no haber contado.
+    expect(veredicto(item({ stockErp: 100, conteo1: 0 }))).toBe('falta');
+    expect(diferenciaUnidades(item({ stockErp: 100, conteo1: 0 }))).toBe(-100);
+  });
+
+  it('un stock del ERP de CERO tambien es un dato real', () => {
+    expect(veredicto(item({ stockErp: 0, conteo1: 0 }))).toBe('cuadrado');
+    expect(veredicto(item({ stockErp: 0, conteo1: 5 }))).toBe('falta');
+  });
 });
 
 describe('conteoFinal', () => {
@@ -64,10 +141,11 @@ describe('diferenciaUnidades', () => {
     expect(diferenciaUnidades(item({ stockErp: 100, conteo1: 88, conteo2: 100 }))).toBe(0);
   });
 
-  it('un item SIN CONTAR da 0, no "menos todo el stock"', () => {
-    // Que nadie lo haya contado no es lo mismo que haberlo contado en cero:
-    // lo segundo inventaria un faltante por cada item no llegado.
-    expect(diferenciaUnidades(item({ stockErp: 100 }))).toBe(0);
+  it('un item SIN CONTAR da null, ni 0 ni "menos todo el stock"', () => {
+    // Las tres respuestas son distintas: -100 inventaria un faltante por
+    // cada item al que no se llego; 0 afirmaria que cuadra sin evidencia;
+    // null dice la verdad, que es "todavia no se".
+    expect(diferenciaUnidades(item({ stockErp: 100 }))).toBeNull();
   });
 });
 
@@ -158,11 +236,13 @@ describe('resumir', () => {
   ];
   const r = resumir(items);
 
-  it('cuenta por veredicto', () => {
+  it('cuenta por veredicto, y el sin contar NO entra en cuadrados', () => {
     expect(r.items).toBe(5);
-    expect(r.cuadrados).toBe(2); // A, y E (sin contar da diferencia 0)
+    expect(r.cuadrados).toBe(1); // solo A
     expect(r.conFalta).toBe(2); // B, C
     expect(r.deEmpresa).toBe(1); // D
+    expect(r.sinContar).toBe(1); // E -- antes se contaba como cuadrado
+    expect(r.auditables).toBe(4); // los 5 menos el que no se puede auditar
   });
 
   it('separa unidades faltantes de sobrantes, siempre en positivo', () => {
@@ -185,8 +265,12 @@ describe('resumir', () => {
     expect(r.sinContar).toBe(1);
   });
 
-  it('calcula el porcentaje cuadrado', () => {
-    expect(r.porcentajeCuadrado).toBe(40);
+  it('el porcentaje cuadrado se calcula sobre los AUDITABLES, no sobre el total', () => {
+    // 1 cuadrado de 4 auditables = 25%. Sobre el total daria 20% y
+    // mezclaria peras con manzanas: con 11.835 items sin stock cargado, un
+    // porcentaje sobre el total no significa nada.
+    expect(r.porcentajeCuadrado).toBe(25);
+    expect(r.porcentajeAuditable).toBe(80); // 4 de 5
   });
 
   it('no divide por cero con una matriz vacia', () => {

@@ -2,7 +2,8 @@ import { Router } from 'express';
 import rateLimit from 'express-rate-limit';
 import { validar } from '../../middleware/validation.middleware';
 import * as controller from './sesion.controller';
-import { ingresarSchema, parametrosSucursalSchema } from './sesion.schema';
+import { requiereSesion } from '../../middleware/auth.middleware';
+import { cambiarPinSchema, ingresarSchema, parametrosSucursalSchema } from './sesion.schema';
 
 /**
  * PIN de 6 digitos = espacio chico (1.000.000 combinaciones): sin esto,
@@ -32,3 +33,20 @@ sesionRouter.get(
 // ruta de arriba.
 sesionRouter.get('/administradores', controller.administradores);
 sesionRouter.post('/ingresar', limitadorIngreso, validar(ingresarSchema, 'body'), controller.ingresar);
+
+/**
+ * Cambio de PIN propio. Requiere sesion pero NINGUN rol: cualquiera cambia
+ * el suyo, incluido el rol `conteo`. Es el unico camino por el que un PIN
+ * pasa a ser conocido solo por su dueno -- el reseteo del administrador,
+ * por definicion, deja el PIN en manos de dos personas.
+ *
+ * Rate-limited igual que el ingreso: pide el PIN actual, asi que es otra
+ * puerta por donde se podria probar a fuerza bruta.
+ */
+sesionRouter.post(
+  '/cambiar-pin',
+  limitadorIngreso,
+  requiereSesion,
+  validar(cambiarPinSchema, 'body'),
+  controller.cambiarPin,
+);

@@ -20,6 +20,7 @@ import {
   resumir,
   veredicto,
   type ItemAuditoria,
+  type VeredictoAuditoria,
 } from './auditoria.calculos';
 import { puedeVerLaMatriz, validarAccesoALaMatriz, validarSucursal } from './auditoria.permisos';
 import type { ListarAuditablesQuery, MatrizQuery } from './auditoria.schema';
@@ -149,11 +150,19 @@ async function armarMatriz(inventarioId: number): Promise<ItemAuditoria[]> {
       codigo: item.codigo,
       descripcion: contado?.descripcion ?? item.descripcion,
       zona: contado?.zona ?? '',
-      // Sin precio no se puede valorizar, pero la diferencia en unidades
-      // sigue siendo valida: 0 en vez de null para no romper la aritmetica
-      // de toda la matriz por un item sin precio en Dynamics.
-      precioVenta: item.precioVenta === null ? 0 : item.precioVenta.toNumber(),
-      stockErp: item.stockErp ?? 0,
+      // NULL SE PROPAGA COMO NULL, no como 0.
+      //
+      // El stock sale UNICAMENTE de CatalogoItem.stockErp -- el snapshot de
+      // Dynamics tomado al abrir el mes -- y nunca de otro lado: `Producto`
+      // no tiene stock y no puede tenerlo (conteo ciego).
+      //
+      // Cuando el snapshot no trajo el dato, viaja null y el item queda con
+      // veredicto `sin_erp`. Poner 0 en su lugar hacia que 11.835 productos
+      // reales sin stock cargado se reportaran como "100% cuadrados": el
+      // peor error posible en la pantalla donde se decide si el inventario
+      // cierra. Ver el comentario de cabecera de auditoria.calculos.ts.
+      precioVenta: item.precioVenta?.toNumber() ?? null,
+      stockErp: item.stockErp,
       conteo1: contado?.conteos.get(1) ?? null,
       conteo2: contado?.conteos.get(2) ?? null,
       conteo3: contado?.conteos.get(3) ?? null,
@@ -169,9 +178,17 @@ async function armarMatriz(inventarioId: number): Promise<ItemAuditoria[]> {
 export interface FilaMatrizDto extends ItemAuditoria {
   /** Derivados -- nunca columnas (ver auditoria.calculos.ts). */
   conteoFinal: number | null;
-  diferenciaUnidades: number;
-  diferenciaValor: number;
-  veredicto: string;
+  /** null = falta el stock del ERP o el conteo: no se puede comparar. */
+  diferenciaUnidades: number | null;
+  /** null = no se puede calcular la diferencia, o el item no tiene precio. */
+  diferenciaValor: number | null;
+  veredicto: VeredictoAuditoria;
+  /**
+   * Motivo legible de por que este item no se puede auditar todavia. null
+   * cuando si se puede. Va en la fila y no solo en el veredicto para que la
+   * pantalla pueda mostrarlo tal cual, sin traducir un enum a castellano.
+   */
+  motivoSinDato: string | null;
 }
 
 /**
@@ -215,15 +232,22 @@ export async function matriz(
     total: filtrada.length,
     limite: query.limite,
     desplazamiento: query.desplazamiento,
-    matriz: pagina.map(
-      (i): FilaMatrizDto => ({
+    matriz: pagina.map((i): FilaMatrizDto => {
+      const v = veredicto(i);
+      return {
         ...i,
         conteoFinal: conteoFinal(i),
         diferenciaUnidades: diferenciaUnidades(i),
         diferenciaValor: diferenciaValor(i),
-        veredicto: veredicto(i),
-      }),
-    ),
+        veredicto: v,
+        motivoSinDato:
+          v === 'sin_erp'
+            ? 'Sin dato del ERP: el snapshot de Dynamics no trajo stock para este ítem, así que no hay contra qué compararlo.'
+            : v === 'sin_contar'
+              ? 'Sin contar: ninguna hoja finalizada incluye este ítem todavía.'
+              : null,
+      };
+    }),
   };
 }
 

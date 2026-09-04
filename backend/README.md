@@ -1266,6 +1266,106 @@ BASE_URL=http://localhost:3001 node scripts/verificar-puertos-pendientes-api.mjs
 
 Verifica, entre otras cosas, que el secreto no aparece en **ninguna** respuesta (ni en el `PUT` que lo recibe, ni en el `GET`, ni en el mensaje de la prueba), que el `409` de sincronización funciona, y que el body con `aprobadorId` sigue dando `400`.
 
+---
+
+### Cambio de PIN propio — `POST /api/sesion/cambiar-pin` (requiere sesión, **cualquier rol**)
+
+Cualquiera cambia el suyo, incluido el rol `conteo`. Es el único camino por el que un PIN pasa a ser conocido **solo por su dueño**.
+
+**Por qué hace falta, además del reseteo del administrador**: quien resetea **elige** el PIN, así que lo conoce. Un PIN que otra persona conoce no autentica a nadie — identifica a dos. Y este sistema apoya sobre el PIN algo bastante más serio que un login: la firma que cierra el inventario del mes. Si el administrador sabe el PIN de Gilmer y el de Rosa, puede entrar como los dos y completar solo la doble validación del lacrado, que es justamente el control que el sistema existe para sostener.
+
+El reseteo del administrador sigue haciendo falta (alguien se olvida el PIN y hay que devolverle el acceso), pero es el camino de **excepción**: entrega un PIN que dos personas conocen, y el dueño debería cambiarlo enseguida por este endpoint.
+
+Body:
+```json
+{ "pinActual": "000102", "pinNuevo": "820394" }
+```
+
+No lleva `colaboradorId`: quien cambia el PIN es el de la sesión, y eso sale del token. El schema es `.strict()`, así que un `colaboradorId` en el body da **400** — misma regla que la aprobación del lacrado.
+
+**Exige el PIN actual** aunque el token ya pruebe quién es, y no es redundante: un token robado (un teléfono desbloqueado sobre el mostrador, una sesión que quedó abierta) alcanzaría para cambiarle el PIN al dueño y dejarlo afuera de su propia cuenta. Pedir el actual convierte ese robo en "puede usar la sesión hasta que expire" en vez de "se quedó con la cuenta".
+
+**Al cambiar el PIN se cierran todas las sesiones de esa persona**, incluida la actual. Si lo está cambiando porque sospecha que alguien lo conocía, dejar vivas las sesiones abiertas de ese alguien haría que el cambio no sirviera de nada. Cuesta un segundo (volver a ingresar) y hace que el cambio signifique de verdad "desde ahora, solo yo".
+
+PINs rechazados (`400`):
+- El **predecible del seed** — el id del colaborador con ceros (`102` → `000102`). La pantalla de login lista a todas las personas con su nombre, así que cualquiera que abra la app lo deduce. Sería volver voluntariamente al agujero.
+- Los **triviales**: todos los dígitos iguales (`000000`, `111111`) y secuencias corridas (`123456`, `654321`).
+- Uno igual al actual.
+
+Rate-limited igual que el ingreso (8 intentos / 15 min): pide el PIN actual, así que es otra puerta por donde se podría probar a fuerza bruta.
+
+Respuesta `204`, sin body. Errores: `400` PIN inválido o rechazado · `401` el PIN actual no es correcto, o la cuenta no está disponible · `429` demasiados intentos.
+
+Escribe en `RegistroAuditoria` con `accion: "colaborador.pin_cambiado_por_si_mismo"`. Nunca el PIN, ni el viejo ni el nuevo.
+
+#### El camino completo de rotación de PINs
+
+| Quién | Qué puede | Endpoint |
+|---|---|---|
+| `administrador` | Resetear el PIN de **cualquiera**, cualquier sucursal | `POST /api/usuarios/:id/resetear-pin` |
+| `auditor` | Resetear solo `coordinador`/`conteo` **de su propia sucursal**. Nunca a otro auditor ni al administrador | `POST /api/usuarios/:id/resetear-pin` |
+| `coordinador`, `conteo` | No resetean a nadie | — |
+| **Cualquiera** | Cambiar **el suyo**, sabiendo el actual | `POST /api/sesion/cambiar-pin` |
+
+> **Los PIN del seed son predecibles a propósito** y eso no cambia: sirven para probar. `prisma/seed.ts` los genera como el id con ceros. Lo que existe ahora es el camino para rotarlos, verificado contra la base.
+
+---
+
+### La auditoría contra un catálogo sin stock del ERP
+
+`CatalogoItem.stockErp` es nullable, y el módulo de auditoría **distingue "sin dato" de "cero"**. No es un detalle de tipos: es la diferencia entre un inventario auditable y uno que miente.
+
+Los 11.835 productos traídos de Dynamics todavía no tienen stock cargado. Con la primera versión del módulo —que hacía `stockErp ?? 0`— esos ítems daban diferencia 0, veredicto `cuadrado`, y el resumen decía **"100% cuadrados"**: un falso "todo bien" en la única pantalla donde se decide si el inventario cierra. Corregido.
+
+**El stock sale únicamente de `CatalogoItem.stockErp`** — el snapshot de Dynamics tomado al abrir el mes — y nunca de otro lado. `Producto` no tiene stock y no puede tenerlo: es lo que ve quien cuenta.
+
+Dos veredictos nuevos para lo que no se puede afirmar:
+
+| Veredicto | Cuándo | `diferenciaUnidades` |
+|---|---|---|
+| `sin_erp` | El snapshot no trajo stock: no hay contra qué comparar | `null` |
+| `sin_contar` | Hay stock del ERP, pero ninguna hoja finalizada incluye el ítem | `null` |
+| `cuadrado` | El conteo final coincide con el ERP | `0` |
+| `empresa` | Hay diferencia y la asume gerencia | el número |
+| `falta` | Hay diferencia (faltante **o** sobrante) | el número |
+
+`sin_erp` gana sobre `esEmpresa`: sin stock no se puede afirmar nada del ítem, ni siquiera que la empresa lo absorbe.
+
+Cada fila trae `motivoSinDato` con el texto legible, para que la pantalla lo muestre tal cual sin traducir un enum.
+
+Un `0` **sí** es un dato real de los dos lados: `stockErp: 0` dice "no debería haber ninguno" y un conteo de `0` dice "no hay ninguno en góndola". Lo que no puede ser `0` es "no sé".
+
+El resumen agrega:
+
+```json
+{
+  "items": 11835,
+  "cuadrados": 0,
+  "sinDatoErp": 11835,
+  "sinContar": 0,
+  "auditables": 0,
+  "porcentajeCuadrado": 0,
+  "porcentajeAuditable": 0,
+  "sinPrecio": 0
+}
+```
+
+- `porcentajeCuadrado` se calcula sobre los **auditables**, no sobre el total: con 11.835 ítems sin stock, un porcentaje sobre el total no significa nada.
+- `porcentajeAuditable` dice qué porción del inventario se puede auditar hoy.
+- `sinPrecio` cuenta los ítems con diferencia que no se pudieron valorizar. Si son muchos, el monto del faltante está incompleto y quien lo lee tiene que saberlo.
+
+Y un filtro nuevo, `sin_dato`, que junta `sin_erp` + `sin_contar`. Los cuatro de la maqueta (`todos`, `cuadrados`, `faltante`, `empresa`) no cambian de significado — solo dejan de incluir por error a los que no tienen con qué compararse.
+
+> **Para el front**: `stockErp`, `precioVenta`, `diferenciaUnidades` y `diferenciaValor` viajan como `number | null`. El tipo `ItemAuditoria` de `mobile/lib/dominio/tipos.ts` los declara `number` a secas — hay que hacerlos nullables ahí también. Un tipo que no puede expresar "no sé" fuerza a inventar un cero, que es exactamente el bug que se acaba de corregir. Y `VeredictoAuditoria` pasa de 3 valores a 5.
+
+### Verificación de todo esto
+
+```bash
+node scripts/verificar-cierre-pendientes.mjs   # backend en :3000
+```
+
+Verifica los tres frentes: que la auditoría distinga NULL de 0 contra los datos reales, el camino completo de rotación de PINs con sus permisos, y las tres reglas del histórico **escribiendo directo en Postgres** (no por la API) — porque una regla que solo vive en un `if` la saltea cualquiera que escriba en la tabla.
+
 ## Desarrollo
 
 ```bash
