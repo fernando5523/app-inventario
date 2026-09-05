@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { repartirExacto } from '../../dominio/reparto-de-fondo';
 import {
   calcularEmbudo,
   calcularResumenLiquidacion,
@@ -133,7 +134,34 @@ describe('calcularResumenLiquidacion (Pantalla 6)', () => {
       multaInasistencia: 20,
     });
     expect(reunion.fondoMultas).toBe(80);
-    expect(reunion.bonoAsistencia).toBe(11.43);
+    // El .vtt dice "S/11.43 c/u", y ESE es el numero que no cerraba:
+    // 11.43 x 7 = 80.01, un centavo que ponia la empresa.
+    //
+    // Ahora el encabezado muestra el PISO del reparto (11.42) y la planilla
+    // le da 11.43 a los primeros 6 y 11.42 al septimo, para que la suma de
+    // exactamente 80. Es un centavo de diferencia en el cartel a cambio de
+    // que la plata cierre -- ver dominio/reparto-de-fondo.ts.
+    expect(reunion.bonoAsistencia).toBe(11.42);
+  });
+
+  it('el bono del encabezado es el PISO, y repartido cierra contra el fondo', () => {
+    const reunion = calcularResumenLiquidacion({
+      montoFaltanteBruto: 0,
+      montoNegativos: 0,
+      montoFaltanteEmpresa: 0,
+      colaboradoresAlcanzados: 11,
+      colaboradoresAsistieron: 7,
+      multaInasistencia: 20,
+    });
+    const asistentes = [1, 2, 3, 4, 5, 6, 7];
+    const reparto = repartirExacto(reunion.fondoMultas, asistentes);
+
+    // Nadie recibe MENOS que el numero del encabezado.
+    for (const monto of reparto.values()) expect(monto).toBeGreaterThanOrEqual(reunion.bonoAsistencia);
+
+    // Y la suma da el fondo, al centavo.
+    const sumado = [...reparto.values()].reduce((t, m) => t + Math.round(m * 100), 0);
+    expect(sumado).toBe(Math.round(reunion.fondoMultas * 100));
   });
 
   it('no divide por cero si no asistio nadie', () => {

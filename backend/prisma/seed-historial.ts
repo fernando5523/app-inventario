@@ -18,6 +18,7 @@
  */
 
 import { Prisma, PrismaClient } from '@prisma/client';
+import { repartirExacto } from '../src/dominio/reparto-de-fondo';
 import { armarContenidoLacrado, armarFolio, calcularHash, ALGORITMO_HASH } from '../src/modules/historial/historial.lacrado';
 
 const prisma = new PrismaClient();
@@ -215,7 +216,16 @@ async function sembrarPeriodo(d: DatosPeriodo, sucursalNombre: string): Promise<
   const neto = redondear(d.bruto - d.negativos - d.empresa);
   const cuotaBase = redondear(neto / PLANILLA.length);
   const faltas = PLANILLA.length - asistieron;
-  const bono = asistieron === 0 ? 0 : redondear((faltas * multa) / asistieron);
+
+  // El fondo se reparte EXACTO entre los asistentes: la suma de los bonos da
+  // el fondo al centavo. Con `redondear(fondo / asistentes)` para todos, la
+  // empresa a veces ponia y a veces se quedaba con la diferencia -- ver
+  // src/dominio/reparto-de-fondo.ts.
+  const fondo = redondear(faltas * multa);
+  const bonos = repartirExacto(
+    fondo,
+    PLANILLA.filter((p) => p.asistio).map((p) => p.id),
+  );
 
   for (const p of PLANILLA) {
     await prisma.liquidacionColaborador.create({
@@ -227,7 +237,7 @@ async function sembrarPeriodo(d: DatosPeriodo, sucursalNombre: string): Promise<
         asistio: p.asistio,
         cuotaBase: dec(cuotaBase),
         multaInasistencia: dec(p.asistio ? 0 : multa),
-        bonoAsistencia: dec(p.asistio ? bono : 0),
+        bonoAsistencia: dec(bonos.get(p.id) ?? 0),
         createdAt: cerradoEn,
       },
     });
@@ -373,7 +383,11 @@ async function sembrarPendienteDeFirma(): Promise<void> {
   const bruto = 2200, negativos = 380, empresa = 170;
   const neto = redondear(bruto - negativos - empresa);
   const cuotaBase = redondear(neto / PLANILLA.length);
-  const bono = redondear(((PLANILLA.length - asistieron) * multa) / asistieron);
+  // Reparto EXACTO del fondo, igual que en sembrarPeriodo.
+  const bonos = repartirExacto(
+    redondear((PLANILLA.length - asistieron) * multa),
+    PLANILLA.filter((p) => p.asistio).map((p) => p.id),
+  );
 
   await prisma.inventario.create({
     data: {
@@ -447,7 +461,7 @@ async function sembrarPendienteDeFirma(): Promise<void> {
         asistio: p.asistio,
         cuotaBase: dec(cuotaBase),
         multaInasistencia: dec(p.asistio ? 0 : multa),
-        bonoAsistencia: dec(p.asistio ? bono : 0),
+        bonoAsistencia: dec(bonos.get(p.id) ?? 0),
         createdAt: cerradoEn,
       },
     });

@@ -29,6 +29,25 @@ export interface DetalleLiquidacionDto {
   monto: number;
 }
 
+/**
+ * Lo que la pantalla tiene que ADVERTIR sobre este monto.
+ *
+ * Un item con diferencia pero SIN precio de venta suma 0 al faltante (ver
+ * auditoria.calculos.ts): no rompe el calculo y no inventa un precio, pero
+ * deja el monto SUBESTIMADO. La auditoria ya contaba esos items; lo que
+ * faltaba era traerlos hasta aca.
+ *
+ * Quien firma un descuento a la nomina de otra persona tiene derecho a saber
+ * que el numero esta incompleto. El problema nunca fue el calculo: es que
+ * hoy nadie se entera.
+ */
+export interface AdvertenciaLiquidacion {
+  /** Items con diferencia real que no se pudieron valorizar. */
+  itemsSinPrecio: number;
+  /** Texto listo para mostrar. `null` cuando no hay nada que advertir. */
+  mensaje: string | null;
+}
+
 /** Espeja mobile/lib/puertos/repositorios.ts#Liquidacion. */
 export interface LiquidacionDto {
   /** "Agosto 2026" -- legible, como lo muestra la pantalla. */
@@ -39,9 +58,46 @@ export interface LiquidacionDto {
   faltanteNeto: number;
   cuotaBase: number;
   multaInasistencia: number;
+  /**
+   * El PISO del reparto del fondo de multas -- lo que muestra el encabezado.
+   * Cuando el fondo no divide exacto, a algunos asistentes les toca un
+   * centavo mas; el monto de cada uno esta en su fila de la planilla, y la
+   * suma da el fondo al centavo (ver dominio/reparto-de-fondo.ts).
+   */
   bonoAsistencia: number;
   totalFaltas: number;
   planilla: DetalleLiquidacionDto[];
+  /**
+   * Campo NUEVO respecto del puerto del front (`Liquidacion`): hay que
+   * sumarlo alla y mostrarlo en la pantalla. Ver AdvertenciaLiquidacion.
+   */
+  advertencia: AdvertenciaLiquidacion;
+}
+
+/**
+ * Items del inventario con diferencia REAL que no se pudieron valorizar.
+ * `montoDiferencia` queda en null cuando el item no traia precio de venta en
+ * el snapshot.
+ *
+ * Se filtra por `diferencia: { not: 0 }` porque un item que cuadro no aporta
+ * plata aunque no tenga precio: no falta nada de el, asi que no subestima
+ * ningun monto y no hay nada que advertir.
+ */
+async function contarItemsSinPrecio(inventarioId: number): Promise<number> {
+  return prisma.diferenciaItem.count({
+    where: { inventarioId, montoDiferencia: null, diferencia: { not: 0 } },
+  });
+}
+
+/** El texto que ve quien firma. `null` si no hay nada que advertir. */
+export function armarAdvertencia(itemsSinPrecio: number): AdvertenciaLiquidacion {
+  if (itemsSinPrecio <= 0) return { itemsSinPrecio: 0, mensaje: null };
+  const plural = itemsSinPrecio === 1 ? 'ítem' : 'ítems';
+  const tienen = itemsSinPrecio === 1 ? 'tiene' : 'tienen';
+  return {
+    itemsSinPrecio,
+    mensaje: `${itemsSinPrecio} ${plural} con diferencia no ${tienen} precio de venta en Dynamics: el monto puede estar subestimado.`,
+  };
 }
 
 const MESES = [
@@ -107,6 +163,8 @@ export async function deSucursal(actor: ColaboradorAutenticado, sucursalId: numb
     multaInasistencia: r.multaInasistencia.toNumber(),
   });
 
+  const itemsSinPrecio = await contarItemsSinPrecio(inventario.id);
+
   return {
     periodo: nombreDePeriodo(inventario.periodoAnio, inventario.periodoMes),
     faltanteBruto: r.montoFaltanteBruto.toNumber(),
@@ -132,6 +190,7 @@ export async function deSucursal(actor: ColaboradorAutenticado, sucursalId: numb
         bonoAsistencia: l.bonoAsistencia.toNumber(),
       }),
     })),
+    advertencia: armarAdvertencia(itemsSinPrecio),
   };
 }
 
@@ -151,6 +210,15 @@ export async function conciliacion(
 
   const sumaPlanilla = redondear(liquidacion.planilla.reduce((total, p) => total + p.monto, 0));
 
+  // Lo que EFECTIVAMENTE se repartió en bonos: la suma de lo que recibió cada
+  // asistente, no `bonoAsistencia × asistentes`. Esa multiplicación es
+  // justamente la que no cerraba, porque a algunos les toca un centavo más.
+  const repartido = redondear(
+    liquidacion.planilla
+      .filter((p) => p.asistio)
+      .reduce((total, p) => total + (liquidacion.cuotaBase - p.monto), 0),
+  );
+
   return {
     periodo: liquidacion.periodo,
     faltanteNeto: liquidacion.faltanteNeto,
@@ -166,5 +234,26 @@ export async function conciliacion(
     colaboradores: liquidacion.planilla.length,
     asistieron: liquidacion.planilla.filter((p) => p.asistio).length,
     faltaron: liquidacion.totalFaltas,
+
+    /**
+     * EL FONDO DE MULTAS TIENE QUE CERRAR: lo que se recauda de quienes
+     * faltaron es exactamente lo que se reparte entre quienes asistieron. Es
+     * la regla textual del cliente -- el fondo SE REDISTRIBUYE -- y hasta el
+     * arreglo del reparto no se cumplia: con S/80 entre 7 asistentes se
+     * repartian S/80.01 y la empresa ponia un centavo.
+     *
+     * Se expone y no se asume: si algun dia vuelve a no cerrar, se ve acá en
+     * vez de aparecer como un descuadre en la nomina tres meses despues.
+     */
+    fondoDeMultas: {
+      recaudado: redondear(liquidacion.totalFaltas * liquidacion.multaInasistencia),
+      repartido: repartido,
+      /** Tiene que ser 0. Positivo = la empresa pone; negativo = se queda. */
+      diferencia: redondear(repartido - liquidacion.totalFaltas * liquidacion.multaInasistencia),
+      cierra: redondear(repartido - liquidacion.totalFaltas * liquidacion.multaInasistencia) === 0,
+    },
+
+    /** Lo que hay que decirle a quien firma -- ver AdvertenciaLiquidacion. */
+    advertencia: liquidacion.advertencia,
   };
 }

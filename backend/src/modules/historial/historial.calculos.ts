@@ -18,6 +18,8 @@
  * de una cadena -- de eso se ocupa `redondear`.
  */
 
+import { bonoBase } from '../../dominio/reparto-de-fondo';
+
 /** Redondeo a 2 decimales (centavos), medio hacia arriba. */
 export function redondear(valor: number, decimales = 2): number {
   const factor = 10 ** decimales;
@@ -87,7 +89,15 @@ export interface ResumenLiquidacion {
   faltantes: number;
   /** faltantes * multaInasistencia -- lo que se redistribuye. */
   fondoMultas: number;
-  /** fondoMultas / asistentes: cuanto le baja la cuota a cada uno que fue. */
+  /**
+   * El PISO del reparto del fondo entre los asistentes -- lo que muestra el
+   * encabezado ("-S/7.50 de descuento adicional para cada asistente").
+   *
+   * Es el piso y no el promedio: cuando el fondo no divide exacto, a algunos
+   * les toca UN centavo mas (ver dominio/reparto-de-fondo.ts). Decir un
+   * promedio con decimales que nadie recibe seria peor que decir el piso.
+   * El monto exacto de cada persona esta en su fila de la planilla.
+   */
   bonoAsistencia: number;
   /**
    * Centavos que quedan sin repartir por el redondeo de `cuotaBase`
@@ -110,7 +120,10 @@ export function calcularResumenLiquidacion(e: EntradaLiquidacion): ResumenLiquid
 
   const faltantes = Math.max(0, e.colaboradoresAlcanzados - e.colaboradoresAsistieron);
   const fondoMultas = redondear(faltantes * e.multaInasistencia);
-  const bonoAsistencia = e.colaboradoresAsistieron === 0 ? 0 : redondear(fondoMultas / e.colaboradoresAsistieron);
+  // `bonoBase` y no `redondear(fondo / asistentes)`: con el redondeo, la suma
+  // de los bonos no daba el fondo y la empresa a veces ponia y a veces se
+  // quedaba con la diferencia. Ver dominio/reparto-de-fondo.ts.
+  const bonoAsistencia = bonoBase(fondoMultas, e.colaboradoresAsistieron);
 
   const residuoCentavos = redondear(montoFaltanteNeto - cuotaBase * e.colaboradoresAlcanzados);
 
