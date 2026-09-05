@@ -839,10 +839,12 @@ en_curso ──▶ conteo_cerrado ──▶ liquidado ──▶ lacrado
 | Estado | Qué significa |
 |---|---|
 | `en_curso` | Snapshot tomado, las 3 rondas de conteo todavía se pueden tocar. Es el único estado que acepta escrituras de conteo. |
-| `conteo_cerrado` | La 3ra ronda quedó fija (cierre de Gilmer): las cantidades ya no se recuentan. |
-| `liquidado` | La planilla de descuentos está calculada. Falta la firma. |
+| `conteo_cerrado` | La 3ra ronda quedó fija (cierre de Gilmer): las cantidades ya no se recuentan. Lo escribe `rondas.service.ts#cerrar` junto con `ResultadoInventario` y el detalle de diferencias. |
+| `liquidado` | La planilla de descuentos está calculada **y persistida**. Falta la firma. Lo escribe `POST /api/liquidacion/inventarios/:id/liquidar`. |
 | `lacrado` | Cerrado e inmutable. Cualquier ajuste entra en el período siguiente. |
 | `anulado` | Se abandonó sin llegar a lacrar (ej. snapshot equivocado). No produce histórico contable, pero libera la sucursal. |
+
+**Las flechas no se saltean: se liquida ANTES de lacrar.** Decisión del cliente, y la única compatible con lo que el sello contiene — el hash incluye la planilla (`armarDatosLacrado` lee `inv.liquidaciones`), así que firmar antes de liquidar sellaba `liquidaciones: []` y la verificación respondía "intacto" para siempre. Por eso `ESTADOS_APROBABLES` es `['liquidado']` y nada más: que el estado no lo permita, en vez de una guarda que alguien puede saltear, es lo que hace de esto un control y no un recordatorio.
 
 #### Dos reglas que sostiene la base de datos, no el código
 
@@ -1159,7 +1161,7 @@ Respuesta `201`:
 }
 ```
 
-Errores: `403` rol o sucursal · `409` ya está lacrado, faltan aprobaciones (*"el lacrado exige 2 de personas distintas y hay 1"*), o el estado no es `conteo_cerrado`/`liquidado`.
+Errores: `403` rol o sucursal · `409` ya está lacrado, faltan aprobaciones (*"el lacrado exige 2 de personas distintas y hay 1"*), o el inventario **todavía no está liquidado** (*"el coordinador tiene que cerrar la planilla antes de que se pueda firmar el lacrado"*).
 
 #### `POST /api/historial/inventarios/:id/lacrado/registro-erp`
 
@@ -1279,6 +1281,35 @@ Respuesta `200`:
 `diferenciaPorRedondeo` son los centavos que deja el redondeo de la cuota (1390 ÷ 11 = 126.36 × 11 = 1389.96, sobran 4). Se expone en vez de esconderse. **Pendiente de definir con el cliente**: hoy queda a favor del personal.
 
 Va aparte y no dentro de `Liquidacion` porque esa forma espeja el puerto del front y no se le pueden agregar campos sin romperlo.
+
+#### `POST /api/liquidacion/inventarios/:inventarioId/liquidar`
+
+Cierra la planilla: calcula el descuento de cada persona, lo **persiste** en `LiquidacionColaborador` y deja el inventario en `liquidado`. Los dos hechos van en una transacción — son un solo hecho de negocio, igual que cerrar la última ronda y cerrar el conteo.
+
+Respuesta `201`:
+```json
+{
+  "inventarioId": 20,
+  "estado": "liquidado",
+  "colaboradores": 11,
+  "cuotaBase": 126.36,
+  "bonoAsistencia": 11.42,
+  "faltantes": 4,
+  "totalDescontado": 1390
+}
+```
+
+**Rol `administrador` o `coordinador` — el auditor NO.** Es quien firma el lacrado, y el sello incluye la planilla: si pudiera cerrarla y después firmarla, el control de dos personas se completa solo. No alcanza con que sean dos pasos, tienen que ser dos personas.
+
+**Por qué existe**: `LiquidacionColaborador` se leía en el histórico y en el armado del sello, y solo la escribía el seed. En un inventario real la tabla quedaba vacía, el lacrado hasheaba `liquidaciones: []` y la verificación respondía "intacto" para siempre. Un sello sobre un documento vacío es peor que no tener sello.
+
+El bono sale de `repartirExacto`, no de `bonoBase × asistentes`: la suma de la columna da el fondo al centavo (S/80 entre 7 daba S/80.01 con la multiplicación). Las filas guardan las **tres partes** — cuota, multa, bono — y nunca el total: misma regla que deja a `Conteo` sin columna `total`.
+
+> ⚠️ **Hoy este endpoint responde `409` siempre, y está bien que así sea.** No existe mecanismo para registrar la asistencia ni para cargar los ajustes del mes, así que `ResultadoInventario.colaboradoresAsistieron` y `montoNegativos` son `NULL`. Sin esos dos datos no hay cuota ni bono que valgan, y escribir la planilla igual sería descontarle a alguien un monto calculado sobre un dato que nadie cargó. El endpoint queda listo y testeado para el día que el cliente defina la captura.
+>
+> **Para quien implemente esa captura**: un contador no alcanza. `colaboradoresAsistieron` es *cuántos*; la planilla necesita *quiénes* (`LiquidacionColaborador.asistio` es por persona). Si el mecanismo solo guarda el total, `liquidacion.cierre.ts#liquidar` sigue sin poder armar la planilla.
+
+Errores: `404` inventario inexistente · `403` rol sin permiso (el mensaje dice quién sí puede) o sucursal ajena · `409` conteo todavía abierto, planilla ya cerrada, sin resultado calculado, o sin asistencia/ajustes registrados.
 
 ---
 

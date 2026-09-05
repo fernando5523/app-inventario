@@ -3,7 +3,7 @@ import { requiereSesion } from '../../middleware/auth.middleware';
 import { requiereRol } from '../../middleware/autorizacion.middleware';
 import { validar } from '../../middleware/validation.middleware';
 import * as controller from './liquidacion.controller';
-import { parametrosSucursalSchema } from './liquidacion.schema';
+import { parametrosInventarioSchema, parametrosSucursalSchema } from './liquidacion.schema';
 
 /**
  * Liquidacion y nomina (pantalla 6).
@@ -32,4 +32,20 @@ liquidacionRouter.get(
   '/sucursales/:sucursalId/conciliacion',
   validar(parametrosSucursalSchema, 'params'),
   controller.conciliacion,
+);
+
+/**
+ * Cerrar la planilla del inventario y dejarlo en `liquidado`.
+ *
+ * SIN el auditor, al reves que los dos GET de arriba: el auditor es quien
+ * FIRMA el lacrado, y el sello incluye la planilla. Si pudiera cerrarla y
+ * despues firmarla, el control de dos personas se completa solo. El recorte
+ * fino vive en liquidacion.permisos.ts#validarPuedeLiquidar; este
+ * `requiereRol` es la primera barrera, no la unica.
+ */
+liquidacionRouter.post(
+  '/inventarios/:inventarioId/liquidar',
+  requiereRol('administrador', 'coordinador'),
+  validar(parametrosInventarioSchema, 'params'),
+  controller.liquidar,
 );

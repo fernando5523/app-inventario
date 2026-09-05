@@ -137,11 +137,27 @@ export interface AprobacionExistente {
 }
 
 /**
- * Estados en los que tiene sentido firmar: el conteo ya cerro (las
- * cantidades estan fijas) pero todavia no se lacro. Aprobar un inventario
- * `en_curso` seria firmar un resultado que todavia puede cambiar.
+ * SE LIQUIDA PRIMERO, SE LACRA DESPUES. Decision del cliente, y la unica
+ * compatible con lo que el sello contiene.
+ *
+ * El sello hashea la PLANILLA (historial.service.ts#armarDatosLacrado lee
+ * `inv.liquidaciones`): es la parte que mas le importa al colaborador,
+ * porque es cuanto le descuentan del sueldo. Firmar antes de liquidar
+ * significaba sellar `liquidaciones: []` y que la verificacion respondiera
+ * "intacto" para siempre -- un sello sobre un documento vacio, que es peor
+ * que no tener sello porque da falsa confianza.
+ *
+ * `conteo_cerrado` salio de esta lista por eso. No es una guarda mas que
+ * alguien puede saltear: el estado NO LO PERMITE, y esa es la diferencia
+ * entre un control y un recordatorio. La transicion a `liquidado` la escribe
+ * `liquidacion.cierre.ts#liquidar`, que solo persiste la planilla con la
+ * asistencia y los ajustes ya cargados.
+ *
+ * `liquidado` es el unico estado aprobable: `en_curso` seria firmar un
+ * resultado que todavia puede cambiar, y `lacrado` ya esta firmado (lo corta
+ * antes `verificarNoLacrado`).
  */
-const ESTADOS_APROBABLES: EstadoInventario[] = ['conteo_cerrado', 'liquidado'];
+const ESTADOS_APROBABLES: EstadoInventario[] = ['liquidado'];
 
 /**
  * EL CONTROL DE DOS PERSONAS, de verdad.
@@ -180,11 +196,20 @@ export function validarPuedeAprobar(
   verificarNoLacrado(inventario, 'aprobar el cierre');
 
   if (!ESTADOS_APROBABLES.includes(inventario.estado)) {
+    // Dos mensajes distintos porque la accion que le toca a quien lee es
+    // distinta, y decirle "no se puede" sin decirle QUE falta y QUIEN lo hace
+    // lo deja mirando la pantalla. Sin el enum crudo de la base: `en_curso`
+    // es un valor de Postgres, no algo que la persona pueda accionar.
+    if (inventario.estado === 'conteo_cerrado') {
+      throw new Conflicto(
+        'El inventario todavia no esta liquidado: el coordinador tiene que cerrar la planilla ' +
+          'antes de que se pueda firmar el lacrado. El sello incluye lo que se le descuenta a cada ' +
+          'persona, asi que firmarlo antes seria sellar una planilla vacia.',
+      );
+    }
     throw new Conflicto(
-      // Sin el enum crudo de la base: `en_curso` es un valor de Postgres, no
-      // algo que la persona pueda accionar.
       'Todavia no hay nada que aprobar: el conteo sigue abierto. ' +
-        'La aprobacion viene despues de cerrar la ultima ronda.',
+        'La aprobacion viene despues de cerrar la ultima ronda y de liquidar.',
     );
   }
 

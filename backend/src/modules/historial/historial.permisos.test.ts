@@ -106,32 +106,74 @@ describe('verificarNoLacrado', () => {
 // ---------------------------------------------------------------------------
 
 describe('validarPuedeAprobar', () => {
-  it('un auditor de la sucursal puede firmar un inventario con el conteo cerrado', () => {
-    expect(() => validarPuedeAprobar(gilmer, inventario('conteo_cerrado'), [])).not.toThrow();
+  it('un auditor de la sucursal puede firmar un inventario ya liquidado', () => {
+    expect(() => validarPuedeAprobar(gilmer, inventario('liquidado'), [])).not.toThrow();
   });
 
-  it('tambien se puede firmar cuando ya esta liquidado', () => {
-    expect(() => validarPuedeAprobar(gilmer, inventario('liquidado'), [])).not.toThrow();
+  /**
+   * SE LIQUIDA PRIMERO, SE LACRA DESPUES -- decision del cliente, y la unica
+   * compatible con lo que el sello contiene: el hash incluye la PLANILLA
+   * (historial.service.ts#armarDatosLacrado lee `inv.liquidaciones`).
+   *
+   * Antes `conteo_cerrado` era aprobable, y como nada escribia
+   * LiquidacionColaborador, el sello se calculaba sobre `liquidaciones: []`
+   * y la verificacion respondia "intacto" para siempre. Un sello sobre un
+   * documento vacio es peor que no tener sello: da falsa confianza sobre lo
+   * que mas le importa al colaborador.
+   *
+   * Que el estado no lo permita -- y no una guarda que alguien puede saltear
+   * -- es lo que hace de esto un control y no un recordatorio.
+   */
+  describe('el conteo cerrado pero SIN liquidar', () => {
+    it('no se puede firmar todavia', () => {
+      expect(() => validarPuedeAprobar(gilmer, inventario('conteo_cerrado'), [])).toThrow(Conflicto);
+    });
+
+    it('el mensaje nombra el paso que falta Y quien lo hace', () => {
+      // Decirle al auditor "no se puede" sin decirle que falta ni a quien
+      // pedirselo lo deja mirando la pantalla.
+      expect(() => validarPuedeAprobar(gilmer, inventario('conteo_cerrado'), [])).toThrow(/no esta liquidado/);
+      expect(() => validarPuedeAprobar(gilmer, inventario('conteo_cerrado'), [])).toThrow(/coordinador/);
+      expect(() => validarPuedeAprobar(gilmer, inventario('conteo_cerrado'), [])).toThrow(/cerrar la planilla/);
+    });
+
+    it('explica POR QUE importa el orden, no solo que hay un orden', () => {
+      expect(() => validarPuedeAprobar(gilmer, inventario('conteo_cerrado'), [])).toThrow(/planilla vacia/);
+    });
+
+    it('no filtra el enum crudo de la base', () => {
+      // `conteo_cerrado` es un valor de Postgres, no algo accionable.
+      expect(() => validarPuedeAprobar(gilmer, inventario('conteo_cerrado'), [])).not.toThrow(/conteo_cerrado/);
+    });
+
+    it('el mensaje es DISTINTO del de "el conteo sigue abierto"', () => {
+      // La accion que le toca a quien lee es otra: ahi hay que cerrar la
+      // ronda, aca hay que cerrar la planilla.
+      expect(() => validarPuedeAprobar(gilmer, inventario('en_curso'), [])).toThrow(/conteo sigue abierto/);
+      expect(() => validarPuedeAprobar(gilmer, inventario('conteo_cerrado'), [])).not.toThrow(
+        /conteo sigue abierto/,
+      );
+    });
   });
 
   it('LA MISMA PERSONA NO COMPLETA EL PAR: la segunda firma la da otro', () => {
     // El corazon del control de dos personas. Gilmer ya firmo; si pudiera
     // firmar de nuevo cerraria el mes solo y la doble validacion seria un
     // boton doble.
-    expect(() => validarPuedeAprobar(gilmer, inventario('conteo_cerrado'), [{ aprobadorId: gilmer.colaboradorId }])).toThrow(
+    expect(() => validarPuedeAprobar(gilmer, inventario('liquidado'), [{ aprobadorId: gilmer.colaboradorId }])).toThrow(
       Conflicto,
     );
   });
 
   it('el mensaje le dice que la otra firma va desde otra sesion', () => {
     expect(() =>
-      validarPuedeAprobar(gilmer, inventario('conteo_cerrado'), [{ aprobadorId: gilmer.colaboradorId }]),
+      validarPuedeAprobar(gilmer, inventario('liquidado'), [{ aprobadorId: gilmer.colaboradorId }]),
     ).toThrow(/OTRA persona/);
   });
 
   it('OTRA persona SI puede dar la segunda firma', () => {
     expect(() =>
-      validarPuedeAprobar(rosa, inventario('conteo_cerrado'), [{ aprobadorId: gilmer.colaboradorId }]),
+      validarPuedeAprobar(rosa, inventario('liquidado'), [{ aprobadorId: gilmer.colaboradorId }]),
     ).not.toThrow();
   });
 
@@ -149,22 +191,22 @@ describe('validarPuedeAprobar', () => {
   });
 
   it('un auditor de otra tienda no firma este cierre', () => {
-    expect(() => validarPuedeAprobar(auditorOtraTienda, inventario('conteo_cerrado', 1), [])).toThrow(Prohibido);
+    expect(() => validarPuedeAprobar(auditorOtraTienda, inventario('liquidado', 1), [])).toThrow(Prohibido);
   });
 
   it('un contador no firma el cierre', () => {
-    expect(() => validarPuedeAprobar(contador, inventario('conteo_cerrado'), [])).toThrow(Prohibido);
+    expect(() => validarPuedeAprobar(contador, inventario('liquidado'), [])).toThrow(Prohibido);
   });
 
   it('un coordinador tampoco firma el cierre hoy (ver ROLES_QUE_APRUEBAN_CIERRE)', () => {
-    expect(() => validarPuedeAprobar(coordinador, inventario('conteo_cerrado'), [])).toThrow(Prohibido);
+    expect(() => validarPuedeAprobar(coordinador, inventario('liquidado'), [])).toThrow(Prohibido);
   });
 
   it('el par completo dice que el paso siguiente es LACRAR', () => {
     // No es un error: es que ya se habilito lo que sigue. Decirlo evita que
     // la persona se pregunte que hizo mal.
     expect(() =>
-      validarPuedeAprobar(admin, inventario('conteo_cerrado'), [{ aprobadorId: 12 }, { aprobadorId: 30 }]),
+      validarPuedeAprobar(admin, inventario('liquidado'), [{ aprobadorId: 12 }, { aprobadorId: 30 }]),
     ).toThrow(/listo para lacrar/);
   });
 
@@ -172,16 +214,16 @@ describe('validarPuedeAprobar', () => {
     // Antes decia "solo podes consultar el historico de tu propia sucursal"
     // — falso: ES su sucursal. El problema es el rol, y mandarlo a mirar la
     // tienda lo deja dando vueltas.
-    expect(() => validarPuedeAprobar(coordinador, inventario('conteo_cerrado'), [])).not.toThrow(
+    expect(() => validarPuedeAprobar(coordinador, inventario('liquidado'), [])).not.toThrow(
       /tu propia sucursal/,
     );
-    expect(() => validarPuedeAprobar(coordinador, inventario('conteo_cerrado'), [])).toThrow(
+    expect(() => validarPuedeAprobar(coordinador, inventario('liquidado'), [])).toThrow(
       /auditor y el administrador/,
     );
   });
 
   it('y a uno de OTRA tienda si se le dice que es la tienda', () => {
-    expect(() => validarPuedeAprobar(auditorOtraTienda, inventario('conteo_cerrado'), [])).toThrow(/otra tienda/);
+    expect(() => validarPuedeAprobar(auditorOtraTienda, inventario('liquidado'), [])).toThrow(/otra tienda/);
   });
 
   it('aprobar con el conteo abierto no filtra el enum', () => {
@@ -191,7 +233,7 @@ describe('validarPuedeAprobar', () => {
 
   it('no se agrega una tercera firma sobre un par ya completo', () => {
     expect(() =>
-      validarPuedeAprobar(admin, inventario('conteo_cerrado'), [{ aprobadorId: 12 }, { aprobadorId: 30 }]),
+      validarPuedeAprobar(admin, inventario('liquidado'), [{ aprobadorId: 12 }, { aprobadorId: 30 }]),
     ).toThrow(Conflicto);
   });
 });
@@ -294,11 +336,11 @@ describe('validarPuedeLacrar', () => {
     // este chequeo resuelve el segundo. Bloquear el primero aca seria poner
     // el control de "conto algo?" en el lugar equivocado.
     //
-    // Ademas ya esta cubierto: ESTADOS_APROBABLES solo deja lacrar un
-    // inventario `conteo_cerrado` o `liquidado`, asi que uno recien creado y
-    // vacio (`en_curso`) no llega ni a este punto. Para tener 0 hojas Y estar
-    // cerrado, alguien tuvo que cerrar explicitamente un ciclo sin hojas --
-    // y eso lo tiene que impedir quien cierra el conteo, no el lacrado.
+    // Ademas ya esta cubierto: ESTADOS_APROBABLES solo deja firmar un
+    // inventario `liquidado`, asi que uno recien creado y vacio (`en_curso`)
+    // no llega ni a este punto. Para tener 0 hojas Y estar liquidado, alguien
+    // tuvo que cerrar explicitamente un ciclo sin hojas -- y eso lo tiene que
+    // impedir quien cierra el conteo, no el lacrado.
     expect(() => validarPuedeLacrar(gilmer, listo, dosFirmas)).not.toThrow();
     expect(() =>
       validarPuedeLacrar(gilmer, { ...listo, estado: 'en_curso' as EstadoInventario }, dosFirmas),

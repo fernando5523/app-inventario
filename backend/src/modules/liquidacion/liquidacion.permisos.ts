@@ -38,3 +38,38 @@ export function validarAcceso(actor: ColaboradorAutenticado, sucursalId: number)
     throw new Prohibido('Esa sucursal no es la tuya.');
   }
 }
+
+/**
+ * Quien CIERRA la planilla, que no es lo mismo que quien la mira.
+ *
+ * EL AUDITOR SALE DE ESTA LISTA, y esa es toda la razon de que esta funcion
+ * exista aparte de `validarAcceso`. El auditor es quien FIRMA el lacrado
+ * (historial.permisos.ts#validarPuedeAprobar), y el sello incluye la
+ * planilla: si la misma persona pudiera cerrar la planilla y despues
+ * firmarla, el control de dos personas se completa solo. Es exactamente el
+ * agujero que ese control existe para tapar -- y no alcanza con que sean dos
+ * pasos, tienen que ser dos personas.
+ *
+ * El coordinador si: es quien cierra las rondas (inventarios.routes.ts) y
+ * quien tiene la Pantalla 6. El administrador tambien, por la misma razon
+ * que entra a todo lo demas.
+ *
+ * `conteo` no aparece por lo mismo que en `validarAcceso`: el descuento de
+ * los companeros no es asunto de quien cuenta.
+ */
+const ROLES_QUE_LIQUIDAN: readonly Rol[] = ['administrador', 'coordinador'];
+
+export function validarPuedeLiquidar(actor: ColaboradorAutenticado, sucursalId: number): void {
+  if (!ROLES_QUE_LIQUIDAN.includes(actor.rol)) {
+    // Decir quien SI puede: quien lee esto tiene que saber a quien pedirselo,
+    // no quedarse mirando la pantalla (mismo criterio que
+    // historial.permisos.ts#validarPuedeAprobar).
+    throw new Prohibido(
+      'Cerrar la planilla lo hace el coordinador de la tienda o el administrador. ' +
+        'El auditor no la cierra: es quien despues la firma, y la misma persona no puede hacer las dos cosas.',
+    );
+  }
+  if (actor.rol !== 'administrador' && actor.sucursalId !== sucursalId) {
+    throw new Prohibido('Esa sucursal no es la tuya.');
+  }
+}
