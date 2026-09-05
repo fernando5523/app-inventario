@@ -20,15 +20,23 @@
  * reconciliación) con piezas de producción de verdad en cada eslabón
  * salvo Postgres mismo, y es 100% hermético: no necesita nada corriendo.
  *
- * DATO IMPORTANTE que esta tarea encontró (no un bug de este archivo, un
- * hallazgo): HOY no existe ningún `sincronizador.ts` que llame a
- * `procesarColaDeSincronizacion` con la red real -- ni un temporizador,
- * ni un listener de reconexión, ni nada al reabrir la app (confirmado:
- * la única mención de `procesarColaDeSincronizacion` fuera de tests es un
- * comentario en contenedor.ts). `enviarViaApiReal`, acá abajo, es
- * exactamente el trabajo que ESE módulo tendría que hacer el día que
- * exista -- este archivo prueba que la pieza funciona extremo a extremo,
- * no que hoy se dispare sola en la app.
+ * ACTUALIZADO (2026-09-04): `sincronizador.ts` SÍ existe y SÍ llama a
+ * `procesarColaDeSincronizacion` con la red real (`enviarPorRed`, que hace
+ * exactamente lo mismo que `enviarViaApiReal` acá abajo). Está disparado
+ * en 5 momentos, todos verificados en el código:
+ *   1. Reconexión de red — sincronizador.ts:160-166.
+ *   2. Al finalizar una hoja — app/conteo/contar.tsx:289.
+ *   3. Manual — app/conteo/contar.tsx:323 y app/conteo/mis-hojas.tsx:140 (BandaSync.onSincronizar).
+ *   4. Vuelta a primer plano — sincronizador.ts:171.
+ *   5. Arranque de la app — app/_layout.tsx:43.
+ * `contenedor.ts` expone `sincronizador` como `sincronizadorReal` directo.
+ * Este archivo sigue siendo el que prueba la ORQUESTACIÓN de punta a
+ * punta (SQLite -> cola -> red -> reconciliación). `sincronizador.test.ts`
+ * cubre el lock contra pasadas solapadas, `estado()`/`suscribir()` y la
+ * traducción de errores de `enviarPorRed` — NO ejercita los 5 disparadores
+ * en sí (no simula el evento de red ni de `AppState` para verificar que
+ * `sincronizar()` se llama solo). Verificarlos hoy es leer el código en
+ * los archivo:línea de arriba, no un test automatizado.
  */
 
 import { DatabaseSync } from 'node:sqlite';

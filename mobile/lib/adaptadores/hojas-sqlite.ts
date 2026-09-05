@@ -660,10 +660,19 @@ export async function estadoDeLaCola(): Promise<EstadoColaCruda> {
 
 /**
  * Recorre la cola en orden y trata de mandar cada item con `enviar`
- * (inyectado: hoy no hay un endpoint de hojas confirmado contra el
- * backend — ver hojas-api.ts — así que nada llama a esto todavía con una
- * implementación de red real; queda lista para cuando lo haya, sin tener
- * que tocar este archivo).
+ * (inyectado a propósito: este archivo no sabe de red, `sincronizador.ts`
+ * es quien decide CUÁNDO llamar a esto y CÓMO mandar cada item por HTTP).
+ *
+ * `enviar` real es `enviarPorRed` (sincronizador.ts) contra `hojasApi`
+ * (hojas-api.ts). `sincronizador.ts` la dispara en 5 momentos, todos
+ * verificados en el código, no solo documentados acá:
+ *   1. Reconexión de red — sincronizador.ts:160-166 (Network.addNetworkStateListener, solo en la transición a conectado).
+ *   2. Al finalizar una hoja — app/conteo/contar.tsx:289 (`void sincronizador.sincronizar()` justo después de `repositorioHojas.finalizar()`).
+ *   3. Manual — app/conteo/contar.tsx:323 y app/conteo/mis-hojas.tsx:140 (`BandaSync onSincronizar`).
+ *   4. Vuelta a primer plano — sincronizador.ts:171 (`AppState.addEventListener('change', ...)`).
+ *   5. Arranque de la app — app/_layout.tsx:43 (`useEffect(() => iniciarSincronizador(), [])`).
+ * `contenedor.ts` expone `sincronizador` como `sincronizadorReal` directo,
+ * sin flag que pueda caer a un stub.
  *
  * Rechazado o sin red: el item queda en `error` (sqlite-cola.ts#
  * aplicarResultadoEnvio) — NUNCA desaparece en silencio ni se reintenta
