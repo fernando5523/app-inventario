@@ -19,6 +19,7 @@ import { inventarioIdSinRed, rondaActivaSinRed } from '../../lib/adaptadores/hoj
 import { repositorioHojas, repositorioInventario, sincronizador } from '../../lib/contenedor';
 import { resolverCodigoEnHoja, type CoincidenciaEscaneo } from '../../lib/dominio/escaneo';
 import { avance, puedeEditar, puedeFinalizar } from '../../lib/dominio/hoja';
+import { ORDINAL } from '../../lib/dominio/texto-cierre-ronda';
 import type { Conteo, HojaConteo, Producto } from '../../lib/dominio/tipos';
 import type { EstadoCola } from '../../lib/puertos/repositorios';
 import { useSesion } from '../../lib/sesion-contexto';
@@ -336,7 +337,7 @@ export default function ContarScreen(): JSX.Element {
     <>
       <PantallaConTabs scrollable contentStyle={styles.contenido}>
       <View style={styles.cabeceraHoja}>
-        <BarraApp rotulo="Conteo ciego · 1er conteo" sinBorde />
+        <BarraApp rotulo={`Conteo ciego · ${ORDINAL[ronda ?? 1]} conteo`} sinBorde />
         <AvanceFila texto={`${contados} / ${total} Productos`} porcentaje={porcentaje} />
       </View>
 

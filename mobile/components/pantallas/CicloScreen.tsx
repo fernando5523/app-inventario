@@ -300,12 +300,21 @@ export function CicloScreen({ rol }: CicloScreenProps): JSX.Element {
         // al último conteo). No es un error — el backend lo dice en el motivo.
         Alert.alert(`${ORDINAL[rondaActiva]} conteo cerrado`, cierre.motivoSinSiguiente ?? 'El ciclo de conteos terminó.');
       }
-      // Recargar hojas y preview: el estado de la pantalla cambió. `hojasT1`
-      // sigue siendo la ronda 1 (Paso 1); el preview se recarga para la misma
-      // ronda que se acaba de cerrar.
+      // El cierre cambió la RONDA ACTIVA en el backend: hay que RE-PEDIR
+      // activo() para no quedar mostrando el bloque de cierre de la ronda que
+      // se acaba de cerrar. Antes `rondaActiva` quedaba en 1 y el botón
+      // "Cerrar el 1er conteo" seguía habilitado sobre una ronda ya cerrada.
+      const activo = await repositorioInventario.activo(sesion!.sucursal!.id);
+      setRondaActiva(activo?.rondaActiva ?? null);
+      // `hojasT1` sigue siendo la ronda 1 (Paso 1, siempre la 1ra pasada).
       const todas = await repositorioHojas.todas(inventarioId, 1);
       setHojasT1(todas);
-      await cargarResumen(inventarioId, rondaActiva);
+      await cargarResumenDeRondas(inventarioId);
+      // El preview del cierre, ahora para la ronda ACTIVA nueva. Si el ciclo
+      // terminó (rondaActiva null), no queda nada que cerrar: se limpia el
+      // preview para que el bloque desaparezca.
+      if (activo?.rondaActiva != null) await cargarResumen(inventarioId, activo.rondaActiva);
+      else setResumen(null);
     } catch (error) {
       // El backend rechaza con mensaje claro (hojas sin finalizar, o ya
       // cerrada): se muestra tal cual, no un "no se pudo" genérico.

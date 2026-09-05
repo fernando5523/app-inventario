@@ -6,6 +6,7 @@ import { ActivityIndicator, Alert, StyleSheet, Text, View } from 'react-native';
 import { AvanceFila, BandaSync, BarraApp, Button, EmptyState, TarjetaHoja, sincronizacionDeHojas } from '../../components/ui';
 import { PantallaConTabs } from '../../components/navegacion/PantallaConTabs';
 import { inventarioIdSinRed, rondaActivaSinRed, ultimaDescarga } from '../../lib/adaptadores/hojas-sqlite';
+import { ORDINAL } from '../../lib/dominio/texto-cierre-ronda';
 import { repositorioHojas, repositorioInventario, sincronizador } from '../../lib/contenedor';
 import type { HojaConteo } from '../../lib/dominio/tipos';
 import type { EstadoCola } from '../../lib/puertos/repositorios';
@@ -75,6 +76,10 @@ export default function MisHojasScreen(): JSX.Element {
   // vacía (por eso `estadoVacio` no aplica acá), pero mostrarla sin avisar
   // sería dejar creer que esas son TODAS las hojas del lote.
   const [descargaIncompleta, setDescargaIncompleta] = useState(false);
+  // La ronda activa que se está mostrando — para el rótulo. Con red sale de
+  // activo().rondaActiva; sin red, de rondaActivaSinRed. NUNCA fija en "1er":
+  // en la ronda 2 el rótulo tiene que decir "2do conteo".
+  const [rondaActual, setRondaActual] = useState<number | null>(null);
   const [estadoCola, setEstadoCola] = useState<EstadoCola>(sincronizador.estado());
   useEffect(() => sincronizador.suscribir(setEstadoCola), []);
 
@@ -96,6 +101,7 @@ export default function MisHojasScreen(): JSX.Element {
       ronda = inventarioId ? await rondaActivaSinRed(inventarioId) : null;
       sinRedYsinLocal = inventarioId === null;
     }
+    setRondaActual(ronda);
     if (!inventarioId || ronda === null) {
       setHojas([]);
       // Sin esto, "sin conexión y nunca se descargó nada" caería en el
@@ -163,7 +169,7 @@ export default function MisHojasScreen(): JSX.Element {
     <PantallaConTabs scrollable contentStyle={styles.contenido}>
       <View style={styles.cabeceraHoja}>
         <BarraApp
-          rotulo="Mis hojas · 1er conteo"
+          rotulo={`Mis hojas · ${ORDINAL[rondaActual ?? 1]} conteo`}
           sede={sesion.sucursal!.nombre}
           cifras={`${hojas.length} hojas · ${totalItemsBloque} ítems · ${enProceso} en proceso`}
           onSalir={salir}

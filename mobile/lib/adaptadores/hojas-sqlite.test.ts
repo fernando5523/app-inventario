@@ -155,7 +155,7 @@ vi.mock('./catalogo-api', () => ({
 // Import DESPUÉS del vi.mock (vitest lo hoistea igual, pero así queda
 // explícito el orden real: hojas-sqlite.ts se carga con `_sqlite.ts` ya
 // reemplazado, nunca llega a tocar `expo-sqlite`).
-const { hojasSqlite, inventarioIdSinRed, procesarColaDeSincronizacion, ultimaDescarga } = await import('./hojas-sqlite');
+const { hojasSqlite, inventarioIdSinRed, rondaActivaSinRed, procesarColaDeSincronizacion, ultimaDescarga } = await import('./hojas-sqlite');
 const { obtenerInventarioDeSucursal } = await import('./_compartido');
 const { ErrorApi } = await import('./_http');
 const { hojasApi } = await import('./hojas-api');
@@ -1095,5 +1095,63 @@ describe('migración v4 (numero_conteo): aditiva — nunca le cuesta a nadie un 
     } finally {
       limpiar(raw, dir);
     }
+  });
+});
+
+describe('AVANCE OFFLINE: la ronda activa NO suma las dos rondas', () => {
+  // El caso real (visto en el emulador, ronda 2 de Market Bolívar): con la
+  // ronda 1 y la ronda 2 ambas asignadas al Contador y en la estructura local,
+  // SIN RED "Tu avance" contaba 50 hojas (las dos rondas) en vez de las 25 de
+  // la ronda activa. La lista ONLINE (con `activo().rondaActiva`) sí mostraba
+  // 25 — la divergencia está en el camino offline (`rondaActivaSinRed` + mias).
+  const INV = 999100;
+  const prod = (id: number) => ({
+    id,
+    codigo: String(id).padStart(4, '0'),
+    codigoBarras: `773000000${id}`,
+    descripcion: `Producto ${id}`,
+    empaques: [{ nombre: 'Caja', factor: 12 }],
+  });
+  // Mismo `numero` (#001..#025) en las dos rondas — es la MISMA góndola
+  // recontada — pero ids de hoja/producto distintos, como los materializa el
+  // backend al abrir el reconteo. Ambas asignadas a María (la sesión default).
+  const hoja = (id: number, numero: string) => ({
+    id,
+    inventarioId: INV,
+    numero,
+    zona: 'Zona X',
+    gondola: 'X1',
+    tamano: 50,
+    estado: 'pendiente' as const,
+    sync: 'sincronizado' as const,
+    asignados: ['María Rojas'],
+    productos: [prod(id * 10 + 1)],
+    conteos: [],
+  });
+  const hojasR1 = Array.from({ length: 25 }, (_, i) => hoja(99110000 + i, String(i + 1).padStart(3, '0')));
+  const hojasR2 = Array.from({ length: 25 }, (_, i) => hoja(99120000 + i, String(i + 1).padStart(3, '0')));
+
+  it('con 25 hojas en ronda 1 y 25 en ronda 2 locales, sin red, mias(ronda activa) devuelve 25 — nunca 50', async () => {
+    // El Coordinador vio la ronda 1 y la 2: las 50 quedaron en la estructura
+    // local (25 con numero_conteo=1, 25 con numero_conteo=2).
+    vi.mocked(hojasApi.todas).mockResolvedValueOnce(hojasR1);
+    await hojasSqlite.todas(INV, 1);
+    vi.mocked(hojasApi.todas).mockResolvedValueOnce(hojasR2);
+    await hojasSqlite.todas(INV, 2);
+
+    // Sin red para lo que sigue: el refresco en segundo plano de `mias` falla.
+    vi.mocked(hojasApi.mias).mockRejectedValue(new ErrorApi('sin-red'));
+
+    // La ronda activa sin red = la más alta descargada.
+    expect(await rondaActivaSinRed(INV)).toBe(2);
+
+    // El camino EXACTO de Inicio/Mis hojas offline: mias con la ronda activa.
+    const activa = await rondaActivaSinRed(INV);
+    const mias = await hojasSqlite.mias(INV, activa!);
+
+    // LO QUE NO PUEDE FALLAR: solo las 25 de la ronda 2, NUNCA las 50.
+    expect(mias).toHaveLength(25);
+    // Y el avance (total de productos de esas hojas) es sobre 25 hojas, no 50.
+    expect(mias.reduce((acc, h) => acc + h.productos.length, 0)).toBe(25);
   });
 });
