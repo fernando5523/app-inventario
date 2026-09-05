@@ -168,7 +168,15 @@ describe('validarPuedeAprobar', () => {
 });
 
 describe('validarPuedeLacrar', () => {
-  const listo = { sucursalId: 1, estado: 'liquidado' as EstadoInventario, yaLacrado: false, todoSincronizado: true };
+  // `hojasSinFinalizar: []` = todas cerradas. Es la condicion para lacrar, y
+  // es DISTINTA de `todoSincronizado`: ver el comentario del tipo.
+  const listo = {
+    sucursalId: 1,
+    estado: 'liquidado' as EstadoInventario,
+    yaLacrado: false,
+    todoSincronizado: true,
+    hojasSinFinalizar: [],
+  };
   const dosFirmas = [{ aprobadorId: 12 }, { aprobadorId: 30 }];
 
   it('con dos firmas de personas distintas se puede lacrar', () => {
@@ -192,6 +200,80 @@ describe('validarPuedeLacrar', () => {
 
   it('el mensaje dice cuantas firmas distintas hay', () => {
     expect(() => validarPuedeLacrar(gilmer, listo, [{ aprobadorId: 12 }])).toThrow(/hay 1/);
+  });
+
+  // -------------------------------------------------------------------------
+  // Hojas sin finalizar: el hueco que permitia lacrar un inventario a medio
+  // contar. `sync` y `estado` son cosas distintas.
+  // -------------------------------------------------------------------------
+
+  it('NO SE LACRA con una hoja pendiente, aunque este todo sincronizado', () => {
+    const conPendiente = {
+      ...listo,
+      todoSincronizado: true,
+      hojasSinFinalizar: [{ numero: '007', estado: 'pendiente', asignados: ['Maria Rojas'] }],
+    };
+    expect(() => validarPuedeLacrar(gilmer, conPendiente, dosFirmas)).toThrow(Conflicto);
+  });
+
+  it('tampoco con una hoja en-proceso: sincronizada no es lo mismo que terminada', () => {
+    // 12 de 50 items contados y subidos al servidor. El backend la ve al dia;
+    // la gondola no.
+    const enProceso = {
+      ...listo,
+      hojasSinFinalizar: [{ numero: '012', estado: 'en-proceso', asignados: ['Ana Perez'] }],
+    };
+    expect(() => validarPuedeLacrar(gilmer, enProceso, dosFirmas)).toThrow(Conflicto);
+  });
+
+  it('el error dice CUANTAS y CUALES, con numero y asignado', () => {
+    // Un "no se puede lacrar" pelado obliga a buscar cual de 25 hojas falta.
+    const dos = {
+      ...listo,
+      hojasSinFinalizar: [
+        { numero: '007', estado: 'pendiente', asignados: ['Maria Rojas'] },
+        { numero: '012', estado: 'en-proceso', asignados: ['Ana Perez', 'Luis Shuan'] },
+      ],
+    };
+    expect(() => validarPuedeLacrar(gilmer, dos, dosFirmas)).toThrow(/2 hojas siguen sin finalizar/);
+    expect(() => validarPuedeLacrar(gilmer, dos, dosFirmas)).toThrow(/#007 \(pendiente, Maria Rojas\)/);
+    expect(() => validarPuedeLacrar(gilmer, dos, dosFirmas)).toThrow(/#012 \(en-proceso, Ana Perez y Luis Shuan\)/);
+  });
+
+  it('una hoja sin asignar tambien se nombra: hay que ir a cerrarla igual', () => {
+    const huerfana = { ...listo, hojasSinFinalizar: [{ numero: '003', estado: 'pendiente', asignados: [] }] };
+    expect(() => validarPuedeLacrar(gilmer, huerfana, dosFirmas)).toThrow(/#003 \(pendiente, sin asignar\)/);
+  });
+
+  it('las hojas sin finalizar se avisan ANTES que la sincronizacion', () => {
+    // Una hoja sin cerrar NO se arregla sola esperando la WiFi: hay que ir a
+    // la gondola. Es lo primero que la persona tiene que saber.
+    const ambas = {
+      ...listo,
+      todoSincronizado: false,
+      hojasSinFinalizar: [{ numero: '007', estado: 'pendiente', asignados: ['Maria Rojas'] }],
+    };
+    expect(() => validarPuedeLacrar(gilmer, ambas, dosFirmas)).toThrow(/sin finalizar/);
+  });
+
+  it('CON TODAS FINALIZADAS si se lacra', () => {
+    expect(() => validarPuedeLacrar(gilmer, { ...listo, hojasSinFinalizar: [] }, dosFirmas)).not.toThrow();
+  });
+
+  it('un inventario SIN NINGUNA hoja pasa este chequeo, y es a proposito', () => {
+    // DECISION: "cero hojas" y "hojas sin terminar" son problemas distintos y
+    // este chequeo resuelve el segundo. Bloquear el primero aca seria poner
+    // el control de "conto algo?" en el lugar equivocado.
+    //
+    // Ademas ya esta cubierto: ESTADOS_APROBABLES solo deja lacrar un
+    // inventario `conteo_cerrado` o `liquidado`, asi que uno recien creado y
+    // vacio (`en_curso`) no llega ni a este punto. Para tener 0 hojas Y estar
+    // cerrado, alguien tuvo que cerrar explicitamente un ciclo sin hojas --
+    // y eso lo tiene que impedir quien cierra el conteo, no el lacrado.
+    expect(() => validarPuedeLacrar(gilmer, listo, dosFirmas)).not.toThrow();
+    expect(() =>
+      validarPuedeLacrar(gilmer, { ...listo, estado: 'en_curso' as EstadoInventario }, dosFirmas),
+    ).toThrow(Conflicto);
   });
 
   it('un inventario ya lacrado no se vuelve a lacrar', () => {

@@ -36,6 +36,7 @@ import {
   validarPuedeAprobar,
   validarPuedeLacrar,
   type EstadoInventario,
+  type HojaSinFinalizar,
 } from './historial.permisos';
 import type {
   AprobarCierreInput,
@@ -668,9 +669,10 @@ export interface LacradoDto {
  */
 export async function lacrar(actor: ColaboradorAutenticado, id: number): Promise<LacradoDto> {
   const inv = await traerInventarioOFallar(actor, id, INCLUDE_SELLO);
-  const [yaLacrado, sinSincronizar] = await Promise.all([
+  const [yaLacrado, sinSincronizar, hojasSinFinalizar] = await Promise.all([
     prisma.lacradoInventario.count({ where: { inventarioId: id } }).then((n) => n > 0),
     contarHojasSinSincronizar(id),
+    traerHojasSinFinalizar(id),
   ]);
 
   validarPuedeLacrar(
@@ -680,6 +682,7 @@ export async function lacrar(actor: ColaboradorAutenticado, id: number): Promise
       estado: inv.estado as EstadoInventario,
       yaLacrado,
       todoSincronizado: sinSincronizar === 0,
+      hojasSinFinalizar,
     },
     inv.aprobaciones,
   );
@@ -762,6 +765,37 @@ async function contarHojasSinSincronizar(inventarioId: number): Promise<number> 
   return prisma.hojaConteo.count({
     where: { inventarioId, sync: { not: 'sincronizado' } },
   });
+}
+
+/**
+ * Hojas que la persona todavia NO dio por terminadas.
+ *
+ * DISTINTO de `contarHojasSinSincronizar`: esa mira `sync` (si el conteo
+ * llego al servidor), esta mira `estado` (si la hoja se cerro). Una hoja
+ * puede estar sincronizada al dia y tener 12 de 50 items contados.
+ *
+ * Se traen los datos para poder NOMBRARLAS en el error —numero y asignados—
+ * no solo contarlas: quien lo lee tiene que poder ir a buscarlas.
+ */
+async function traerHojasSinFinalizar(inventarioId: number): Promise<HojaSinFinalizar[]> {
+  const hojas = await prisma.hojaConteo.findMany({
+    where: { inventarioId, estado: { not: 'finalizada' } },
+    orderBy: { numero: 'asc' },
+    select: {
+      numero: true,
+      estado: true,
+      asignadoA: { select: { nombre: true } },
+      asignadoA2: { select: { nombre: true } },
+    },
+  });
+
+  return hojas.map((h) => ({
+    numero: h.numero,
+    // El enum de Prisma dice `en_proceso`; el vocabulario del front (y el que
+    // ve la persona) es `en-proceso`.
+    estado: h.estado === 'en_proceso' ? 'en-proceso' : h.estado,
+    asignados: [h.asignadoA?.nombre, h.asignadoA2?.nombre].filter((n): n is string => Boolean(n)),
+  }));
 }
 
 /**

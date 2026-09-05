@@ -176,6 +176,44 @@ export function validarPuedeAprobar(
   }
 }
 
+/** Una hoja que quedo sin cerrar, con lo justo para ir a buscarla. */
+export interface HojaSinFinalizar {
+  numero: string;
+  estado: string;
+  /** Nombres de los asignados. Vacio = nadie la tiene asignada. */
+  asignados: string[];
+}
+
+/** Cuantas hojas se nombran en el mensaje antes de resumir el resto. */
+const HOJAS_A_LISTAR = 8;
+
+/**
+ * El mensaje del rechazo. Dice CUANTAS y CUALES, con numero de hoja y a
+ * quien esta asignada.
+ *
+ * Un "no se puede lacrar" pelado obliga a quien lo lee a salir a buscar cual
+ * de 25 hojas falta, y en la practica termina en que alguien vuelve a pedir
+ * el lacrado a ver si ahora si. El numero y el nombre son lo que convierte
+ * el error en una tarea concreta.
+ */
+export function mensajeHojasSinFinalizar(hojas: HojaSinFinalizar[]): string {
+  const cuantas = hojas.length;
+  const detalle = hojas
+    .slice(0, HOJAS_A_LISTAR)
+    .map((h) => {
+      const quien = h.asignados.length > 0 ? h.asignados.join(' y ') : 'sin asignar';
+      return `#${h.numero} (${h.estado}, ${quien})`;
+    })
+    .join(', ');
+  const resto = cuantas > HOJAS_A_LISTAR ? ` y ${cuantas - HOJAS_A_LISTAR} mas` : '';
+
+  return (
+    `No se puede lacrar: ${cuantas} ${cuantas === 1 ? 'hoja sigue' : 'hojas siguen'} sin finalizar. ` +
+    `Lacrar ahora cerraria el inventario con esos items sin contar, y el faltante se liquida igual. ` +
+    `Falta cerrar: ${detalle}${resto}.`
+  );
+}
+
 /**
  * Lanza si no se puede ejecutar el lacrado. Cuenta aprobadores DISTINTOS,
  * no filas: aunque el unique de la base ya lo garantice, contar filas seria
@@ -196,6 +234,21 @@ export function validarPuedeLacrar(
      * conteos ya no entran nunca.
      */
     todoSincronizado: boolean;
+    /**
+     * Hojas de la ronda que NO estan finalizadas. Vacio es la condicion para
+     * lacrar.
+     *
+     * Es una cosa DISTINTA de `todoSincronizado`, y confundirlas es como se
+     * lacra un inventario a medio contar:
+     *   - `sync`   = si el conteo llego al servidor
+     *   - `estado` = si la persona dio por terminada la hoja
+     *
+     * Una hoja puede estar perfectamente sincronizada y tener 12 de 50 items
+     * contados. El servidor la ve al dia; la gondola no. Y como el lacrado es
+     * el punto de no retorno, esos 38 items entran a la liquidacion como
+     * faltante -- un faltante inventado que alguien paga de su sueldo.
+     */
+    hojasSinFinalizar: HojaSinFinalizar[];
   },
   aprobaciones: AprobacionExistente[],
 ): void {
@@ -221,6 +274,15 @@ export function validarPuedeLacrar(
     throw new Conflicto(
       `Faltan aprobaciones: el lacrado exige ${APROBACIONES_REQUERIDAS} de personas distintas y hay ${aprobadoresDistintos.size}.`,
     );
+  }
+
+  /**
+   * Antes que el de sincronizacion: una hoja sin finalizar NO se arregla
+   * sola. Hay que ir a la gondola, contarla y cerrarla — asi que es lo
+   * primero que la persona tiene que saber.
+   */
+  if (inventario.hojasSinFinalizar.length > 0) {
+    throw new Conflicto(mensajeHojasSinFinalizar(inventario.hojasSinFinalizar));
   }
 
   // Ultimo chequeo, y va al final a proposito: es el que mas probablemente
