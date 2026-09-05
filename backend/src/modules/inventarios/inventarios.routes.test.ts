@@ -128,3 +128,100 @@ describe('GET /api/sucursales/:id/inventarios/activo: los 4 roles operativos ent
     expect(r.status).toBe(200);
   });
 });
+
+/**
+ * LOS PASOS 2 Y 3 DEL WIZARD: partir el catálogo en hojas y repartirlas.
+ *
+ * Quien reparte decide QUIÉN CUENTA QUÉ. Un contador que pudiera repartirse
+ * las suyas elegiría las góndolas fáciles; el auditor tampoco, porque audita
+ * lo que otros contaron y no arma el lote.
+ *
+ * OJO CON EL ALCANCE DE ESTOS TESTS: la ruta solo mira el ROL. Que un
+ * coordinador no pueda tocar el inventario de OTRA sucursal lo resuelve
+ * `inventarios.service.ts#inventarioDelActor` (compara
+ * `inventario.sucursalId !== actor.sucursalId`, con el administrador exento
+ * por no pertenecer a ninguna). Eso tiene sus propios tests, sin Prisma —
+ * acá un coordinador de la sucursal 1 pasa el middleware aunque el
+ * inventario 9 sea de otra tienda, y está bien que así sea.
+ */
+describe('POST /api/inventarios/:id/hojas: crear las hojas de conteo', () => {
+  async function iniciar(): Promise<void> {
+    const app = appDePrueba('/api/inventarios', inventariosRouter);
+    ({ baseUrl, cerrar } = await levantar(app));
+  }
+
+  const crear = (actor?: ColaboradorAutenticado) => ({
+    method: 'POST',
+    headers: {
+      ...(actor ? autorizacion(actor) : {}),
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ tamano: 50 }),
+  });
+
+  it('sin sesión, 401', async () => {
+    await iniciar();
+    expect((await fetch(`${baseUrl}/api/inventarios/9/hojas`, crear())).status).toBe(401);
+  });
+
+  it('conteo, 403 -- quien cuenta no se arma su propio lote', async () => {
+    await iniciar();
+    expect((await fetch(`${baseUrl}/api/inventarios/9/hojas`, crear(CONTEO))).status).toBe(403);
+  });
+
+  it('auditor, 403 -- audita lo que otros contaron, no arma el lote', async () => {
+    await iniciar();
+    expect((await fetch(`${baseUrl}/api/inventarios/9/hojas`, crear(AUDITOR))).status).toBe(403);
+  });
+
+  it('coordinador, pasa el middleware', async () => {
+    await iniciar();
+    expect((await fetch(`${baseUrl}/api/inventarios/9/hojas`, crear(COORDINADOR))).status).toBe(200);
+  });
+
+  it('administrador, pasa el middleware', async () => {
+    await iniciar();
+    expect((await fetch(`${baseUrl}/api/inventarios/9/hojas`, crear(ADMIN))).status).toBe(200);
+  });
+});
+
+describe('POST /api/inventarios/:id/hojas/asignar: repartir entre los contadores', () => {
+  async function iniciar(): Promise<void> {
+    const app = appDePrueba('/api/inventarios', inventariosRouter);
+    ({ baseUrl, cerrar } = await levantar(app));
+  }
+
+  const asignar = (actor?: ColaboradorAutenticado) => ({
+    method: 'POST',
+    headers: {
+      ...(actor ? autorizacion(actor) : {}),
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ colaboradorIds: [102, 104] }),
+  });
+
+  it('sin sesión, 401', async () => {
+    await iniciar();
+    expect((await fetch(`${baseUrl}/api/inventarios/9/hojas/asignar`, asignar())).status).toBe(401);
+  });
+
+  it('conteo, 403 -- elegiría las góndolas fáciles', async () => {
+    await iniciar();
+    expect((await fetch(`${baseUrl}/api/inventarios/9/hojas/asignar`, asignar(CONTEO))).status).toBe(403);
+  });
+
+  it('auditor, 403', async () => {
+    await iniciar();
+    expect((await fetch(`${baseUrl}/api/inventarios/9/hojas/asignar`, asignar(AUDITOR))).status).toBe(403);
+  });
+
+  it('coordinador, pasa el middleware', async () => {
+    await iniciar();
+    expect((await fetch(`${baseUrl}/api/inventarios/9/hojas/asignar`, asignar(COORDINADOR))).status).toBe(200);
+  });
+
+  it('administrador, pasa el middleware', async () => {
+    await iniciar();
+    expect((await fetch(`${baseUrl}/api/inventarios/9/hojas/asignar`, asignar(ADMIN))).status).toBe(200);
+  });
+});
