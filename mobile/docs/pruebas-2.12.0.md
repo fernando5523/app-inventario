@@ -72,20 +72,20 @@ Después, escribí el PIN correcto (220022) e ingresá.
 **Tocar:** abrir esa hoja recién repartida.
 **Debe leerse:** arriba, **"0 / N Productos"** — ningún renglón trae el número que Luis cargó en la ronda 1, aunque sea la misma góndola.
 
-### 8. Historial — filtros
-**Rol:** Coordinador (Nancy, 110011).
+### 8. Historial — filtros (y el chip de Sucursal)
+**Rol:** Administrador (Admin Sistema, 001000) — **no Coordinador**: `historial.routes.ts` exige `requiereRol('administrador', 'auditor')`; un Coordinador recibe 403. Nancy no sirve acá.
 **Pantalla:** Historial.
-**Tocar:** el chip de **Período** (elegir un año) y, si aparece, un mes; después el filtro de **Estado**.
-**Debe leerse:** la cabecera cambia a **"Mostrando N de M inventarios"** con M igual o menor al total sin filtrar. Con una combinación sin resultados, aparece **"Ningún inventario con estos filtros"** / **"Probá con otra combinación."**.
+**Tocar:** el chip de **Sucursal** (solo lo ve el Administrador — un Auditor no lo tiene, porque su alcance ya está fijo en la suya), después **Período** (elegir un año) y el filtro de **Estado**.
+**Debe leerse:** el chip de Sucursal ofrece **"Todas"** más un chip por cada tienda (con su nombre real, incluida Luzuriaga). La cabecera cambia a **"Mostrando N de M inventarios"** con M igual o menor al total sin filtrar. Con una combinación sin resultados, aparece **"Ningún inventario con estos filtros"** / **"Probá con otra combinación."**.
 
 ### 9. Historial — Cargar más
-**Rol:** Coordinador (Nancy, 110011).
+**Rol:** Administrador (Admin Sistema, 001000).
 **Pantalla:** Historial, con un filtro que deje más inventarios de los que entran en una página.
 **Tocar:** el botón **"Cargar más (N restantes)"** al final de la lista.
 **Debe leerse:** se agregan más filas a la lista (no reemplaza las que ya estaban) y el botón actualiza su número de "restantes"; cuando llega a 0, el botón desaparece.
 
 ### 10. Comparativo mensual
-**Rol:** Coordinador (Nancy, 110011).
+**Rol:** Administrador (Admin Sistema, 001000) — mismo motivo que el paso 8: `/historial/comparativo` cuelga del mismo router, sin `coordinador` en la lista.
 **Pantalla:** Historial → botón **"Comparativo mensual"** (arriba, al lado del ícono de tendencia).
 **Tocar:** abrir la pantalla.
 **Debe leerse:** el rótulo de arriba dice **"Comparativo mensual"** y la tabla trae las columnas **"Período" · "Ítems" · "Cuadrados" · "Faltante neto" · "Vs. mes anterior"**, una fila por mes cerrado. Si todavía no hay ningún período comparable, en cambio dice **"Todavía no hay períodos comparables"** / **"Hace falta al menos un inventario cerrado con asistencia y ajustes ya cargados."**.
@@ -96,5 +96,18 @@ Después, escribí el PIN correcto (220022) e ingresá.
 **Tocar:** abrir la pantalla, sin tocar el botón de lacrado todavía.
 **Debe leerse:** una tarjeta titulada **"Conciliación"** con las filas **"Suma real de la planilla"** y **"Diferencia por redondeo"**, y más abajo **"Fondo de multas recaudado"** / **"Repartido entre asistentes"**. Si cierra, badge **"El fondo de multas cierra"**; si no, un aviso **"El fondo de multas no cierra: se repartió S/ X de S/ Y recaudados (diferencia de S/ Z)."**.
 
-### 12. Ajustes del mes — PENDIENTE
-**Estado:** todavía en desarrollo (lo está terminando otro agente en paralelo, sin commitear al cierre de esta nota). **No probar esta noche** — no está en el 2.12.0 que va al teléfono. Se agrega a este documento en cuanto quede integrado.
+### 12. Ajustes del mes
+**Rol:** Coordinador (Nancy, 110011) — `PUT/GET /liquidacion/inventarios/:id/ajustes` exige `requiereRol('administrador', 'coordinador')`, sin auditor: es quien después firma el lacrado, y el sello incluye estos montos.
+**Requisito previo:** el inventario de Luzuriaga tiene que estar en `conteo_cerrado` (las 3 rondas del ciclo cerradas, o el ciclo terminado antes por falta de ítems a recontar). Si todavía hay una ronda abierta, la pantalla de Liquidación no muestra nada útil ("No se pudo cargar la liquidación").
+**Pantalla:** Liquidación.
+
+**12.1 — Antes de cargar nada.**
+**Tocar:** abrir la pantalla, sin tocar nada más.
+**Debe leerse:** arriba de todo (antes del resumen de faltante), una tarjeta **"Ajustes del mes"** con el badge **"Sin registrar"**, el título **"Sin registrar"** y el texto **"Hasta que alguien cargue los ajustes del mes no se puede calcular el faltante neto ni cerrar la planilla. Si no hubo ajustes, cargá 0 — eso también es un dato."**.
+
+**12.2 — Cargar los ajustes.**
+**Tocar:** completar **"Ajustes a favor del personal (S/)"** (0 es válido) y **"¿De dónde salen? (obligatorio)"** con una nota (por ejemplo "mermas documentadas de agosto"); dejar **"Faltante que absorbe la empresa (S/) — opcional"** vacío para conservar el calculado. Tocar **"Guardar ajustes"**.
+**Debe leerse:** el badge "Sin registrar" desaparece; el título pasa a **"S/ N en ajustes"** (N = lo que cargaste) y el texto a **"Registrado por Nancy Quispe el {fecha}."** (formato fecha/hora del teléfono). Recién ahí el resumen de abajo ("Faltante neto a descontar", "Cuota base…") deja de decir "No se puede calcular" y muestra cifras.
+
+**12.3 — Después de liquidar (verificación PARCIAL — falta el botón).**
+La app hoy **no tiene ningún botón que llame a `POST /liquidacion/inventarios/:id/liquidar`** (revisado `mobile/lib/puertos/repositorios.ts` — `RepositorioLiquidacion` no declara `liquidar()`, y no hay ninguna llamada a esa ruta en toda la carpeta `mobile/`). O sea: **no hay forma de dejar el inventario en `liquidado` desde el teléfono**, así que este último paso no se puede probar en el 2.12.0 tal como está. Queda documentado para cuando exista el botón — el texto que tiene que aparecer, verificado en `backend/src/modules/liquidacion/liquidacion.ajustes.ts`, es un cartel **"No se pudieron guardar los ajustes"** con el cuerpo **"La planilla de este inventario ya se cerró: los ajustes no se pueden cambiar. Lo que se descontó ya se descontó, y cualquier corrección entra en el periodo siguiente."** al tocar "Corregir" → "Guardar ajustes" sobre un inventario ya liquidado o lacrado.
