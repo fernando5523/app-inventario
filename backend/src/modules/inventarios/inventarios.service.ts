@@ -235,7 +235,10 @@ export async function crearHojas(actor: ColaboradorAutenticado, inventarioId: nu
     detalle: { tamano, hojas: tamanos.length, items: ordenados.length },
   });
 
-  return listarHojas(inventarioId);
+  // `1` fijo, igual que el `numeroConteo` con el que se crearon arriba: este
+  // endpoint es el paso 2 del wizard y solo arma la PRIMERA ronda. Las
+  // siguientes las crea rondas.service.ts#cerrar al abrirlas.
+  return listarHojas(inventarioId, 1);
 }
 
 /**
@@ -302,13 +305,32 @@ export async function asignarHojas(
   const porId = new Map(encontrados.map((c) => [c.id, c]));
   const presentes = colaboradorIds.map((id) => porId.get(id)!);
 
+  /**
+   * SOLO LAS HOJAS DE LA RONDA ACTIVA, y nunca una finalizada.
+   *
+   * Sin el filtro por `numeroConteo`, repartir la ronda 2 alcanzaba tambien
+   * a cualquier hoja sin asignar que hubiera quedado de la ronda 1 -- una
+   * hoja que quizas YA SE CONTO. Reasignarla se la saca de "Mis hojas" a
+   * quien la conto y se la pone a otro, con los conteos adentro: el segundo
+   * abre una hoja con numeros que no puso.
+   *
+   * `estado: { not: 'finalizada' }` es el cinturon del cinturon: una hoja
+   * finalizada es un hecho cerrado, y ninguna operacion de reparto puede
+   * tocarla ni por accidente.
+   */
+  const ronda = await rondaActivaDe(inventarioId);
   const sinAsignar = await prisma.hojaConteo.findMany({
-    where: { inventarioId, asignadoAId: null },
+    where: { inventarioId, numeroConteo: ronda, asignadoAId: null, estado: { not: 'finalizada' } },
     orderBy: { id: 'asc' },
     select: { id: true },
   });
   if (sinAsignar.length === 0) {
-    throw new Conflicto('No quedan hojas sin asignar en este inventario.');
+    // El mensaje nombra la ronda: con dos rondas abiertas, "no quedan hojas
+    // sin asignar" a secas deja a quien lo lee sin saber de cual habla.
+    throw new Conflicto(
+      `No quedan hojas sin asignar en la ronda ${ronda} de este inventario. ` +
+        'Las de rondas anteriores ya se repartieron y no se vuelven a tocar.',
+    );
   }
 
   const reparto = repartir(sinAsignar, presentes);
@@ -332,13 +354,41 @@ export async function asignarHojas(
     },
   });
 
-  return listarHojas(inventarioId);
+  // La ronda que se acaba de repartir, no la que sea al momento de responder.
+  return listarHojas(inventarioId, ronda);
 }
 
-/** Todas las hojas del inventario -- solo el Coordinador ve el lote entero. */
-async function listarHojas(inventarioId: number): Promise<HojaDto[]> {
-  const hojas = await prisma.hojaConteo.findMany({
+/**
+ * La ronda con hojas mas alta: la que se esta contando ahora. `1` si todavia
+ * no hay ninguna (inventario recien creado).
+ *
+ * Misma cuenta que hace `activo()` para `rondaActiva` -- se extrae para que
+ * el reparto y el listado no puedan quedar mirando rondas distintas.
+ */
+async function rondaActivaDe(inventarioId: number): Promise<number> {
+  const { _max } = await prisma.hojaConteo.aggregate({
     where: { inventarioId },
+    _max: { numeroConteo: true },
+  });
+  return _max.numeroConteo ?? 1;
+}
+
+/**
+ * Las hojas de UNA ronda -- solo el Coordinador ve el lote entero.
+ *
+ * Devolvia TODAS las del inventario, y eso es lo que la pantalla contaba: al
+ * repartir la ronda 2 de Bolivar, "25 hojas" pasaba a "50 hojas creadas / 50
+ * por persona" porque sumaba las 25 finalizadas de la ronda 1. El numero era
+ * real (hay 50 filas) pero respondia otra pregunta que la que se estaba
+ * haciendo: cuantas hojas hay que contar AHORA.
+ *
+ * La ronda viaja explicita en vez de calcularse acá adentro: quien llama ya
+ * sabe sobre cual esta operando, y dos consultas del maximo en el mismo
+ * request pueden dar distinto si entre medio se abre una ronda.
+ */
+async function listarHojas(inventarioId: number, ronda: number): Promise<HojaDto[]> {
+  const hojas = await prisma.hojaConteo.findMany({
+    where: { inventarioId, numeroConteo: ronda },
     orderBy: { id: 'asc' },
     include: INCLUIR_TODO,
   });

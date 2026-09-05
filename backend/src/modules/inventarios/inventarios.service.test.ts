@@ -229,7 +229,13 @@ describe('asignarHojas', () => {
     });
   }
 
+  /** La ronda que `rondaActivaDe` va a leer. Por defecto la 1. */
+  function rondaActiva(n: number): void {
+    prismaMock.hojaConteo.aggregate.mockResolvedValue({ _max: { numeroConteo: n } });
+  }
+
   beforeEach(() => {
+    rondaActiva(1);
     hojasLibres([1, 2, 3, 4]);
     // Prisma devuelve las filas en el orden que quiere, NO en el del `in`:
     // el mock lo refleja a proposito para que el test del orden valga algo.
@@ -263,8 +269,72 @@ describe('asignarHojas', () => {
     await asignarHojas(COORD, 9, [10, 20]);
 
     expect(prismaMock.hojaConteo.findMany).toHaveBeenCalledWith(
-      expect.objectContaining({ where: { inventarioId: 9, asignadoAId: null } }),
+      expect.objectContaining({
+        where: expect.objectContaining({ inventarioId: 9, asignadoAId: null }),
+      }),
     );
+  });
+
+  /**
+   * EL BUG QUE VIO min-4 EN BOLIVAR (ronda 2 recién abierta): repartir la
+   * ronda 2 alcanzaba también a las hojas de la ronda 1.
+   *
+   * Sin el filtro por `numeroConteo`, una hoja de la ronda 1 que hubiera
+   * quedado sin asignar se repartía junto con las nuevas — y esa hoja puede
+   * tener conteos adentro. Reasignarla se la saca de "Mis hojas" a quien la
+   * contó y se la da a otro, con los números ya cargados: el segundo abre
+   * una hoja con cantidades que no puso.
+   */
+  describe('con la ronda 2 abierta: no toca la ronda 1', () => {
+    it('filtra por la ronda activa, no por todo el inventario', async () => {
+      rondaActiva(2);
+      await asignarHojas(COORD, 9, [10, 20]);
+
+      expect(prismaMock.hojaConteo.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({ inventarioId: 9, numeroConteo: 2, asignadoAId: null }),
+        }),
+      );
+    });
+
+    /**
+     * El cinturón del cinturón. Una hoja finalizada es un hecho cerrado:
+     * ninguna operación de reparto puede tocarla, ni siquiera si por algún
+     * camino quedara sin asignar en la ronda activa.
+     */
+    it('excluye las finalizadas explícitamente', async () => {
+      rondaActiva(2);
+      await asignarHojas(COORD, 9, [10, 20]);
+
+      const [args] = prismaMock.hojaConteo.findMany.mock.calls.find(
+        ([a]) => (a as { where?: { asignadoAId?: null } }).where?.asignadoAId === null,
+      )!;
+      expect((args as { where: { estado: unknown } }).where.estado).toEqual({ not: 'finalizada' });
+    });
+
+    it('el listado que devuelve es SOLO el de la ronda repartida', async () => {
+      // Es lo que la pantalla cuenta: con 25 de la ronda 1 y 25 de la 2,
+      // devolver las 50 hacía que dijera "50 hojas creadas / 50 por persona".
+      rondaActiva(2);
+      await asignarHojas(COORD, 9, [10, 20]);
+
+      expect(prismaMock.hojaConteo.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { inventarioId: 9, numeroConteo: 2 },
+          include: expect.anything(),
+        }),
+      );
+    });
+
+    it('el rechazo nombra la ronda: con dos abiertas, "no quedan hojas" no alcanza', async () => {
+      rondaActiva(2);
+      hojasLibres([]);
+      prismaMock.colaborador.findMany.mockResolvedValue([{ id: 10, nombre: 'Ana' }]);
+
+      const error = await asignarHojas(COORD, 9, [10]).catch((e) => e);
+      expect(error.message).toContain('ronda 2');
+      expect(error.message).toMatch(/rondas anteriores/i);
+    });
   });
 
   /** Una hoja asignada a alguien de otra tienda es una gondola que nadie cuenta. */
