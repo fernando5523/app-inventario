@@ -36,6 +36,7 @@
 
 import type {
   AjustesDelMes,
+  CierreLiquidacion,
   Conciliacion,
   DatosAjustes,
   Liquidacion,
@@ -104,6 +105,23 @@ export const liquidacionApi: RepositorioLiquidacion = {
         ...(datos.montoEmpresa !== undefined ? { montoEmpresa: datos.montoEmpresa } : {}),
         nota: datos.nota,
       },
+    });
+  },
+
+  /**
+   * `POST /api/liquidacion/inventarios/:id/liquidar` → `CierreLiquidacion` (201).
+   *
+   * SIN CUERPO a propósito: quien liquida sale del TOKEN, nunca del body —
+   * igual que quien firma el lacrado. No hay nada que el teléfono pueda
+   * mandar que cambie de quién es la firma.
+   *
+   * Los 409 NO se traducen: el backend explica qué falta (los ajustes del
+   * mes, que nadie registró conteos, que ya se liquidó) y la pantalla los
+   * muestra tal cual. Un mensaje genérico acá borraría justo lo accionable.
+   */
+  async liquidar(inventarioId) {
+    return await pedir<CierreLiquidacion>(`/api/liquidacion/inventarios/${inventarioId}/liquidar`, {
+      metodo: 'POST',
     });
   },
 };

@@ -3,6 +3,7 @@ import { repartirExacto } from '../../dominio/reparto-de-fondo';
 import {
   calcularEmbudo,
   calcularResumenLiquidacion,
+  resumirAsistencia,
   calcularTotalDescuento,
   compararPeriodos,
   redondear,
@@ -188,6 +189,54 @@ describe('calcularResumenLiquidacion (Pantalla 6)', () => {
     });
     expect(raro.faltantes).toBe(0);
     expect(raro.fondoMultas).toBe(0);
+  });
+});
+
+/**
+ * UN CONTEO DE PERSONAS NO PUEDE SER NEGATIVO.
+ *
+ * Visto en la app el 2026-09-05: "redistribuido entre los **-2** colaboradores
+ * que sí asistieron". Salía de `planilla.length - totalFaltas` con la planilla
+ * vacía: 0 - 2 = -2. Un número negativo de personas no es un error de cálculo,
+ * es un número que no significa nada — y quien lo ve deja de creerle al resto
+ * de la pantalla.
+ */
+describe('resumirAsistencia: las tres invariantes de un conteo de gente', () => {
+  it('el caso normal: 11 alcanzados, 7 vinieron, 4 faltaron', () => {
+    expect(resumirAsistencia(11, 7)).toEqual({ alcanzados: 11, asistieron: 7, faltaron: 4 });
+  });
+
+  it('nadie vino: 0 asistieron, TODOS faltaron -- nunca un negativo', () => {
+    expect(resumirAsistencia(11, 0)).toEqual({ alcanzados: 11, asistieron: 0, faltaron: 11 });
+  });
+
+  it('vinieron todos: 0 faltas', () => {
+    expect(resumirAsistencia(11, 11)).toEqual({ alcanzados: 11, asistieron: 11, faltaron: 0 });
+  });
+
+  it('EL CASO DEL BUG: asistieron mayor que el universo se acota, no da faltaron negativo', () => {
+    // 0 - 2 = -2 era lo que se veía en pantalla. Acá el desfase se corrige
+    // hacia el universo real en vez de propagarse como un imposible.
+    expect(resumirAsistencia(0, 2)).toEqual({ alcanzados: 0, asistieron: 0, faltaron: 0 });
+  });
+
+  it('un asistieron mayor que alcanzados se recorta: "13 de 11" es igual de imposible', () => {
+    expect(resumirAsistencia(11, 13)).toEqual({ alcanzados: 11, asistieron: 11, faltaron: 0 });
+  });
+
+  it('entradas negativas se saneann a 0, no se propagan', () => {
+    expect(resumirAsistencia(-5, -3)).toEqual({ alcanzados: 0, asistieron: 0, faltaron: 0 });
+  });
+
+  it('LA INVARIANTE, sobre cualquier combinación: nunca negativos y siempre suman', () => {
+    for (const alcanzados of [-3, 0, 1, 7, 11]) {
+      for (const asistieron of [-2, 0, 1, 7, 13]) {
+        const r = resumirAsistencia(alcanzados, asistieron);
+        expect(r.asistieron).toBeGreaterThanOrEqual(0);
+        expect(r.faltaron).toBeGreaterThanOrEqual(0);
+        expect(r.asistieron + r.faltaron).toBe(r.alcanzados);
+      }
+    }
   });
 });
 

@@ -272,3 +272,94 @@ describe('ajustes del mes', () => {
     expect(cuerpo.nota).toBe('Mermas documentadas de agosto.');
   });
 });
+
+/**
+ * LIQUIDAR: el paso que la app no tenía.
+ *
+ * `POST /liquidacion/inventarios/:id/liquidar` existía en el backend desde
+ * 381e6b6 y ninguna pantalla lo llamaba, así que desde el teléfono el
+ * inventario nunca llegaba a `liquidado` — y sin eso el lacrado, que exige
+ * ese estado, era inalcanzable.
+ */
+describe('liquidar', () => {
+  const CIERRE = {
+    inventarioId: 29,
+    estado: 'liquidado' as const,
+    colaboradores: 3,
+    cuotaBase: 126.36,
+    bonoAsistencia: 11.42,
+    faltantes: 1,
+    totalDescontado: 390.14,
+  };
+
+  it('hace POST al inventario', async () => {
+    const fn = vi.fn(async (_url: string, _init: RequestInit) => json(CIERRE, 201));
+    vi.stubGlobal('fetch', fn);
+
+    await liquidacionApi.liquidar(29);
+
+    expect(fn.mock.calls[0]![0]).toContain('/api/liquidacion/inventarios/29/liquidar');
+    expect(fn.mock.calls[0]![1].method).toBe('POST');
+  });
+
+  /**
+   * SIN CUERPO: quien liquida sale del TOKEN, igual que quien firma el
+   * lacrado. No hay nada que el teléfono pueda mandar que cambie de quién es
+   * la firma.
+   */
+  it('no manda cuerpo: quién liquida sale del token, no del body', async () => {
+    const fn = vi.fn(async (_url: string, _init: RequestInit) => json(CIERRE, 201));
+    vi.stubGlobal('fetch', fn);
+
+    await liquidacionApi.liquidar(29);
+
+    expect(fn.mock.calls[0]![1].body).toBeUndefined();
+  });
+
+  it('devuelve el resumen de lo que quedó firme', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => json(CIERRE, 201)));
+
+    await expect(liquidacionApi.liquidar(29)).resolves.toMatchObject({
+      estado: 'liquidado',
+      colaboradores: 3,
+      totalDescontado: 390.14,
+    });
+  });
+
+  /**
+   * EL 409 SE MUESTRA TAL CUAL. Sus mensajes dicen QUÉ falta —los ajustes
+   * del mes, que nadie registró conteos, que ya se liquidó— y son lo único
+   * accionable que recibe quien lo lee. Traducirlos a un genérico borraría
+   * justo eso.
+   */
+  it('un 409 sube con el mensaje del backend, sin traducir', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () =>
+        json(
+          {
+            error:
+              'Ningún colaborador registró conteos en este inventario: no hay asistencia deducible ni a quién repartir el faltante.',
+          },
+          409,
+        ),
+      ),
+    );
+
+    const error = await liquidacionApi.liquidar(29).catch((e) => e);
+    expect(error.message).toContain('Ningún colaborador registró conteos');
+  });
+
+  it('el 409 de "ya se cerró" también llega entero', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => json({ error: 'La planilla de este inventario ya se cerró.' }, 409)));
+
+    const error = await liquidacionApi.liquidar(29).catch((e) => e);
+    expect(error.message).toContain('ya se cerró');
+  });
+
+  it('un 403 sube como error: el auditor no liquida', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => json({ error: 'sin permiso' }, 403)));
+
+    await expect(liquidacionApi.liquidar(29)).rejects.toThrow();
+  });
+});

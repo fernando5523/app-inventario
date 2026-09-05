@@ -560,6 +560,36 @@ export interface RepositorioLiquidacion {
    * planilla ya se firmó.
    */
   registrarAjustes(inventarioId: number, datos: DatosAjustes): Promise<AjustesDelMes>;
+  /**
+   * CIERRA LA PLANILLA: calcula el descuento de cada persona, lo persiste y
+   * deja el inventario en `liquidado`. Punto de no retorno de la nómina.
+   *
+   * Sin esto el inventario NUNCA llegaba a `liquidado` desde el teléfono, y
+   * como el lacrado exige ese estado, todo el cierre del mes quedaba
+   * inalcanzable en la app aunque el backend estuviera completo.
+   *
+   * Lo hace el Coordinador o el Administrador, nunca el Auditor: el sello que
+   * él firma después incluye esta planilla, y quien la cierra no puede
+   * además firmarla.
+   *
+   * Rechaza (409) si faltan los ajustes del mes, si nadie registró conteos, o
+   * si ya se liquidó. Esos mensajes se muestran tal cual: dicen qué falta.
+   */
+  liquidar(inventarioId: number): Promise<CierreLiquidacion>;
+}
+
+/** Lo que devuelve `liquidar`: el resumen de lo que quedó firme. */
+export interface CierreLiquidacion {
+  inventarioId: number;
+  estado: 'liquidado';
+  /** Cuántas filas de planilla se escribieron: el personal alcanzado. */
+  colaboradores: number;
+  cuotaBase: number;
+  /** El PISO del reparto del fondo, no el promedio (ver `Liquidacion.bonoAsistencia`). */
+  bonoAsistencia: number;
+  faltantes: number;
+  /** La suma real de la planilla, para cuadrar contra el faltante neto. */
+  totalDescontado: number;
 }
 
 // ---------------------------------------------------------------------------

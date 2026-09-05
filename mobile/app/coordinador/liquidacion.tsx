@@ -1,5 +1,5 @@
 import { router, useFocusEffect } from 'expo-router';
-import { AlertTriangle, ClipboardEdit, Layers, Scale, Wallet } from 'lucide-react-native';
+import { AlertTriangle, Check, ClipboardEdit, Layers, Scale, Wallet } from 'lucide-react-native';
 import { useCallback, useMemo, useState, type JSX } from 'react';
 import { ActivityIndicator, Alert, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 
@@ -10,6 +10,7 @@ import { textoDeAjustes, validarAjustes } from '../../lib/dominio/ajustes-formul
 import { asistentesConCentavoExtra } from '../../lib/dominio/reparto-visible';
 import type {
   AjustesDelMes,
+  CierreLiquidacion,
   Conciliacion,
   DatosAjustes,
   DetalleLiquidacion,
@@ -80,6 +81,9 @@ export default function LiquidacionScreen(): JSX.Element {
   const [filtro, setFiltro] = useState<Filtro>('todos');
   const [ajustes, setAjustes] = useState<AjustesDelMes | null>(null);
   const [guardandoAjustes, setGuardandoAjustes] = useState(false);
+  const [liquidando, setLiquidando] = useState(false);
+  /** Lo que devolvió `liquidar` en ESTA sesión: alimenta el cartel de "ya está cerrada". */
+  const [cerrado, setCerrado] = useState<CierreLiquidacion | null>(null);
 
   const cargar = useCallback(async () => {
     if (!sesion) return;
@@ -131,6 +135,48 @@ export default function LiquidacionScreen(): JSX.Element {
    * pantalla diciendo "no se puede calcular" al lado de unos ajustes ya
    * cargados — el tipo de contradicción que hace desconfiar de todo lo demás.
    */
+  /**
+   * PUNTO DE NO RETORNO de la nómina: al confirmar, los descuentos quedan
+   * firmes y el inventario pasa a `liquidado`.
+   *
+   * La confirmación dice los DOS números que se están firmando (el faltante
+   * neto y a cuánta gente alcanza) antes de la frase de advertencia: un
+   * "¿estás seguro?" sin cifras no le da a nadie con qué decidir.
+   *
+   * El 409 del backend se muestra TAL CUAL. Sus mensajes dicen qué falta
+   * —los ajustes, que nadie registró conteos, que ya se liquidó— y
+   * reemplazarlos por un genérico borraría justo lo accionable.
+   */
+  function liquidarAhora(): void {
+    if (!liquidacion || liquidacion.faltanteNeto === null) return;
+
+    Alert.alert(
+      'Cerrar la planilla',
+      `Faltante neto: ${soles(liquidacion.faltanteNeto)}\n` +
+        `Alcanza a ${liquidacion.planilla.length} colaboradores.\n\n` +
+        'Esto cierra la planilla: los descuentos quedan firmes y solo un auditor puede lacrar después. No se puede deshacer.',
+      [
+        { text: 'Cancelar', style: 'cancel' },
+        { text: 'Liquidar', style: 'destructive', onPress: () => void confirmarLiquidacion() },
+      ],
+    );
+  }
+
+  async function confirmarLiquidacion(): Promise<void> {
+    if (!liquidacion) return;
+    setLiquidando(true);
+    try {
+      const cierre = await repositorioLiquidacion.liquidar(liquidacion.inventarioId);
+      setCerrado(cierre);
+      // Recarga: la pantalla pasa a mostrar la planilla FIRME, sin edición.
+      await cargar();
+    } catch (e) {
+      Alert.alert('No se pudo cerrar la planilla', e instanceof Error ? e.message : 'Probá de nuevo en un momento.');
+    } finally {
+      setLiquidando(false);
+    }
+  }
+
   async function guardarAjustes(datos: DatosAjustes): Promise<void> {
     if (!liquidacion) return;
     setGuardandoAjustes(true);
@@ -221,6 +267,10 @@ export default function LiquidacionScreen(): JSX.Element {
             estado={ajustes}
             guardando={guardandoAjustes}
             onGuardar={guardarAjustes}
+            // Con la planilla cerrada los ajustes son historia: el backend
+            // los rechaza igual, pero un formulario que se puede llenar para
+            // recibir un 409 es peor que no tenerlo.
+            soloLectura={cerrado !== null}
           />
 
           <View style={styles.tarjeta}>
@@ -437,9 +487,99 @@ export default function LiquidacionScreen(): JSX.Element {
               Mostrando {visibles.length} de <Text style={styles.pieListaFuerte}>{liquidacion.planilla.length} colaboradores</Text>
             </Text>
           </View>
+
+          {/*
+            EL CIERRE DE LA PLANILLA va al FINAL, después de la planilla y la
+            conciliación. No es orden estético: es lo último que se hace, y
+            ponerlo arriba invitaría a firmar sin haber mirado los números que
+            se firman.
+          */}
+          {cerrado !== null ? (
+            <View style={styles.tarjeta}>
+              <View style={styles.tarjetaCabecera}>
+                <Check size={18} color={colors.ok} />
+                <Text style={styles.tarjetaTitulo}>Planilla cerrada</Text>
+                <Badge label="Liquidado" variant="ok" />
+              </View>
+              <Text style={styles.tarjetaTexto}>
+                Liquidado el {formatoFechaHora(new Date().toISOString())} por {sesion.colaborador.nombre}. Los descuentos de{' '}
+                {cerrado.colaboradores} colaboradores quedaron firmes por {soles(cerrado.totalDescontado)} en total.
+              </Text>
+              <Text style={styles.tarjetaTexto}>
+                El paso que sigue es el lacrado, y lo firma un auditor — no vos: el sello incluye esta planilla, y quien
+                la cierra no puede además firmarla.
+              </Text>
+            </View>
+          ) : (
+            <CierreDePlanilla
+              liquidacion={liquidacion}
+              ajustes={ajustes}
+              liquidando={liquidando}
+              onLiquidar={liquidarAhora}
+            />
+          )}
         </>
       )}
     </PantallaConTabs>
+  );
+}
+
+/**
+ * EL PASO QUE NO EXISTÍA EN LA APP.
+ *
+ * `POST /liquidacion/inventarios/:id/liquidar` estaba en el backend desde
+ * 381e6b6 y ninguna pantalla lo llamaba: el inventario nunca llegaba a
+ * `liquidado` desde el teléfono, y como el lacrado exige ese estado, todo el
+ * cierre del mes quedaba inalcanzable. La decisión del cliente "liquidar
+ * primero, lacrar después" no se podía ejecutar.
+ *
+ * Habilitado SOLO con los ajustes registrados y el resumen calculable: son
+ * las dos condiciones que el backend exige, y un botón que se puede tocar
+ * para recibir un 409 es un botón que enseña a ignorar los errores.
+ */
+function CierreDePlanilla({
+  liquidacion,
+  ajustes,
+  liquidando,
+  onLiquidar,
+}: {
+  liquidacion: Liquidacion;
+  ajustes: AjustesDelMes | null;
+  liquidando: boolean;
+  onLiquidar: () => void;
+}): JSX.Element {
+  const ajustesListos = ajustes !== null && ajustes.registrado && ajustes.montoNegativos !== null;
+  const calculable = liquidacion.faltanteNeto !== null && liquidacion.cuotaBase !== null;
+  const puedeLiquidar = ajustesListos && calculable && liquidacion.planilla.length > 0;
+
+  return (
+    <View style={styles.tarjeta}>
+      <View style={styles.tarjetaCabecera}>
+        <Wallet size={18} color={colors.rojo} />
+        <Text style={styles.tarjetaTitulo}>Cerrar la planilla</Text>
+      </View>
+
+      {puedeLiquidar ? (
+        <Text style={styles.tarjetaTexto}>
+          Vas a dejar firmes los descuentos de {liquidacion.planilla.length} colaboradores por{' '}
+          {soles(liquidacion.faltanteNeto!)} de faltante neto. Después de esto, solo un auditor puede lacrar.
+        </Text>
+      ) : (
+        // Dice QUÉ falta, no "no se puede": si el botón está apagado, la
+        // persona tiene que saber qué ir a hacer.
+        <Text style={styles.tarjetaTexto}>
+          {!ajustesListos
+            ? 'Primero cargá los ajustes del mes, arriba. Sin eso no se puede calcular lo que se le descuenta a cada persona.'
+            : 'Todavía no se puede calcular la planilla: revisá las advertencias de arriba.'}
+        </Text>
+      )}
+
+      <Button
+        label={liquidando ? 'Cerrando la planilla…' : 'Liquidar este inventario'}
+        onPress={onLiquidar}
+        disabled={!puedeLiquidar || liquidando}
+      />
+    </View>
   );
 }
 
@@ -459,11 +599,14 @@ function TarjetaAjustes({
   estado,
   guardando,
   onGuardar,
+  soloLectura = false,
 }: {
   inventarioId: number;
   estado: AjustesDelMes | null;
   guardando: boolean;
   onGuardar: (datos: DatosAjustes) => Promise<void>;
+  /** Con la planilla ya cerrada, los ajustes se muestran pero no se tocan. */
+  soloLectura?: boolean;
 }): JSX.Element | null {
   const [editando, setEditando] = useState(false);
   const [montoNegativos, setMontoNegativos] = useState('');
@@ -476,7 +619,7 @@ function TarjetaAjustes({
   if (estado === null) return null;
 
   const texto = textoDeAjustes(estado, soles, formatoFechaHora);
-  const mostrandoFormulario = editando || texto.bloqueaLiquidacion;
+  const mostrandoFormulario = !soloLectura && (editando || texto.bloqueaLiquidacion);
 
   async function guardar(): Promise<void> {
     const validado = validarAjustes({ montoNegativos, montoEmpresa, nota });
@@ -546,7 +689,7 @@ function TarjetaAjustes({
             <Button label="Cancelar" variant="outline" size="sm" onPress={() => setEditando(false)} />
           ) : null}
         </View>
-      ) : (
+      ) : soloLectura ? null : (
         <Button
           label="Corregir"
           variant="outline"

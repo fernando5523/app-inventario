@@ -226,15 +226,6 @@ export async function liquidar(
     orderBy: { id: 'asc' },
   });
 
-  const resumen = calcularResumenLiquidacion({
-    montoFaltanteBruto: r.montoFaltanteBruto.toNumber(),
-    montoNegativos: r.montoNegativos!.toNumber(),
-    montoFaltanteEmpresa: r.montoFaltanteEmpresa.toNumber(),
-    colaboradoresAlcanzados: r.colaboradoresAlcanzados,
-    colaboradoresAsistieron: r.colaboradoresAsistieron!,
-    multaInasistencia: r.multaInasistencia.toNumber(),
-  });
-
   // QUIENES asistieron, con LA MISMA regla y LA MISMA consulta que uso el
   // cierre del conteo para contar cuantos (SELECT_ASISTENCIA en
   // dominio/asistencia.ts). De ahi sale la invariante que se testea: la
@@ -246,6 +237,41 @@ export async function liquidar(
     select: SELECT_ASISTENCIA,
   });
   const idsQueAsistieron = [...quienesAsistieron(hojasDelInventario.map(aHojaParaAsistencia))];
+
+  /**
+   * NADIE CONTO: no hay asistencia deducible ni a quien repartir.
+   *
+   * Pasa cuando el inventario llega a `conteo_cerrado` con todas las hojas
+   * finalizadas pero SIN un solo conteo cargado -- visto en la app el
+   * 2026-09-05 en Luzuriaga, con las hojas finalizadas por script. La
+   * asistencia se deduce de hojas con conteos (ver dominio/asistencia.ts),
+   * asi que da 0 asistentes.
+   *
+   * Con 0 asistentes la cuenta deja de significar nada: el fondo de multas
+   * no tiene entre quienes repartirse, TODO el personal figura ausente, y la
+   * planilla sale con multa para todos por un inventario que en los hechos
+   * nadie hizo. Se corta ACA, antes de escribir una sola fila.
+   *
+   * Va DESPUES de deducir la asistencia y no antes: el numero que decide es
+   * el de las hojas, no el `colaboradoresAsistieron` congelado en el
+   * resultado -- si alguno de los dos estuviera mal, el que manda es el que
+   * se acaba de leer.
+   */
+  if (idsQueAsistieron.length === 0) {
+    throw new Conflicto(
+      'Ningún colaborador registró conteos en este inventario: no hay asistencia deducible ni a quién repartir el faltante. ' +
+        'Revisá que las hojas tengan conteos cargados antes de liquidar.',
+    );
+  }
+
+  const resumen = calcularResumenLiquidacion({
+    montoFaltanteBruto: r.montoFaltanteBruto.toNumber(),
+    montoNegativos: r.montoNegativos!.toNumber(),
+    montoFaltanteEmpresa: r.montoFaltanteEmpresa.toNumber(),
+    colaboradoresAlcanzados: r.colaboradoresAlcanzados,
+    colaboradoresAsistieron: r.colaboradoresAsistieron!,
+    multaInasistencia: r.multaInasistencia.toNumber(),
+  });
 
   const planilla = armarPlanilla({
     colaboradores: colaboradores.map((c) => ({ id: c.id, nombre: c.nombre, rol: c.rol as Rol })),

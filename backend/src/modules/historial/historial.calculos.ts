@@ -81,6 +81,36 @@ export interface EntradaLiquidacion {
   multaInasistencia: number;
 }
 
+/**
+ * CUANTA GENTE VINO Y CUANTA FALTO, con las tres invariantes que un conteo
+ * de PERSONAS no puede violar nunca:
+ *
+ *   asistieron >= 0
+ *   faltaron   >= 0
+ *   asistieron + faltaron === alcanzados
+ *
+ * Existe porque la pantalla mostro "redistribuido entre los -2 colaboradores
+ * que si asistieron" (visto en la app el 2026-09-05). Salia de restar
+ * `planilla.length - totalFaltas` con la planilla vacia: 0 - 2 = -2. Un
+ * numero negativo de personas no es un error de calculo, es un numero que no
+ * significa nada -- y quien lo ve deja de creerle al resto de la pantalla.
+ *
+ * Se acota contra `alcanzados` y no solo contra 0: si `asistieron` viniera
+ * mayor que el universo (una planilla desfasada del resultado), "13 de 11
+ * asistieron" es igual de imposible.
+ */
+export interface AsistenciaResumida {
+  alcanzados: number;
+  asistieron: number;
+  faltaron: number;
+}
+
+export function resumirAsistencia(alcanzados: number, asistieron: number): AsistenciaResumida {
+  const universo = Math.max(0, alcanzados);
+  const vinieron = Math.min(Math.max(0, asistieron), universo);
+  return { alcanzados: universo, asistieron: vinieron, faltaron: universo - vinieron };
+}
+
 export interface ResumenLiquidacion {
   /** bruto - negativos - empresa. */
   montoFaltanteNeto: number;

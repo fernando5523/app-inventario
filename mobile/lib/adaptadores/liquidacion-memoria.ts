@@ -14,6 +14,7 @@ import { simularLatencia } from './_compartido';
 import { sesionMemoria } from './sesion-memoria';
 import type {
   AjustesDelMes,
+  CierreLiquidacion,
   Conciliacion,
   DatosAjustes,
   DetalleLiquidacion,
@@ -33,6 +34,9 @@ function redondear(n: number): number {
  */
 const ajustesCargados = new Map<number, AjustesDelMes>();
 
+/** Inventarios ya liquidados en esta corrida: liquidar dos veces tiene que fallar. */
+const liquidados = new Set<number>();
+
 function sinRegistrar(inventarioId: number): AjustesDelMes {
   return {
     inventarioId,
@@ -48,6 +52,7 @@ function sinRegistrar(inventarioId: number): AjustesDelMes {
 /** Solo para tests: deja el adaptador como recién arrancado. */
 export function limpiarAjustesMemoria(): void {
   ajustesCargados.clear();
+  liquidados.clear();
 }
 
 const SUCURSAL_LUZURIAGA_ID = 1;
@@ -194,5 +199,41 @@ export const liquidacionMemoria: RepositorioLiquidacion = {
 
     ajustesCargados.set(inventarioId, registrado);
     return registrado;
+  },
+
+  /**
+   * Reproduce las guardas REALES del backend, no solo el camino feliz: sin
+   * ajustes cargados rechaza igual que `liquidacion.cierre.ts`. Un adaptador
+   * en memoria que siempre dice que sí hace que la pantalla se pruebe contra
+   * un backend que no existe.
+   */
+  async liquidar(inventarioId): Promise<CierreLiquidacion> {
+    await simularLatencia();
+
+    if (liquidados.has(inventarioId)) {
+      throw new Error(
+        'La planilla de este inventario ya se cerró. Una liquidación no se recalcula: lo que se descontó ya se descontó.',
+      );
+    }
+    const ajustes = ajustesCargados.get(inventarioId);
+    if (ajustes === undefined || ajustes.montoNegativos === null) {
+      throw new Error(
+        'No se puede cerrar la planilla todavía. Los ajustes del mes todavía no se cargaron: el faltante neto de esta planilla no los descuenta.',
+      );
+    }
+
+    liquidados.add(inventarioId);
+    const liquidacion = await liquidacionMemoria.deSucursal(SUCURSAL_LUZURIAGA_ID);
+    const planilla = liquidacion?.planilla ?? [];
+
+    return {
+      inventarioId,
+      estado: 'liquidado',
+      colaboradores: planilla.length,
+      cuotaBase: liquidacion?.cuotaBase ?? 0,
+      bonoAsistencia: liquidacion?.bonoAsistencia ?? 0,
+      faltantes: liquidacion?.totalFaltas ?? 0,
+      totalDescontado: redondear(planilla.reduce((total, p) => total + p.monto, 0)),
+    };
   },
 };

@@ -275,6 +275,54 @@ describe('liquidar', () => {
     });
   });
 
+  /**
+   * NADIE CONTO. Visto en la app el 2026-09-05 (Luzuriaga, hojas finalizadas
+   * por script sin un solo conteo): la asistencia se deduce de hojas CON
+   * conteos, así que dio 0 asistentes y la planilla salió vacía, con
+   * "Cuota base (0 colaboradores)" y "-2 colaboradores que sí asistieron".
+   *
+   * Con 0 asistentes la cuenta deja de significar nada: el fondo de multas no
+   * tiene entre quiénes repartirse y TODO el personal figura ausente, o sea
+   * una planilla con multa para todos por un inventario que en los hechos
+   * nadie hizo.
+   */
+  describe('nadie registró conteos', () => {
+    beforeEach(() => {
+      // Hojas asignadas pero SIN conteos: es exactamente lo que deja
+      // finalizar por script sin contar.
+      prismaMock.hojaConteo.findMany.mockResolvedValue([
+        { asignadoAId: 1, asignadoA2Id: null, _count: { conteos: 0 } },
+        { asignadoAId: 2, asignadoA2Id: null, _count: { conteos: 0 } },
+      ]);
+    });
+
+    it('rechaza en vez de escribir una planilla de multas para todos', async () => {
+      await expect(liquidar(COORD, 9)).rejects.toThrow(/Ningún colaborador registró conteos/);
+      expect(prismaMock.liquidacionColaborador.createMany).not.toHaveBeenCalled();
+      expect(prismaMock.inventario.update).not.toHaveBeenCalled();
+    });
+
+    it('el mensaje dice la causa Y qué mirar', async () => {
+      const error = await liquidar(COORD, 9).catch((e) => e);
+      expect(error.message).toContain('no hay asistencia deducible ni a quién repartir el faltante');
+      expect(error.message).toMatch(/hojas tengan conteos cargados/);
+    });
+
+    it('sin ninguna hoja tampoco liquida', async () => {
+      prismaMock.hojaConteo.findMany.mockResolvedValue([]);
+      await expect(liquidar(COORD, 9)).rejects.toThrow(/Ningún colaborador registró conteos/);
+    });
+
+    /**
+     * Manda el número que se acaba de LEER de las hojas, no el congelado en
+     * el resultado: si los dos discreparan, el que vale es el de las hojas.
+     */
+    it('aunque el resultado diga que asistieron 7, si las hojas dicen 0 no liquida', async () => {
+      mockInventario({ resultado: { ...resultadoCompleto, colaboradoresAsistieron: 7 } });
+      await expect(liquidar(COORD, 9)).rejects.toThrow(/Ningún colaborador registró conteos/);
+    });
+  });
+
   describe('con todos los datos cargados', () => {
     beforeEach(() => {
       // Se fuerza el escenario completo: es el que existirá cuando haya
