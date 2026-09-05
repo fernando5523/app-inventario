@@ -78,6 +78,8 @@ interface FilaCola {
   creado_en: string;
   intentos: number;
   estado: string;
+  /** Migración v5 — ver sqlite-esquema.ts. NULL salvo un rechazo real. */
+  razon: string | null;
 }
 
 /** `hojas_estructura` (migración v3, `numero_conteo` en v4) — ver sqlite-esquema.ts. */
@@ -149,6 +151,7 @@ function filaAItemCola(f: FilaCola): ItemCola {
     creadoEn: f.creado_en,
     intentos: f.intentos,
     estado: f.estado as ItemCola['estado'],
+    razon: f.razon,
   };
 }
 
@@ -690,11 +693,15 @@ export const hojasSqlite: RepositorioHojas = {
       // ON CONFLICT en (hoja_id, tipo, producto_id): un conteo nuevo del
       // MISMO producto reemplaza al que ya estaba pendiente de mandar —
       // nunca se apilan dos envíos para lo mismo (ver sqlite-cola.ts).
+      // `razon = NULL`: un conteo NUEVO del mismo producto es un intento
+      // fresco — la razón del rechazo anterior (si lo hubo) ya no aplica a
+      // este dato, y dejarla quedaría mostrando un motivo viejo para un
+      // envío que todavía ni se intentó.
       await db.runAsync(
         `INSERT INTO cola_sync (hoja_id, tipo, producto_id, creado_en, intentos, estado)
          VALUES (?, 'conteo', ?, ?, 0, 'pendiente')
          ON CONFLICT(hoja_id, tipo, producto_id)
-         DO UPDATE SET creado_en = excluded.creado_en, intentos = 0, estado = 'pendiente'`,
+         DO UPDATE SET creado_en = excluded.creado_en, intentos = 0, estado = 'pendiente', razon = NULL`,
         [hojaId, conteo.productoId, ahora],
       );
     });
@@ -720,7 +727,7 @@ export const hojasSqlite: RepositorioHojas = {
         `INSERT INTO cola_sync (hoja_id, tipo, producto_id, creado_en, intentos, estado)
          VALUES (?, 'finalizar', 0, ?, 0, 'pendiente')
          ON CONFLICT(hoja_id, tipo, producto_id)
-         DO UPDATE SET creado_en = excluded.creado_en, intentos = 0, estado = 'pendiente'`,
+         DO UPDATE SET creado_en = excluded.creado_en, intentos = 0, estado = 'pendiente', razon = NULL`,
         [hojaId, ahora],
       );
     });
@@ -745,13 +752,29 @@ export interface EstadoColaCruda {
   pendientes: number;
   /** Cuántos de esos quedaron en `error` -- no se van a resolver solos reintentando. */
   enError: number;
+  /**
+   * La razón del rechazo MÁS RECIENTE entre los items en error -- `null`
+   * si ninguno está en error, o si los que están en error son todos
+   * `sin-red` (ahí no hay "razón del servidor": hay falta de señal, y ese
+   * mensaje lo arma `sincronizador.ts` aparte). La pantalla la usa para
+   * decir POR QUÉ en vez de "revisá la conexión" cuando el problema real
+   * es un rechazo del servidor (ver BandaSync.tsx).
+   */
+  razonRechazo: string | null;
 }
 
 /** Lo que necesita `sincronizador.ts` para armar `EstadoCola` (puertos/repositorios.ts) -- cuenta TODA la cola, no una hoja sola. */
 export async function estadoDeLaCola(): Promise<EstadoColaCruda> {
   const db = await obtenerDb();
   const filas = await db.getAllAsync<{ estado: string }>('SELECT estado FROM cola_sync');
-  return { pendientes: filas.length, enError: filas.filter((f) => f.estado === 'error').length };
+  const masReciente = await db.getFirstAsync<{ razon: string | null }>(
+    "SELECT razon FROM cola_sync WHERE estado = 'error' AND razon IS NOT NULL ORDER BY id DESC LIMIT 1",
+  );
+  return {
+    pendientes: filas.length,
+    enError: filas.filter((f) => f.estado === 'error').length,
+    razonRechazo: masReciente?.razon ?? null,
+  };
 }
 
 /**
@@ -774,6 +797,22 @@ export async function estadoDeLaCola(): Promise<EstadoColaCruda> {
  * aplicarResultadoEnvio) — NUNCA desaparece en silencio ni se reintenta
  * infinito sin que se note. El conteo en sí sigue en `conteos`: lo único
  * que cambia es que deja de estar "al día" con el servidor.
+ *
+ * DECISIÓN DEL CLIENTE (2026-09-05, honestidad del estado, no regla de
+ * negocio): una hoja NO puede declararse finalizada ante el servidor
+ * mientras tenga conteos que el servidor no aceptó. Antes, un `finalizar`
+ * más adelante en la cola se mandaba igual aunque el `conteo` de la MISMA
+ * hoja que iba justo antes hubiera quedado rechazado (`hojas.service.ts
+ * #finalizar` no consulta productos/conteos para decidir) — el servidor
+ * terminaba creyendo la hoja completa cuando le faltaba un renglón, y
+ * `rondas.service.ts#cerrar` (que sólo mira `estado`/`sync` de la hoja,
+ * nunca sus productos) podía cerrar la ronda sin que nada avisara del
+ * hueco. Por eso, antes de mandar un `finalizar`, se comprueba que no
+ * quede ningún `conteo` de esa misma hoja todavía en la cola (pendiente O
+ * rechazado — cualquiera de los dos significa "el servidor todavía no lo
+ * tiene") — si queda alguno, el `finalizar` NO se manda: se deja
+ * `pendiente` para reintentar en la próxima pasada, cuando (si) se
+ * resuelva.
  */
 export async function procesarColaDeSincronizacion(enviar: EnviarItemCola): Promise<void> {
   const db = await obtenerDb();
@@ -781,33 +820,52 @@ export async function procesarColaDeSincronizacion(enviar: EnviarItemCola): Prom
   const items = ordenarCola(filas.map(filaAItemCola));
 
   for (const item of items) {
-    await db.runAsync('UPDATE cola_sync SET estado = ? WHERE id = ?', ['enviando', item.id]);
-
-    const hojaBase = await buscarHojaBase(item.hojaId);
-    let resultado: ResultadoEnvio;
-    if (!hojaBase) {
-      // La hoja ya no existe en el origen — no debería pasar, pero no
-      // tira abajo el resto de la cola si pasa.
-      resultado = { ok: false, motivo: 'rechazado' };
-    } else {
-      const hojaActual = await hojaConEstadoLocal(hojaBase);
-      try {
-        resultado = await enviar(item, hojaActual);
-      } catch {
-        resultado = { ok: false, motivo: 'sin-red' };
-      }
+    let seEnvia = true;
+    if (item.tipo === 'finalizar') {
+      const conteosSinResolver = await db.getFirstAsync<{ n: number }>(
+        "SELECT COUNT(*) as n FROM cola_sync WHERE hoja_id = ? AND tipo = 'conteo'",
+        [item.hojaId],
+      );
+      seEnvia = (conteosSinResolver?.n ?? 0) === 0;
     }
 
-    const siguiente = aplicarResultadoEnvio(item, resultado);
-    if (siguiente === null) {
-      await db.runAsync('DELETE FROM cola_sync WHERE id = ?', [item.id]);
-    } else {
-      await db.runAsync('UPDATE cola_sync SET estado = ?, intentos = ? WHERE id = ?', [siguiente.estado, siguiente.intentos, item.id]);
+    if (seEnvia) {
+      await db.runAsync('UPDATE cola_sync SET estado = ? WHERE id = ?', ['enviando', item.id]);
+
+      const hojaBase = await buscarHojaBase(item.hojaId);
+      let resultado: ResultadoEnvio;
+      if (!hojaBase) {
+        // La hoja ya no existe en el origen — no debería pasar, pero no
+        // tira abajo el resto de la cola si pasa.
+        resultado = { ok: false, motivo: 'rechazado' };
+      } else {
+        const hojaActual = await hojaConEstadoLocal(hojaBase);
+        try {
+          resultado = await enviar(item, hojaActual);
+        } catch {
+          resultado = { ok: false, motivo: 'sin-red' };
+        }
+      }
+
+      const siguiente = aplicarResultadoEnvio(item, resultado);
+      if (siguiente === null) {
+        await db.runAsync('DELETE FROM cola_sync WHERE id = ?', [item.id]);
+      } else {
+        await db.runAsync('UPDATE cola_sync SET estado = ?, intentos = ?, razon = ? WHERE id = ?', [
+          siguiente.estado,
+          siguiente.intentos,
+          siguiente.razon ?? null,
+          item.id,
+        ]);
+      }
     }
 
     // El sync de la hoja se recalcula de lo que le queda pendiente EN LA
     // COLA, nunca se pisa a mano aparte — así nunca se desincroniza de
     // la cola real (mismo criterio que sqlite-cola.ts#estadoSyncDeHoja).
+    // Se recalcula IGUAL cuando `seEnvia` es false: un finalizar bloqueado
+    // no cambia nada en la cola, pero el conteo que lo está bloqueando ya
+    // pudo haber sido tocado antes en esta misma pasada.
     const restantes = await db.getAllAsync<FilaCola>('SELECT * FROM cola_sync WHERE hoja_id = ?', [item.hojaId]);
     const nuevoSync = estadoSyncDeHoja(restantes.map(filaAItemCola));
     await db.runAsync('UPDATE hoja_estado_local SET sync = ? WHERE hoja_id = ?', [nuevoSync, item.hojaId]);

@@ -31,7 +31,11 @@ vi.mock('expo-network', () => ({
 
 const hojasSqliteMock = vi.hoisted(() => ({
   procesarColaDeSincronizacion: vi.fn(async (): Promise<void> => undefined),
-  estadoDeLaCola: vi.fn(async () => ({ pendientes: 0, enError: 0 })),
+  estadoDeLaCola: vi.fn(async (): Promise<{ pendientes: number; enError: number; razonRechazo: string | null }> => ({
+    pendientes: 0,
+    enError: 0,
+    razonRechazo: null,
+  })),
 }));
 vi.mock('./hojas-sqlite', () => hojasSqliteMock);
 
@@ -51,7 +55,7 @@ import type { EstadoCola } from '../puertos/repositorios';
 beforeEach(() => {
   vi.clearAllMocks();
   hojasSqliteMock.procesarColaDeSincronizacion.mockResolvedValue(undefined);
-  hojasSqliteMock.estadoDeLaCola.mockResolvedValue({ pendientes: 0, enError: 0 });
+  hojasSqliteMock.estadoDeLaCola.mockResolvedValue({ pendientes: 0, enError: 0, razonRechazo: null });
   escuchaDeRed = null;
 });
 
@@ -83,7 +87,7 @@ describe('sincronizar(): nunca se solapan dos pasadas', () => {
 
 describe('estado()/suscribir(): la banda tiene que decir la verdad', () => {
   it('tras una pasada sin nada en error: ultimaSync se llena, error queda null', async () => {
-    hojasSqliteMock.estadoDeLaCola.mockResolvedValue({ pendientes: 2, enError: 0 });
+    hojasSqliteMock.estadoDeLaCola.mockResolvedValue({ pendientes: 2, enError: 0, razonRechazo: null });
 
     await sincronizadorReal.sincronizar();
 
@@ -93,14 +97,31 @@ describe('estado()/suscribir(): la banda tiene que decir la verdad', () => {
     expect(estado.ultimaSync).not.toBeNull();
   });
 
-  it('si quedan items en error, el mensaje lo dice explícito -- NUNCA "sincronizado" con la cola llena', async () => {
-    hojasSqliteMock.estadoDeLaCola.mockResolvedValue({ pendientes: 3, enError: 3 });
+  it('si quedan items en error sin razón de servidor (todos sin-red), el mensaje lo dice explícito -- NUNCA "sincronizado" con la cola llena', async () => {
+    hojasSqliteMock.estadoDeLaCola.mockResolvedValue({ pendientes: 3, enError: 3, razonRechazo: null });
 
     await sincronizadorReal.sincronizar();
 
     const estado = sincronizadorReal.estado();
     expect(estado.pendientes).toBe(3);
     expect(estado.error).toContain('3');
+  });
+
+  it('si hay una razón de rechazo real, esa razón GANA sobre el mensaje genérico de "revisá la conexión"', async () => {
+    // 2a: un 409 (ej. "la hoja ya la finalizó otro colaborador") no es un
+    // problema de red -- decirle a la persona que revise la conexión la
+    // manda a buscar señal cuando el problema real es otro.
+    hojasSqliteMock.estadoDeLaCola.mockResolvedValue({
+      pendientes: 1,
+      enError: 1,
+      razonRechazo: 'La hoja ya está finalizada: no se puede corregir el conteo.',
+    });
+
+    await sincronizadorReal.sincronizar();
+
+    const estado = sincronizadorReal.estado();
+    expect(estado.error).toBe('La hoja ya está finalizada: no se puede corregir el conteo.');
+    expect(estado.error).not.toContain('revisá la conexión');
   });
 
   it('notifica a quien se suscribió, y deja de hacerlo tras desuscribirse', async () => {
@@ -136,14 +157,22 @@ describe('enviarPorRed: traduce hojasApi (resuelve o tira ErrorApi) a ResultadoE
     await expect(enviarPorRed(itemConteo, HOJA)).resolves.toEqual({ ok: false, motivo: 'sin-red' });
   });
 
-  it('ErrorApi "conflicto" (409 real: la hoja ya la finalizó otro) -> motivo "rechazado", NO "sin-red"', async () => {
-    hojasApiMock.hojasApi.guardarConteo.mockRejectedValueOnce(new ErrorApi('conflicto', { estado: 409 }));
-    await expect(enviarPorRed(itemConteo, HOJA)).resolves.toEqual({ ok: false, motivo: 'rechazado' });
+  it('ErrorApi "conflicto" (409 real: la hoja ya la finalizó otro) -> motivo "rechazado", NO "sin-red", con el mensaje del servidor', async () => {
+    hojasApiMock.hojasApi.guardarConteo.mockRejectedValueOnce(new ErrorApi('conflicto', { estado: 409, mensaje: 'La hoja ya está finalizada: no se puede corregir el conteo.' }));
+    await expect(enviarPorRed(itemConteo, HOJA)).resolves.toEqual({
+      ok: false,
+      motivo: 'rechazado',
+      mensaje: 'La hoja ya está finalizada: no se puede corregir el conteo.',
+    });
   });
 
-  it('ErrorApi "sesion-vencida" (401) -> motivo "rechazado": no se va a arreglar solo insistiendo', async () => {
+  it('ErrorApi "sesion-vencida" (401) -> motivo "rechazado": no se va a arreglar solo insistiendo, con su propio mensaje', async () => {
     hojasApiMock.hojasApi.guardarConteo.mockRejectedValueOnce(new ErrorApi('sesion-vencida'));
-    await expect(enviarPorRed(itemConteo, HOJA)).resolves.toEqual({ ok: false, motivo: 'rechazado' });
+    await expect(enviarPorRed(itemConteo, HOJA)).resolves.toEqual({
+      ok: false,
+      motivo: 'rechazado',
+      mensaje: 'Tu sesión venció. Ingresá de nuevo con tu PIN.',
+    });
   });
 
   it('item tipo "finalizar" llama a hojasApi.finalizar, no a guardarConteo', async () => {

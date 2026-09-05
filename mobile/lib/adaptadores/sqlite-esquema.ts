@@ -199,6 +199,24 @@ export const MIGRACIONES_SQLITE: string[] = [
   CREATE INDEX IF NOT EXISTS idx_hojas_estructura_inv_ronda
     ON hojas_estructura(inventario_id, numero_conteo);
   `,
+  /**
+   * v5 — la RAZÓN de un rechazo (hallazgo 2026-09-05: un conteo rechazado
+   * no frenaba al `finalizar` de la misma hoja, que salía igual, y el
+   * único mensaje que veía la persona era "revisá la conexión" — activamente
+   * engañoso para un 409 que no tiene nada que ver con la red).
+   *
+   * `razon` guarda el mensaje del servidor (`ErrorApi.message`, ver
+   * sincronizador.ts#enviarPorRed) SOLO para un rechazo real
+   * (`motivo: 'rechazado'`) — un `sin-red` no tiene "razón del servidor"
+   * que guardar, y por eso queda en NULL en ese caso (ver
+   * sqlite-cola.ts#aplicarResultadoEnvio).
+   *
+   * ADITIVA: `ALTER TABLE ... ADD COLUMN` nullable, sin tocar filas
+   * existentes — mismo criterio que v4 (numero_conteo).
+   */
+  `
+  ALTER TABLE cola_sync ADD COLUMN razon TEXT;
+  `,
 ];
 
 export async function migrarSqlite(db: DbMigrable): Promise<void> {

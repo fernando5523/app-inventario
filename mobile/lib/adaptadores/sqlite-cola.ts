@@ -23,6 +23,15 @@ export interface ItemCola {
   creadoEn: string;
   intentos: number;
   estado: EstadoItemCola;
+  /**
+   * El motivo que dio el SERVIDOR para un rechazo real (`motivo:
+   * 'rechazado'`) — nunca para un `sin-red`, que no tiene "razón del
+   * servidor" que guardar. `undefined`/`null` = sin rechazo todavía, o
+   * rechazo sin motivo (queda "Rechazado por el servidor." al mostrarlo,
+   * ver sincronizador.ts). Opcional para no obligar a tocar cada literal
+   * de `ItemCola` que ya existía antes de este campo.
+   */
+  razon?: string | null;
 }
 
 /**
@@ -63,7 +72,17 @@ export function estadoSyncDeHoja(itemsDeLaHoja: ItemCola[]): EstadoSync {
   return 'local';
 }
 
-export type ResultadoEnvio = { ok: true } | { ok: false; motivo: 'sin-red' | 'rechazado' };
+export type ResultadoEnvio =
+  | { ok: true }
+  | {
+      ok: false;
+      motivo: 'sin-red' | 'rechazado';
+      /** El mensaje que dio el servidor, si `motivo` es 'rechazado'. Ver `ItemCola.razon`. */
+      mensaje?: string | null;
+    };
+
+/** Lo que se muestra cuando el servidor rechazó algo sin mandar un mensaje aprovechable. Nunca se inventa un motivo más específico que esto. */
+export const RECHAZO_SIN_MOTIVO = 'Rechazado por el servidor.';
 
 /**
  * Transición PURA de un item tras intentar enviarlo — decide qué hacer,
@@ -71,13 +90,21 @@ export type ResultadoEnvio = { ok: true } | { ok: false; motivo: 'sin-red' | 're
  * queda, con el estado que le corresponde.
  *
  * Rechazado (el servidor dijo que no — ej. la hoja ya la finalizó otra
- * persona) y sin-red se tratan IGUAL acá: los dos dejan el item en
- * `error`, visible, nunca en un limbo silencioso ni en un reintento
- * infinito sin que nadie se entere. La pantalla es la que decide, con
- * `motivo`, qué mensaje mostrar — esta función solo dice "no se pudo,
- * quedate a la vista".
+ * persona) y sin-red se tratan IGUAL en el `estado`: los dos dejan el
+ * item en `error`, visible, nunca en un limbo silencioso ni en un
+ * reintento infinito sin que nadie se entere. Donde SÍ se distinguen es
+ * en `razon`: un rechazo real guarda el motivo del servidor (o el
+ * fallback fijo si no mandó ninguno) para que la pantalla pueda decir
+ * POR QUÉ en vez de mandar a buscar señal cuando el problema no es de
+ * red — un `sin-red` no tiene "razón del servidor" que guardar, así que
+ * queda en `null`.
  */
 export function aplicarResultadoEnvio(item: ItemCola, resultado: ResultadoEnvio): ItemCola | null {
   if (resultado.ok) return null;
-  return { ...item, estado: 'error', intentos: item.intentos + 1 };
+  return {
+    ...item,
+    estado: 'error',
+    intentos: item.intentos + 1,
+    razon: resultado.motivo === 'rechazado' ? (resultado.mensaje?.trim() || RECHAZO_SIN_MOTIVO) : null,
+  };
 }

@@ -30,7 +30,7 @@ import { AppState, type AppStateStatus } from 'react-native';
 import * as Network from 'expo-network';
 
 import type { EstadoCola, Sincronizador } from '../puertos/repositorios';
-import { esFallaDeRed } from './_http';
+import { esErrorApi, esFallaDeRed } from './_http';
 import { hojasApi } from './hojas-api';
 import { estadoDeLaCola, procesarColaDeSincronizacion, type EnviarItemCola } from './hojas-sqlite';
 
@@ -58,7 +58,13 @@ export const enviarPorRed: EnviarItemCola = async (item, hoja) => {
     // 409 "hoja ya finalizada por otro", 500...) -> `rechazado`: queda
     // visible en error, nunca en un reintento infinito silencioso --
     // mismo criterio ya verificado en hojas-sincronizacion.test.ts.
-    return { ok: false, motivo: esFallaDeRed(error) ? 'sin-red' : 'rechazado' };
+    //
+    // El `mensaje` viaja SOLO en el rechazo real: es lo que permite que la
+    // banda de sincronización diga POR QUÉ ("La hoja ya está finalizada:
+    // no se puede corregir el conteo.") en vez de "revisá la conexión",
+    // que para un 409 es activamente engañoso -- el problema no es de red.
+    if (esFallaDeRed(error)) return { ok: false, motivo: 'sin-red' };
+    return { ok: false, motivo: 'rechazado', mensaje: esErrorApi(error) ? error.message : null };
   }
 };
 
@@ -89,7 +95,7 @@ function actualizarConectividad(sinRed: boolean): void {
 }
 
 async function actualizarEstadoDesdeLaCola(huboExito: boolean): Promise<void> {
-  const { pendientes, enError } = await estadoDeLaCola();
+  const { pendientes, enError, razonRechazo } = await estadoDeLaCola();
   estadoActual = {
     ...estadoActual,
     pendientes,
@@ -98,10 +104,12 @@ async function actualizarEstadoDesdeLaCola(huboExito: boolean): Promise<void> {
     // pasada real recién. Mentir acá ("nunca sincronizó") sería tan malo
     // como decir "sincronizado" con la cola llena.
     ultimaSync: huboExito ? new Date().toISOString() : estadoActual.ultimaSync,
-    error:
-      enError > 0
-        ? `${enError} ${enError === 1 ? 'ítem no se pudo sincronizar' : 'ítems no se pudieron sincronizar'} — revisá la conexión o pedí ayuda.`
-        : null,
+    // `razonRechazo` gana cuando existe: es el motivo REAL que dio el
+    // servidor para un rechazo (o el fallback fijo si no mandó ninguno,
+    // ver sqlite-cola.ts#RECHAZO_SIN_MOTIVO) -- "revisá la conexión" solo
+    // queda para cuando lo que falló de verdad fue la red (sin-red), que
+    // no deja una razón de servidor que mostrar.
+    error: enError > 0 ? (razonRechazo ?? `${enError} ${enError === 1 ? 'ítem no se pudo sincronizar' : 'ítems no se pudieron sincronizar'} — revisá la conexión o pedí ayuda.`) : null,
   };
   notificar();
 }

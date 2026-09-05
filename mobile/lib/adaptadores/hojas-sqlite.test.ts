@@ -528,32 +528,53 @@ describe('un conteo rechazado por el servidor no queda en un limbo silencioso', 
   });
 });
 
-describe('INVESTIGACIÓN (sin arreglar): un conteo rechazado no frena el finalizar que le sigue en la cola', () => {
-  // Escenario pedido: el Contador cuenta SIN RED, finaliza la hoja
-  // también sin red (los dos quedan en cola_sync), y cuando vuelve la
-  // red, `procesarColaDeSincronizacion` procesa la cola EN ORDEN pero SIN
-  // que el resultado de un item dependa del de otro (hojas-sqlite.ts:
-  // 778-815, `for (const item of items) { ... }` sin ningún corte ni
-  // condición entre iteraciones). Si el conteo de un producto se rechaza
-  // (motivo != 'sin-red' — cualquier error real, no necesariamente el
-  // caso de este test) y el finalizar de ESA MISMA hoja está más
-  // adelante en la cola, el finalizar se manda IGUAL y "sale bien": nada
-  // acá lo condiciona a que los conteos anteriores hayan tenido éxito.
+describe('ARREGLADO (2026-09-05): una hoja no se declara finalizada ante el servidor mientras tenga conteos sin resolver', () => {
+  // Antes de este fix, `procesarColaDeSincronizacion` mandaba el
+  // `finalizar` de una hoja aunque el `conteo` de la MISMA hoja que iba
+  // antes en la cola hubiera sido rechazado -- el servidor terminaba
+  // creyendo la hoja completa (sync: 'sincronizado') sin que nadie le
+  // avisara del hueco, y `rondas.service.ts#cerrar` podía cerrar la
+  // ronda sobre esa mentira. Decisión del cliente: NO es una regla de
+  // negocio, es honestidad del estado -- una hoja no puede declararse
+  // finalizada mientras el servidor no aceptó todos sus conteos.
   //
-  // Del lado del servidor eso es exactamente lo que `hojas.service.ts
-  // #finalizar` permite: no consulta `producto`/`conteo` para decidir,
-  // marca `sync: 'sincronizado'` sin preguntar si falta algún renglón
-  // (ver el test correspondiente en hojas.service.test.ts). El resultado:
-  // el Coordinador puede cerrar la ronda (`rondas.service.ts#cerrar` solo
-  // mira `estado`/`sync` de la HOJA, nunca de sus productos) sin que nada
-  // le avise que un producto de esa hoja nunca llegó a contarse en el
-  // servidor — la única marca que existe es LOCAL, en el teléfono de
-  // quien contó, y el mensaje que ve ahí ("revisá la conexión o pedí
-  // ayuda") ni siquiera dice que la causa es un rechazo del servidor, no
-  // de red.
-  it('el finalizar de la hoja se sincroniza igual, aunque el conteo previo del mismo producto haya sido rechazado', async () => {
-    const { hojaId, inventarioId } = await hoja002();
-    const productoId = 59;
+  // Hoja sintética propia (no la #002 del seed, que otros tests de este
+  // archivo ya finalizan/sincronizan) — cada test usa un INVENTARIO
+  // propio (no solo una hoja propia): `mias()` solo AWAITEA la descarga
+  // cuando no hay nada local todavía para ese inventario (ver
+  // `descargarSiHaceFalta`) -- compartir un inventario entre tests haría
+  // que el segundo cayera en la descarga en 2do plano (`void
+  // descargarHojas`) y leyera la base ANTES de que esa descarga termine.
+  function hojaDeRiesgo(inventarioId: number, id: number, numero: string, productoId: number) {
+    return {
+      id,
+      inventarioId,
+      numero,
+      zona: 'Zona R',
+      gondola: 'R1',
+      tamano: 50,
+      estado: 'pendiente' as const,
+      sync: 'sincronizado' as const,
+      asignados: ['María Rojas'],
+      productos: [
+        {
+          id: productoId,
+          codigo: String(productoId).padStart(4, '0'),
+          codigoBarras: `774000000${productoId}`,
+          descripcion: `Producto ${productoId}`,
+          empaques: [{ nombre: 'Caja', factor: 12 }],
+        },
+      ],
+      conteos: [],
+    };
+  }
+
+  it('hoja con 1 rechazado: NO se manda el finalizar (queda pendiente, la hoja visible en error)', async () => {
+    const INV_RIESGO = 555101;
+    const productoId = 991;
+    vi.mocked(hojasApi.mias).mockResolvedValueOnce([hojaDeRiesgo(INV_RIESGO, 5551001, '001', productoId)]);
+    const [hoja] = await hojasSqlite.mias(INV_RIESGO, 1);
+    const hojaId = hoja!.id;
 
     await hojasSqlite.guardarConteo(hojaId, {
       productoId,
@@ -564,46 +585,97 @@ describe('INVESTIGACIÓN (sin arreglar): un conteo rechazado no frena el finaliz
     });
     // finalizar() no exige que la hoja esté completa (puedeFinalizar solo
     // mira si YA estaba finalizada, nunca si faltan renglones) — mismo
-    // criterio que el backend, ver hojas.service.ts#finalizar.
+    // criterio que el backend, ver hojas.service.ts#finalizar. El punto
+    // de este test es que la cola SÍ lo frena, aunque el dominio no.
     await hojasSqlite.finalizar(hojaId);
 
+    let seLlamoAFinalizar = false;
     await procesarColaDeSincronizacion(async (item) => {
-      // Simula un rechazo real del servidor para ESE producto puntual
-      // (no 'sin-red': un 'sin-red' sería reintentable y no probaría
-      // nada distinto de lo que ya cubren los tests de arriba) y un
-      // finalizar que sí sale bien -- exactamente lo que puede pasar si
-      // hojas.service.ts#guardarConteo rechaza ese conteo por cualquier
-      // motivo real (no necesariamente "hoja finalizada": puede ser
-      // cualquier otro rechazo) mientras el finalizar de la misma hoja,
-      // que no depende de eso, sí es aceptado.
+      if (item.tipo === 'finalizar') seLlamoAFinalizar = true;
+      if (item.tipo === 'conteo' && item.productoId === productoId) {
+        return { ok: false, motivo: 'rechazado', mensaje: 'La ronda 1 ya cerró.' };
+      }
+      return { ok: true };
+    });
+
+    // El finalizar NUNCA se intentó mandar -- ni siquiera para que el
+    // servidor lo rechazara: se lo bloqueó ACÁ, antes de gastar el viaje.
+    expect(seLlamoAFinalizar).toBe(false);
+
+    const db = await obtenerDbDeTest();
+
+    // El conteo rechazado queda visible, con la razón que dio "el servidor".
+    const itemConteo = await db.getFirstAsync<{ estado: string; razon: string | null }>(
+      "SELECT estado, razon FROM cola_sync WHERE hoja_id = ? AND tipo = 'conteo' AND producto_id = ?",
+      [hojaId, productoId],
+    );
+    expect(itemConteo?.estado).toBe('error');
+    expect(itemConteo?.razon).toBe('La ronda 1 ya cerró.');
+
+    // El finalizar sigue en la cola, PENDIENTE -- no se perdió, no quedó
+    // en error: está esperando a que se resuelva lo que lo bloquea.
+    const itemFinalizar = await db.getFirstAsync<{ estado: string }>("SELECT estado FROM cola_sync WHERE hoja_id = ? AND tipo = ?", [
+      hojaId,
+      'finalizar',
+    ]);
+    expect(itemFinalizar?.estado).toBe('pendiente');
+
+    // Local: la persona SÍ ve que algo quedó mal (sync: 'error') -- pero,
+    // a propósito, la hoja no le miente al SERVIDOR diciendo que está
+    // completa: eso es justamente lo que este fix evita.
+    const hojaLocal = await hojasSqlite.porNumero(INV_RIESGO, '001', 1);
+    expect(hojaLocal!.sync).toBe('error');
+  });
+
+  it('se resuelve el rechazo: en la próxima pasada, el finalizar SÍ se manda', async () => {
+    const INV_RIESGO = 555102;
+    const productoId = 992;
+    vi.mocked(hojasApi.mias).mockResolvedValueOnce([hojaDeRiesgo(INV_RIESGO, 5551002, '002', productoId)]);
+    const [hoja] = await hojasSqlite.mias(INV_RIESGO, 1);
+    const hojaId = hoja!.id;
+
+    await hojasSqlite.guardarConteo(hojaId, {
+      productoId,
+      empaques: [{ empaqueNombre: 'Caja', cantidad: 1 }],
+      sueltas: 0,
+      confirmadoPorEscaner: false,
+      contadoEn: 't-riesgo-conteo-2',
+    });
+    await hojasSqlite.finalizar(hojaId);
+
+    // Pasada 1: el conteo se rechaza -- el finalizar queda bloqueado (ya
+    // demostrado arriba).
+    await procesarColaDeSincronizacion(async (item) => {
       if (item.tipo === 'conteo' && item.productoId === productoId) {
         return { ok: false, motivo: 'rechazado' };
       }
       return { ok: true };
     });
 
+    // Se resuelve lo que bloqueaba (ej. la ronda se reabrió, o era un
+    // error transitorio del servidor): el MISMO item de la cola se
+    // reintenta, sin tocar el conteo local -- que la hoja ya esté
+    // finalizada localmente le impide a la persona corregirlo a mano
+    // (`puedeEditar`), así que "resolverse" acá es que el reintento
+    // automático tenga éxito, no una edición nueva.
+    //
+    // Pasada 2: esta vez todo sale bien -- incluido el conteo que antes
+    // se había rechazado.
+    let seLlamoAFinalizar = false;
+    await procesarColaDeSincronizacion(async (item) => {
+      if (item.tipo === 'finalizar') seLlamoAFinalizar = true;
+      return { ok: true };
+    });
+
+    expect(seLlamoAFinalizar).toBe(true);
+
     const db = await obtenerDbDeTest();
+    const restantes = await db.getAllAsync('SELECT * FROM cola_sync WHERE hoja_id = ?', [hojaId]);
+    expect(restantes).toHaveLength(0); // cola vacía: conteo Y finalizar salieron.
 
-    // El conteo de este producto NUNCA salió: sigue en la cola, en error.
-    const itemConteo = await db.getFirstAsync<{ estado: string }>(
-      "SELECT estado FROM cola_sync WHERE hoja_id = ? AND tipo = 'conteo' AND producto_id = ?",
-      [hojaId, productoId],
-    );
-    expect(itemConteo?.estado).toBe('error');
-
-    // El finalizar SÍ salió: se sacó de la cola porque "se sincronizó".
-    const itemFinalizar = await db.getFirstAsync('SELECT * FROM cola_sync WHERE hoja_id = ? AND tipo = ?', [hojaId, 'finalizar']);
-    expect(itemFinalizar).toBeNull();
-
-    // EL PUNTO: la hoja queda finalizada localmente, con el conteo de
-    // este producto perdido en la cola -- visible en ESTE teléfono
-    // (sync: 'error'), pero eso es un dato LOCAL. Lo que le llegó al
-    // servidor fue el finalizar (aceptado), sin que nada le avisara que
-    // faltaba este producto -- ver hojas.service.test.ts para el mismo
-    // hallazgo del lado del servidor.
-    const hojaLocal = await hojasSqlite.porNumero(inventarioId, '002', 1);
+    const hojaLocal = await hojasSqlite.porNumero(INV_RIESGO, '002', 1);
     expect(hojaLocal!.estado).toBe('finalizada');
-    expect(hojaLocal!.sync).toBe('error');
+    expect(hojaLocal!.sync).toBe('sincronizado');
   });
 });
 

@@ -93,4 +93,23 @@ describe('aplicarResultadoEnvio', () => {
     expect(original.estado).toBe('pendiente');
     expect(original.intentos).toBe(0);
   });
+
+  it('rechazado con mensaje del servidor: la razón es ESE mensaje, no un genérico', () => {
+    const resultado = aplicarResultadoEnvio(item(), {
+      ok: false,
+      motivo: 'rechazado',
+      mensaje: 'La hoja ya está finalizada: no se puede corregir el conteo.',
+    });
+    expect(resultado?.razon).toBe('La hoja ya está finalizada: no se puede corregir el conteo.');
+  });
+
+  it('rechazado SIN mensaje del servidor: cae al fallback fijo, nunca un texto inventado', () => {
+    const resultado = aplicarResultadoEnvio(item(), { ok: false, motivo: 'rechazado' });
+    expect(resultado?.razon).toBe('Rechazado por el servidor.');
+  });
+
+  it('sin-red: razon queda null -- no hay "razón del servidor" que guardar', () => {
+    const resultado = aplicarResultadoEnvio(item(), { ok: false, motivo: 'sin-red' });
+    expect(resultado?.razon).toBeNull();
+  });
 });
