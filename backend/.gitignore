@@ -1,5 +1,7 @@
 node_modules/
 dist/
+# Log del servidor de desarrollo en background (npm run dev > logs/dev.log)
+logs/
 .env
 # Contenido real de .env, esperando el mv manual (ver README.md) -- tiene
 # una credencial real, no se commitea bajo ningun nombre.
