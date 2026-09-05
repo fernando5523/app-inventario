@@ -24,7 +24,7 @@ vi.mock('../../shared/auditoria', () => ({ registrarAuditoria: vi.fn() }));
 
 import { calcularTotalDescuento } from '../historial/historial.calculos';
 import type { ColaboradorAutenticado } from '../../shared/tipos';
-import { armarPlanilla, liquidar, type ColaboradorParaLiquidar } from './liquidacion.cierre';
+import { armarPlanilla, liquidar, proyectarPlanilla, type ColaboradorParaLiquidar } from './liquidacion.cierre';
 
 const COORD: ColaboradorAutenticado = { colaboradorId: 5, sucursalId: 1, rol: 'coordinador' };
 const AUDITOR: ColaboradorAutenticado = { colaboradorId: 8, sucursalId: 1, rol: 'auditor' };
@@ -437,6 +437,36 @@ describe('liquidar', () => {
           expect.objectContaining({ where: { inventarioId: 9 } }),
         );
       });
+    });
+
+    /**
+     * LA INVARIANTE QUE HACE QUE LA VISTA PREVIA VALGA ALGO: lo que la
+     * pantalla muestra ANTES de firmar es exactamente lo que se firma.
+     *
+     * Salen de la misma función (`proyectarPlanilla`), así que no pueden
+     * discrepar por construcción. Este test fija que sigan siendo la misma:
+     * el día que alguien duplique el cálculo "para la preview", la pantalla
+     * mostraría una planilla y se firmaría otra, y nadie lo notaría hasta
+     * que alguien compare su recibo con lo que vio en el teléfono.
+     */
+    it('la proyección y lo que se persiste son LAS MISMAS filas', async () => {
+      const { planilla: proyectada } = await proyectarPlanilla(9, 1, {
+        montoFaltanteBruto: 1500,
+        montoNegativos: 100,
+        montoFaltanteEmpresa: 10,
+        colaboradoresAlcanzados: 11,
+        colaboradoresAsistieron: 7,
+        multaInasistencia: 20,
+      });
+
+      await liquidar(COORD, 9);
+      const { data: persistida } = prismaMock.liquidacionColaborador.createMany.mock.calls[0]![0] as {
+        data: Array<Record<string, unknown>>;
+      };
+
+      // Se compara sin `inventarioId`, que lo agrega el que escribe.
+      const sinInventario = persistida.map(({ inventarioId: _i, ...resto }) => resto);
+      expect(sinInventario).toEqual(proyectada);
     });
 
     it('el total descontado cuadra con la suma de la planilla', async () => {

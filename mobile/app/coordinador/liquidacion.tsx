@@ -7,7 +7,7 @@ import { PantallaConTabs } from '../../components/navegacion/PantallaConTabs';
 import { BarraApp, Badge, Button, formatoFechaHora } from '../../components/ui';
 import { repositorioLiquidacion } from '../../lib/contenedor';
 import { textoDeAjustes, validarAjustes } from '../../lib/dominio/ajustes-formulario';
-import { asistentesConCentavoExtra } from '../../lib/dominio/reparto-visible';
+import { asistentesConCentavoExtra, resumirAsistencia } from '../../lib/dominio/reparto-visible';
 import type {
   AjustesDelMes,
   CierreLiquidacion,
@@ -205,7 +205,16 @@ export default function LiquidacionScreen(): JSX.Element {
     liquidacion.cuotaBase !== null &&
     liquidacion.bonoAsistencia !== null;
 
-  const asistieron = datosCompletos ? liquidacion.planilla.length - liquidacion.totalFaltas! : null;
+  /**
+   * LA RESTA QUE DABA -2. Era `planilla.length - totalFaltas` con la planilla
+   * vacía: 0 - 2. Ahora sale de `resumirAsistencia`, que garantiza que
+   * ninguno de los dos números sea negativo y que sumen el universo.
+   *
+   * Y se cuenta sobre la planilla —proyectada o firme, según corresponda— en
+   * vez de restar: quién asistió es un hecho por fila, no una diferencia.
+   */
+  const asistencia = liquidacion === null ? null : resumirAsistencia(liquidacion.planilla.length, liquidacion.planilla.filter((p) => p.asistio).length);
+  const asistieron = datosCompletos ? asistencia!.asistieron : null;
 
   // A cuántos asistentes les tocó el centavo extra del reparto. La regla vive
   // en lib/dominio/reparto-visible.ts, no acá: así se prueba sin montar la
@@ -428,7 +437,14 @@ export default function LiquidacionScreen(): JSX.Element {
           ) : null}
 
           <View style={styles.seccion}>
-            <Text style={styles.seccionTitulo}>Planilla de descuentos</Text>
+            {/*
+              PROYECTADA vs FIRME, y el título es la única señal. Antes de
+              liquidar son las filas que VAN A pasar: llamarlas "Planilla de
+              descuentos" a secas haría creer que el descuento ya está hecho.
+            */}
+            <Text style={styles.seccionTitulo}>
+              {liquidacion.proyectada ? 'Planilla proyectada' : 'Planilla de descuentos'}
+            </Text>
             <Text style={styles.seccionTotal}>{liquidacion.planilla.length} colaboradores</Text>
           </View>
 
@@ -550,7 +566,21 @@ function CierreDePlanilla({
 }): JSX.Element {
   const ajustesListos = ajustes !== null && ajustes.registrado && ajustes.montoNegativos !== null;
   const calculable = liquidacion.faltanteNeto !== null && liquidacion.cuotaBase !== null;
-  const puedeLiquidar = ajustesListos && calculable && liquidacion.planilla.length > 0;
+
+  /**
+   * ASISTENTES REALES, de la planilla PROYECTADA.
+   *
+   * Antes esto era `liquidacion.planilla.length > 0`, y era un candado que
+   * pedía su propia llave: la planilla sale de `LiquidacionColaborador`, que
+   * el backend solo llena AL liquidar. El botón nunca se habilitaba.
+   *
+   * Ahora el backend proyecta las filas antes de firmar, así que se puede
+   * preguntar lo que de verdad importa: si hay alguien que haya contado. Con
+   * 0 asistentes el backend rechaza igual (409), y un botón que se puede
+   * tocar para recibir un error enseña a ignorar los errores.
+   */
+  const asistentes = liquidacion.planilla.filter((p) => p.asistio).length;
+  const puedeLiquidar = ajustesListos && calculable && asistentes > 0;
 
   return (
     <View style={styles.tarjeta}>
@@ -570,7 +600,9 @@ function CierreDePlanilla({
         <Text style={styles.tarjetaTexto}>
           {!ajustesListos
             ? 'Primero cargá los ajustes del mes, arriba. Sin eso no se puede calcular lo que se le descuenta a cada persona.'
-            : 'Todavía no se puede calcular la planilla: revisá las advertencias de arriba.'}
+            : asistentes === 0
+              ? 'Ningún colaborador registró conteos en este inventario: no hay asistencia deducible ni a quién repartir el faltante. Revisá que las hojas tengan conteos cargados.'
+              : 'Todavía no se puede calcular la planilla: revisá las advertencias de arriba.'}
         </Text>
       )}
 

@@ -30,6 +30,7 @@
 
 import { prisma } from '../../config/database';
 import { registrarAuditoria } from '../../shared/auditoria';
+
 import { Conflicto, NoEncontrado } from '../../shared/errores';
 import type { ColaboradorAutenticado } from '../../shared/tipos';
 import { validarPuedeLiquidar } from './liquidacion.permisos';

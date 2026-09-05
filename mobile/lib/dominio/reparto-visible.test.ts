@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { asistentesConCentavoExtra, type FilaConMonto } from './reparto-visible';
+import { asistentesConCentavoExtra, resumirAsistencia, type FilaConMonto } from './reparto-visible';
 
 /**
  * El caso real de la reunión, tal como llega del backend:
@@ -62,5 +62,45 @@ describe('asistentesConCentavoExtra', () => {
   it('sin fondo que repartir (nadie faltó) no hay centavo que explicar', () => {
     const todosAsistieron: FilaConMonto[] = Array.from({ length: 11 }, () => ({ asistio: true, monto: 126.36 }));
     expect(asistentesConCentavoExtra(todosAsistieron, 126.36, 0)).toBe(0);
+  });
+});
+
+/**
+ * UN CONTEO DE PERSONAS NO PUEDE SER NEGATIVO.
+ *
+ * La pantalla mostró "redistribuido entre los **-2** colaboradores que sí
+ * asistieron" (visto en la app el 2026-09-05): salía de
+ * `planilla.length - totalFaltas` con la planilla vacía, 0 - 2 = -2.
+ */
+describe('resumirAsistencia', () => {
+  it('el caso normal: 11 alcanzados, 7 vinieron, 4 faltaron', () => {
+    expect(resumirAsistencia(11, 7)).toEqual({ alcanzados: 11, asistieron: 7, faltaron: 4 });
+  });
+
+  it('EL CASO DEL BUG: universo vacío no produce negativos', () => {
+    expect(resumirAsistencia(0, 2)).toEqual({ alcanzados: 0, asistieron: 0, faltaron: 0 });
+  });
+
+  it('nadie vino: todos faltaron, ninguno negativo', () => {
+    expect(resumirAsistencia(3, 0)).toEqual({ alcanzados: 3, asistieron: 0, faltaron: 3 });
+  });
+
+  it('vino uno solo (el caso real de Bolívar): 1 asistió, el resto faltó', () => {
+    expect(resumirAsistencia(3, 1)).toEqual({ alcanzados: 3, asistieron: 1, faltaron: 2 });
+  });
+
+  it('más asistentes que universo se recorta: "13 de 11" es imposible', () => {
+    expect(resumirAsistencia(11, 13)).toEqual({ alcanzados: 11, asistieron: 11, faltaron: 0 });
+  });
+
+  it('LA INVARIANTE sobre cualquier combinación', () => {
+    for (const alcanzados of [-3, 0, 1, 3, 11]) {
+      for (const asistieron of [-2, 0, 1, 7, 13]) {
+        const r = resumirAsistencia(alcanzados, asistieron);
+        expect(r.asistieron).toBeGreaterThanOrEqual(0);
+        expect(r.faltaron).toBeGreaterThanOrEqual(0);
+        expect(r.asistieron + r.faltaron).toBe(r.alcanzados);
+      }
+    }
   });
 });

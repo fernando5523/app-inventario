@@ -448,6 +448,17 @@ export interface Liquidacion {
   /** null, mismo criterio que `faltanteNeto`: sin asistencia registrada no hay "cuántos faltaron" que valga. */
   totalFaltas: number | null;
   planilla: DetalleLiquidacion[];
+  /**
+   * `true` = la planilla todavía NO se firmó: son las filas que `liquidar()`
+   * va a persistir, calculadas con la misma función del backend y sin
+   * escribir nada. `false` = ya se liquidó y estas son las reales.
+   *
+   * Viaja explícito y no se deduce de `planilla.length`: una planilla vacía
+   * y una proyectada se veían igual desde acá, y de ahí salió un botón
+   * "Liquidar" que se habilitaba con `planilla.length > 0` y por lo tanto
+   * NUNCA se habilitaba — la planilla solo se llena AL liquidar.
+   */
+  proyectada: boolean;
   /** Ver AdvertenciaLiquidacion. Siempre viene; `mensaje: null` si no hay nada que decir. */
   advertencia: AdvertenciaLiquidacion;
 }

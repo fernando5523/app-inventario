@@ -58,7 +58,12 @@ import { bonoBase, repartirExacto } from '../../dominio/reparto-de-fondo';
 import { registrarAuditoria } from '../../shared/auditoria';
 import { Conflicto, NoEncontrado } from '../../shared/errores';
 import type { ColaboradorAutenticado, Rol } from '../../shared/tipos';
-import { calcularResumenLiquidacion, calcularTotalDescuento, redondear } from '../historial/historial.calculos';
+import {
+  calcularResumenLiquidacion,
+  calcularTotalDescuento,
+  redondear,
+  type EntradaLiquidacion,
+} from '../historial/historial.calculos';
 import { validarPuedeLiquidar } from './liquidacion.permisos';
 import { armarAdvertencia } from './liquidacion.service';
 
@@ -130,6 +135,70 @@ export function armarPlanilla(e: EntradaPlanilla): FilaPlanilla[] {
       bonoAsistencia: asistio ? (bonoPorPersona.get(c.id) ?? 0) : 0,
     };
   });
+}
+
+// ---------------------------------------------------------------------------
+// La proyeccion: UN SOLO calculo para la vista previa y para el cierre
+// ---------------------------------------------------------------------------
+
+export interface ProyeccionPlanilla {
+  planilla: FilaPlanilla[];
+  resumen: ReturnType<typeof calcularResumenLiquidacion>;
+  /** Ids de quienes asistieron, deducidos de las hojas. */
+  asistentes: number[];
+}
+
+/**
+ * Las filas que la planilla VA A TENER, calculadas sin escribir nada.
+ *
+ * Existe porque la pantalla tenia un candado que pedia su propia llave: el
+ * boton "Liquidar" se habilitaba con `planilla.length > 0`, y la planilla
+ * solo se llena AL liquidar. Nunca se habilitaba.
+ *
+ * La salida es la misma para la vista previa y para el cierre porque es
+ * literalmente la misma funcion -- `liquidar()` la llama y persiste lo que
+ * devuelve. Si hubiera dos calculos, el dia que uno cambie la pantalla
+ * mostraria una planilla y se firmaria otra, y nadie lo notaria hasta que
+ * alguien compare su recibo con lo que vio en el telefono.
+ */
+export async function proyectarPlanilla(
+  inventarioId: number,
+  sucursalId: number,
+  entrada: EntradaLiquidacion,
+): Promise<ProyeccionPlanilla> {
+  const colaboradores = await prisma.colaborador.findMany({
+    // El MISMO universo que `colaboradoresAlcanzados` (rondas.service.ts):
+    // si estas dos consultas no coinciden, la cuota por persona no cierra
+    // contra el faltante neto y nadie entiende por que.
+    where: { sucursalId, activo: true },
+    select: { id: true, nombre: true, rol: true },
+    orderBy: { id: 'asc' },
+  });
+
+  // QUIENES asistieron, con LA MISMA regla y LA MISMA consulta que uso el
+  // cierre del conteo para contar cuantos (SELECT_ASISTENCIA en
+  // dominio/asistencia.ts). De ahi sale la invariante que se testea: la
+  // cantidad de `asistio: true` en la planilla es igual a
+  // `ResultadoInventario.colaboradoresAsistieron`.
+  const hojas = await prisma.hojaConteo.findMany({
+    where: { inventarioId },
+    select: SELECT_ASISTENCIA,
+  });
+  const asistentes = [...quienesAsistieron(hojas.map(aHojaParaAsistencia))];
+
+  const resumen = calcularResumenLiquidacion(entrada);
+
+  return {
+    planilla: armarPlanilla({
+      colaboradores: colaboradores.map((c) => ({ id: c.id, nombre: c.nombre, rol: c.rol as Rol })),
+      idsQueAsistieron: asistentes,
+      cuotaBase: resumen.cuotaBase,
+      multaInasistencia: entrada.multaInasistencia,
+      fondoMultas: resumen.fondoMultas,
+    }),
+    resumen,
+    asistentes,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -217,26 +286,14 @@ export async function liquidar(
     );
   }
 
-  const colaboradores = await prisma.colaborador.findMany({
-    // El MISMO universo que `colaboradoresAlcanzados` (rondas.service.ts):
-    // si estas dos consultas no coinciden, la cuota por persona no cierra
-    // contra el faltante neto y nadie entiende por que.
-    where: { sucursalId: inventario.sucursalId, activo: true },
-    select: { id: true, nombre: true, rol: true },
-    orderBy: { id: 'asc' },
+  const { planilla, resumen, asistentes } = await proyectarPlanilla(inventarioId, inventario.sucursalId, {
+    montoFaltanteBruto: r.montoFaltanteBruto.toNumber(),
+    montoNegativos: r.montoNegativos!.toNumber(),
+    montoFaltanteEmpresa: r.montoFaltanteEmpresa.toNumber(),
+    colaboradoresAlcanzados: r.colaboradoresAlcanzados,
+    colaboradoresAsistieron: r.colaboradoresAsistieron!,
+    multaInasistencia: r.multaInasistencia.toNumber(),
   });
-
-  // QUIENES asistieron, con LA MISMA regla y LA MISMA consulta que uso el
-  // cierre del conteo para contar cuantos (SELECT_ASISTENCIA en
-  // dominio/asistencia.ts). De ahi sale la invariante que se testea: la
-  // cantidad de `asistio: true` en la planilla es igual a
-  // `ResultadoInventario.colaboradoresAsistieron`. Dos lecturas distintas
-  // podrian discrepar, y ese numero lo firma alguien.
-  const hojasDelInventario = await prisma.hojaConteo.findMany({
-    where: { inventarioId },
-    select: SELECT_ASISTENCIA,
-  });
-  const idsQueAsistieron = [...quienesAsistieron(hojasDelInventario.map(aHojaParaAsistencia))];
 
   /**
    * NADIE CONTO: no hay asistencia deducible ni a quien repartir.
@@ -257,29 +314,12 @@ export async function liquidar(
    * resultado -- si alguno de los dos estuviera mal, el que manda es el que
    * se acaba de leer.
    */
-  if (idsQueAsistieron.length === 0) {
+  if (asistentes.length === 0) {
     throw new Conflicto(
       'Ningún colaborador registró conteos en este inventario: no hay asistencia deducible ni a quién repartir el faltante. ' +
         'Revisá que las hojas tengan conteos cargados antes de liquidar.',
     );
   }
-
-  const resumen = calcularResumenLiquidacion({
-    montoFaltanteBruto: r.montoFaltanteBruto.toNumber(),
-    montoNegativos: r.montoNegativos!.toNumber(),
-    montoFaltanteEmpresa: r.montoFaltanteEmpresa.toNumber(),
-    colaboradoresAlcanzados: r.colaboradoresAlcanzados,
-    colaboradoresAsistieron: r.colaboradoresAsistieron!,
-    multaInasistencia: r.multaInasistencia.toNumber(),
-  });
-
-  const planilla = armarPlanilla({
-    colaboradores: colaboradores.map((c) => ({ id: c.id, nombre: c.nombre, rol: c.rol as Rol })),
-    idsQueAsistieron,
-    cuotaBase: resumen.cuotaBase,
-    multaInasistencia: r.multaInasistencia.toNumber(),
-    fondoMultas: resumen.fondoMultas,
-  });
 
   // Planilla y estado, o ninguno de los dos. Si el estado quedara en
   // `liquidado` sin las filas, el lacrado -- que ahora exige ese estado --

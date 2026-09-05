@@ -363,3 +363,61 @@ describe('liquidar', () => {
     await expect(liquidacionApi.liquidar(29)).rejects.toThrow();
   });
 });
+
+/**
+ * LA PLANILLA PROYECTADA. `LiquidacionColaborador` se llena AL liquidar, así
+ * que antes de eso el backend devuelve las filas que VA a persistir,
+ * calculadas con la misma función y sin escribir nada.
+ *
+ * Sin esto, la pantalla veía una planilla vacía y el botón "Liquidar" —que
+ * se habilitaba con `planilla.length > 0`— nunca se habilitaba: un candado
+ * que pedía su propia llave.
+ */
+describe('planilla proyectada vs firme', () => {
+  const base = {
+    inventarioId: 29,
+    periodo: 'Septiembre 2026',
+    faltanteBruto: 1500,
+    negativosDelMes: 0,
+    faltanteEmpresa: 10,
+    faltanteNeto: 1490,
+    cuotaBase: 496.67,
+    multaInasistencia: 20,
+    bonoAsistencia: 13.33,
+    totalFaltas: 2,
+    advertencia: { itemsSinPrecio: 0, asistenciaSinRegistrar: false, ajustesSinRegistrar: false, mensaje: null },
+  };
+
+  it('antes de liquidar, la planilla viene CON filas y marcada como proyectada', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () =>
+        json({
+          ...base,
+          proyectada: true,
+          planilla: [{ colaboradorId: 1, nombre: 'Conteo', rol: 'conteo', asistio: true, monto: 483.34 }],
+        }),
+      ),
+    );
+
+    const l = await liquidacionApi.deSucursal(1);
+    expect(l?.proyectada).toBe(true);
+    expect(l?.planilla).toHaveLength(1);
+  });
+
+  it('después de liquidar viene con proyectada:false', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () =>
+        json({
+          ...base,
+          proyectada: false,
+          planilla: [{ colaboradorId: 1, nombre: 'Conteo', rol: 'conteo', asistio: true, monto: 483.34 }],
+        }),
+      ),
+    );
+
+    const l = await liquidacionApi.deSucursal(1);
+    expect(l?.proyectada).toBe(false);
+  });
+});

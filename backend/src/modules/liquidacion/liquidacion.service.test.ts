@@ -14,6 +14,12 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const prismaMock = vi.hoisted(() => ({
   inventario: { findFirst: vi.fn() },
   diferenciaItem: { count: vi.fn() },
+  // Los usa `proyectarPlanilla`: `deSucursal` proyecta la planilla cuando
+  // todavía no se liquidó, con la misma función que después persiste
+  // `liquidar()`. Por defecto vacíos -- cada test que le importe la
+  // proyección los llena.
+  colaborador: { findMany: vi.fn(async () => []) },
+  hojaConteo: { findMany: vi.fn(async () => []) },
 }));
 vi.mock('../../config/database', () => ({ prisma: prismaMock }));
 

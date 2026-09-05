@@ -17,6 +17,7 @@
 import { prisma } from '../../config/database';
 import type { ColaboradorAutenticado, Rol } from '../../shared/tipos';
 import { calcularResumenLiquidacion, calcularTotalDescuento, redondear } from '../historial/historial.calculos';
+import { proyectarPlanilla } from './liquidacion.cierre';
 import { validarAcceso } from './liquidacion.permisos';
 
 /** Espeja tipos del puerto: mobile/lib/puertos/repositorios.ts#DetalleLiquidacion. */
@@ -106,6 +107,16 @@ export interface LiquidacionDto {
   /** null, mismo criterio que `faltanteNeto`: sin asistencia registrada no hay "cuántos faltaron" que valga. */
   totalFaltas: number | null;
   planilla: DetalleLiquidacionDto[];
+  /**
+   * `true` = la planilla todavia NO se firmo: son las filas que
+   * `liquidar()` va a persistir, calculadas con la misma funcion y sin
+   * escribir nada. `false` = ya se liquido y estas son las filas reales.
+   *
+   * Que viaje explicito y no se deduzca de `planilla.length` es el punto:
+   * una planilla vacia y una proyectada se veian igual desde el front, y de
+   * ahi salio el boton que nunca se habilitaba.
+   */
+  proyectada: boolean;
   /**
    * Campo NUEVO respecto del puerto del front (`Liquidacion`): hay que
    * sumarlo alla y mostrarlo en la pantalla. Ver AdvertenciaLiquidacion.
@@ -241,6 +252,60 @@ export async function deSucursal(actor: ColaboradorAutenticado, sucursalId: numb
 
   const itemsSinPrecio = await contarItemsSinPrecio(inventario.id);
 
+  /**
+   * LA PLANILLA ANTES DE LIQUIDAR: proyectada, no vacia.
+   *
+   * `LiquidacionColaborador` se llena AL liquidar, asi que antes de eso
+   * `inventario.liquidaciones` esta vacio. Devolver esa lista vacia era un
+   * candado que pedia su propia llave: la pantalla habilitaba "Liquidar" con
+   * `planilla.length > 0` y nunca se habilitaba. Y el mismo vacio producia
+   * el "-2 colaboradores que si asistieron" (0 filas - 2 faltas).
+   *
+   * La proyeccion sale de `proyectarPlanilla`, LA MISMA funcion que usa
+   * `liquidar()` para persistir. No hay dos calculos: si los hubiera, el dia
+   * que uno cambie la pantalla mostraria una planilla y se firmaria otra, y
+   * nadie lo notaria hasta que alguien compare su recibo con lo que vio.
+   *
+   * Solo se proyecta si el resumen es calculable -- sin ajustes cargados no
+   * hay cuota base con la que armar ninguna fila.
+   */
+  const persistida = inventario.liquidaciones.length > 0;
+  const proyeccion =
+    persistida || resumen === null
+      ? null
+      : await proyectarPlanilla(inventario.id, inventario.sucursalId, {
+          montoFaltanteBruto: r.montoFaltanteBruto.toNumber(),
+          montoNegativos: r.montoNegativos!.toNumber(),
+          montoFaltanteEmpresa: r.montoFaltanteEmpresa.toNumber(),
+          colaboradoresAlcanzados: r.colaboradoresAlcanzados,
+          colaboradoresAsistieron: r.colaboradoresAsistieron!,
+          multaInasistencia: r.multaInasistencia.toNumber(),
+        });
+
+  const planilla: DetalleLiquidacionDto[] = persistida
+    ? inventario.liquidaciones.map((l) => ({
+        colaboradorId: l.colaboradorId,
+        // El nombre CONGELADO al liquidar, no el actual: es lo que decia el
+        // recibo de sueldo de ese mes.
+        nombre: l.nombreAlLiquidar,
+        rol: l.rolAlLiquidar as Rol,
+        asistio: l.asistio,
+        // Derivado de sus tres partes, nunca una columna -- misma regla que
+        // deja a Conteo sin columna `total`.
+        monto: calcularTotalDescuento({
+          cuotaBase: l.cuotaBase.toNumber(),
+          multaInasistencia: l.multaInasistencia.toNumber(),
+          bonoAsistencia: l.bonoAsistencia.toNumber(),
+        }),
+      }))
+    : (proyeccion?.planilla ?? []).map((f) => ({
+        colaboradorId: f.colaboradorId,
+        nombre: f.nombreAlLiquidar,
+        rol: f.rolAlLiquidar,
+        asistio: f.asistio,
+        monto: calcularTotalDescuento(f),
+      }));
+
   return {
     inventarioId: inventario.id,
     periodo: nombreDePeriodo(inventario.periodoAnio, inventario.periodoMes),
@@ -252,21 +317,13 @@ export async function deSucursal(actor: ColaboradorAutenticado, sucursalId: numb
     multaInasistencia: r.multaInasistencia.toNumber(),
     bonoAsistencia: resumen?.bonoAsistencia ?? null,
     totalFaltas: resumen?.faltantes ?? null,
-    planilla: inventario.liquidaciones.map((l) => ({
-      colaboradorId: l.colaboradorId,
-      // El nombre CONGELADO al liquidar, no el actual: es lo que decia el
-      // recibo de sueldo de ese mes.
-      nombre: l.nombreAlLiquidar,
-      rol: l.rolAlLiquidar as Rol,
-      asistio: l.asistio,
-      // Derivado de sus tres partes, nunca una columna -- misma regla que
-      // deja a Conteo sin columna `total`.
-      monto: calcularTotalDescuento({
-        cuotaBase: l.cuotaBase.toNumber(),
-        multaInasistencia: l.multaInasistencia.toNumber(),
-        bonoAsistencia: l.bonoAsistencia.toNumber(),
-      }),
-    })),
+    planilla,
+    /**
+     * `true` = todavia no se firmo, estas filas son lo que VA A PASAR.
+     * La pantalla titula distinto ("Planilla proyectada" vs "Planilla") y no
+     * ofrece editarla despues.
+     */
+    proyectada: !persistida,
     advertencia: armarAdvertencia({ itemsSinPrecio, asistenciaSinRegistrar, ajustesSinRegistrar }),
   };
 }

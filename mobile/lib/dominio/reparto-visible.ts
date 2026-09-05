@@ -50,3 +50,34 @@ export function asistentesConCentavoExtra(
     return bonoDeEstaPersona > pisoEnCentavos;
   }).length;
 }
+
+/**
+ * CUÁNTA GENTE VINO Y CUÁNTA FALTÓ, con las tres invariantes que un conteo
+ * de PERSONAS no puede violar nunca:
+ *
+ *   asistieron >= 0
+ *   faltaron   >= 0
+ *   asistieron + faltaron === alcanzados
+ *
+ * Existe porque la pantalla mostró "redistribuido entre los **-2**
+ * colaboradores que sí asistieron" (visto en la app el 2026-09-05). Salía de
+ * `planilla.length - totalFaltas` con la planilla vacía: 0 - 2 = -2. Un
+ * número negativo de personas no es un error de cálculo, es un número que no
+ * significa nada — y quien lo ve deja de creerle al resto de la pantalla.
+ *
+ * Espeja `historial.calculos.ts#resumirAsistencia` del backend. Está
+ * duplicada a propósito y no importada: no hay lib compartida entre backend y
+ * mobile (mismo caso que `redondear`), y una regla de tres líneas duplicada
+ * es más barata que el andamiaje para compartirla.
+ */
+export interface AsistenciaVisible {
+  alcanzados: number;
+  asistieron: number;
+  faltaron: number;
+}
+
+export function resumirAsistencia(alcanzados: number, asistieron: number): AsistenciaVisible {
+  const universo = Math.max(0, alcanzados);
+  const vinieron = Math.min(Math.max(0, asistieron), universo);
+  return { alcanzados: universo, asistieron: vinieron, faltaron: universo - vinieron };
+}
