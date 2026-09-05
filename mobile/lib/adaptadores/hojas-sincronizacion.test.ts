@@ -57,7 +57,17 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 vi.mock('react-native', () => ({ Platform: { OS: 'android' } }));
 vi.mock('expo-constants', () => ({ default: { expoConfig: { extra: {} } } }));
 vi.mock('./sesion-api', () => ({
-  sesionApi: { sesionActiva: async () => null },
+  // La #002 del seed es de María Rojas (ver _compartido.ts); `porNumero`/`mias`
+  // ahora filtran por el colaborador de la sesión, así que estos tests —que
+  // abren la #002— tienen que estar logueados como ella para verla como propia.
+  sesionApi: {
+    sesionActiva: async () => ({
+      colaborador: { id: 501, nombre: 'María Rojas', dni: '4821', rol: 'conteo' },
+      sucursal: { id: 1, nombre: 'Market Central Luzuriaga', colaboradores: 6 },
+      token: 'token-de-prueba',
+      expiraEn: '2099-01-01T00:00:00.000Z',
+    }),
+  },
 }));
 
 import { avance } from '../dominio/hoja';

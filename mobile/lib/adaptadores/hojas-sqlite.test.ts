@@ -22,7 +22,7 @@ import { DatabaseSync } from 'node:sqlite';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { afterAll, describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 // Desde la descarga inicial, hojas-sqlite.ts importa `esFallaDeRed` de
 // `./_http` DIRECTO (no solo a través de hojas-api.ts/catalogo-api.ts,
@@ -33,6 +33,7 @@ vi.mock('react-native', () => ({ Platform: { OS: 'android' } }));
 vi.mock('expo-constants', () => ({ default: { expoConfig: { extra: {} } } }));
 
 import { avance } from '../dominio/hoja';
+import type { Sesion } from '../dominio/tipos';
 import { migrarSqlite, MIGRACIONES_SQLITE } from './sqlite-esquema';
 
 // ---------------------------------------------------------------------------
@@ -111,7 +112,10 @@ vi.mock('./_sqlite', () => ({
 // test de este archivo llama a `mias()`, así que alcanza con un stub: lo
 // que importa acá es no arrastrar el módulo real al grafo de imports.
 vi.mock('./sesion-api', () => ({
-  sesionApi: { sesionActiva: async () => null },
+  // vi.fn (no una función suelta) para que cada test decida QUIÉN está
+  // logueado — `mias`/`porNumero` ahora filtran por el colaborador de la
+  // sesión, así que "sin sesión" y "sesión de otro" son casos que se prueban.
+  sesionApi: { sesionActiva: vi.fn() },
 }));
 
 // Mismo motivo: hojas-api.ts/catalogo-api.ts importan react-native vía
@@ -155,6 +159,22 @@ const { hojasSqlite, inventarioIdSinRed, procesarColaDeSincronizacion, ultimaDes
 const { obtenerInventarioDeSucursal } = await import('./_compartido');
 const { ErrorApi } = await import('./_http');
 const { hojasApi } = await import('./hojas-api');
+const { sesionApi } = await import('./sesion-api');
+
+// La sesión por defecto de los tests: María Rojas, la Contadora dueña de la
+// #002 del seed (ver _compartido.ts) — así todos los tests que abren la #002
+// con `porNumero` la ven como propia, sin declarar sesión uno por uno. Sin
+// sesión, `mias`/`porNumero` devuelven vacío a propósito.
+const SESION_MARIA = {
+  colaborador: { id: 501, nombre: 'María Rojas', dni: '4821', rol: 'conteo' },
+  sucursal: { id: 1, nombre: 'Market Central Luzuriaga', colaboradores: 6 },
+  token: 'token-de-prueba',
+  expiraEn: '2099-01-01T00:00:00.000Z',
+} as unknown as Sesion;
+
+beforeEach(() => {
+  vi.mocked(sesionApi.sesionActiva).mockResolvedValue(SESION_MARIA);
+});
 
 afterAll(() => {
   rawActual?.close();
@@ -570,7 +590,7 @@ describe('el tamaño bajado es el NOMINAL del lote, no cuánto hay para contar',
         tamano: 50, // nominal del lote — el backend NO lo ajustó a lo real.
         estado: 'pendiente',
         sync: 'sincronizado',
-        asignados: ['Conteo'],
+        asignados: ['María Rojas'],
         productos: Array.from({ length: 36 }, (_, i) => productoDeTest(i + 1)),
         conteos: [],
       },
@@ -640,7 +660,7 @@ describe('CONTEO CIEGO ENTRE RONDAS: en la ronda 2 el Contador NO ve lo que cont
     tamano: 50,
     estado: 'pendiente' as const,
     sync: 'sincronizado' as const,
-    asignados: ['Conteo'],
+    asignados: ['María Rojas'],
     productos: [prod(PROD_R1), prod(88100012)],
     conteos: [],
   };
@@ -653,7 +673,7 @@ describe('CONTEO CIEGO ENTRE RONDAS: en la ronda 2 el Contador NO ve lo que cont
     tamano: 50,
     estado: 'pendiente' as const,
     sync: 'sincronizado' as const,
-    asignados: ['Conteo'],
+    asignados: ['María Rojas'],
     productos: [prod(88200011)],
     conteos: [],
   };
@@ -706,6 +726,74 @@ describe('CONTEO CIEGO ENTRE RONDAS: en la ronda 2 el Contador NO ve lo que cont
     // ronda (filtro por `numero_conteo` en la consulta), nunca las de la otra.
     expect(ronda1DespuesDeContar.every((h) => h.id === h1.id)).toBe(true);
     expect(ronda2.every((h) => h.id === h2.id)).toBe(true);
+  });
+});
+
+describe('AISLAMIENTO ENTRE CONTADORES: cada uno ve SOLO sus hojas, aunque el cache tenga las de todos', () => {
+  // El caso real (min-5): el Coordinador bajó `todas` en ESTE mismo teléfono,
+  // así que `hojas_estructura` quedó con las hojas de LOS DOS contadores. Cada
+  // Contador tiene que ver solo las suyas y no poder abrir ni contar las del
+  // otro — si no, se rompe el reparto y la asistencia deducida de "hoja
+  // asignada con conteos" deja figurar como asistente a quien contó ajeno.
+  const INV = 777001;
+  const LUIS = 'Luis Shuan';
+  const CARLA = 'Carla Depaz';
+
+  const prod = (id: number) => ({
+    id,
+    codigo: String(id).padStart(4, '0'),
+    codigoBarras: `772000000${id}`,
+    descripcion: `Producto ${id}`,
+    empaques: [{ nombre: 'Caja', factor: 12 }],
+  });
+  const hoja = (id: number, numero: string, quien: string) => ({
+    id,
+    inventarioId: INV,
+    numero,
+    zona: 'Zona R',
+    gondola: 'R1',
+    tamano: 50,
+    estado: 'pendiente' as const,
+    sync: 'sincronizado' as const,
+    asignados: [quien],
+    productos: [prod(id * 10 + 1)],
+    conteos: [],
+  });
+  const hojasLuis = [hoja(7710001, '001', LUIS), hoja(7710002, '002', LUIS)];
+  const hojasCarla = [hoja(7710011, '011', CARLA), hoja(7710012, '012', CARLA)];
+
+  const sesionDe = (nombre: string) =>
+    ({ ...SESION_MARIA, colaborador: { ...SESION_MARIA.colaborador, nombre } }) as unknown as Sesion;
+
+  it('el Coordinador bajó TODAS; Luis ve solo las suyas, Carla solo las suyas, y ninguno abre las del otro', async () => {
+    // Que la descarga en segundo plano de `mias` no reponga nada raro: lo que
+    // se prueba es la lectura del cache que dejó `todas`, no otra descarga.
+    vi.mocked(hojasApi.mias).mockResolvedValue([]);
+
+    // El Coordinador baja `todas`: las 4 hojas (de los dos) entran al cache
+    // compartido del teléfono — es EXACTAMENTE lo que dispara el bug.
+    vi.mocked(hojasApi.todas).mockResolvedValueOnce([...hojasLuis, ...hojasCarla]);
+    await hojasSqlite.todas(INV, 1);
+
+    // Luis entra a Mis Hojas: ve SOLO las suyas.
+    vi.mocked(sesionApi.sesionActiva).mockResolvedValue(sesionDe(LUIS));
+    const deLuis = await hojasSqlite.mias(INV, 1);
+    expect(deLuis.map((h) => h.numero).sort()).toEqual(['001', '002']);
+    expect(deLuis.every((h) => h.asignados.includes(LUIS))).toBe(true);
+    // Y NO puede abrir una de Carla ni sabiendo el número: null, no la hoja.
+    expect(await hojasSqlite.porNumero(INV, '011', 1)).toBeNull();
+
+    // Carla entra: ve las suyas, nunca las de Luis.
+    vi.mocked(sesionApi.sesionActiva).mockResolvedValue(sesionDe(CARLA));
+    const deCarla = await hojasSqlite.mias(INV, 1);
+    expect(deCarla.map((h) => h.numero).sort()).toEqual(['011', '012']);
+    expect(await hojasSqlite.porNumero(INV, '001', 1)).toBeNull();
+  });
+
+  it('sin sesión no se sabe de quién son las hojas: `mias` devuelve vacío, jamás todas', async () => {
+    vi.mocked(sesionApi.sesionActiva).mockResolvedValue(null as unknown as Sesion);
+    expect(await hojasSqlite.mias(INV, 1)).toEqual([]);
+    expect(await hojasSqlite.porNumero(INV, '001', 1)).toBeNull();
   });
 });
 

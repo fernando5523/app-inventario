@@ -576,6 +576,17 @@ async function hojasConEstadoLocal(hojasBase: HojaConteo[]): Promise<HojaConteo[
 // El adaptador
 // ---------------------------------------------------------------------------
 
+/**
+ * El nombre del colaborador de la sesión activa — la clave para filtrar "mis
+ * hojas" por asignación. El login por defecto pasa por sesionApi (HTTP, con la
+ * sesión en su propia tabla SQLite); el modo debug, por sesionMemoria. Se
+ * prueban los dos, igual que ya hacía el filtro del dataset de ejemplo.
+ */
+async function nombreDeColaboradorEnSesion(): Promise<string | null> {
+  const sesion = (await sesionApi.sesionActiva()) ?? (await sesionMemoria.sesionActiva());
+  return sesion?.colaborador.nombre ?? null;
+}
+
 export const hojasSqlite: RepositorioHojas = {
   async mias(inventarioId, ronda) {
     // La descarga que faltaba (bug real): antes de leer nada, se le
@@ -583,26 +594,20 @@ export const hojasSqlite: RepositorioHojas = {
     // espera esa respuesta y cuándo se muestra lo local sin esperar.
     await descargarSiHaceFalta(inventarioId, 'mias', ronda);
 
-    const { hojas, origen } = await hojasDeInventarioBase(inventarioId, ronda);
-    if (origen === 'real') {
-      // El backend ya resolvió "mías" del lado del servidor
-      // (alcance=mias, ver backend/README.md) — lo que hay en
-      // `hojas_estructura` para este inventario NO es nada más que eso.
-      return hojasConEstadoLocal(hojas);
-    }
+    const { hojas } = await hojasDeInventarioBase(inventarioId, ronda);
 
-    // Cayó al dataset de ejemplo (`_compartido.ts`): ese SÍ mezcla las
-    // hojas de todos los contadores en un solo inventario, así que acá
-    // sigue haciendo falta el filtro por nombre, como siempre.
-    // El login por defecto pasa por sesionApi (HTTP), que guarda la sesión
-    // activa en su propia tabla SQLite — no en el estado en memoria de
-    // sesionMemoria. Probar ahí primero y caer a sesionMemoria cubre el
-    // modo debug (EXPO_PUBLIC_PUERTOS_MEMORIA=sesion) sin volver a perder
-    // de vista quién está logueado cuando la sesión sí vino por HTTP.
-    const sesion = (await sesionApi.sesionActiva()) ?? (await sesionMemoria.sesionActiva());
-    if (!sesion) return [];
-
-    const propias = hojas.filter((hoja) => hoja.asignados.includes(sesion.colaborador.nombre));
+    // SIEMPRE filtrar por el colaborador de la sesión — pase lo que pase con
+    // el `origen`. `hojas_estructura` es una tabla COMPARTIDA del teléfono: si
+    // el Coordinador bajó `todas` en este MISMO equipo, las hojas de TODOS los
+    // contadores del inventario quedaron ahí. Confiar en "origen real = ya vino
+    // filtrado del servidor" era EL BUG (min-5): un Contador veía —y podía
+    // CONTAR— hojas ajenas, rompiendo el reparto y la asistencia deducida de
+    // "hoja asignada con conteos" (ef44a2d). "Mía" es "estoy en sus asignados",
+    // nunca "está en el cache del teléfono". Sin sesión no se sabe de quién son
+    // las hojas: se devuelve vacío, jamás todas.
+    const nombre = await nombreDeColaboradorEnSesion();
+    if (!nombre) return [];
+    const propias = hojas.filter((hoja) => hoja.asignados.includes(nombre));
     return hojasConEstadoLocal(propias);
   },
 
@@ -613,13 +618,19 @@ export const hojasSqlite: RepositorioHojas = {
   },
 
   async porNumero(inventarioId, numero, ronda) {
-    // `porNumero` lo usa `contar.tsx` para reabrir UNA hoja propia
-    // (siempre después de haber pasado por `mias()`), así que alcanza con
-    // refrescar el mismo alcance — no hace falta esperar acá si `mias()`
-    // ya disparó la descarga hace un instante.
+    // `porNumero` lo usa `contar.tsx` para reabrir UNA hoja (siempre después
+    // de pasar por `mias()`), así que alcanza con refrescar el mismo alcance.
     await descargarSiHaceFalta(inventarioId, 'mias', ronda);
     const { hojas } = await hojasDeInventarioBase(inventarioId, ronda);
-    const hojaBase = hojas.find((h) => h.numero === numero);
+
+    // Misma regla de propiedad que `mias`: una hoja solo es abrible por el
+    // Contador si está en SUS asignados. Sin esto, entrar por ?numero=011 a una
+    // hoja de otro (deep link, o el param a mano) esquiva el filtro de la lista
+    // y deja contar una hoja ajena. "No es tuya" y "no existe" son lo mismo
+    // acá: null — y contar.tsx ya muestra el EmptyState de "hoja no encontrada".
+    const nombre = await nombreDeColaboradorEnSesion();
+    if (!nombre) return null;
+    const hojaBase = hojas.find((h) => h.numero === numero && h.asignados.includes(nombre));
     if (!hojaBase) return null;
     return hojaConEstadoLocal(hojaBase);
   },
