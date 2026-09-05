@@ -4,6 +4,7 @@ import { ActivityIndicator, StyleSheet, Text, View } from 'react-native';
 
 import { inventarioIdSinRed, rondaActivaSinRed } from '../../lib/adaptadores/hojas-sqlite';
 import { repositorioHojas, repositorioInventario, repositorioTiendas, repositorioUsuarios, sincronizador } from '../../lib/contenedor';
+import { cifraOSinRed, filaPct } from '../../lib/dominio/cifra-sin-red';
 import { avance, avanceConjunto, estadoConjunto } from '../../lib/dominio/hoja';
 import type { HojaConteo, Rol } from '../../lib/dominio/tipos';
 import type { EstadoCola } from '../../lib/puertos/repositorios';
@@ -22,8 +23,9 @@ const NOMBRE_ROL: Record<Rol, string> = {
 
 interface InventarioActivo {
   inventarioId: number;
-  items: number;
-  totalHojas: number;
+  /** null = no se pudo traer (sin red); nunca 0 con ese significado. */
+  items: number | null;
+  totalHojas: number | null;
 }
 
 interface EstadoSistema {
@@ -39,10 +41,6 @@ interface FilaEstado {
   valor: string;
   pct?: string;
   color?: string;
-}
-
-function pct(parte: number, total: number): string {
-  return total === 0 ? '0%' : `${Math.round((parte / total) * 100)}%`;
 }
 
 const ETIQUETA_ESTADO_1ER_CONTEO: Record<ReturnType<typeof estadoConjunto>, string> = {
@@ -128,22 +126,25 @@ export function InicioScreen(): JSX.Element {
         // rol siempre tiene sucursal real.
         let inventarioId: number | null;
         let ronda: number | null = null;
-        let items = 0;
-        let totalHojas = 0;
+        let items: number | null = null;
+        let totalHojas: number | null = null;
         try {
           const activo = await repositorioInventario.activo(sesion!.sucursal!.id);
           inventarioId = activo?.inventarioId ?? null;
           ronda = activo?.rondaActiva ?? null;
-          items = activo?.items ?? 0;
-          totalHojas = activo?.totalHojas ?? 0;
+          items = activo?.items ?? null;
+          totalHojas = activo?.totalHojas ?? null;
         } catch {
           // Sin red (u otra falla): el avance de HOY puede estar completo
           // en SQLite — se sigue con eso en vez de dejar "Tu avance"
           // colgado esperando una respuesta que no va a llegar (ver
           // inventarioIdSinRed en hojas-sqlite.ts). `items`/`totalHojas`
-          // quedan en 0 porque esos números solo los tiene el snapshot del
-          // servidor — no son lo que el operario necesita ver acá: lo que
-          // importa es SU avance, que sale de `repositorioHojas` abajo.
+          // quedan en null (nunca 0): esos números solo los tiene el
+          // snapshot del servidor, y null es "no se sabe" — mostrarlos en
+          // 0 diría "no hay ninguno", que es una afirmación distinta y
+          // falsa (ver lib/dominio/cifra-sin-red.ts). Lo que importa acá
+          // es el avance de la persona, que sale de `repositorioHojas`
+          // abajo y no depende de este try.
           inventarioId = await inventarioIdSinRed();
           // La ronda activa, sin red: sale de MAX(numero_conteo) en la
           // estructura local (ver rondaActivaSinRed). Sin esto, el Contador
@@ -216,13 +217,16 @@ export function InicioScreen(): JSX.Element {
       const contando = new Set(
         hojasRonda1.filter((h) => h.estado !== 'pendiente').flatMap((h) => h.asignados),
       ).size;
-      cifras = `${inventario.totalHojas} hojas · ${formatoMiles(inventario.items)} ítems · ${asignadas} asignadas`;
+      // Sin red, totalHojas/items son null: se muestran como "—", nunca
+      // como "0 hojas" (que diría "no hay ninguna" en vez de "no lo sé").
+      const sinRed = inventario.totalHojas === null || inventario.items === null;
+      cifras = `${cifraOSinRed(inventario.totalHojas)} hojas · ${cifraOSinRed(inventario.items, formatoMiles)} ítems · ${asignadas} asignadas${sinRed ? ' · sin red' : ''}`;
       filasEstado = [
-        { etiqueta: 'Hojas asignadas', valor: String(asignadas), pct: `/ ${inventario.totalHojas} (${pct(asignadas, inventario.totalHojas)})` },
+        { etiqueta: 'Hojas asignadas', valor: String(asignadas), pct: filaPct(asignadas, inventario.totalHojas) },
         {
           etiqueta: 'Hojas finalizadas',
           valor: String(finalizadas),
-          pct: `/ ${inventario.totalHojas} (${pct(finalizadas, inventario.totalHojas)})`,
+          pct: filaPct(finalizadas, inventario.totalHojas),
           color: colors.ok,
         },
         { etiqueta: 'Contando ahora', valor: String(contando), pct: 'colaboradores' },
@@ -270,7 +274,10 @@ export function InicioScreen(): JSX.Element {
       const avance1 = avanceConjunto(hojasRonda1);
       const pct1 = avance1.totalItems > 0 ? (avance1.itemsContados / avance1.totalItems) * 100 : 0;
       const etiquetaEstado1 = ETIQUETA_ESTADO_1ER_CONTEO[estado1];
-      cifras = `${inventario.totalHojas} hojas · ${formatoMiles(inventario.items)} ítems · ${etiquetaEstado1}`;
+      // Mismo criterio que el bloque de Coordinador: sin red no se muestra
+      // "0 hojas", se muestra "—" y se aclara por qué.
+      const sinRed = inventario.totalHojas === null || inventario.items === null;
+      cifras = `${cifraOSinRed(inventario.totalHojas)} hojas · ${cifraOSinRed(inventario.items, formatoMiles)} ítems · ${etiquetaEstado1}${sinRed ? ' · sin red' : ''}`;
       filasEstado = [
         { etiqueta: 'Ciclo de conteos', valor: etiquetaEstado1, color: estado1 === 'finalizada' ? colors.ok : colors.proceso },
         {
@@ -292,13 +299,13 @@ export function InicioScreen(): JSX.Element {
         {
           etiqueta: 'Tiendas activas',
           valor: String(estadoSistema.tiendasActivas),
-          pct: `/ ${estadoSistema.totalTiendas} (${pct(estadoSistema.tiendasActivas, estadoSistema.totalTiendas)})`,
+          pct: filaPct(estadoSistema.tiendasActivas, estadoSistema.totalTiendas),
           color: colors.ok,
         },
         {
           etiqueta: 'Usuarios habilitados',
           valor: String(estadoSistema.usuariosActivos),
-          pct: `/ ${estadoSistema.totalUsuarios} (${pct(estadoSistema.usuariosActivos, estadoSistema.totalUsuarios)})`,
+          pct: filaPct(estadoSistema.usuariosActivos, estadoSistema.totalUsuarios),
         },
         {
           etiqueta: 'Inventarios en curso',

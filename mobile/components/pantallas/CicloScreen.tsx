@@ -36,8 +36,10 @@ function calcularHojas(totalItems: number, tamano: TamanoHoja): CalculoHojas {
 
 function textoCalculo(c: CalculoHojas, tamano: number): string {
   if (c.total === 0) return 'Sin ítems para calcular.';
-  if (c.parcial === 0) return `${nf.format(c.total)} hojas de ${tamano} ítems (exacto).`;
-  return `${nf.format(c.total)} hojas de ${tamano} ítems: ${nf.format(c.completas)} completas + 1 parcial de ${c.parcial} — la cantidad de hojas se calcula siempre, nunca es fija.`;
+  const sufHojas = c.total === 1 ? '' : 's';
+  if (c.parcial === 0) return `${nf.format(c.total)} hoja${sufHojas} de ${tamano} ítems (exacto).`;
+  const sufCompletas = c.completas === 1 ? '' : 's';
+  return `${nf.format(c.total)} hoja${sufHojas} de ${tamano} ítems: ${nf.format(c.completas)} completa${sufCompletas} + 1 parcial de ${c.parcial} — la cantidad de hojas se calcula siempre, nunca es fija.`;
 }
 
 /**
@@ -169,6 +171,12 @@ export function CicloScreen({ rol }: CicloScreenProps): JSX.Element {
   const { sesion, cerrar } = useSesion();
   const [cargando, setCargando] = useState(true);
   const [items, setItems] = useState<number | null>(null);
+  // El tamaño de hoja REAL del 1er conteo -- null hasta que se crean las
+  // hojas (mismo momento que `totalHojas: null` en el puerto). Antes el
+  // Paso 1 calculaba siempre contra un 50 fijo en el código, así que un
+  // inventario armado con hojas de 20 o 30 mostraba una cantidad de hojas
+  // que no era la real (ver lib/dominio/lote.ts#partirEnHojas).
+  const [tamanoHoja, setTamanoHoja] = useState<TamanoHoja | null>(null);
   const [inventarioId, setInventarioId] = useState<number | null>(null);
   const [hojasT1, setHojasT1] = useState<HojaConteo[] | null>(null);
   const [tamanoReconteo, setTamanoReconteo] = useState<TamanoHoja>(50);
@@ -237,6 +245,7 @@ export function CicloScreen({ rol }: CicloScreenProps): JSX.Element {
       const activo = await repositorioInventario.activo(sesion!.sucursal!.id);
       if (!vigente) return;
       setItems(activo?.items ?? null);
+      setTamanoHoja(activo?.tamanoHoja ?? null);
       setInventarioId(activo?.inventarioId ?? null);
       setRondaActiva(activo?.rondaActiva ?? null);
       if (!activo) {
@@ -328,14 +337,17 @@ export function CicloScreen({ rol }: CicloScreenProps): JSX.Element {
         ? { ronda: 1 as const, datos: comparativoT1 }
         : null;
 
-  const hojasCalculoT1 = calcularHojas(totalT1, 50);
+  // null cuando todavía no se sabe el tamaño real de hoja del 1er conteo:
+  // sin eso no hay con qué calcular cuántas hojas hay ni si la última
+  // queda parcial, y no se inventa un tamaño para poder mostrar algo.
+  const textoCalculoHojasT1 = tamanoHoja !== null ? textoCalculo(calcularHojas(totalT1, tamanoHoja), tamanoHoja) : null;
 
   return (
     <PantallaConTabs scrollable contentStyle={styles.contenido}>
       <BarraApp
         rotulo={rol === 'auditor' ? 'Auditoría · Ciclo de conteos' : 'Gestión masiva'}
         sede={sesion.sucursal!.nombre}
-        cifras={items ? `${nf.format(items)} ítems · 3 pasadas de cierre` : undefined}
+        cifras={items ? `${nf.format(items)} ítem${items === 1 ? '' : 's'} · 3 pasadas de cierre` : undefined}
         onSalir={salir}
       />
 
@@ -351,7 +363,7 @@ export function CicloScreen({ rol }: CicloScreenProps): JSX.Element {
             estado={estadoT1}
             // El cálculo de hojas Y, cuando ya hay conteos, el comparativo
             // contra el ERP: cuántos cuadraron y cuántos pasarían al 2do.
-            calculo={[textoCalculo(hojasCalculoT1, 50), comparativoT1?.detalle].filter(Boolean).join(' ')}
+            calculo={[textoCalculoHojasT1, comparativoT1?.detalle].filter(Boolean).join(' ')}
             avance={
               avanceT1 && hojasT1 && hojasT1.length > 0
                 ? {

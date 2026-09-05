@@ -478,8 +478,17 @@ export default function HojasScreen(): JSX.Element {
     }
   }
 
+  // "N hojas CREADAS" y "saldrían N hojas" (preview, antes de crearlas) son
+  // afirmaciones distintas -- antes `hojas.length || previa.total` las
+  // mezclaba bajo el mismo texto, y alguien que solo mirara la barra de
+  // arriba podía leer una previsualización como un hecho ya consumado.
+  const sufijoPlural = (n: number) => (n === 1 ? '' : 's');
   const cifras = items
-    ? `${formatoMiles(hojas.length || (previa?.total ?? 0))} hojas · ${formatoMiles(items)} ítems`
+    ? hojas.length > 0
+      ? `${formatoMiles(hojas.length)} hoja${sufijoPlural(hojas.length)} creada${sufijoPlural(hojas.length)} · ${formatoMiles(items)} ítem${sufijoPlural(items)}`
+      : previa
+        ? `Saldrían ${formatoMiles(previa.total)} hoja${sufijoPlural(previa.total)} · ${formatoMiles(items)} ítem${sufijoPlural(items)}`
+        : `${formatoMiles(items)} ítem${sufijoPlural(items)}`
     : undefined;
 
   return (

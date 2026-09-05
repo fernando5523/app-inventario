@@ -195,11 +195,10 @@ export default function LacradoScreen(): JSX.Element {
         // "ítems del inventario", no "ítems auditados": `items` es el total
         // del snapshot (repositorioInventario.activo()), no la cantidad
         // que de verdad se comparó contra Dynamics -- eso lo dice
-        // app/auditor/auditoria.tsx con su propio total real (hoy, 3
-        // ítems de ejemplo, ver auditoria-memoria.ts). Decir "auditados"
-        // acá es la misma inconsistencia que la auditoría marcó entre
-        // Inicio/Auditoría/Lacrado: tres pantallas, tres cifras distintas
-        // para lo que suena a la misma cosa.
+        // app/auditor/auditoria.tsx con su propio total (RepositorioAuditoria
+        // .matriz()). Decir "auditados" acá sería la misma inconsistencia
+        // que la auditoría marcó entre Inicio/Auditoría/Lacrado: tres
+        // pantallas, tres cifras distintas para lo que suena a la misma cosa.
         cifras={items ? `${periodo ? `${periodo} · ` : ''}${formatoMiles(items)} ítems del inventario` : undefined}
         onSalir={salir}
       />
