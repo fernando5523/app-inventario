@@ -46,6 +46,19 @@ export interface EstadoSincronizacion {
 export function sincronizacionDeHojas(hojas: HojaConteo[], cola?: EstadoCola): EstadoSincronizacion {
   if (cola) {
     if (cola.error) return { estado: 'error', mensaje: cola.error };
+    // `sinRed` gana sobre el conteo de pendientes: es la respuesta a la
+    // pregunta que de verdad se hace quien está sin señal contando ("¿esto
+    // se guardó?"), y no depende de que haya corrido una sincronización
+    // (que sin red no corre nunca) — se sabe apenas cambia la conectividad
+    // (sincronizador.ts#actualizarConectividad).
+    if (cola.sinRed) {
+      return cola.pendientes > 0
+        ? {
+            estado: 'offline',
+            mensaje: `Sin conexión — ${cola.pendientes} ${cola.pendientes === 1 ? 'conteo guardado' : 'conteos guardados'} en el equipo, se van a subir solos.`,
+          }
+        : { estado: 'offline', mensaje: 'Sin conexión — seguí contando, se guarda en el equipo y sube solo.' };
+    }
     if (cola.pendientes === 0) return { estado: 'ok', mensaje: 'Sincronizado' };
     const sufijo = cola.ultimaSync ? ` · última sync ${formatoFechaHora(cola.ultimaSync)}` : ' · todavía no sincronizó';
     return {

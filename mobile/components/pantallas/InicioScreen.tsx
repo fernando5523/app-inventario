@@ -2,6 +2,7 @@ import { router, useFocusEffect } from 'expo-router';
 import { useCallback, useEffect, useState, type JSX } from 'react';
 import { ActivityIndicator, StyleSheet, Text, View } from 'react-native';
 
+import { inventarioIdSinRed } from '../../lib/adaptadores/hojas-sqlite';
 import { repositorioHojas, repositorioInventario, repositorioTiendas, repositorioUsuarios, sincronizador } from '../../lib/contenedor';
 import { avance, avanceConjunto, estadoConjunto } from '../../lib/dominio/hoja';
 import type { HojaConteo, Rol } from '../../lib/dominio/tipos';
@@ -103,22 +104,39 @@ export function InicioScreen(): JSX.Element {
 
         // Ya se descartó 'administrador' arriba (return temprano): acá el
         // rol siempre tiene sucursal real.
-        const activo = await repositorioInventario.activo(sesion!.sucursal!.id);
+        let inventarioId: number | null;
+        let items = 0;
+        let totalHojas = 0;
+        try {
+          const activo = await repositorioInventario.activo(sesion!.sucursal!.id);
+          inventarioId = activo?.inventarioId ?? null;
+          items = activo?.items ?? 0;
+          totalHojas = activo?.totalHojas ?? 0;
+        } catch {
+          // Sin red (u otra falla): el avance de HOY puede estar completo
+          // en SQLite — se sigue con eso en vez de dejar "Tu avance"
+          // colgado esperando una respuesta que no va a llegar (ver
+          // inventarioIdSinRed en hojas-sqlite.ts). `items`/`totalHojas`
+          // quedan en 0 porque esos números solo los tiene el snapshot del
+          // servidor — no son lo que el operario necesita ver acá: lo que
+          // importa es SU avance, que sale de `repositorioHojas` abajo.
+          inventarioId = await inventarioIdSinRed();
+        }
         if (!vigente) return;
 
-        if (!activo) {
+        if (!inventarioId) {
           setInventario(null);
           setCargando(false);
           return;
         }
-        setInventario({ inventarioId: activo.inventarioId, items: activo.items, totalHojas: activo.totalHojas });
+        setInventario({ inventarioId, items, totalHojas });
 
         if (sesion!.colaborador.rol === 'coordinador' || sesion!.colaborador.rol === 'auditor') {
-          const todas = await repositorioHojas.todas(activo.inventarioId);
+          const todas = await repositorioHojas.todas(inventarioId);
           if (vigente) setHojasRonda1(todas);
         } else if (sesion!.colaborador.rol === 'conteo') {
           // mias(), NUNCA todas(): un Contador no puede ver el lote entero.
-          const mias = await repositorioHojas.mias(activo.inventarioId);
+          const mias = await repositorioHojas.mias(inventarioId);
           if (vigente) setMisHojas(mias);
         }
         if (vigente) setCargando(false);

@@ -66,16 +66,32 @@ export const enviarPorRed: EnviarItemCola = async (item, hoja) => {
 // Estado observable + el lock contra solapamiento.
 // ---------------------------------------------------------------------------
 
-let estadoActual: EstadoCola = { pendientes: 0, ultimaSync: null, error: null };
+let estadoActual: EstadoCola = { pendientes: 0, ultimaSync: null, error: null, sinRed: false };
 const escuchas = new Set<(estado: EstadoCola) => void>();
 
 function notificar(): void {
   for (const escuchar of escuchas) escuchar(estadoActual);
 }
 
+/**
+ * Conectividad ACTUAL, separada de `actualizarEstadoDesdeLaCola`: guardar
+ * un conteo no dispara ninguna pasada de sincronización (ver el comentario
+ * grande de arriba), así que si `sinRed` solo se actualizara ahí, alguien
+ * sin señal contando su primer producto no vería ningún aviso hasta que
+ * corriera una pasada real -- minutos después, o nunca si no se da ninguno
+ * de los disparadores. Esto se llama en cuanto CAMBIA la conectividad
+ * (`iniciarSincronizador`), notificando de inmediato.
+ */
+function actualizarConectividad(sinRed: boolean): void {
+  if (estadoActual.sinRed === sinRed) return;
+  estadoActual = { ...estadoActual, sinRed };
+  notificar();
+}
+
 async function actualizarEstadoDesdeLaCola(huboExito: boolean): Promise<void> {
   const { pendientes, enError } = await estadoDeLaCola();
   estadoActual = {
+    ...estadoActual,
     pendientes,
     // `ultimaSync` es CUÁNDO CORRIÓ una pasada sin tirar, no "cuándo se
     // vació la cola entera" -- si hay items en error, igual hubo una
@@ -153,12 +169,18 @@ export function iniciarSincronizador(): () => void {
 
   Network.getNetworkStateAsync()
     .then((estado) => {
-      ultimoConectado = estaConectado(estado);
+      const conectado = estaConectado(estado);
+      ultimoConectado = conectado;
+      // Refleja el estado real YA, sin esperar ningún evento: si la app se
+      // abre directo sin señal, la banda tiene que poder decirlo desde el
+      // primer render, no recién cuando algo cambie.
+      actualizarConectividad(!conectado);
     })
     .catch(() => undefined); // sin lectura inicial, se corrige solo con el primer evento real.
 
   const suscripcionRed = Network.addNetworkStateListener((estado) => {
     const conectadoAhora = estaConectado(estado);
+    actualizarConectividad(!conectadoAhora);
     // Solo en la TRANSICIÓN a conectado -- pasar de WiFi a datos móviles
     // sin perder conexión no tiene que disparar nada de más.
     if (conectadoAhora && !ultimoConectado) sincronizar();

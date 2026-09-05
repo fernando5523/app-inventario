@@ -264,6 +264,26 @@ async function hojasDeInventarioBase(inventarioId: number): Promise<HojasDeInven
   return { hojas: inventario?.hojas ?? [], origen: 'mock' };
 }
 
+/**
+ * El `inventarioId` sin preguntarle al servidor — para cuando
+ * `repositorioInventario.activo()` no puede responder (sin red: es HTTP
+ * puro, sin caché local, ver contenedor.ts). Sin este fallback, Inicio,
+ * Mis hojas y Contar dependían TODAS de esa respuesta para poder mostrar
+ * cualquier cosa, aunque el avance completo ya estuviera acá adentro: el
+ * operario sin señal veía un spinner infinito en vez de su trabajo.
+ *
+ * Se resuelve leyendo `hojas_estructura`, que ya tiene el `inventario_id`
+ * de cualquier hoja que se haya descargado alguna vez. Un colaborador
+ * cuenta en UN inventario a la vez, así que cualquier fila sirve — no es
+ * la fuente de verdad (`repositorioInventario.activo()` lo es cuando hay
+ * red), es el único dato que queda cuando no la hay.
+ */
+export async function inventarioIdSinRed(): Promise<number | null> {
+  const db = await obtenerDb();
+  const fila = await db.getFirstAsync<{ inventario_id: number }>('SELECT inventario_id FROM hojas_estructura LIMIT 1');
+  return fila?.inventario_id ?? null;
+}
+
 // ---------------------------------------------------------------------------
 // Descarga inicial — lo que faltaba (bug real, reportado por el cliente)
 // ---------------------------------------------------------------------------

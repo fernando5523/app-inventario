@@ -20,9 +20,13 @@ vi.mock('react-native', () => ({
   Platform: { OS: 'android' }, // lo usa _http.ts para resolver la URL base.
 }));
 vi.mock('expo-constants', () => ({ default: { expoConfig: { extra: {} } } }));
+let escuchaDeRed: ((estado: { isConnected: boolean; isInternetReachable: boolean }) => void) | null = null;
 vi.mock('expo-network', () => ({
   getNetworkStateAsync: vi.fn(async () => ({ isConnected: true, isInternetReachable: true })),
-  addNetworkStateListener: vi.fn(() => ({ remove: vi.fn() })),
+  addNetworkStateListener: vi.fn((cb: (estado: { isConnected: boolean; isInternetReachable: boolean }) => void) => {
+    escuchaDeRed = cb;
+    return { remove: vi.fn() };
+  }),
 }));
 
 const hojasSqliteMock = vi.hoisted(() => ({
@@ -36,9 +40,11 @@ const hojasApiMock = vi.hoisted(() => ({
 }));
 vi.mock('./hojas-api', () => hojasApiMock);
 
+import * as Network from 'expo-network';
+
 import type { ItemCola } from './sqlite-cola';
 import { ErrorApi } from './_http';
-import { enviarPorRed, estaConectado, sincronizadorReal } from './sincronizador';
+import { enviarPorRed, estaConectado, iniciarSincronizador, sincronizadorReal } from './sincronizador';
 import type { Conteo, HojaConteo } from '../dominio/tipos';
 import type { EstadoCola } from '../puertos/repositorios';
 
@@ -46,6 +52,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   hojasSqliteMock.procesarColaDeSincronizacion.mockResolvedValue(undefined);
   hojasSqliteMock.estadoDeLaCola.mockResolvedValue({ pendientes: 0, enError: 0 });
+  escuchaDeRed = null;
 });
 
 // ---------------------------------------------------------------------------
@@ -162,5 +169,75 @@ describe('estaConectado', () => {
     [{ isConnected: undefined, isInternetReachable: true }, false],
   ] as const)('%o -> %s', (estado, esperado) => {
     expect(estaConectado(estado)).toBe(esperado);
+  });
+});
+
+describe('iniciarSincronizador: la banda tiene que saber que está sin red YA, sin esperar una pasada', () => {
+  // Caso real reportado por el cliente: guardar un conteo no dispara
+  // ninguna pasada de sincronización (ni con red), así que si `sinRed`
+  // solo se actualizara dentro de una pasada, alguien sin señal contando
+  // su primer producto no vería ningún aviso -- la banda seguiría
+  // mostrando el último estado conocido (a veces "Sincronizado").
+
+  it('la app se abre YA sin señal: sinRed queda en true desde la lectura inicial, sin esperar ningún evento', async () => {
+    vi.mocked(Network.getNetworkStateAsync).mockResolvedValueOnce({ isConnected: false, isInternetReachable: false } as never);
+
+    const limpiar = iniciarSincronizador();
+    await vi.waitFor(() => expect(sincronizadorReal.estado().sinRed).toBe(true));
+    limpiar();
+  });
+
+  it('perder la señal notifica a quien está suscrito de inmediato, sin correr ninguna pasada de sync', async () => {
+    const limpiar = iniciarSincronizador();
+    await vi.waitFor(() => expect(escuchaDeRed).not.toBeNull());
+
+    const recibidos: EstadoCola[] = [];
+    sincronizadorReal.suscribir((e) => recibidos.push(e));
+    const llamadasAntes = hojasSqliteMock.procesarColaDeSincronizacion.mock.calls.length;
+
+    escuchaDeRed!({ isConnected: false, isInternetReachable: false });
+
+    expect(sincronizadorReal.estado().sinRed).toBe(true);
+    expect(recibidos.some((e) => e.sinRed)).toBe(true);
+    // Perder la señal no es la transición que dispara sincronizar() -- eso
+    // sigue siendo solo al RECUPERARLA (ver el disparador #1 documentado
+    // arriba).
+    expect(hojasSqliteMock.procesarColaDeSincronizacion.mock.calls.length).toBe(llamadasAntes);
+
+    limpiar();
+  });
+
+  it('recuperar la señal apaga sinRed Y dispara sincronizar() -- los dos efectos de la misma transición', async () => {
+    vi.mocked(Network.getNetworkStateAsync).mockResolvedValueOnce({ isConnected: false, isInternetReachable: false } as never);
+
+    // Controlo A MANO cuándo termina la pasada inicial ("por si quedó algo
+    // pendiente de la sesión anterior", disparada sola al final de
+    // iniciarSincronizador) -- el estado del módulo (`ultimaSync`, etc.)
+    // persiste ENTRE tests de este archivo, así que esperar "ya no es
+    // null" puede pasar de arrastre por un valor de un test anterior sin
+    // que la pasada de ESTE test haya terminado todavía. Con la promesa
+    // controlada, el lock contra pasadas solapadas se libera en un
+    // momento que el test conoce con certeza.
+    let resolverPrimeraPasada!: () => void;
+    hojasSqliteMock.procesarColaDeSincronizacion.mockImplementationOnce(() => new Promise<void>((r) => (resolverPrimeraPasada = r)));
+
+    const limpiar = iniciarSincronizador();
+    await vi.waitFor(() => expect(sincronizadorReal.estado().sinRed).toBe(true));
+
+    resolverPrimeraPasada();
+    await vi.waitFor(() => expect(hojasSqliteMock.procesarColaDeSincronizacion).toHaveBeenCalledTimes(1));
+    // `resolverPrimeraPasada()` solo hace que la promesa mockeada resuelva
+    // -- falta toda la cadena posterior de `ejecutarSincronizacion`
+    // (actualizarEstadoDesdeLaCola, y recién en el `.finally()` se suelta
+    // el lock). Un solo microtask no alcanza; un macrotask sí deja que se
+    // procese toda la cadena antes de seguir.
+    await new Promise((r) => setTimeout(r, 0));
+
+    escuchaDeRed!({ isConnected: true, isInternetReachable: true });
+
+    expect(sincronizadorReal.estado().sinRed).toBe(false);
+    await vi.waitFor(() => expect(hojasSqliteMock.procesarColaDeSincronizacion).toHaveBeenCalledTimes(2));
+
+    limpiar();
   });
 });

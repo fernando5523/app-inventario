@@ -15,6 +15,7 @@ import {
   type RechazoEscaneo,
 } from '../../components/ui';
 import { PantallaConTabs } from '../../components/navegacion/PantallaConTabs';
+import { inventarioIdSinRed } from '../../lib/adaptadores/hojas-sqlite';
 import { repositorioCatalogo, repositorioHojas, repositorioInventario, sincronizador } from '../../lib/contenedor';
 import { avance, puedeEditar, puedeFinalizar } from '../../lib/dominio/hoja';
 import type { Conteo, Empaque, HojaConteo, Producto } from '../../lib/dominio/tipos';
@@ -100,17 +101,30 @@ export default function ContarScreen(): JSX.Element {
     let vigente = true;
 
     async function iniciar(): Promise<void> {
-      const activo = await repositorioInventario.activo(sesion!.sucursal!.id);
+      let inventarioIdResuelto: number | null;
+      try {
+        const activo = await repositorioInventario.activo(sesion!.sucursal!.id);
+        inventarioIdResuelto = activo?.inventarioId ?? null;
+      } catch {
+        // Sin red (u otra falla): no hay forma de preguntarle al servidor
+        // cuál es el inventario activo, pero el avance de HOY puede estar
+        // completo en SQLite — se sigue con eso en vez de dejar la
+        // pantalla colgada esperando una respuesta que no va a llegar. Ver
+        // inventarioIdSinRed: es EL bug que reportó el cliente ("conté sin
+        // señal, cerré la app, la reabrí y vi un spinner infinito" con el
+        // trabajo sano en el teléfono, pero invisible).
+        inventarioIdResuelto = await inventarioIdSinRed();
+      }
       if (!vigente) return;
-      if (!activo) {
+      if (!inventarioIdResuelto) {
         setCargando(false);
         return;
       }
-      setInventarioId(activo.inventarioId);
+      setInventarioId(inventarioIdResuelto);
 
       let numero = numeroActivo;
       if (!numero) {
-        const mias = await repositorioHojas.mias(activo.inventarioId);
+        const mias = await repositorioHojas.mias(inventarioIdResuelto);
         const actual = mias.find((h) => h.estado === 'en-proceso' && h.productos.length > 0) ?? mias.find((h) => h.productos.length > 0);
         numero = actual?.numero ?? null;
         if (vigente && numero) setNumeroActivo(numero);
@@ -121,7 +135,7 @@ export default function ContarScreen(): JSX.Element {
         return;
       }
 
-      const encontrada = await repositorioHojas.porNumero(activo.inventarioId, numero);
+      const encontrada = await repositorioHojas.porNumero(inventarioIdResuelto, numero);
       if (vigente) {
         setHoja(encontrada);
         setCargando(false);

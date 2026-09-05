@@ -151,7 +151,7 @@ vi.mock('./catalogo-api', () => ({
 // Import DESPUÉS del vi.mock (vitest lo hoistea igual, pero así queda
 // explícito el orden real: hojas-sqlite.ts se carga con `_sqlite.ts` ya
 // reemplazado, nunca llega a tocar `expo-sqlite`).
-const { hojasSqlite, procesarColaDeSincronizacion, ultimaDescarga } = await import('./hojas-sqlite');
+const { hojasSqlite, inventarioIdSinRed, procesarColaDeSincronizacion, ultimaDescarga } = await import('./hojas-sqlite');
 const { obtenerInventarioDeSucursal } = await import('./_compartido');
 const { ErrorApi } = await import('./_http');
 const { hojasApi } = await import('./hojas-api');
@@ -581,5 +581,29 @@ describe('el tamaño bajado es el NOMINAL del lote, no cuánto hay para contar',
     expect(hojas).toHaveLength(1);
     expect(hojas[0]!.tamano).toBe(50);
     expect(hojas[0]!.productos).toHaveLength(36);
+  });
+});
+
+describe('inventarioIdSinRed: el fallback cuando no hay forma de preguntarle al servidor', () => {
+  // Caso real: sin red, Inicio/Mis hojas/Contar no pueden llamar a
+  // repositorioInventario.activo() (HTTP puro) para saber cuál es el
+  // inventario activo -- pero si ya se descargó estructura de alguna hoja
+  // (ver el test de arriba, que dejó inventario_id=999004 en
+  // hojas_estructura), ESO alcanza para seguir mostrando el avance local
+  // sin depender del servidor.
+  it('devuelve el inventario_id de alguna hoja con estructura ya descargada', async () => {
+    const db = await obtenerDbDeTest();
+    const filas = await db.getAllAsync<{ inventario_id: number }>('SELECT inventario_id FROM hojas_estructura');
+    expect(filas.length).toBeGreaterThan(0);
+
+    const resultado = await inventarioIdSinRed();
+    expect(resultado).not.toBeNull();
+    expect(filas.map((f) => f.inventario_id)).toContain(resultado);
+  });
+
+  it('sin ninguna hoja con estructura local, devuelve null en vez de inventar un id', async () => {
+    const db = await obtenerDbDeTest();
+    await db.runAsync('DELETE FROM hojas_estructura');
+    expect(await inventarioIdSinRed()).toBeNull();
   });
 });

@@ -5,7 +5,7 @@ import { ActivityIndicator, Alert, StyleSheet, Text, View } from 'react-native';
 
 import { AvanceFila, BandaSync, BarraApp, EmptyState, TarjetaHoja, sincronizacionDeHojas } from '../../components/ui';
 import { PantallaConTabs } from '../../components/navegacion/PantallaConTabs';
-import { ultimaDescarga } from '../../lib/adaptadores/hojas-sqlite';
+import { inventarioIdSinRed, ultimaDescarga } from '../../lib/adaptadores/hojas-sqlite';
 import { repositorioHojas, repositorioInventario, sincronizador } from '../../lib/contenedor';
 import type { HojaConteo } from '../../lib/dominio/tipos';
 import type { EstadoCola } from '../../lib/puertos/repositorios';
@@ -68,9 +68,26 @@ export default function MisHojasScreen(): JSX.Element {
 
   const cargar = useCallback(async () => {
     if (!sesion) return;
-    const activo = await repositorioInventario.activo(sesion.sucursal!.id);
-    if (!activo) {
+    let inventarioId: number | null;
+    let sinRedYsinLocal = false;
+    try {
+      const activo = await repositorioInventario.activo(sesion.sucursal!.id);
+      inventarioId = activo?.inventarioId ?? null;
+    } catch {
+      // Sin red (u otra falla): el avance de hoy puede estar completo en
+      // SQLite — se sigue con eso en vez de dejar la lista colgada
+      // esperando una respuesta que no va a llegar (ver inventarioIdSinRed
+      // en hojas-sqlite.ts).
+      inventarioId = await inventarioIdSinRed();
+      sinRedYsinLocal = inventarioId === null;
+    }
+    if (!inventarioId) {
       setHojas([]);
+      // Sin esto, "sin conexión y nunca se descargó nada" caería en el
+      // mensaje neutro de "todavía no tenés hojas asignadas" — que invita
+      // a esperar a que el coordinador reparta, cuando el problema real es
+      // que no hay señal.
+      setMotivoSinHojas(sinRedYsinLocal ? 'sin-red' : null);
       setCargando(false);
       return;
     }
@@ -78,9 +95,9 @@ export default function MisHojasScreen(): JSX.Element {
     // por accidente. `mias()` ya intenta la descarga inicial sola
     // (hojas-sqlite.ts#descargarSiHaceFalta) — acá solo se lee el
     // resultado, nunca dos veces la misma lógica.
-    const mias = await repositorioHojas.mias(activo.inventarioId);
+    const mias = await repositorioHojas.mias(inventarioId);
     setHojas(mias);
-    const resultado = ultimaDescarga(activo.inventarioId, 'mias');
+    const resultado = ultimaDescarga(inventarioId, 'mias');
     setMotivoSinHojas(mias.length === 0 && resultado?.ok === false ? resultado.motivo : null);
     setCargando(false);
   }, [sesion]);
