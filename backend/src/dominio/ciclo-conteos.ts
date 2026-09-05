@@ -142,14 +142,33 @@ export function itemsParaLaRondaSiguiente<T extends ItemDeRonda>(items: readonly
   return items.filter((i) => destinoTrasRonda(i) === 'recontar');
 }
 
+/**
+ * Las cifras del cierre. LOS NOMBRES IMPORTAN ACÁ MÁS QUE EN NINGÚN OTRO
+ * LADO: esto es lo que lee el Coordinador para decidir si cierra la ronda y
+ * manda a once personas a recontar.
+ *
+ * Antes existía un campo `contados` que en realidad era el total del
+ * universo, y sobre una ronda sin ningún conteo cargado devolvía
+ * `contados: 1236` junto con `sinContar: 1236`. Leído rápido, eso dice "ya
+ * se contaron los 1.236" — y el Coordinador cerraba una ronda vacía. Un
+ * resumen cuyas cifras no cierran entre sí es peor que no tener resumen,
+ * porque se lee igual y lleva a decidir mal.
+ *
+ * DOS INVARIANTES, verificados en los tests:
+ *
+ *     total = cuadrados + aRecontar + sinDatoErp     (los tres destinos)
+ *     total = contados  + sinContar                  (con dato o sin dato)
+ */
 export interface ResumenDeRonda {
-  /** Ítems que entraron a la ronda que se cierra. */
+  /** Ítems que ENTRARON a la ronda. No dice nada sobre si se contaron. */
+  total: number;
+  /** De esos, cuántos tienen conteo en alguna ronda (la actual o anterior). */
   contados: number;
+  /** Cuántos no tienen conteo en NINGUNA ronda: nadie los miró todavía. */
+  sinContar: number;
   cuadrados: number;
   /** Van a la ronda siguiente. */
   aRecontar: number;
-  /** De esos, cuántos es porque NINGUNA ronda los contó. */
-  sinContar: number;
   /** No se pueden auditar: falta el stock del ERP. No se recuentan. */
   sinDatoErp: number;
   /** % de ítems que cuadraron sobre los AUDITABLES (los que tienen stock). */
@@ -164,22 +183,26 @@ export interface ResumenDeRonda {
  */
 export function resumirRonda(items: readonly ItemDeRonda[]): ResumenDeRonda {
   const r: ResumenDeRonda = {
-    contados: items.length,
+    total: items.length,
+    contados: 0,
+    sinContar: 0,
     cuadrados: 0,
     aRecontar: 0,
-    sinContar: 0,
     sinDatoErp: 0,
     porcentajeCuadrado: 0,
   };
 
   for (const item of items) {
+    // Contado o no, INDEPENDIENTE del destino: un ítem sin stock del ERP
+    // igual puede estar contado, y uno que va a recontar puede tener un
+    // conteo viejo. Así `contados + sinContar` cierra siempre contra el total.
+    if (conteoQueManda(item.conteos) === null) r.sinContar += 1;
+    else r.contados += 1;
+
     const destino = destinoTrasRonda(item);
     if (destino === 'cuadrado') r.cuadrados += 1;
     else if (destino === 'sin_dato_erp') r.sinDatoErp += 1;
-    else {
-      r.aRecontar += 1;
-      if (conteoQueManda(item.conteos) === null) r.sinContar += 1;
-    }
+    else r.aRecontar += 1;
   }
 
   const auditables = items.length - r.sinDatoErp;

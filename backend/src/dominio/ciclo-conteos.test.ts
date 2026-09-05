@@ -170,21 +170,101 @@ describe('resumirRonda (el embudo de la Pantalla 4)', () => {
   ]);
 
   it('cuenta cada destino por separado', () => {
-    expect(r.contados).toBe(5);
+    expect(r.total).toBe(5);
     expect(r.cuadrados).toBe(2);
     expect(r.aRecontar).toBe(2);
     expect(r.sinDatoErp).toBe(1);
   });
 
-  it('separa cuántos van a recontar POR NO HABERSE CONTADO NUNCA', () => {
+  it('`total` es el universo y `contados` lo que DE VERDAD se contó', () => {
+    // Son cosas distintas y tienen que poder leerse por separado: 4 de los 5
+    // tienen conteo, el quinto no lo miró nadie.
+    expect(r.total).toBe(5);
+    expect(r.contados).toBe(4);
     expect(r.sinContar).toBe(1);
   });
 
-  it('un ítem con conteo viejo NO cuenta como "sin contar"', () => {
+  it('un ítem con conteo viejo cuenta como CONTADO, no como sin contar', () => {
     // Tiene el de la ronda 1: no es que nadie lo miró, es que difiere.
     const conViejo = resumirRonda([{ codigo: 'X', stockErp: 100, conteos: [88, null] }]);
     expect(conViejo.aRecontar).toBe(1);
+    expect(conViejo.contados).toBe(1);
     expect(conViejo.sinContar).toBe(0);
+  });
+
+  // -------------------------------------------------------------------------
+  // EL CASO QUE ESTABA MAL: una ronda recién abierta, sin ningún conteo.
+  // Es el estado inicial de TODA ronda, así que es el más frecuente de todos.
+  // -------------------------------------------------------------------------
+  describe('ronda SIN NINGÚN conteo cargado (el estado inicial)', () => {
+    const reciénAbierta = resumirRonda(
+      Array.from({ length: 1236 }, (_, n) => ({ codigo: `IT-${n}`, stockErp: 10, conteos: [null] })),
+    );
+
+    it('NO dice que se contaron 1.236: dice que hay 1.236 y que no se contó ninguno', () => {
+      // El bug original: `contados: 1236` junto a `sinContar: 1236`. Leído
+      // rápido eso decía "ya se hizo una pasada" y el Coordinador cerraba una
+      // ronda vacía, mandando a la gente a recontar de nuevo.
+      expect(reciénAbierta.total).toBe(1236);
+      expect(reciénAbierta.contados).toBe(0);
+      expect(reciénAbierta.sinContar).toBe(1236);
+    });
+
+    it('nada cuadra y todo va a recontar', () => {
+      expect(reciénAbierta.cuadrados).toBe(0);
+      expect(reciénAbierta.aRecontar).toBe(1236);
+      expect(reciénAbierta.porcentajeCuadrado).toBe(0);
+    });
+
+    it('los dos invariantes se cumplen igual en este caso', () => {
+      expect(reciénAbierta.cuadrados + reciénAbierta.aRecontar + reciénAbierta.sinDatoErp).toBe(reciénAbierta.total);
+      expect(reciénAbierta.contados + reciénAbierta.sinContar).toBe(reciénAbierta.total);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // LOS INVARIANTES: un resumen cuyas cifras no cierran entre sí es peor que
+  // no tener resumen, porque se lee igual y lleva a decidir mal.
+  // -------------------------------------------------------------------------
+  describe('invariantes de las cifras', () => {
+    const casos: Array<[string, ItemDeRonda[]]> = [
+      ['ronda vacía', []],
+      ['sin ningún conteo', [{ codigo: 'A', stockErp: 10, conteos: [null] }]],
+      ['todo cuadrado', [{ codigo: 'A', stockErp: 10, conteos: [10] }]],
+      ['todo sin dato del ERP', [{ codigo: 'A', stockErp: null, conteos: [5] }]],
+      ['sin dato del ERP y sin contar', [{ codigo: 'A', stockErp: null, conteos: [null] }]],
+      [
+        'mezcla de todo',
+        [
+          { codigo: 'A', stockErp: 10, conteos: [10] },
+          { codigo: 'B', stockErp: 10, conteos: [8] },
+          { codigo: 'C', stockErp: 10, conteos: [null] },
+          { codigo: 'D', stockErp: null, conteos: [5] },
+          { codigo: 'E', stockErp: null, conteos: [null] },
+          { codigo: 'F', stockErp: 10, conteos: [8, null] },
+          { codigo: 'G', stockErp: 10, conteos: [8, 10] },
+        ],
+      ],
+    ];
+
+    it.each(casos)('%s: total = cuadrados + aRecontar + sinDatoErp', (_nombre, items) => {
+      const r = resumirRonda(items);
+      expect(r.cuadrados + r.aRecontar + r.sinDatoErp).toBe(r.total);
+    });
+
+    it.each(casos)('%s: total = contados + sinContar', (_nombre, items) => {
+      const r = resumirRonda(items);
+      expect(r.contados + r.sinContar).toBe(r.total);
+    });
+
+    it.each(casos)('%s: ninguna cifra supera al total', (_nombre, items) => {
+      const r = resumirRonda(items);
+      for (const [campo, valor] of Object.entries(r)) {
+        if (campo === 'total' || campo === 'porcentajeCuadrado') continue;
+        expect(valor).toBeLessThanOrEqual(r.total);
+        expect(valor).toBeGreaterThanOrEqual(0);
+      }
+    });
   });
 
   it('el porcentaje se calcula sobre los AUDITABLES, no sobre el total', () => {
@@ -198,6 +278,7 @@ describe('resumirRonda (el embudo de la Pantalla 4)', () => {
   });
 
   it('con la ronda vacía devuelve todo en cero', () => {
+    expect(resumirRonda([]).total).toBe(0);
     expect(resumirRonda([]).contados).toBe(0);
   });
 
@@ -208,6 +289,8 @@ describe('resumirRonda (el embudo de la Pantalla 4)', () => {
       conteos: [n < 650 ? 9 : 10],
     }));
     const resumen = resumirRonda(ochoMil);
+    expect(resumen.total).toBe(8000);
+    expect(resumen.contados).toBe(8000);
     expect(resumen.aRecontar).toBe(650);
     expect(resumen.cuadrados).toBe(7350);
     expect(itemsParaLaRondaSiguiente(ochoMil)).toHaveLength(650);
