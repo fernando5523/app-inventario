@@ -182,26 +182,38 @@ const hojasLocal: RepositorioHojas = entorno?.EXPO_PUBLIC_HOJAS_MEMORIA === '1' 
 export const repositorioHojas: RepositorioHojas = elegirHttp('hojas', hojasLocal, hojasApi);
 
 /**
- * ── CATÁLOGO: pasa por el selector, pero por DEFECTO local ──
+ * ── CATÁLOGO: CONECTADO, como el resto ──
  *
- * El endpoint existe y está probado (`GET /api/hojas/:id/productos` devuelve
- * `empaques: [...]` con la forma exacta del dominio). Lo que NO se puede hoy
- * es enchufarlo, y la razón es de coherencia, no de contrato:
+ * ⚠️ ESTE PUERTO ESTUVO SIRVIENDO UN CATÁLOGO DE MENTIRA EN EL APK REAL.
  *
- * el catálogo tiene que salir de la MISMA fuente que la hoja. `hojas` viene
- * de SQLite, con el dataset local (hoja #002, 50 productos). Si el catálogo
- * viniera del backend, la pantalla abriría la hoja #002 de SQLite y le
- * pediría al servidor los productos de una hoja que el servidor no tiene:
- * 404, hoja abierta y vacía, con el operario parado frente a la góndola.
+ * Usaba `elegirHttp`, o sea: memoria por defecto y HTTP solo con
+ * `EXPO_PUBLIC_PUERTOS_HTTP=catalogo`. En el APK no hay NINGUNA
+ * `EXPO_PUBLIC_PUERTOS_*`, así que el escáner de Contar buscaba los códigos
+ * de barras en el dataset de demo — encontrando productos que no están en la
+ * góndola y no encontrando los que sí. Un escáner que responde con datos de
+ * otro catálogo es peor que uno que no responde: el segundo se nota.
  *
- * Se mueve junto con `hojas`, no por separado — y `hojas` solo puede salir
- * del backend cuando exista el módulo que CREA hojas (paso 2 del
- * Coordinador), que hoy no existe.
+ * Los dos motivos que justificaban dejarlo en memoria ya no son ciertos:
  *
- * Ya no está clavado: `EXPO_PUBLIC_PUERTOS_HTTP=catalogo` lo enchufa el día
- * que las hojas vengan del servidor.
+ *  1. "el módulo que CREA hojas no existe" — existe:
+ *     `inventarios.service.ts#crearHojas`, `POST /api/inventarios/:id/hojas`.
+ *     Verificado el 2026-09-05 creando 20 hojas de 50 desde la app.
+ *  2. "el catálogo tiene que salir de la MISMA fuente que la hoja" — se
+ *     cumple, y al revés de como estaba escrito: la hoja BAJA del servidor
+ *     (`hojasApi` por la cola de `hojas-sqlite.ts`), así que el `hojaId` que
+ *     tiene la pantalla es el del servidor. Es el catálogo en memoria el que
+ *     rompía la coherencia, no al revés.
+ *
+ * Ahora usa `elegir` como los demás: HTTP por defecto, memoria SOLO con
+ * `EXPO_PUBLIC_PUERTOS_MEMORIA=catalogo`.
+ *
+ * PENDIENTE, y no es de este archivo: `porCodigoBarras` pega contra el
+ * servidor, así que en el fondo del almacén —sin señal— el escáner queda sin
+ * respuesta. La hoja ya está local con todos sus productos, así que la
+ * búsqueda por código podría resolverse offline sin pedirle nada a nadie;
+ * eso es una decisión de la pantalla de Contar, no del selector.
  */
-export const repositorioCatalogo: RepositorioCatalogo = elegirHttp('catalogo', catalogoMemoria, catalogoApi);
+export const repositorioCatalogo: RepositorioCatalogo = elegir('catalogo', catalogoMemoria, catalogoApi);
 
 /**
  * ── INVENTARIO: CONECTADO ──
