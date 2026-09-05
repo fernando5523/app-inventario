@@ -69,7 +69,13 @@ export function resolverSucursalConsultable(
     // Un auditor sin sucursal no deberia existir (usuarios.schema.ts la
     // exige para todo rol que no sea administrador). Si aparece, no se le
     // abre el historico entero "por las dudas".
-    throw new Prohibido('Tu cuenta no tiene sucursal asignada: no se puede resolver el alcance del historico.');
+    // "Resolver el alcance" no le dice nada a nadie, y encima esto la
+    // persona NO lo puede arreglar sola: el mensaje tiene que decirle a
+    // quien pedirselo.
+    throw new Prohibido(
+      'Tu cuenta no tiene una tienda asignada, asi que no se puede saber que historico mostrarte. ' +
+        'Pedile a un administrador que te asigne una en Usuarios.',
+    );
   }
   return actor.sucursalId;
 }
@@ -78,8 +84,21 @@ export function resolverSucursalConsultable(
 export function validarAccesoAInventario(actor: ColaboradorAutenticado, inventario: { sucursalId: number }): void {
   if (actor.rol === 'administrador') return;
 
-  if (actor.rol !== 'auditor' || actor.sucursalId !== inventario.sucursalId) {
-    throw new Prohibido('Solo podes consultar el historico de tu propia sucursal.');
+  /**
+   * DOS causas distintas, dos mensajes distintos. Antes las dos caian en
+   * "solo podes consultar el historico de tu propia sucursal", que para un
+   * coordinador de ESA MISMA tienda es directamente falso: va a mirar la
+   * sucursal, la encuentra bien, y se queda sin saber que pasa. El problema
+   * era su rol, no la tienda.
+   */
+  if (actor.rol !== 'auditor') {
+    throw new Prohibido(
+      'El historico de inventarios lo consultan el auditor y el administrador. ' +
+        'Si necesitas un dato de un cierre anterior, pediselo a ellos.',
+    );
+  }
+  if (actor.sucursalId !== inventario.sucursalId) {
+    throw new Prohibido('Ese inventario es de otra tienda: solo podes consultar el historico de la tuya.');
   }
 }
 
@@ -151,14 +170,21 @@ export function validarPuedeAprobar(
   validarAccesoAInventario(actor, inventario);
 
   if (!ROLES_QUE_APRUEBAN_CIERRE.includes(actor.rol)) {
-    throw new Prohibido('Tu rol no puede aprobar el cierre de un inventario.');
+    // Decir que no podes sin decir quien si deja a la persona mirando la
+    // pantalla sin saber a quien pedirle.
+    throw new Prohibido(
+      'Aprobar el cierre lo hace un auditor o el administrador. Pediles que lo firmen desde su propia sesion.',
+    );
   }
 
   verificarNoLacrado(inventario, 'aprobar el cierre');
 
   if (!ESTADOS_APROBABLES.includes(inventario.estado)) {
     throw new Conflicto(
-      `Solo se puede aprobar el cierre de un inventario con el conteo cerrado. Estado actual: "${inventario.estado}".`,
+      // Sin el enum crudo de la base: `en_curso` es un valor de Postgres, no
+      // algo que la persona pueda accionar.
+      'Todavia no hay nada que aprobar: el conteo sigue abierto. ' +
+        'La aprobacion viene despues de cerrar la ultima ronda.',
     );
   }
 
@@ -172,7 +198,12 @@ export function validarPuedeAprobar(
   }
 
   if (aprobacionesExistentes.length >= APROBACIONES_REQUERIDAS) {
-    throw new Conflicto('El inventario ya tiene las dos aprobaciones necesarias.');
+    // No es un error: es que el paso siguiente ya esta habilitado. Decirlo
+    // es la diferencia entre un rechazo util y uno que deja a la persona
+    // preguntandose que hizo mal.
+    throw new Conflicto(
+      'Ya estan las dos firmas: este inventario esta listo para lacrar. No hace falta una tercera aprobacion.',
+    );
   }
 }
 
@@ -255,17 +286,23 @@ export function validarPuedeLacrar(
   validarAccesoAInventario(actor, inventario);
 
   if (!ROLES_QUE_APRUEBAN_CIERRE.includes(actor.rol)) {
-    throw new Prohibido('Tu rol no puede lacrar un inventario.');
+    throw new Prohibido(
+      'Lacrar el inventario lo hace un auditor o el administrador. Pediles que lo firmen desde su propia sesion.',
+    );
   }
 
   if (inventario.yaLacrado || inventario.estado === 'lacrado') {
-    throw new Conflicto('El inventario ya esta lacrado. Un lacrado no se repite ni se rehace.');
+    throw new Conflicto(
+      'Este inventario ya esta lacrado y no se puede modificar. ' +
+        'Cualquier ajuste entra en el inventario del mes siguiente.',
+    );
   }
   verificarNoLacrado(inventario, 'lacrar');
 
   if (!ESTADOS_APROBABLES.includes(inventario.estado)) {
     throw new Conflicto(
-      `Solo se lacra un inventario con el conteo cerrado y liquidado. Estado actual: "${inventario.estado}".`,
+      'Todavia no se puede lacrar: el inventario sigue en curso. ' +
+        'Antes hay que cerrar las 3 rondas de conteo y liquidar el mes.',
     );
   }
 

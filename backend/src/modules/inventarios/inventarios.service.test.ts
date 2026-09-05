@@ -53,6 +53,41 @@ beforeEach(() => {
   );
 });
 
+describe('el TEXTO de los rechazos: que paso y que hacer', () => {
+  it('al repartir, NOMBRA a las personas que fallan en vez de decir "alguna"', async () => {
+    // Con 11 elegidas, "alguna" obliga a probar de a una hasta dar con la
+    // que sobra. Los ids salen por diferencia contra lo que si encontro.
+    prismaMock.colaborador.findMany.mockResolvedValue([{ id: 101, nombre: 'Maria' }]);
+    prismaMock.hojaConteo.findMany.mockResolvedValue([{ id: 1, numero: '001' }]);
+
+    const error = await asignarHojas(COORD, 9, [101, 107, 112]).catch((e) => e);
+    expect(error).toBeInstanceOf(SolicitudInvalida);
+    expect(error.message).toMatch(/107/);
+    expect(error.message).toMatch(/112/);
+    // Y manda al lugar donde se arregla.
+    expect(error.message).toMatch(/Usuarios/);
+    // Pero NO confirma cual de las tres causas es: distinguirlas revelaria
+    // que un id existe en otra sucursal.
+    expect(error.message).not.toMatch(/101/);
+  });
+
+  it('crear hojas sin catalogo manda al paso 1, no dice solo "no hay items"', async () => {
+    prismaMock.catalogoItem.findMany.mockResolvedValue([]);
+    const error = await crearHojas(COORD, 9, 20).catch((e) => e);
+    expect(error).toBeInstanceOf(SolicitudInvalida);
+    expect(error.message).toMatch(/catálogo de Dynamics/);
+  });
+
+  it('rehacer hojas con conteos cargados dice CUANTOS se perderian', async () => {
+    // El costo, no solo el bloqueo: es lo que deja decidir.
+    prismaMock.conteo.count.mockResolvedValue(47);
+    const error = await crearHojas(COORD, 9, 20).catch((e) => e);
+    expect(error).toBeInstanceOf(Conflicto);
+    expect(error.message).toMatch(/47/);
+    expect(error.message).toMatch(/borraría ese trabajo/);
+  });
+});
+
 describe('crearHojas', () => {
   it('parte los items en hojas del tamaño pedido', async () => {
     prismaMock.catalogoItem.findMany.mockResolvedValue([

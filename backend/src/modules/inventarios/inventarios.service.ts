@@ -267,7 +267,25 @@ export async function asignarHojas(
     select: { id: true, nombre: true },
   });
   if (encontrados.length !== colaboradorIds.length) {
-    throw new SolicitudInvalida('Alguna de las personas elegidas no existe, está inactiva o no es de esta tienda.');
+    /**
+     * CUALES fallan, no "alguna". Con 11 personas elegidas, "alguna" obliga
+     * a probar de a una hasta dar con la que sobra. Los ids salen por
+     * diferencia contra lo que SI encontro la consulta -- el dato ya estaba
+     * a mano.
+     *
+     * No se dice cual de las tres causas es (inexistente / inactiva / de
+     * otra tienda) a proposito: distinguirlas confirmaria que un id existe
+     * en otra sucursal, y quien reparte hojas no tiene por que enterarse del
+     * padron ajeno. Se nombran las tres y se manda a Usuarios, que es donde
+     * se resuelven las tres.
+     */
+    const hallados = new Set(encontrados.map((c) => c.id));
+    const faltan = colaboradorIds.filter((id) => !hallados.has(id));
+    throw new SolicitudInvalida(
+      `No se puede repartir: ${faltan.length} de las personas elegidas no ${faltan.length === 1 ? 'esta disponible' : 'estan disponibles'} ` +
+        `(${faltan.length === 1 ? 'id' : 'ids'} ${faltan.join(', ')}). ` +
+        'Puede ser que esten deshabilitadas o que sean de otra tienda. Revisalas en Usuarios y volve a elegir.',
+    );
   }
 
   /**

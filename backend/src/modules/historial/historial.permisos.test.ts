@@ -160,6 +160,35 @@ describe('validarPuedeAprobar', () => {
     expect(() => validarPuedeAprobar(coordinador, inventario('conteo_cerrado'), [])).toThrow(Prohibido);
   });
 
+  it('el par completo dice que el paso siguiente es LACRAR', () => {
+    // No es un error: es que ya se habilito lo que sigue. Decirlo evita que
+    // la persona se pregunte que hizo mal.
+    expect(() =>
+      validarPuedeAprobar(admin, inventario('conteo_cerrado'), [{ aprobadorId: 12 }, { aprobadorId: 30 }]),
+    ).toThrow(/listo para lacrar/);
+  });
+
+  it('a un coordinador de SU PROPIA tienda no se le echa la culpa a la sucursal', () => {
+    // Antes decia "solo podes consultar el historico de tu propia sucursal"
+    // — falso: ES su sucursal. El problema es el rol, y mandarlo a mirar la
+    // tienda lo deja dando vueltas.
+    expect(() => validarPuedeAprobar(coordinador, inventario('conteo_cerrado'), [])).not.toThrow(
+      /tu propia sucursal/,
+    );
+    expect(() => validarPuedeAprobar(coordinador, inventario('conteo_cerrado'), [])).toThrow(
+      /auditor y el administrador/,
+    );
+  });
+
+  it('y a uno de OTRA tienda si se le dice que es la tienda', () => {
+    expect(() => validarPuedeAprobar(auditorOtraTienda, inventario('conteo_cerrado'), [])).toThrow(/otra tienda/);
+  });
+
+  it('aprobar con el conteo abierto no filtra el enum', () => {
+    expect(() => validarPuedeAprobar(admin, inventario('en_curso'), [])).not.toThrow(/en_curso/);
+    expect(() => validarPuedeAprobar(admin, inventario('en_curso'), [])).toThrow(/cerrar la ultima ronda/);
+  });
+
   it('no se agrega una tercera firma sobre un par ya completo', () => {
     expect(() =>
       validarPuedeAprobar(admin, inventario('conteo_cerrado'), [{ aprobadorId: 12 }, { aprobadorId: 30 }]),
@@ -274,6 +303,43 @@ describe('validarPuedeLacrar', () => {
     expect(() =>
       validarPuedeLacrar(gilmer, { ...listo, estado: 'en_curso' as EstadoInventario }, dosFirmas),
     ).toThrow(Conflicto);
+  });
+
+  // -------------------------------------------------------------------------
+  // El TEXTO del rechazo. Un mensaje que no dice que hacer obliga a adivinar,
+  // y la persona esta parada frente al inventario del mes.
+  // -------------------------------------------------------------------------
+
+  it('no filtra el enum de la base a la pantalla', () => {
+    // "en_curso" es un valor de Postgres, no algo accionable.
+    const enCurso = { ...listo, estado: 'en_curso' as EstadoInventario };
+    expect(() => validarPuedeLacrar(gilmer, enCurso, dosFirmas)).not.toThrow(/en_curso/);
+    expect(() => validarPuedeLacrar(gilmer, enCurso, dosFirmas)).toThrow(/cerrar las 3 rondas/);
+  });
+
+  it('el rechazo a un coordinador dice QUIEN si puede, no que sea otra tienda', () => {
+    expect(() => validarPuedeLacrar(coordinador, listo, dosFirmas)).not.toThrow(/tu propia sucursal/);
+    expect(() => validarPuedeLacrar(coordinador, listo, dosFirmas)).toThrow(/auditor y el administrador/);
+  });
+
+  it('un lacrado repetido dice donde entra el ajuste', () => {
+    expect(() => validarPuedeLacrar(gilmer, { ...listo, yaLacrado: true }, dosFirmas)).toThrow(/mes siguiente/);
+  });
+
+  it('distingue "faltan hojas por finalizar" de "hay hojas sin sincronizar"', () => {
+    // Se parecen y piden acciones OPUESTAS: una es ir a la gondola a contar,
+    // la otra es conectar el telefono al WiFi. Confundirlas manda a la
+    // persona al lugar equivocado.
+    const sinFinalizar = {
+      ...listo,
+      hojasSinFinalizar: [{ numero: '007', estado: 'pendiente', asignados: ['Maria Rojas'] }],
+    };
+    expect(() => validarPuedeLacrar(gilmer, sinFinalizar, dosFirmas)).toThrow(/sin finalizar/);
+    expect(() => validarPuedeLacrar(gilmer, sinFinalizar, dosFirmas)).not.toThrow(/sincroniz/);
+
+    const sinSync = { ...listo, todoSincronizado: false };
+    expect(() => validarPuedeLacrar(gilmer, sinSync, dosFirmas)).toThrow(/sincronizar/);
+    expect(() => validarPuedeLacrar(gilmer, sinSync, dosFirmas)).not.toThrow(/sin finalizar/);
   });
 
   it('un inventario ya lacrado no se vuelve a lacrar', () => {

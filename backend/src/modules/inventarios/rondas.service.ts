@@ -58,8 +58,12 @@ async function inventarioDelActor(actor: ColaboradorAutenticado, inventarioId: n
     throw new Prohibido('Ese inventario es de otra sucursal.');
   }
   if (inventario.estado !== 'en_curso') {
+    // Sin el enum crudo: `conteo_cerrado` es un valor de Postgres. Lo que la
+    // persona necesita saber es que el ciclo ya se cerro y donde entra lo que
+    // falte.
     throw new Conflicto(
-      `El inventario está en estado "${inventario.estado}": el ciclo de conteos solo avanza mientras está en curso.`,
+      'El conteo de este inventario ya está cerrado: no se pueden abrir más rondas. ' +
+        'Si falta recontar algo, entra en el inventario del mes que viene.',
     );
   }
   return inventario;
@@ -253,7 +257,10 @@ export async function resumen(
 
   const hojas = await prisma.hojaConteo.count({ where: { inventarioId, numeroConteo: ronda } });
   if (hojas === 0) {
-    throw new NoEncontrado(`El inventario ${inventarioId} no tiene hojas de la ronda ${ronda}.`);
+    throw new NoEncontrado(
+      `El inventario todavía no tiene hojas de la ronda ${ronda}. ` +
+        'Creá las hojas y repartilas (paso 2 del wizard) antes de cerrar la ronda.',
+    );
   }
 
   const universo = await universoDeLaRonda(inventarioId, ronda);
@@ -344,7 +351,10 @@ export async function cerrar(
 
   const hojasDeLaRonda = await prisma.hojaConteo.count({ where: { inventarioId, numeroConteo: ronda } });
   if (hojasDeLaRonda === 0) {
-    throw new NoEncontrado(`El inventario ${inventarioId} no tiene hojas de la ronda ${ronda}.`);
+    throw new NoEncontrado(
+      `El inventario todavía no tiene hojas de la ronda ${ronda}. ` +
+        'Creá las hojas y repartilas (paso 2 del wizard) antes de cerrar la ronda.',
+    );
   }
 
   // Ya cerrada: si existe la ronda siguiente, esta operación ya se hizo.
