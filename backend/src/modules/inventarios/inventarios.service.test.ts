@@ -16,7 +16,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const prismaMock = vi.hoisted(() => ({
   inventario: { findUnique: vi.fn(), findFirst: vi.fn(), update: vi.fn() },
   catalogoItem: { findMany: vi.fn() },
-  hojaConteo: { findMany: vi.fn(), findFirst: vi.fn(), create: vi.fn(), deleteMany: vi.fn(), update: vi.fn() },
+  hojaConteo: { findMany: vi.fn(), findFirst: vi.fn(), create: vi.fn(), deleteMany: vi.fn(), update: vi.fn(), aggregate: vi.fn() },
   producto: { deleteMany: vi.fn() },
   empaque: { deleteMany: vi.fn() },
   conteo: { count: vi.fn() },
@@ -257,9 +257,10 @@ describe('activo', () => {
 
   /**
    * `tamanoHoja` tiene default 50 en la base: sin hojas, devolverlo diria
-   * "hojas de 50" cuando no hay ninguna.
+   * "hojas de 50" cuando no hay ninguna. `rondaActiva` sigue el mismo
+   * criterio -- sin hojas no hay ninguna fila de la que sacar un maximo.
    */
-  it('sin hojas creadas, tamanoHoja es null y no el default de la base', async () => {
+  it('sin hojas creadas, tamanoHoja y rondaActiva son null, no el default de la base', async () => {
     prismaMock.inventario.findFirst.mockResolvedValue({
       id: 9,
       snapshotItems: 1548,
@@ -274,9 +275,12 @@ describe('activo', () => {
     expect(r!.tamanoHoja).toBeNull();
     expect(r!.totalHojas).toBe(0);
     expect(r!.items).toBe(1548);
+    expect(r!.rondaActiva).toBeNull();
+    // Sin hojas no hay maximo que pedir: ni siquiera se consulta.
+    expect(prismaMock.hojaConteo.aggregate).not.toHaveBeenCalled();
   });
 
-  it('con hojas creadas devuelve el tamaño real', async () => {
+  it('con hojas creadas devuelve el tamaño real y la ronda con mas hojas', async () => {
     prismaMock.inventario.findFirst.mockResolvedValue({
       id: 9,
       snapshotItems: 1548,
@@ -285,11 +289,41 @@ describe('activo', () => {
       tamanoHoja: 30,
       _count: { hojas: 52 },
     });
+    prismaMock.hojaConteo.aggregate.mockResolvedValue({ _max: { numeroConteo: 1 } });
 
     const r = await activo(1);
 
     expect(r!.tamanoHoja).toBe(30);
     expect(r!.totalHojas).toBe(52);
+    expect(r!.rondaActiva).toBe(1);
+    expect(prismaMock.hojaConteo.aggregate).toHaveBeenCalledWith({
+      where: { inventarioId: 9 },
+      _max: { numeroConteo: true },
+    });
+  });
+
+  /**
+   * EL CASO LIMITE QUE ESTE CAMPO NO DISTINGUE, a proposito (ver el
+   * comentario largo de `InventarioActivoDto.rondaActiva`): la ronda 3 (la
+   * ultima del ciclo) se cerro sin abrir una ronda 4 -- el inventario
+   * sigue en_curso, esa ronda ya no admite mas conteo, y rondaActiva sigue
+   * devolviendo 3 igual, porque es la ronda mas alta que existe de verdad.
+   * No inventa un "esta cerrada" que el modelo no persiste.
+   */
+  it('devuelve la ronda mas alta que existe aunque esa ronda ya este cerrada', async () => {
+    prismaMock.inventario.findFirst.mockResolvedValue({
+      id: 9,
+      snapshotItems: 1548,
+      snapshotTomadoEn: new Date(),
+      createdAt: new Date(),
+      tamanoHoja: 30,
+      _count: { hojas: 3 },
+    });
+    prismaMock.hojaConteo.aggregate.mockResolvedValue({ _max: { numeroConteo: 3 } });
+
+    const r = await activo(1);
+
+    expect(r!.rondaActiva).toBe(3);
   });
 
   it('solo mira inventarios EN CURSO, no el ultimo cerrado', async () => {

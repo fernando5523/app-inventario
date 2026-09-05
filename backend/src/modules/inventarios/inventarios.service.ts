@@ -43,6 +43,30 @@ export interface InventarioActivoDto {
   /** null = todavia no se crearon hojas (el Coordinador esta en el paso 1). */
   tamanoHoja: number | null;
   totalHojas: number;
+  /**
+   * La ronda MAS ALTA que tiene hojas creadas (HojaConteo.numeroConteo) --
+   * es lo unico que el front necesita para saber en que ronda esta parado.
+   * null = todavia no se creo ninguna hoja, mismo momento que `tamanoHoja:
+   * null` (el Coordinador esta en el paso 1, antes de partir en hojas).
+   *
+   * CASO LIMITE QUE ESTE CAMPO NO DISTINGUE, a proposito: la ronda mas alta
+   * que existe no es siempre una ronda que todavia admite conteo. Mientras
+   * el ciclo sigue (rondas 1 y 2), esto no pasa nunca -- cerrar una ronda
+   * (rondas.service.ts#cerrar) crea la ronda siguiente en la MISMA
+   * transaccion en la que la deja sin mas conteo, asi que el maximo salta
+   * de una a la otra sin quedar nunca "atras". Pero si la ronda 3 (la
+   * ultima del ciclo, RONDAS_DEL_CICLO) se cierra SIN abrir una siguiente
+   * (motivoSinSiguiente != null en rondas.service.ts#cerrar), el
+   * inventario sigue en_curso -- nada lo pasa a `conteo_cerrado` todavia --
+   * y este campo sigue devolviendo 3, aunque esa ronda ya no se pueda
+   * tocar. El modelo hoy no persiste "esta ronda esta cerrada" como columna
+   * propia (rondas.service.ts lo infiere viendo si existe la ronda+1), asi
+   * que rondaActiva no inventa un estado que no existe -- devuelve la
+   * verdad simple ("la ronda que hay"), no la pregunta mas fina ("se puede
+   * seguir contando en ella"). Quien necesite esa distincion pide ademas
+   * el resumen de la ronda (GET .../rondas/:ronda/resumen).
+   */
+  rondaActiva: number | null;
 }
 
 /**
@@ -61,6 +85,20 @@ export async function activo(sucursalId: number): Promise<InventarioActivoDto | 
   });
   if (inventario === null) return null;
 
+  // Sin hojas, ni siquiera vale la pena preguntar: no hay fila de
+  // HojaConteo con la que calcular un maximo, y MAX() sobre nada en SQL ya
+  // da null -- pero pedirlo igual seria una consulta de mas en el camino
+  // mas comun (inventario recien creado, Coordinador todavia en el paso 1).
+  const rondaActiva =
+    inventario._count.hojas > 0
+      ? (
+          await prisma.hojaConteo.aggregate({
+            where: { inventarioId: inventario.id },
+            _max: { numeroConteo: true },
+          })
+        )._max.numeroConteo
+      : null;
+
   return {
     inventarioId: inventario.id,
     // `snapshotItems` es nullable: un inventario puede existir sin snapshot
@@ -73,6 +111,7 @@ export async function activo(sucursalId: number): Promise<InventarioActivoDto | 
     // eso se condiciona a que existan.
     tamanoHoja: inventario._count.hojas > 0 ? inventario.tamanoHoja : null,
     totalHojas: inventario._count.hojas,
+    rondaActiva,
   };
 }
 
