@@ -1309,11 +1309,17 @@ Respuesta `201`:
 
 El bono sale de `repartirExacto`, no de `bonoBase × asistentes`: la suma de la columna da el fondo al centavo (S/80 entre 7 daba S/80.01 con la multiplicación). Las filas guardan las **tres partes** — cuota, multa, bono — y nunca el total: misma regla que deja a `Conteo` sin columna `total`.
 
-> ⚠️ **Hoy este endpoint responde `409` siempre, y está bien que así sea.** No existe mecanismo para registrar la asistencia ni para cargar los ajustes del mes, así que `ResultadoInventario.colaboradoresAsistieron` y `montoNegativos` son `NULL`. Sin esos dos datos no hay cuota ni bono que valgan, y escribir la planilla igual sería descontarle a alguien un monto calculado sobre un dato que nadie cargó. El endpoint queda listo y testeado para el día que el cliente defina la captura.
->
-> **Para quien implemente esa captura**: un contador no alcanza. `colaboradoresAsistieron` es *cuántos*; la planilla necesita *quiénes* (`LiquidacionColaborador.asistio` es por persona). Si el mecanismo solo guarda el total, `liquidacion.cierre.ts#liquidar` sigue sin poder armar la planilla.
+**La asistencia se deduce de las hojas**, sin carga manual: asistió quien tiene al menos una hoja asignada (titular o segundo) con al menos un `Conteo`, en **cualquier** ronda. Decisión del cliente. La regla vive aislada en `dominio/asistencia.ts` y la usan los dos extremos con la misma consulta: el cierre del conteo la cuenta (`colaboradoresAsistieron` — *cuántos*) y el cierre de la planilla la resuelve por persona (`LiquidacionColaborador.asistio` — *quiénes*). Salen de la misma lectura, así que no pueden discrepar; hay un test que lo fija.
 
-Errores: `404` inventario inexistente · `403` rol sin permiso (el mensaje dice quién sí puede) o sucursal ajena · `409` conteo todavía abierto, planilla ya cerrada, sin resultado calculado, o sin asistencia/ajustes registrados.
+> **El costo de la regla, aceptado explícitamente por el cliente**: quien vino y **no llegó a contar** figura como ausente — se le descuenta la multa y no cobra el bono. No es un bug: es el precio de no tener carga manual. Si alguien reclama que sí vino, el sistema no se equivocó: respondió lo único que puede saber.
+>
+> Quien nunca recibió hoja también tiene fila en la planilla, con `asistio: false`. El universo son los colaboradores **activos de la sucursal**, no los que recibieron hoja — dejarlos afuera sería no cobrarles la multa.
+
+> ⚠️ **Hoy este endpoint sigue respondiendo `409`, ahora solo por los ajustes del mes.** No hay endpoint, ni pantalla, ni tabla donde cargarlos, así que `ResultadoInventario.montoNegativos` es `NULL`.
+>
+> **Y no es lo mismo que era la asistencia.** La cuenta es `neto = bruto − negativos − empresa`: asumir `0` cuando hubo S/380 de mermas documentadas **infla el faltante neto en S/380** y se lo descuenta de más a gente que no lo debe. El error no es simétrico, y por eso no se toma el default cómodo. El día que exista un lugar donde cargarlos, un `0` pasará a significar "alguien miró y no había" —un cero real— y ahí sí corresponde el default con `ajustesSinRegistrar`.
+
+Errores: `404` inventario inexistente · `403` rol sin permiso (el mensaje dice quién sí puede) o sucursal ajena · `409` conteo todavía abierto, planilla ya cerrada, sin resultado calculado, sin ajustes del mes registrados, o —solo en inventarios cerrados **antes** de que existiera la regla— sin asistencia.
 
 ---
 

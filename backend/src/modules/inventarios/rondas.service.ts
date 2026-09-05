@@ -27,6 +27,7 @@
  */
 
 import { prisma } from '../../config/database';
+import { aHojaParaAsistencia, quienesAsistieron, SELECT_ASISTENCIA } from '../../dominio/asistencia';
 import {
   destinoTrasRonda,
   itemsParaLaRondaSiguiente,
@@ -407,6 +408,17 @@ export async function cerrar(
     const matrizCompleta = await armarMatriz(inventarioId);
     const embudo = embudoDeConteos(matrizCompleta);
     const resumenAuditoria = resumirAuditoria(matrizCompleta);
+
+    // QUIENES ASISTIERON, deducido de las hojas -- decisión del cliente, con
+    // su costo escrito al lado en `dominio/asistencia.ts`. Se congela ACÁ,
+    // en el cierre, y no se recalcula después: las hojas de un inventario
+    // cerrado ya no cambian, pero el padrón sí (alguien se va, entra otro),
+    // y la planilla de agosto no se reescribe en noviembre.
+    const hojasDelInventario = await prisma.hojaConteo.findMany({
+      where: { inventarioId },
+      select: SELECT_ASISTENCIA,
+    });
+    const asistieron = quienesAsistieron(hojasDelInventario.map(aHojaParaAsistencia));
     // El DETALLE ítem por ítem de esos mismos agregados. Sale de la misma
     // matriz y entra en la misma transacción a propósito: si el total y su
     // detalle se escribieran en dos momentos distintos podrían discrepar, y
@@ -435,20 +447,27 @@ export async function cerrar(
           // resta de acá -- lo que queda es lo que absorbe la empresa.
           montoFaltanteEmpresa: redondear(resumenAuditoria.valorFaltante - resumenAuditoria.valorFaltanteDescontable),
           colaboradoresAlcanzados,
-          // NULL, NUNCA 0 -- ver el comentario largo de ambos campos en
-          // schema.prisma#ResultadoInventario. No existe TODAVÍA ningún
-          // mecanismo para cargar los ajustes del mes ni para registrar
-          // quién asistió (decisión pendiente del cliente): un 0 acá
-          // afirmaría "no hubo ajustes"/"vino todo el mundo" sin que nadie
-          // lo haya verificado, y la planilla de liquidación saldría
-          // firmada con multas y bonos inventados. NO SE INVENTA el
-          // mecanismo de captura en esta tarea -- este es el lugar
-          // preparado para cuando el cliente lo defina: liquidacion.service.ts
-          // ya sabe leer estos dos campos en null y avisarlo antes de
-          // firmar (ver AdvertenciaLiquidacion.asistenciaSinRegistrar/
-          // ajustesSinRegistrar).
+          // `montoNegativos` SIGUE EN NULL, y `colaboradoresAsistieron` ya
+          // NO. La diferencia entre los dos casos es si el dato existe en
+          // alguna parte:
+          //
+          //   - La asistencia SÍ existe: está en las hojas, y el cliente
+          //     definió cómo deducirla (dominio/asistencia.ts). Dejarla en
+          //     null ahora sería decir "no sabemos" sobre algo que sabemos.
+          //
+          //   - Los ajustes del mes NO existen en ningún lado: no hay
+          //     endpoint, ni pantalla, ni tabla donde cargarlos. Un 0 acá no
+          //     significaría "no hubo ajustes" sino "no hay dónde ponerlos",
+          //     y la cuenta es `neto = bruto - negativos - empresa`: asumir
+          //     0 cuando hubo S/380 de mermas documentadas infla el faltante
+          //     neto en S/380 y se lo descuenta de más a gente que no lo
+          //     debe. El error no es simétrico, y por eso se queda en null.
+          //
+          // El día que exista un lugar donde cargarlos, un 0 pasa a ser un
+          // cero real (alguien miró y no había) y ahí corresponde el default
+          // con `ajustesSinRegistrar` -- hoy no.
           montoNegativos: null,
-          colaboradoresAsistieron: null,
+          colaboradoresAsistieron: asistieron.size,
           // multaInasistencia: se deja el default de la columna (S/20) --
           // no hay config editable para esto todavía (ver
           // backend/prisma/configuraciones.ts).

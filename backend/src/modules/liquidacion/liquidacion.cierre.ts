@@ -24,29 +24,36 @@
  * planilla no se cerro.
  *
  * ---------------------------------------------------------------------------
- * LO QUE HOY FRENA ESTE ENDPOINT, A PROPOSITO
+ * DE DONDE SALE LA ASISTENCIA
  * ---------------------------------------------------------------------------
- * No existe mecanismo para registrar la asistencia ni para cargar los ajustes
- * del mes -- decision pendiente del cliente, ver
- * `rondas.service.ts#cerrar`, que persiste NULL en
- * `ResultadoInventario.colaboradoresAsistieron` y `montoNegativos` en vez de
- * inventar un 0. Sin esos dos datos no hay `cuotaBase` ni `bonoAsistencia`
- * que valgan, asi que `liquidar()` corta con 409 y NO escribe una planilla
- * con la asistencia asumida.
+ * SE DEDUCE DE LAS HOJAS, sin carga manual: asistio quien tiene al menos una
+ * hoja asignada con al menos un conteo, en cualquier ronda. La regla y su
+ * costo aceptado -- quien vino y no llego a contar figura como ausente --
+ * viven en `dominio/asistencia.ts`.
  *
- * Es decir: hoy este endpoint responde 409 SIEMPRE. Esta bien que asi sea.
- * La alternativa -- escribir filas con `asistio: true` para todos porque es
- * el default comodo -- es firmarle a alguien un descuento calculado sobre un
- * dato que nadie verifico.
+ * Esta funcion usa LA MISMA consulta (`SELECT_ASISTENCIA`) que el cierre del
+ * conteo, y de ahi sale la invariante: la cantidad de `asistio: true` en la
+ * planilla es igual a `ResultadoInventario.colaboradoresAsistieron`. Salen de
+ * la misma lectura, no pueden discrepar -- y ese numero lo firma alguien.
  *
- * OJO PARA QUIEN IMPLEMENTE LA CAPTURA DE ASISTENCIA: un contador no alcanza.
- * `ResultadoInventario.colaboradoresAsistieron` es CUANTOS, y la planilla
- * necesita QUIENES (`LiquidacionColaborador.asistio` es por persona). El
- * mecanismo que se defina tiene que registrar personas, no un numero -- si
- * solo guarda el total, esta funcion sigue sin poder armar la planilla.
+ * ---------------------------------------------------------------------------
+ * LO QUE TODAVIA FRENA ESTE ENDPOINT, A PROPOSITO
+ * ---------------------------------------------------------------------------
+ * Los AJUSTES DEL MES. No hay endpoint, ni pantalla, ni tabla donde
+ * cargarlos, asi que `ResultadoInventario.montoNegativos` sigue en NULL y
+ * `liquidar()` corta con 409.
+ *
+ * Y NO es lo mismo que era la asistencia. La cuenta es
+ * `neto = bruto - negativos - empresa`: asumir 0 cuando hubo S/380 de mermas
+ * documentadas infla el faltante neto en S/380 y se lo descuenta DE MAS a
+ * gente que no lo debe. El error no es simetrico, y por eso no se toma el
+ * default comodo. El dia que exista un lugar donde cargarlos, un 0 pasa a
+ * significar "alguien miro y no habia" -- que es un cero real -- y ahi si
+ * corresponde el default con `ajustesSinRegistrar`.
  */
 
 import { prisma } from '../../config/database';
+import { aHojaParaAsistencia, quienesAsistieron, SELECT_ASISTENCIA } from '../../dominio/asistencia';
 import { bonoBase, repartirExacto } from '../../dominio/reparto-de-fondo';
 import { registrarAuditoria } from '../../shared/auditoria';
 import { Conflicto, NoEncontrado } from '../../shared/errores';
@@ -187,12 +194,19 @@ export async function liquidar(
     );
   }
 
-  // LA GUARDA QUE HOY CORTA SIEMPRE. NULL es "no se capturo", nunca "cero"
-  // (ver el comentario largo de AdvertenciaLiquidacion). Sin asistencia no
-  // hay multa ni bono que valgan, y sin los ajustes del mes el faltante neto
-  // esta inflado: la planilla saldria firmada con numeros que nadie verifico.
-  // Se corta ACA en vez de escribir filas y advertir despues, porque despues
-  // ya se descontó.
+  // LA GUARDA. NULL es "no se capturo", nunca "cero" (ver el comentario largo
+  // de AdvertenciaLiquidacion). Se corta ACA en vez de escribir filas y
+  // advertir despues, porque despues ya se descontó.
+  //
+  // La asistencia ya no cae por aca: se deduce de las hojas y el cierre del
+  // conteo la congela (rondas.service.ts). El chequeo se deja igual porque
+  // los inventarios cerrados ANTES de ese cambio tienen null en la columna,
+  // y liquidar uno de esos repartiria un fondo de multas calculado sobre una
+  // asistencia que nadie sabe.
+  //
+  // `montoNegativos` sigue siendo el que corta de verdad: no hay ningun lugar
+  // donde cargar los ajustes del mes todavia. Ver el comentario del cierre en
+  // rondas.service.ts para por que ese sigue en null y la asistencia no.
   const asistenciaSinRegistrar = r.colaboradoresAsistieron === null;
   const ajustesSinRegistrar = r.montoNegativos === null;
   if (asistenciaSinRegistrar || ajustesSinRegistrar) {
@@ -221,10 +235,17 @@ export async function liquidar(
     multaInasistencia: r.multaInasistencia.toNumber(),
   });
 
-  // De donde salen QUIENES asistieron: hoy, de ningun lado -- la guarda de
-  // arriba ya corto. Cuando exista el mecanismo, ESTA es la linea que lo
-  // consume, y necesita ids, no un total.
-  const idsQueAsistieron: number[] = [];
+  // QUIENES asistieron, con LA MISMA regla y LA MISMA consulta que uso el
+  // cierre del conteo para contar cuantos (SELECT_ASISTENCIA en
+  // dominio/asistencia.ts). De ahi sale la invariante que se testea: la
+  // cantidad de `asistio: true` en la planilla es igual a
+  // `ResultadoInventario.colaboradoresAsistieron`. Dos lecturas distintas
+  // podrian discrepar, y ese numero lo firma alguien.
+  const hojasDelInventario = await prisma.hojaConteo.findMany({
+    where: { inventarioId },
+    select: SELECT_ASISTENCIA,
+  });
+  const idsQueAsistieron = [...quienesAsistieron(hojasDelInventario.map(aHojaParaAsistencia))];
 
   const planilla = armarPlanilla({
     colaboradores: colaboradores.map((c) => ({ id: c.id, nombre: c.nombre, rol: c.rol as Rol })),

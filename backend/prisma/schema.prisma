@@ -851,16 +851,23 @@ model ResultadoInventario {
   /// De esos, cuantos asistieron. La diferencia son las faltas que pagan
   /// multa y alimentan el fondo que se redistribuye.
   ///
-  /// NULLABLE a proposito, mismo criterio que `montoNegativos` arriba:
-  /// NULL = la asistencia todavia no se registro, DISTINTO de 0 = "no
-  /// vino nadie". Un 0 falso aca es peor que en stockErp -- afirmaria "
-  /// vinieron todos" (0 faltas) sin que nadie lo haya verificado, y la
-  /// planilla saldria firmada con multas y bonos que no reflejan a nadie
-  /// real. Hoy NO existe ningun mecanismo de captura de asistencia (el
-  /// cliente todavia tiene que decidir como se registra) -- hasta que
-  /// exista, el cierre del conteo persiste NULL. NO SE INVENTA el
-  /// mecanismo de captura aca: este campo solo deja el lugar preparado
-  /// para cuando el cliente lo defina.
+  /// SE DEDUCE DE LAS HOJAS, sin carga manual: asistio quien tiene al menos
+  /// una hoja asignada con al menos un conteo, en cualquier ronda. Decision
+  /// del cliente; la regla y su costo aceptado -- quien vino y no llego a
+  /// contar figura como ausente -- viven en `dominio/asistencia.ts`.
+  /// Lo escribe el cierre del conteo (rondas.service.ts#cerrar), en la misma
+  /// transaccion que el resto del resultado.
+  ///
+  /// SIGUE NULLABLE, y ya no por lo mismo: los inventarios cerrados ANTES de
+  /// que existiera la regla tienen NULL de verdad, y ahi NULL significa "esto
+  /// se cerro cuando nadie sabia quien vino" -- distinto de 0 = "no vino
+  /// nadie". Liquidar uno de esos repartiria un fondo de multas calculado
+  /// sobre una asistencia que no existe, y por eso liquidacion.cierre.ts
+  /// sigue chequeandolo.
+  ///
+  /// La contracara por persona es `LiquidacionColaborador.asistio`, que sale
+  /// de la MISMA regla y la MISMA consulta: este campo es CUANTOS, aquel es
+  /// QUIENES, y no pueden discrepar.
   colaboradoresAsistieron Int? @map("colaboradores_asistieron")
   /// Monto de la multa por inasistencia VIGENTE en este inventario (S/20
   /// hoy). Congelado igual que tamanoHoja: si manana la multa sube, el

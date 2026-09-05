@@ -15,6 +15,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const prismaMock = vi.hoisted(() => ({
   inventario: { findUnique: vi.fn(), update: vi.fn() },
   colaborador: { findMany: vi.fn() },
+  hojaConteo: { findMany: vi.fn() },
   liquidacionColaborador: { createMany: vi.fn() },
   $transaction: vi.fn(),
 }));
@@ -179,6 +180,19 @@ function mockInventario(parcial: Record<string, unknown> = {}): void {
   });
 }
 
+/**
+ * Hojas del inventario para el cálculo de asistencia: los 7 primeros
+ * contaron, los 4 últimos no. Coincide con `colaboradoresAsistieron: 7` de
+ * `resultadoCompleto` -- y esa coincidencia es la invariante que se testea.
+ */
+const hojasConAsistencia = [
+  ...[1, 2, 3, 4, 5, 6, 7].map((id) => ({ asignadoAId: id, asignadoA2Id: null, _count: { conteos: 30 } })),
+  // Asignados pero sin contar: la regla los deja como ausentes. Es el costo
+  // que el cliente aceptó (ver dominio/asistencia.ts).
+  ...[8, 9].map((id) => ({ asignadoAId: id, asignadoA2Id: null, _count: { conteos: 0 } })),
+  // 10 y 11 no aparecen: nunca recibieron hoja.
+];
+
 describe('liquidar', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -186,6 +200,7 @@ describe('liquidar', () => {
     prismaMock.colaborador.findMany.mockResolvedValue(
       equipo(11).map((c) => ({ id: c.id, nombre: c.nombre, rol: c.rol })),
     );
+    prismaMock.hojaConteo.findMany.mockResolvedValue(hojasConAsistencia);
     prismaMock.$transaction.mockImplementation(async (arg: unknown) =>
       Array.isArray(arg) ? Promise.all(arg) : arg,
     );
@@ -313,6 +328,67 @@ describe('liquidar', () => {
       await expect(liquidar(COORD, 9)).rejects.toThrow('conexión caída');
       const { registrarAuditoria } = await import('../../shared/auditoria');
       expect(registrarAuditoria).not.toHaveBeenCalled();
+    });
+
+    /**
+     * LA INVARIANTE. `colaboradoresAsistieron` (cuántos, en el resultado) y
+     * `asistio` (quién, en cada fila) salen de la MISMA lectura y la MISMA
+     * regla. Si discreparan, la planilla repartiría el fondo de multas entre
+     * un número de gente distinto del que lo generó -- y ese número lo firma
+     * alguien.
+     */
+    it('la cantidad de asistio:true coincide con colaboradoresAsistieron', async () => {
+      await liquidar(COORD, 9);
+
+      const { data } = prismaMock.liquidacionColaborador.createMany.mock.calls[0]![0] as {
+        data: Array<{ asistio: boolean }>;
+      };
+      expect(data.filter((f) => f.asistio)).toHaveLength(resultadoCompleto.colaboradoresAsistieron);
+    });
+
+    describe('la regla del cliente, fila por fila', () => {
+      it('quien contó tiene asistio: true y no paga multa', async () => {
+        await liquidar(COORD, 9);
+        const { data } = prismaMock.liquidacionColaborador.createMany.mock.calls[0]![0] as {
+          data: Array<{ colaboradorId: number; asistio: boolean; multaInasistencia: number }>;
+        };
+        const fila = data.find((f) => f.colaboradorId === 1);
+        expect(fila?.asistio).toBe(true);
+        expect(fila?.multaInasistencia).toBe(0);
+      });
+
+      /** El costo aceptado: vino, no llegó a contar, se le descuenta igual. */
+      it('quien tuvo hoja asignada pero no contó figura como AUSENTE', async () => {
+        await liquidar(COORD, 9);
+        const { data } = prismaMock.liquidacionColaborador.createMany.mock.calls[0]![0] as {
+          data: Array<{ colaboradorId: number; asistio: boolean; multaInasistencia: number }>;
+        };
+        const fila = data.find((f) => f.colaboradorId === 8);
+        expect(fila?.asistio).toBe(false);
+        expect(fila?.multaInasistencia).toBe(20);
+      });
+
+      it('quien nunca recibió hoja TAMBIEN tiene fila, con asistio: false', async () => {
+        // El universo es "colaboradores activos de la sucursal", no "los que
+        // recibieron hoja". Dejarlo afuera sería no cobrarle la multa.
+        await liquidar(COORD, 9);
+        const { data } = prismaMock.liquidacionColaborador.createMany.mock.calls[0]![0] as {
+          data: Array<{ colaboradorId: number; asistio: boolean }>;
+        };
+        const fila = data.find((f) => f.colaboradorId === 11);
+        expect(fila).toBeDefined();
+        expect(fila?.asistio).toBe(false);
+      });
+
+      it('la asistencia usa la MISMA consulta que el cierre del conteo', async () => {
+        // Dos queries distintas se desincronizan el día que una filtra por
+        // ronda y la otra no. Por eso `SELECT_ASISTENCIA` vive en un solo
+        // lugar y no filtra ni por ronda ni por estado de hoja.
+        await liquidar(COORD, 9);
+        expect(prismaMock.hojaConteo.findMany).toHaveBeenCalledWith(
+          expect.objectContaining({ where: { inventarioId: 9 } }),
+        );
+      });
     });
 
     it('el total descontado cuadra con la suma de la planilla', async () => {

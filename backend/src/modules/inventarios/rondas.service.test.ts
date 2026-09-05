@@ -74,9 +74,15 @@ function mockHojaConteoFindMany(args: {
   contadoPorRonda?: Array<{ numeroConteo: number; productos: unknown[] }>;
   hojasNuevas?: unknown[];
   matrizHojasFinalizadas?: unknown[];
+  /** Las del cálculo de asistencia: `select` con `_count.conteos`. */
+  asistencia?: Array<{ asignadoAId: number | null; asignadoA2Id: number | null; _count: { conteos: number } }>;
 }): void {
   prismaMock.hojaConteo.findMany.mockImplementation(async (query: unknown) => {
-    const q = query as { where?: Record<string, unknown>; include?: unknown };
+    const q = query as { where?: Record<string, unknown>; include?: unknown; select?: Record<string, unknown> };
+    // La de asistencia se reconoce por el `select`, que es lo único que pide
+    // `_count` -- ANTES que los demás, porque su `where` es solo
+    // `{ inventarioId }` y caería en el `return []` del final.
+    if (q.select?.['_count'] !== undefined) return args.asistencia ?? [];
     const whereEstado = q.where?.estado;
     if (typeof whereEstado === 'string') return args.matrizHojasFinalizadas ?? [];
     if (whereEstado !== undefined) return args.sinFinalizar ?? [];
@@ -275,15 +281,40 @@ describe('cerrar', () => {
      * cierre del conteo tiene que persistir NULL, nunca 0, para no afirmar
      * algo que nadie verificó.
      */
-    it('persiste ResultadoInventario con asistencia y ajustes en NULL, no en 0', async () => {
+    it('persiste los ajustes del mes en NULL, no en 0', async () => {
       await cerrar(COORD, 9, 1);
 
       expect(prismaMock.resultadoInventario.create).toHaveBeenCalledWith({
-        data: expect.objectContaining({
-          inventarioId: 9,
-          colaboradoresAsistieron: null,
-          montoNegativos: null,
-        }),
+        data: expect.objectContaining({ inventarioId: 9, montoNegativos: null }),
+      });
+    });
+
+    /**
+     * LA ASISTENCIA YA NO ES NULL, y la diferencia con `montoNegativos` es
+     * si el dato existe en alguna parte: la asistencia está en las hojas y
+     * el cliente definió cómo deducirla (dominio/asistencia.ts); los ajustes
+     * no tienen dónde cargarse todavía, y `neto = bruto − negativos −
+     * empresa` hace que asumir 0 se le descuente de más a alguien.
+     */
+    it('cuenta la asistencia desde las hojas, no la deja en null', async () => {
+      mockHojaConteoFindMany({
+        contadoPorRonda: [
+          {
+            numeroConteo: 1,
+            productos: [{ codigo: '100', empaques: [{ nombre: 'U', factor: 1 }], conteos: [{ sueltas: 5, empaques: [] }] }],
+          },
+        ],
+        matrizHojasFinalizadas: [hojaFinalizadaParaMatriz],
+        asistencia: [
+          { asignadoAId: 7, asignadoA2Id: 9, _count: { conteos: 40 } }, // vinieron los dos
+          { asignadoAId: 11, asignadoA2Id: null, _count: { conteos: 0 } }, // asignado, no contó
+        ],
+      });
+
+      await cerrar(COORD, 9, 1);
+
+      expect(prismaMock.resultadoInventario.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({ colaboradoresAsistieron: 2 }),
       });
     });
 
