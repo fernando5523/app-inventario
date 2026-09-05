@@ -110,7 +110,12 @@ export default function MisHojasScreen(): JSX.Element {
   }
 
   const contadosTotal = hojas.reduce((acc, h) => acc + h.conteos.length, 0);
-  const totalItemsBloque = hojas.reduce((acc, h) => acc + h.tamano, 0);
+  // productos.length, NUNCA tamano: tamano es el tamaño NOMINAL del lote
+  // pedido al crear las hojas (20/30/50) — la última hoja de un
+  // inventario real queda parcial cuando el catálogo no completa el
+  // lote, y eso es correcto. Sumar tamano infla el total (25×50=1.250
+  // contra 1.236 ítems reales) y la barra de avance nunca llega al 100%.
+  const totalItemsBloque = hojas.reduce((acc, h) => acc + h.productos.length, 0);
   const enProceso = hojas.filter((h) => h.estado === 'en-proceso').length;
   const finalizadas = hojas.filter((h) => h.estado === 'finalizada').length;
   const pendientes = hojas.filter((h) => h.estado === 'pendiente').length;
@@ -148,7 +153,7 @@ export default function MisHojasScreen(): JSX.Element {
                 titulo={`${hoja.zona} (Góndola ${hoja.gondola})`}
                 estado={hoja.estado}
                 contados={hoja.conteos.length}
-                total={hoja.tamano}
+                total={hoja.productos.length}
                 habilitada={hoja.productos.length > 0}
                 onPress={() => abrirHoja(hoja)}
               />

@@ -3,7 +3,7 @@ import { useCallback, useEffect, useState, type JSX } from 'react';
 import { ActivityIndicator, StyleSheet, Text, View } from 'react-native';
 
 import { repositorioHojas, repositorioInventario, repositorioTiendas, repositorioUsuarios, sincronizador } from '../../lib/contenedor';
-import { avanceConjunto, estadoConjunto } from '../../lib/dominio/hoja';
+import { avance, avanceConjunto, estadoConjunto } from '../../lib/dominio/hoja';
 import type { HojaConteo, Rol } from '../../lib/dominio/tipos';
 import type { EstadoCola } from '../../lib/puertos/repositorios';
 import { useSesion } from '../../lib/sesion-contexto';
@@ -187,15 +187,20 @@ export function InicioScreen(): JSX.Element {
     if (misHojas) {
       const hojaActual = misHojas.find((h) => h.estado === 'en-proceso') ?? null;
       const pendientes = misHojas.filter((h) => h.estado === 'pendiente').length;
+      // `avance(hojaActual).total`, NUNCA hojaActual.tamano: tamano es el
+      // tamaño nominal del lote pedido al crear las hojas, no cuántos
+      // productos tiene ESTA — la última hoja de un inventario real queda
+      // parcial, y mostrar el nominal ahí infla el total que ve quien cuenta.
+      const totalHojaActual = hojaActual ? avance(hojaActual).total : 0;
       // Conteo ciego: SOLO sus hojas y sus ítems. Nunca el total del
       // inventario ni una cifra que venga del ERP.
-      cifras = hojaActual ? `Hoja #${hojaActual.numero} · Lote de ${hojaActual.tamano} ítems` : `${misHojas.length} hojas asignadas`;
+      cifras = hojaActual ? `Hoja #${hojaActual.numero} · Lote de ${totalHojaActual} ítems` : `${misHojas.length} hojas asignadas`;
       filasEstado = hojaActual
         ? [
             {
               etiqueta: `Hoja #${hojaActual.numero}`,
               valor: String(hojaActual.conteos.length),
-              pct: `/ ${hojaActual.tamano} ítems`,
+              pct: `/ ${totalHojaActual} ítems`,
               color: colors.ok,
             },
             { etiqueta: 'Tus hojas sin empezar', valor: String(pendientes), pct: `de ${misHojas.length}` },

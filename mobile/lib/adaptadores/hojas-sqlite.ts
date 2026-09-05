@@ -182,18 +182,15 @@ function filaAHojaBase(fila: FilaHojaEstructura, productos: Producto[]): HojaCon
     numero: fila.numero,
     zona: fila.zona,
     gondola: fila.gondola,
-    // `fila.tamano` es el tamaño NOMINAL del lote (20/30/50, configurable —
-    // ver tipos.ts), no necesariamente cuántos productos le tocaron a esta
-    // hoja: el backend arma hojas de a `tamano` hasta que se acaba el
-    // catálogo, así que la ÚLTIMA hoja de un inventario real suele quedar
-    // parcial (25 hojas de 50 con un catálogo de 1.236 ítems → la hoja 025
-    // se queda con 36). Para las pantallas de conteo lo que importa es
-    // cuánto hay REALMENTE para contar — usar el nominal ahí mostraría
-    // "0/50" en una hoja que nunca puede pasar de 36, con la barra de
-    // avance y el aviso de "finalizar con faltantes" mintiendo sobre 14
-    // ítems que no existen. Cae al nominal solo si todavía no hay catálogo
-    // cargado (productos vacío, antes de que catalogoApi.deHoja complete).
-    tamano: productos.length > 0 ? productos.length : fila.tamano,
+    // `tamano` es el tamaño NOMINAL del lote pedido al crear las hojas
+    // (20/30/50, configurable — ver tipos.ts y backend/dominio/lote.ts#
+    // partirEnHojas), no cuántos productos tiene ESTA hoja: la última hoja
+    // de un inventario real queda parcial cuando el catálogo no es
+    // múltiplo exacto del lote, y eso es correcto y esperado. Se guarda
+    // TAL CUAL vino del backend — quien necesite "cuánto hay para contar
+    // de verdad" usa `productos.length` (o `avance()`, que ya lo hace),
+    // nunca este campo.
+    tamano: fila.tamano,
     estado: 'pendiente',
     sync: 'local',
     asignados: JSON.parse(fila.asignados) as string[],

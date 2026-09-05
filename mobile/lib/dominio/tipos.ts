@@ -133,7 +133,16 @@ export interface HojaConteo {
   numero: string;          // "002"
   zona: string;            // "Abarrotes"
   gondola: string;         // "A2"
-  /** Tamaño del lote. Configurable por el cliente: 20, 30 o 50. */
+  /**
+   * Tamaño NOMINAL del lote pedido al crear las hojas (20, 30 o 50 —
+   * configurable, ver backend/dominio/lote.ts#partirEnHojas). NO es
+   * cuántos productos tiene ESTA hoja: la última hoja de un inventario
+   * que no es múltiplo exacto del lote queda parcial a propósito. Para
+   * "cuánto hay para contar de verdad" usar `productos.length` o
+   * `avance()` (lib/dominio/hoja.ts) — nunca este campo. Su único uso
+   * legítimo es informativo, para mostrar el tamaño configurado al armar
+   * el lote (ver app/coordinador/hojas.tsx).
+   */
   tamano: number;
   estado: EstadoHoja;
   sync: EstadoSync;

@@ -541,14 +541,17 @@ describe('la descarga inicial distingue POR QUÉ no trajo hojas', () => {
   });
 });
 
-describe('el tamaño de una hoja bajada es cuánto hay REALMENTE para contar', () => {
+describe('el tamaño bajado es el NOMINAL del lote, no cuánto hay para contar', () => {
   // Caso real (inventario 20 del backend, hoja 025): el backend arma hojas
-  // de a 50 (tamaño nominal del lote) hasta que se acaba el catálogo — la
-  // última hoja de un inventario que no es múltiplo exacto de 50 llega con
-  // menos productos que ese nominal. Mostrar "0/50" ahí es mentir: esa
-  // hoja nunca puede pasar de 36, y el aviso de "finalizar con faltantes"
-  // hablaría de 14 ítems que no existen.
-  it('usa productos.length cuando el backend manda menos productos que su tamaño nominal', async () => {
+  // de a 50 (tamaño pedido al crear el lote, backend/dominio/lote.ts#
+  // partirEnHojas) hasta que se acaba el catálogo — la última hoja de un
+  // inventario que no es múltiplo exacto de 50 llega con menos productos
+  // que ese nominal, y eso es correcto y esperado. `tamano` se guarda TAL
+  // CUAL vino del backend, sin que hojas-sqlite.ts lo pise por
+  // `productos.length` — quien necesita "cuánto hay para contar de
+  // verdad" en las pantallas usa `avance()`/`productos.length`, nunca
+  // este campo (ver mis-hojas.tsx, contar.tsx, InicioScreen.tsx).
+  it('no pisa tamano con productos.length aunque el backend mande menos productos que el nominal', async () => {
     const productoDeTest = (id: number) => ({
       id,
       codigo: String(id).padStart(4, '0'),
@@ -576,6 +579,7 @@ describe('el tamaño de una hoja bajada es cuánto hay REALMENTE para contar', (
     const hojas = await hojasSqlite.mias(999004);
 
     expect(hojas).toHaveLength(1);
-    expect(hojas[0]!.tamano).toBe(36);
+    expect(hojas[0]!.tamano).toBe(50);
+    expect(hojas[0]!.productos).toHaveLength(36);
   });
 });

@@ -177,7 +177,7 @@ export default function ContarScreen(): JSX.Element {
   }
 
   const bloqueado = !puedeEditar(hoja);
-  const { contados, porcentaje } = avance(hoja);
+  const { contados, total, porcentaje } = avance(hoja);
   const visibles = hoja.productos.filter((p) => coincide(p, busqueda));
 
   function conteoDe(producto: Producto): Conteo | null {
@@ -295,10 +295,15 @@ export default function ContarScreen(): JSX.Element {
   }
 
   const { faltantes } = puedeFinalizar(hoja);
+  // total, NUNCA hoja.tamano: tamano es el tamaño nominal del lote pedido
+  // al crear las hojas, no cuántos productos tiene ESTA — la última hoja
+  // de un inventario real queda parcial, y decirle a quien cuenta que
+  // "quedan 14 sin contar" cuando esos 14 no existen la hace dudar de su
+  // propio trabajo y recontar una hoja que ya estaba completa.
   const textoFinalizar =
     faltantes > 0
-      ? `Quedan ${faltantes} de ${hoja.tamano} ítems sin contar. Si finalizás ahora, esos ítems quedan vacíos.`
-      : `Los ${hoja.tamano} ítems de esta hoja están contados.`;
+      ? `Quedan ${faltantes} de ${total} ítems sin contar. Si finalizás ahora, esos ítems quedan vacíos.`
+      : `Los ${total} ítems de esta hoja están contados.`;
 
   const sync = sincronizacionDeHojas([hoja], estadoCola);
 
@@ -312,7 +317,7 @@ export default function ContarScreen(): JSX.Element {
       <PantallaConTabs scrollable contentStyle={styles.contenido}>
       <View style={styles.cabeceraHoja}>
         <BarraApp rotulo="Conteo ciego · 1er conteo" sinBorde />
-        <AvanceFila texto={`${contados} / ${hoja.tamano} Productos`} porcentaje={porcentaje} />
+        <AvanceFila texto={`${contados} / ${total} Productos`} porcentaje={porcentaje} />
       </View>
 
       <BandaSync estado={sync.estado} mensaje={sync.mensaje} onSincronizar={() => sincronizador.sincronizar()} />
@@ -324,7 +329,7 @@ export default function ContarScreen(): JSX.Element {
             style={styles.buscadorInput}
             value={busqueda}
             onChangeText={setBusqueda}
-            placeholder={`Filtrar entre los ${hoja.tamano} de esta hoja o buscar código...`}
+            placeholder={`Filtrar entre los ${total} de esta hoja o buscar código...`}
             placeholderTextColor={colors.grisClaro}
           />
         </View>
