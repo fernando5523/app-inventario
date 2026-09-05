@@ -986,11 +986,15 @@ Respuesta `200`:
   "diferencias": [
     { "codigo": "IT-1002", "descripcion": "Cerveza Cusqueña Dorada 620ml",
       "stockSistema": 240, "conteoFinal": 215, "diferencia": -25, "tipo": "faltante",
-      "resueltoEnConteo": 3, "costoUnitario": 6.5, "montoDiferencia": -162.5 }
+      "resueltoEnConteo": 3, "precioUnitario": 6.5, "montoDiferencia": -162.5 }
   ]
 }
 ```
 Ordenado por diferencia ascendente: los faltantes más grandes primero.
+
+`precioUnitario` es el **precio de venta** congelado al cierre, nunca un costo: el snapshot de Dynamics no trae costos y el cliente definió valorizar las diferencias a precio de venta. Se llamaba `costoUnitario` y el nombre mentía — quien abriera la tabla dentro de un año calcularía márgenes con precios de góndola.
+
+Las filas las escribe `rondas.service.ts#cerrar` al cerrar el conteo, en la misma transacción que `ResultadoInventario` (solo los ítems con diferencia real distinta de cero — ver `auditoria.calculos.ts#diferenciasParaPersistir`).
 
 #### `GET /api/historial/inventarios/:id/liquidacion`
 

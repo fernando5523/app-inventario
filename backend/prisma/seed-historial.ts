@@ -48,16 +48,24 @@ const PLANILLA = [
   { id: 111, nombre: 'Hugo Vergaray', rol: 'conteo' as const, asistio: true },
 ];
 
-/** Productos reales del catalogo de ejemplo ya validado en conteo.html. */
+/**
+ * Productos reales del catalogo de ejemplo ya validado en conteo.html.
+ *
+ * `precioVenta`, no costo: es lo que va a `DiferenciaItem.precioUnitario` y
+ * el sistema NO conoce costos (el snapshot de Dynamics no los trae). La
+ * propiedad se llamaba `costo` y sembraba en la base un dato que decia ser
+ * una cosa y era otra -- justo lo que el rename de la columna vino a
+ * arreglar.
+ */
 const ITEMS = [
-  { codigo: 'IT-1001', descripcion: 'Aceite Vegetal Primor 900ml', costo: 8.9 },
-  { codigo: 'IT-1002', descripcion: 'Cerveza Cusqueña Dorada 620ml', costo: 6.5 },
-  { codigo: 'IT-1003', descripcion: 'Leche Evaporada Gloria 400g', costo: 4.2 },
-  { codigo: 'IT-1004', descripcion: 'Fideos Canuto Don Vittorio 500g', costo: 3.8 },
-  { codigo: 'IT-1005', descripcion: 'Arroz Costeño Extra 5kg', costo: 24.5 },
-  { codigo: 'IT-1006', descripcion: 'Azúcar Rubia Cartavio 1kg', costo: 4.9 },
-  { codigo: 'IT-1007', descripcion: 'Atún Florida en aceite 170g', costo: 5.6 },
-  { codigo: 'IT-1008', descripcion: 'Detergente Bolívar 780g', costo: 9.3 },
+  { codigo: 'IT-1001', descripcion: 'Aceite Vegetal Primor 900ml', precioVenta: 8.9 },
+  { codigo: 'IT-1002', descripcion: 'Cerveza Cusqueña Dorada 620ml', precioVenta: 6.5 },
+  { codigo: 'IT-1003', descripcion: 'Leche Evaporada Gloria 400g', precioVenta: 4.2 },
+  { codigo: 'IT-1004', descripcion: 'Fideos Canuto Don Vittorio 500g', precioVenta: 3.8 },
+  { codigo: 'IT-1005', descripcion: 'Arroz Costeño Extra 5kg', precioVenta: 24.5 },
+  { codigo: 'IT-1006', descripcion: 'Azúcar Rubia Cartavio 1kg', precioVenta: 4.9 },
+  { codigo: 'IT-1007', descripcion: 'Atún Florida en aceite 170g', precioVenta: 5.6 },
+  { codigo: 'IT-1008', descripcion: 'Detergente Bolívar 780g', precioVenta: 9.3 },
 ];
 
 interface DatosPeriodo {
@@ -204,8 +212,8 @@ async function sembrarPeriodo(d: DatosPeriodo, sucursalNombre: string): Promise<
         conteoFinal: dif.contado,
         diferencia,
         resueltoEnConteo: dif.ronda,
-        costoUnitario: dec(item.costo),
-        montoDiferencia: dec(redondear(diferencia * item.costo)),
+        precioUnitario: dec(item.precioVenta),
+        montoDiferencia: dec(redondear(diferencia * item.precioVenta)),
         createdAt: cerradoEn,
       },
     });
@@ -444,8 +452,8 @@ async function sembrarPendienteDeFirma(): Promise<void> {
         conteoFinal: dif.contado,
         diferencia,
         resueltoEnConteo: dif.ronda,
-        costoUnitario: dec(item.costo),
-        montoDiferencia: dec(redondear(diferencia * item.costo)),
+        precioUnitario: dec(item.precioVenta),
+        montoDiferencia: dec(redondear(diferencia * item.precioVenta)),
         createdAt: cerradoEn,
       },
     });

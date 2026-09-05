@@ -909,21 +909,28 @@ model DiferenciaItem {
   /// El precio unitario con el que se valorizo esta diferencia, congelado al
   /// momento del cierre.
   ///
-  /// OJO CON EL NOMBRE: lo que se guarda aca es el precio de VENTA
-  /// (CatalogoItem.precioVenta), NO un costo. El snapshot de Dynamics no
-  /// trae costo -- `CatalogoItem` solo tiene `precioVenta` -- y el cliente
-  /// definio en reunion que las diferencias se valorizan a precio de venta
-  /// (ver auditoria.calculos.ts#diferenciaValor, "nunca precio de compra").
-  /// La columna se llama `costoUnitario` por un modelado anterior a esa
-  /// decision; el rename a `precioUnitario` esta acordado y va en un commit
-  /// propio (toca historial.service.ts, hoy en manos de otro agente).
+  /// ES EL PRECIO DE VENTA, NO UN COSTO, y el nombre lo dice a proposito.
+  /// Se llamaba `costoUnitario` por un modelado anterior a la decision del
+  /// cliente, y ese nombre mentia por dos motivos a la vez:
+  ///
+  ///   1. El snapshot de Dynamics NO TRAE COSTO. `CatalogoItem` tiene
+  ///      `precioVenta` y nada mas, asi que no habia con que llenar una
+  ///      columna de costo aunque se quisiera.
+  ///   2. El cliente definio en reunion que las diferencias se valorizan a
+  ///      precio de VENTA (ver auditoria.calculos.ts#diferenciaValor,
+  ///      "nunca precio de compra", y CatalogoItem.precioVenta).
+  ///
+  /// Una columna llamada `costo_unitario` con un precio de gondola adentro
+  /// es la misma clase de error que `stockErp ?? 0`: el dato esta bien y el
+  /// nombre hace que se lea mal. Quien abra la tabla dentro de un ano y vea
+  /// "costo" va a calcular margenes con precios de venta.
   ///
   /// 4 decimales, igual que el origen: se redondea al multiplicar, no antes.
   /// Nullable: si el snapshot no trajo precio, la diferencia en unidades
   /// sigue siendo valida aunque no se pueda valorizar -- y es justo esa la
   /// que cuenta liquidacion.service.ts#contarItemsSinPrecio para advertirle
   /// a quien firma que el monto puede estar subestimado.
-  costoUnitario   Decimal? @map("costo_unitario")   @db.Decimal(12, 4)
+  precioUnitario  Decimal? @map("precio_unitario")  @db.Decimal(12, 4)
   montoDiferencia Decimal? @map("monto_diferencia") @db.Decimal(12, 2)
 
   createdAt DateTime @default(now()) @map("created_at")

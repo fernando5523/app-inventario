@@ -396,7 +396,7 @@ describe('cerrar', () => {
             conteoFinal: 7,
             diferencia: -3,
             resueltoEnConteo: 3,
-            costoUnitario: 4,
+            precioUnitario: 4,
             montoDiferencia: -12,
           },
         ],

@@ -1,0 +1,16 @@
+-- Renombra diferencias_item.costo_unitario -> precio_unitario.
+--
+-- El nombre mentia. La columna se modelo pensando en el costo de almacen,
+-- pero:
+--   1. el snapshot de Dynamics no trae costo -- catalogo_items solo tiene
+--      precio_venta, asi que nunca hubo con que llenarla;
+--   2. el cliente definio en reunion que las diferencias se valorizan a
+--      precio de VENTA (ver auditoria.calculos.ts#diferenciaValor).
+--
+-- Ver el comentario de DiferenciaItem.precioUnitario en schema.prisma.
+--
+-- RENAME COLUMN, no DROP + ADD: preserva los datos que haya. Hoy la tabla
+-- tiene filas de seed y las que empezo a escribir el cierre del conteo
+-- (0157436), pero un DROP en una migracion que manana corre en produccion
+-- no perdona.
+ALTER TABLE "diferencias_item" RENAME COLUMN "costo_unitario" TO "precio_unitario";

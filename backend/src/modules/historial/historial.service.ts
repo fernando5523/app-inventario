@@ -476,7 +476,10 @@ export async function listarDiferencias(
       diferencia: d.diferencia,
       tipo: d.diferencia < 0 ? 'faltante' : 'sobrante',
       resueltoEnConteo: d.resueltoEnConteo,
-      costoUnitario: aNumero(d.costoUnitario),
+      // Precio de VENTA, no costo -- el campo del DTO se renombra con la
+      // columna a proposito: si la API siguiera diciendo `costoUnitario`,
+      // la pantalla que lo consuma volveria a leerlo como costo.
+      precioUnitario: aNumero(d.precioUnitario),
       montoDiferencia: aNumero(d.montoDiferencia),
     })),
   };

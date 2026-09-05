@@ -364,7 +364,7 @@ describe('diferenciasParaPersistir', () => {
     const [fila] = diferenciasParaPersistir([item({ stockErp: 10, conteo1: 7, precioVenta: null })]);
     expect(fila?.diferencia).toBe(-3);
     expect(fila?.montoDiferencia).toBeNull();
-    expect(fila?.costoUnitario).toBeNull();
+    expect(fila?.precioUnitario).toBeNull();
   });
 
   it('congela la descripción del momento del cierre', () => {

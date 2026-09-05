@@ -311,11 +311,12 @@ export interface FilaDiferencia {
   diferencia: number;
   resueltoEnConteo: number;
   /**
-   * El precio de VENTA con el que se valorizo, no un costo -- ver el
-   * comentario de `DiferenciaItem.costoUnitario` en schema.prisma. `null` si
-   * el snapshot no lo trajo.
+   * El precio de VENTA con el que se valorizo, nunca un costo: el snapshot
+   * de Dynamics no trae costo y el cliente definio valorizar a precio de
+   * venta. Ver `DiferenciaItem.precioUnitario` en schema.prisma. `null` si
+   * el snapshot no trajo precio.
    */
-  costoUnitario: number | null;
+  precioUnitario: number | null;
   montoDiferencia: number | null;
 }
 
@@ -373,7 +374,7 @@ export function diferenciasParaPersistir(items: ItemAuditoria[]): FilaDiferencia
       conteoFinal: final,
       diferencia,
       resueltoEnConteo: rondasNecesarias(item),
-      costoUnitario: item.precioVenta,
+      precioUnitario: item.precioVenta,
       montoDiferencia: diferenciaValor(item),
     });
   }
