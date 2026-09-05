@@ -13,8 +13,24 @@
 import type { AddressInfo } from 'node:net';
 import type { Server } from 'node:http';
 import express from 'express';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { limitadorIngreso } from './sesion.routes';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { ColaboradorAutenticado } from '../../shared/tipos';
+import { appDePrueba, autorizacion, controllerFalso, levantar } from '../../test-utils/http-test';
+
+vi.mock('./sesion.service', () => ({
+  verificarToken: async (token: string) => {
+    try {
+      return JSON.parse(token) as ColaboradorAutenticado;
+    } catch {
+      return null;
+    }
+  },
+}));
+vi.mock('./sesion.controller', () =>
+  controllerFalso(['sucursales', 'colaboradores', 'administradores', 'ingresar', 'cambiarPin']),
+);
+
+import { limitadorIngreso, sesionRouter } from './sesion.routes';
 
 let server: Server;
 let baseUrl: string;
@@ -108,5 +124,48 @@ describe('limitadorIngreso: el 429', () => {
     });
 
     expect(respuesta.status).toBe(200);
+  });
+});
+
+const ALGUIEN: ColaboradorAutenticado = { colaboradorId: 102, sucursalId: 1, rol: 'conteo' };
+
+describe('POST /api/sesion/cambiar-pin: exige sesión', () => {
+  let cerrarRouter: () => Promise<void>;
+  let baseUrlRouter: string;
+
+  beforeEach(async () => {
+    const app = appDePrueba('/api/sesion', sesionRouter);
+    ({ baseUrl: baseUrlRouter, cerrar: cerrarRouter } = await levantar(app));
+  });
+
+  afterEach(async () => {
+    await cerrarRouter();
+  });
+
+  it('sin token, 401 -- ni siquiera llega a leer el body', async () => {
+    const r = await fetch(`${baseUrlRouter}/api/sesion/cambiar-pin`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ pinActual: '111111', pinNuevo: '222222' }),
+    });
+    expect(r.status).toBe(401);
+  });
+
+  it('token invalido (sesión vencida o inexistente), 401', async () => {
+    const r = await fetch(`${baseUrlRouter}/api/sesion/cambiar-pin`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer esto-no-es-json' },
+      body: JSON.stringify({ pinActual: '111111', pinNuevo: '222222' }),
+    });
+    expect(r.status).toBe(401);
+  });
+
+  it('con sesión válida, cualquier rol pasa el middleware -- cambiar el PIN propio no exige un rol especial', async () => {
+    const r = await fetch(`${baseUrlRouter}/api/sesion/cambiar-pin`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...autorizacion(ALGUIEN) },
+      body: JSON.stringify({ pinActual: '111111', pinNuevo: '222222' }),
+    });
+    expect(r.status).toBe(200);
   });
 });
