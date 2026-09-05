@@ -46,6 +46,36 @@ export function esPinTrivial(pin: string): boolean {
   return false;
 }
 
+/**
+ * Rechaza un PIN que no se puede ELEGIR: trivial siempre, y -- cuando se
+ * conoce el colaborador -- el predecible del seed. Es la misma regla que
+ * `validarCambioDePin`, pero sin el "distinto del actual": sirve para los
+ * dos caminos donde NO hay un PIN previo con que comparar -- el alta de una
+ * cuenta y el reseteo del administrador (usuarios.service.ts).
+ *
+ * `colaboradorId` es opcional a proposito: al CREAR el id todavia no existe
+ * (lo autogenera Prisma), asi que ahi solo se puede chequear el trivial. El
+ * predecible se vuelve efectivo al resetear -- que ya conoce el id -- y al
+ * cambiar el propio (validarCambioDePin). No pisa el hueco entero: un PIN
+ * que resulte ser el futuro id no se puede prever al crear; para eso esta el
+ * plan B (forzar cambio al primer ingreso), fuera del alcance de esto.
+ *
+ * Los mensajes dicen QUE esta mal y COMO salir: un "PIN invalido" obliga a
+ * adivinar; esto se corrige de una.
+ */
+export function validarPinElegible(pin: string, colaboradorId?: number): void {
+  if (colaboradorId !== undefined && esPinPredecible(colaboradorId, pin)) {
+    throw new SolicitudInvalida(
+      'El PIN no puede ser el numero de colaborador con ceros (000022 para el colaborador 22): es el que genera el sistema y cualquiera que vea la lista de login lo deduce. Elegi otro.',
+    );
+  }
+  if (esPinTrivial(pin)) {
+    throw new SolicitudInvalida(
+      'El PIN no puede ser una secuencia como 123456 ni todos los digitos iguales como 111111: son los primeros que alguien prueba. Elegi otro.',
+    );
+  }
+}
+
 export interface CambioDePin {
   colaboradorId: number;
   pinActual: string;

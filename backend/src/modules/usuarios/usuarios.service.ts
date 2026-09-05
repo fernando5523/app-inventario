@@ -10,6 +10,7 @@ import { prisma } from '../../config/database';
 import { registrarAuditoria } from '../../shared/auditoria';
 import { Conflicto, NoEncontrado, Prohibido } from '../../shared/errores';
 import { hashearPin } from '../../shared/pin';
+import { validarPinElegible } from '../sesion/sesion.pin';
 import type { ColaboradorAutenticado, Rol } from '../../shared/tipos';
 import { ROLES_GESTIONABLES_POR_AUDITOR, validarAlcanceDeGestion, validarPermisoDeAlta } from './usuarios.permisos';
 import type { CrearUsuarioInput, EditarUsuarioInput } from './usuarios.schema';
@@ -63,6 +64,11 @@ export async function listar(actor: ColaboradorAutenticado, sucursalIdFiltro?: n
 
 export async function crear(actor: ColaboradorAutenticado, input: CrearUsuarioInput): Promise<UsuarioDto> {
   validarPermisoDeAlta(actor, { rol: input.rol, sucursalId: input.sucursalId });
+
+  // Sin colaboradorId: al crear, el id lo autogenera Prisma, asi que aca
+  // solo se puede frenar el trivial (123456, 111111...). El predecible se
+  // valida al resetear, que ya conoce el id. Ver validarPinElegible.
+  validarPinElegible(input.pin);
 
   const pinHash = await hashearPin(input.pin);
 
@@ -129,6 +135,11 @@ export async function actualizarEstado(actor: ColaboradorAutenticado, id: number
 
 export async function resetearPin(actor: ColaboradorAutenticado, id: number, pinNuevo: string): Promise<void> {
   await obtenerConAlcance(actor, id);
+
+  // Con el id a la vista: se frena el predecible (000<id>) Y el trivial. Un
+  // reseteo que devuelve el PIN predecible reabre el agujero que la app vino
+  // a cerrar.
+  validarPinElegible(pinNuevo, id);
 
   const pinHash = await hashearPin(pinNuevo);
   await prisma.colaborador.update({ where: { id }, data: { pinHash } });
