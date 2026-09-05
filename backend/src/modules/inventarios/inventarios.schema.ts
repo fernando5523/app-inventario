@@ -45,3 +45,13 @@ export const asignarHojasSchema = z
   })
   .strict();
 export type AsignarHojasInput = z.infer<typeof asignarHojasSchema>;
+
+/**
+ * La ronda del ciclo, en la URL. 1 a 3 (RONDAS_DEL_CICLO): un `ronda=7` es
+ * un error de quien llama, no una ronda que todavia no existe.
+ */
+export const parametrosRondaSchema = z.object({
+  inventarioId: z.coerce.number().int().positive(),
+  ronda: z.coerce.number().int().min(1).max(3),
+});
+export type ParametrosRonda = z.infer<typeof parametrosRondaSchema>;

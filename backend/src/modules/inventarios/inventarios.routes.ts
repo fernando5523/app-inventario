@@ -8,6 +8,7 @@ import {
   asignarHojasSchema,
   crearHojasSchema,
   parametrosInventarioSchema,
+  parametrosRondaSchema,
   parametrosSucursalSchema,
 } from './inventarios.schema';
 
@@ -38,6 +39,27 @@ inventariosRouter.post(
   validar(parametrosInventarioSchema, 'params'),
   validar(asignarHojasSchema, 'body'),
   controller.asignarHojas,
+);
+
+/**
+ * PASO 4: el CICLO DE 3 CONTEOS.
+ *
+ * El resumen es un PREVIEW y no muta nada: cerrar una ronda es una decision,
+ * no un tramite. Si de 1.236 items quedan 12 por recontar la ronda 2 es media
+ * hora; si quedan 900, algo se conto mal y hay que mirar eso ANTES de mandar
+ * a once personas a recontar.
+ */
+inventariosRouter.get(
+  '/:inventarioId/rondas/:ronda/resumen',
+  validar(parametrosRondaSchema, 'params'),
+  controller.resumenRonda,
+);
+
+/** Cierra la ronda y abre la siguiente SOLO con los items que no cuadraron. */
+inventariosRouter.post(
+  '/:inventarioId/rondas/:ronda/cerrar',
+  validar(parametrosRondaSchema, 'params'),
+  controller.cerrarRonda,
 );
 
 /**

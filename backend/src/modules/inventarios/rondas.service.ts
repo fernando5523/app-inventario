@@ -1,0 +1,381 @@
+/**
+ * Cierre de una ronda y apertura de la siguiente. Es el motor del ciclo de
+ * 3 conteos.
+ *
+ * Toca Prisma; las REGLAS viven en `dominio/ciclo-conteos.ts`, sin Prisma,
+ * para poder probarlas de verdad. En particular la del cliente -- EL ÚLTIMO
+ * CONTEO MANDA -- que está aislada en `conteoQueManda()`: si algún día se
+ * revierte, se cambia esa función y nada más.
+ *
+ * ---------------------------------------------------------------------------
+ * LAS DOS COSAS QUE NO SE PUEDEN ERRAR ACÁ
+ * ---------------------------------------------------------------------------
+ *
+ * 1. NO SE BORRA NADA. La ronda 2 se AGREGA; las hojas, productos y conteos
+ *    de la ronda 1 quedan intactos. La auditoría compara las tres pasadas
+ *    (`auditoria.service.ts` arma la matriz con conteo1/conteo2/conteo3), así
+ *    que borrar una ronda es destruir la evidencia que justifica el cierre.
+ *    Es lo contrario de `crearHojas`, que sí es destructivo -- por eso vive
+ *    en otra función y no se reusa.
+ *
+ * 2. CONTEO CIEGO. Las hojas de la ronda 2 materializan sus PROPIOS
+ *    `Producto`, sin ningún `Conteo` asociado. El contador abre la hoja
+ *    nueva y ve los renglones vacíos: no hay forma de que vea lo que él
+ *    mismo cargó en la ronda 1, ni siquiera por accidente, porque son filas
+ *    distintas de la tabla. Si viera su número anterior lo confirmaría en vez
+ *    de contar, y las tres pasadas dejarían de servir para nada.
+ */
+
+import { prisma } from '../../config/database';
+import {
+  destinoTrasRonda,
+  itemsParaLaRondaSiguiente,
+  puedeAbrirRondaSiguiente,
+  resumirRonda,
+  RONDAS_DEL_CICLO,
+  type ItemDeRonda,
+  type ResumenDeRonda,
+} from '../../dominio/ciclo-conteos';
+import { numeroDeHoja, ordenarParaContar, partirEnHojas, zonaDeHoja } from '../../dominio/lote';
+import { registrarAuditoria } from '../../shared/auditoria';
+import { Conflicto, NoEncontrado, Prohibido, SolicitudInvalida } from '../../shared/errores';
+import type { ColaboradorAutenticado } from '../../shared/tipos';
+import { totalUnidades } from '../hojas/hojas.calculos';
+import { INCLUIR_TODO, aHojaDto, type HojaDto } from '../hojas/hojas.service';
+
+/** El inventario, validando que el actor pueda tocarlo. */
+async function inventarioDelActor(actor: ColaboradorAutenticado, inventarioId: number) {
+  const inventario = await prisma.inventario.findUnique({
+    where: { id: inventarioId },
+    select: { id: true, sucursalId: true, estado: true, tamanoHoja: true },
+  });
+  if (!inventario) throw new NoEncontrado('Ese inventario no existe.');
+
+  if (actor.rol !== 'administrador' && actor.sucursalId !== inventario.sucursalId) {
+    throw new Prohibido('Ese inventario es de otra sucursal.');
+  }
+  if (inventario.estado !== 'en_curso') {
+    throw new Conflicto(
+      `El inventario está en estado "${inventario.estado}": el ciclo de conteos solo avanza mientras está en curso.`,
+    );
+  }
+  return inventario;
+}
+
+/**
+ * Lo contado en CADA ronda hasta `hasta`, por CÓDIGO de item.
+ *
+ * Devuelve el histórico completo y no solo la última ronda porque la regla
+ * del cliente es EL ÚLTIMO CONTEO MANDA, y "el último" puede ser el de una
+ * ronda anterior: si un ítem entró a la ronda 2 y la hoja se finalizó sin
+ * contarlo, manda el de la ronda 1 (ver `dominio/ciclo-conteos.ts`).
+ *
+ * Se agrupa por código y no por `productoId` porque cada ronda materializa
+ * sus propios `Producto`: el mismo artículo es una fila distinta en cada
+ * pasada, y el ItemNumber de Dynamics es lo único que los une.
+ *
+ * El total sale de `totalUnidades` (empaques × factor + sueltas), la misma
+ * función que usa el módulo de hojas. No se recalcula acá: ese número es el
+ * que se audita contra el ERP y no puede tener dos versiones.
+ */
+async function contadoHastaLaRonda(inventarioId: number, hasta: number): Promise<Map<string, Array<number | null>>> {
+  const hojas = await prisma.hojaConteo.findMany({
+    where: { inventarioId, numeroConteo: { lte: hasta } },
+    select: {
+      numeroConteo: true,
+      productos: {
+        select: {
+          codigo: true,
+          empaques: { select: { nombre: true, factor: true } },
+          conteos: { select: { sueltas: true, empaques: { select: { empaqueNombre: true, cantidad: true } } } },
+        },
+      },
+    },
+  });
+
+  const porCodigo = new Map<string, Array<number | null>>();
+  for (const hoja of hojas) {
+    for (const producto of hoja.productos) {
+      const fila = porCodigo.get(producto.codigo) ?? new Array<number | null>(hasta).fill(null);
+      const conteo = producto.conteos[0];
+      if (conteo !== undefined) {
+        // Indice 0 = ronda 1.
+        fila[hoja.numeroConteo - 1] = totalUnidades(
+          { empaques: conteo.empaques, sueltas: conteo.sueltas },
+          producto.empaques,
+        );
+      }
+      porCodigo.set(producto.codigo, fila);
+    }
+  }
+  return porCodigo;
+}
+
+/**
+ * El universo de la ronda: qué ítems entraron y qué se contó de cada uno.
+ *
+ * La ronda 1 tiene el catálogo entero; las siguientes, solo lo que arrastró
+ * la anterior. Por eso el universo sale de los `Producto` de las hojas DE ESA
+ * RONDA y no del catálogo -- si saliera del catálogo, la ronda 2 volvería a
+ * evaluar los 1.236 ítems y el embudo no serviría de nada.
+ */
+async function universoDeLaRonda(inventarioId: number, ronda: number): Promise<ItemDeRonda[]> {
+  const [productos, catalogo, contado] = await Promise.all([
+    prisma.producto.findMany({
+      where: { hoja: { inventarioId, numeroConteo: ronda } },
+      select: { codigo: true, descripcion: true, categoria: true },
+      orderBy: { id: 'asc' },
+    }),
+    prisma.catalogoItem.findMany({
+      where: { inventarioId },
+      select: { codigo: true, stockErp: true },
+    }),
+    contadoHastaLaRonda(inventarioId, ronda),
+  ]);
+
+  const stockPorCodigo = new Map(catalogo.map((c) => [c.codigo, c.stockErp] as const));
+  const vacio = new Array<number | null>(ronda).fill(null);
+
+  return productos.map((p) => ({
+    codigo: p.codigo,
+    stockErp: stockPorCodigo.get(p.codigo) ?? null,
+    conteos: contado.get(p.codigo) ?? vacio,
+  }));
+}
+
+/** Las hojas de una ronda que todavía no están finalizadas. */
+async function hojasSinFinalizar(inventarioId: number, ronda: number) {
+  return prisma.hojaConteo.findMany({
+    where: { inventarioId, numeroConteo: ronda, estado: { not: 'finalizada' } },
+    select: { id: true, numero: true, estado: true, asignadoAId: true, zona: true },
+    orderBy: { numero: 'asc' },
+  });
+}
+
+export interface ResumenRondaDto extends ResumenDeRonda {
+  inventarioId: number;
+  ronda: number;
+  /** Hojas de la ronda que faltan finalizar: bloquean el cierre. */
+  hojasSinFinalizar: Array<{ id: number; numero: string; estado: string; zona: string; asignada: boolean }>;
+  /** true = la ronda se puede cerrar ahora mismo. */
+  sePuedeCerrar: boolean;
+  /** Qué pasaría al cerrar: se abre otra ronda, o el ciclo termina. */
+  siguienteRonda: number | null;
+  motivoSinSiguiente: string | null;
+}
+
+/**
+ * PREVIEW: qué pasaría si se cerrara esta ronda. NO muta nada.
+ *
+ * Existe porque cerrar una ronda es una decisión, no un trámite. Si de 1.236
+ * ítems quedan 12 por recontar, la ronda 2 es media hora; si quedan 900, algo
+ * se contó mal y hay que mirar eso ANTES de mandar a once personas a
+ * recontar. El Coordinador tiene que poder ver el número antes de apretar.
+ */
+export async function resumen(
+  actor: ColaboradorAutenticado,
+  inventarioId: number,
+  ronda: number,
+): Promise<ResumenRondaDto> {
+  await inventarioDelActor(actor, inventarioId);
+
+  const hojas = await prisma.hojaConteo.count({ where: { inventarioId, numeroConteo: ronda } });
+  if (hojas === 0) {
+    throw new NoEncontrado(`El inventario ${inventarioId} no tiene hojas de la ronda ${ronda}.`);
+  }
+
+  const universo = await universoDeLaRonda(inventarioId, ronda);
+  const base = resumirRonda(universo);
+  const pendientes = await hojasSinFinalizar(inventarioId, ronda);
+  const siguiente = puedeAbrirRondaSiguiente(ronda, base.aRecontar);
+
+  return {
+    inventarioId,
+    ronda,
+    ...base,
+    hojasSinFinalizar: pendientes.map((h) => ({
+      id: h.id,
+      numero: h.numero,
+      estado: h.estado,
+      zona: h.zona,
+      asignada: h.asignadoAId !== null,
+    })),
+    sePuedeCerrar: pendientes.length === 0,
+    siguienteRonda: siguiente.puede ? ronda + 1 : null,
+    motivoSinSiguiente: siguiente.motivo,
+  };
+}
+
+export interface CierreDeRondaDto {
+  inventarioId: number;
+  rondaCerrada: number;
+  resumen: ResumenDeRonda;
+  /** La ronda que se abrió, o null si el ciclo no sigue. */
+  rondaAbierta: number | null;
+  motivoSinSiguiente: string | null;
+  /** Hojas nuevas de la ronda siguiente. Vacío si no se abrió ninguna. */
+  hojas: HojaDto[];
+}
+
+/**
+ * Cierra la ronda y abre la siguiente SOLO con lo que no cuadró.
+ *
+ * REQUISITO PARA CERRAR: todas las hojas de la ronda finalizadas. Una hoja
+ * sin finalizar es una hoja que alguien todavía está contando -- cerrar la
+ * ronda ahí congelaría un conteo a medias y lo compararía contra el ERP como
+ * si fuera definitivo.
+ *
+ * Ojo con lo que ESTO NO exige, porque es una decisión pendiente del cliente:
+ * `hojas.service.ts#finalizar` permite finalizar una hoja con renglones sin
+ * contar. Este cierre NO los da por cero: los manda a recontar (ver
+ * `dominio/ciclo-conteos.ts#destinoTrasRonda`). Es lo conservador -- en la
+ * duda se recuenta, que cuesta un ítem más en la ronda siguiente -- pero si
+ * el cliente prefiere bloquear el cierre hasta que estén todos contados, el
+ * cambio es una validación más acá.
+ *
+ * Todo va en UNA transacción: si la creación de las hojas nuevas fallara a
+ * mitad, quedaría una ronda 2 incompleta que nadie sabría interpretar.
+ */
+export async function cerrar(
+  actor: ColaboradorAutenticado,
+  inventarioId: number,
+  ronda: number,
+): Promise<CierreDeRondaDto> {
+  const inventario = await inventarioDelActor(actor, inventarioId);
+
+  const hojasDeLaRonda = await prisma.hojaConteo.count({ where: { inventarioId, numeroConteo: ronda } });
+  if (hojasDeLaRonda === 0) {
+    throw new NoEncontrado(`El inventario ${inventarioId} no tiene hojas de la ronda ${ronda}.`);
+  }
+
+  // Ya cerrada: si existe la ronda siguiente, esta operación ya se hizo.
+  const siguienteYaExiste = await prisma.hojaConteo.count({
+    where: { inventarioId, numeroConteo: ronda + 1 },
+  });
+  if (siguienteYaExiste > 0) {
+    throw new Conflicto(
+      `La ronda ${ronda} ya se cerró: la ronda ${ronda + 1} tiene ${siguienteYaExiste} hoja(s). Cerrar de nuevo duplicaría el reconteo.`,
+    );
+  }
+
+  const pendientes = await hojasSinFinalizar(inventarioId, ronda);
+  if (pendientes.length > 0) {
+    const cuales = pendientes.slice(0, 5).map((h) => `${h.numero} (${h.estado})`).join(', ');
+    const resto = pendientes.length > 5 ? ` y ${pendientes.length - 5} más` : '';
+    throw new Conflicto(
+      `No se puede cerrar la ronda ${ronda}: quedan ${pendientes.length} hoja(s) sin finalizar — ${cuales}${resto}. ` +
+        'Una hoja sin finalizar es una hoja que alguien todavía está contando.',
+    );
+  }
+
+  const universo = await universoDeLaRonda(inventarioId, ronda);
+  const resumenRonda = resumirRonda(universo);
+  const aRecontar = itemsParaLaRondaSiguiente(universo);
+  const siguiente = puedeAbrirRondaSiguiente(ronda, aRecontar.length);
+
+  if (!siguiente.puede) {
+    // No se abre ronda nueva, pero el cierre igual se audita: es el hecho de
+    // negocio que dice "la ronda N terminó y este fue el resultado".
+    await registrarAuditoria({
+      actorId: actor.colaboradorId,
+      accion: 'inventario.ronda_cerrada',
+      entidad: 'inventario',
+      entidadId: inventarioId,
+      detalle: { ronda, ...resumenRonda, rondaAbierta: null, motivo: siguiente.motivo },
+    });
+    return {
+      inventarioId,
+      rondaCerrada: ronda,
+      resumen: resumenRonda,
+      rondaAbierta: null,
+      motivoSinSiguiente: siguiente.motivo,
+      hojas: [],
+    };
+  }
+
+  // Los datos completos de los ítems que vuelven (descripción, empaques,
+  // categoría) salen del CATÁLOGO, no de los Producto de la ronda anterior:
+  // el catálogo es la fuente, y así la hoja nueva nace igual de limpia que
+  // una de la ronda 1.
+  const codigos = new Set(aRecontar.map((i) => i.codigo));
+  const items = await prisma.catalogoItem.findMany({
+    where: { inventarioId, codigo: { in: [...codigos] } },
+    include: { empaques: { orderBy: { orden: 'asc' } } },
+  });
+  if (items.length === 0) {
+    throw new SolicitudInvalida(
+      `Ninguno de los ${aRecontar.length} ítems a recontar existe en el catálogo del inventario ${inventarioId}.`,
+    );
+  }
+
+  const ordenados = ordenarParaContar(items);
+  const tamano = inventario.tamanoHoja;
+  const tamanos = partirEnHojas(ordenados.length, tamano);
+  const rondaNueva = ronda + 1;
+
+  await prisma.$transaction(async (tx) => {
+    let cursor = 0;
+    for (const [indice, cantidad] of tamanos.entries()) {
+      const bloque = ordenados.slice(cursor, cursor + cantidad);
+      cursor += cantidad;
+
+      await tx.hojaConteo.create({
+        data: {
+          inventarioId,
+          numeroConteo: rondaNueva,
+          numero: numeroDeHoja(indice),
+          zona: zonaDeHoja(bloque),
+          gondola: numeroDeHoja(indice),
+          tamano,
+          // SIN asignar: el Coordinador reparte la ronda nueva con
+          // POST /hojas/asignar, igual que la primera. Quién recuenta es una
+          // decisión suya -- puede querer que lo mire otra persona.
+          productos: {
+            create: bloque.map((item) => ({
+              codigo: item.codigo,
+              codigoBarras: item.codigoBarras,
+              descripcion: item.descripcion,
+              categoria: item.categoria,
+              // NI stockErp NI precioVenta, igual que en la ronda 1: es el
+              // conteo ciego. Y sin `conteos`: la hoja nace vacía, así que
+              // el contador no puede ver lo que cargó en la ronda anterior.
+              empaques: {
+                create: item.empaques.map((e) => ({
+                  nombre: e.nombre,
+                  factor: e.factor,
+                  orden: e.orden,
+                  ...(e.codigoBarras !== null ? { codigoBarras: e.codigoBarras } : {}),
+                })),
+              },
+            })),
+          },
+        },
+      });
+    }
+  });
+
+  await registrarAuditoria({
+    actorId: actor.colaboradorId,
+    accion: 'inventario.ronda_cerrada',
+    entidad: 'inventario',
+    entidadId: inventarioId,
+    detalle: { ronda, ...resumenRonda, rondaAbierta: rondaNueva, hojasNuevas: tamanos.length },
+  });
+
+  const hojas = await prisma.hojaConteo.findMany({
+    where: { inventarioId, numeroConteo: rondaNueva },
+    include: INCLUIR_TODO,
+    orderBy: { numero: 'asc' },
+  });
+
+  return {
+    inventarioId,
+    rondaCerrada: ronda,
+    resumen: resumenRonda,
+    rondaAbierta: rondaNueva,
+    motivoSinSiguiente: null,
+    hojas: hojas.map(aHojaDto),
+  };
+}
+
+export { RONDAS_DEL_CICLO, destinoTrasRonda };

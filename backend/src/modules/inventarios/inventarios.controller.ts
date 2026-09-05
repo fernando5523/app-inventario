@@ -2,8 +2,15 @@ import type { Response } from 'express';
 
 import { asyncHandler } from '../../shared/asyncHandler';
 import type { RequestAutenticado } from '../../shared/tipos';
+import * as rondas from './rondas.service';
 import * as service from './inventarios.service';
-import type { AsignarHojasInput, CrearHojasInput, ParametrosInventario, ParametrosSucursal } from './inventarios.schema';
+import type {
+  AsignarHojasInput,
+  CrearHojasInput,
+  ParametrosInventario,
+  ParametrosRonda,
+  ParametrosSucursal,
+} from './inventarios.schema';
 
 /** req.colaborador siempre existe aca: requiereSesion corre antes en la ruta. */
 function actorDe(req: RequestAutenticado) {
@@ -33,4 +40,18 @@ export const asignarHojas = asyncHandler(async (req: RequestAutenticado, res: Re
   const { colaboradorIds } = req.body as AsignarHojasInput;
   // 200 y no 201: las hojas ya existian, lo que cambio es a quien pertenecen.
   res.json(await service.asignarHojas(actorDe(req), inventarioId, colaboradorIds));
+});
+
+// --- Ciclo de 3 conteos ----------------------------------------------------
+
+/** PREVIEW del cierre: no muta nada. Ver rondas.service.ts#resumen. */
+export const resumenRonda = asyncHandler(async (req: RequestAutenticado, res: Response) => {
+  const { inventarioId, ronda } = req.params as unknown as ParametrosRonda;
+  res.json(await rondas.resumen(req.colaborador!, inventarioId, ronda));
+});
+
+/** Cierra la ronda y abre la siguiente SOLO con lo que no cuadro. */
+export const cerrarRonda = asyncHandler(async (req: RequestAutenticado, res: Response) => {
+  const { inventarioId, ronda } = req.params as unknown as ParametrosRonda;
+  res.status(201).json(await rondas.cerrar(req.colaborador!, inventarioId, ronda));
 });
