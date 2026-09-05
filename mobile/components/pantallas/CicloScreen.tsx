@@ -6,6 +6,7 @@ import { ActivityIndicator, Alert, Pressable, StyleSheet, Text, View } from 'rea
 import { repositorioHojas, repositorioInventario } from '../../lib/contenedor';
 import { comparativoDeRonda } from '../../lib/dominio/comparativo-ronda';
 import { avanceConjunto, estadoConjunto, type EstadoConjunto } from '../../lib/dominio/hoja';
+import { ORDINAL, textoBotonCierre } from '../../lib/dominio/texto-cierre-ronda';
 import { partirEnHojas } from '../../lib/dominio/lote';
 import { TAMANOS_HOJA, type HojaConteo, type Rol, type TamanoHoja } from '../../lib/dominio/tipos';
 import type { ResumenRonda } from '../../lib/puertos/repositorios';
@@ -13,9 +14,6 @@ import { useSesion } from '../../lib/sesion-contexto';
 import { colors, fonts, fontSize, radius, spacing } from '../../lib/theme';
 import { PantallaConTabs } from '../navegacion/PantallaConTabs';
 import { BandaSync, Badge, BarraApp, Button, formatoMiles, formatoPct, type BadgeVariant } from '../ui';
-
-/** "1er", "2do", "3er" -- para hablar de una ronda sin repetir el switch. */
-const ORDINAL: Record<number, string> = { 1: '1er', 2: '2do', 3: '3er' };
 
 // formatoMiles/formatoPct, no Intl.NumberFormat('es-PE'): no está
 // garantizado que Hermes traiga los datos ICU de es-PE en el emulador —
@@ -468,7 +466,7 @@ export function CicloScreen({ rol }: CicloScreenProps): JSX.Element {
               <Button
                 label={
                   resumen.sePuedeCerrar
-                    ? `Cerrar y abrir el 2do conteo · ${formatoMiles(resumen.aRecontar)} ítems`
+                    ? textoBotonCierre(rondaActiva, resumen.aRecontar, formatoMiles)
                     : 'Terminá las hojas para poder cerrar'
                 }
                 icon={Lock}
