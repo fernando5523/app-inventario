@@ -33,7 +33,7 @@ vi.mock('react-native', () => ({ Platform: { OS: 'android' } }));
 vi.mock('expo-constants', () => ({ default: { expoConfig: { extra: {} } } }));
 
 import { avance } from '../dominio/hoja';
-import { migrarSqlite } from './sqlite-esquema';
+import { migrarSqlite, MIGRACIONES_SQLITE } from './sqlite-esquema';
 
 // ---------------------------------------------------------------------------
 // Motor de test: node:sqlite envuelto en la MISMA interfaz async que
@@ -176,7 +176,7 @@ async function hoja002(): Promise<{ inventarioId: number; hojaId: number }> {
 describe('recuperación: el conteo sobrevive a cerrar y reabrir la app', () => {
   it('el dato de arranque (32 de 50) ya está en 32 antes de tocar nada', async () => {
     const { inventarioId } = await hoja002();
-    const hoja = await hojasSqlite.porNumero(inventarioId, '002');
+    const hoja = await hojasSqlite.porNumero(inventarioId, '002', 1);
     expect(avance(hoja!).contados).toBe(32);
   });
 
@@ -188,12 +188,12 @@ describe('recuperación: el conteo sobrevive a cerrar y reabrir la app', () => {
     // para que "32" sea literal y no dependa del orden de ejecución del
     // resto de la suite (todos comparten el mismo archivo .db en disco).
     const { inventarioId } = await hoja002();
-    const antesDeCerrar = await hojasSqlite.porNumero(inventarioId, '002');
+    const antesDeCerrar = await hojasSqlite.porNumero(inventarioId, '002', 1);
     expect(avance(antesDeCerrar!).contados).toBe(32);
 
     simularReinicioDeApp();
 
-    const despuesDeReabrir = await hojasSqlite.porNumero(inventarioId, '002');
+    const despuesDeReabrir = await hojasSqlite.porNumero(inventarioId, '002', 1);
     expect(avance(despuesDeReabrir!).contados).toBe(32);
     // No solo la CANTIDAD: las líneas de cada conteo sobreviven intactas,
     // no solo un número que por casualidad coincide.
@@ -202,7 +202,7 @@ describe('recuperación: el conteo sobrevive a cerrar y reabrir la app', () => {
 
   it('el operario cuenta un ítem más (33 de 50) y sigue en 33 después de "reabrir" la app', async () => {
     const { inventarioId, hojaId } = await hoja002();
-    const antes = await hojasSqlite.porNumero(inventarioId, '002');
+    const antes = await hojasSqlite.porNumero(inventarioId, '002', 1);
     const sinContar = antes!.productos.find((p) => !antes!.conteos.some((c) => c.productoId === p.id))!;
 
     await hojasSqlite.guardarConteo(hojaId, {
@@ -213,7 +213,7 @@ describe('recuperación: el conteo sobrevive a cerrar y reabrir la app', () => {
       contadoEn: '2026-09-05T10:00:00.000Z',
     });
 
-    const antesDeCerrar = await hojasSqlite.porNumero(inventarioId, '002');
+    const antesDeCerrar = await hojasSqlite.porNumero(inventarioId, '002', 1);
     expect(avance(antesDeCerrar!).contados).toBe(33);
     expect(antesDeCerrar!.estado).toBe('en-proceso');
     expect(antesDeCerrar!.sync).toBe('local');
@@ -222,7 +222,7 @@ describe('recuperación: el conteo sobrevive a cerrar y reabrir la app', () => {
     simularReinicioDeApp();
 
     // Y esto es EL test: al "volver a abrir", ¿sigue en 33?
-    const despuesDeReabrir = await hojasSqlite.porNumero(inventarioId, '002');
+    const despuesDeReabrir = await hojasSqlite.porNumero(inventarioId, '002', 1);
     expect(avance(despuesDeReabrir!).contados).toBe(33);
     expect(despuesDeReabrir!.estado).toBe('en-proceso');
     expect(despuesDeReabrir!.sync).toBe('local');
@@ -369,7 +369,7 @@ describe('la hoja YA finalizada por otro colaborador no deja el conteo local en 
     // 3) La hoja pasa a sync: 'error' -- un estado DISTINTO de 'local' o
     //    'sincronizando', para que la pantalla pueda avisar que esto no es
     //    "todavía no llegó WiFi" sino "esto no se va a poder mandar solo".
-    const hojaActualizada = await hojasSqlite.porNumero((await hoja002()).inventarioId, '002');
+    const hojaActualizada = await hojasSqlite.porNumero((await hoja002()).inventarioId, '002', 1);
     expect(hojaActualizada!.sync).toBe('error');
 
     // 4) LÍMITE CONOCIDO, documentado a propósito: el estado LOCAL de la
@@ -472,7 +472,7 @@ describe('un conteo rechazado por el servidor no queda en un limbo silencioso', 
     expect(conteo).not.toBeNull();
 
     const inventario = await obtenerInventarioDeSucursal(1);
-    const hojaActualizada = await hojasSqlite.porNumero(inventario!.id, '002');
+    const hojaActualizada = await hojasSqlite.porNumero(inventario!.id, '002', 1);
     expect(hojaActualizada!.sync).toBe('error');
   });
 
@@ -503,7 +503,7 @@ describe('un conteo rechazado por el servidor no queda en un limbo silencioso', 
     // vaciarse la cola de esta hoja por completo, su sync pasa a
     // 'sincronizado'.
     const inventario = await obtenerInventarioDeSucursal(1);
-    const hojaActualizada = await hojasSqlite.porNumero(inventario!.id, '002');
+    const hojaActualizada = await hojasSqlite.porNumero(inventario!.id, '002', 1);
     expect(hojaActualizada!.sync).toBe('sincronizado');
   });
 });
@@ -516,28 +516,28 @@ describe('la descarga inicial distingue POR QUÉ no trajo hojas', () => {
   it('un 401 (sesión vencida) NO es "sin conexión": reconectar a la WiFi no lo arregla', async () => {
     vi.mocked(hojasApi.mias).mockRejectedValueOnce(new ErrorApi('sesion-vencida'));
 
-    const hojas = await hojasSqlite.mias(999001);
+    const hojas = await hojasSqlite.mias(999001, 1);
 
     expect(hojas).toEqual([]);
-    expect(ultimaDescarga(999001, 'mias')).toEqual({ ok: false, motivo: 'sesion-vencida' });
+    expect(ultimaDescarga(999001, 'mias', 1)).toEqual({ ok: false, motivo: 'sesion-vencida' });
   });
 
   it('un 500 del servidor tampoco es "sin conexión": es un error de servidor', async () => {
     vi.mocked(hojasApi.mias).mockRejectedValueOnce(new ErrorApi('servidor'));
 
-    const hojas = await hojasSqlite.mias(999002);
+    const hojas = await hojasSqlite.mias(999002, 1);
 
     expect(hojas).toEqual([]);
-    expect(ultimaDescarga(999002, 'mias')).toEqual({ ok: false, motivo: 'error' });
+    expect(ultimaDescarga(999002, 'mias', 1)).toEqual({ ok: false, motivo: 'error' });
   });
 
   it('la falla de red genérica sigue siendo "sin-red"', async () => {
     vi.mocked(hojasApi.mias).mockRejectedValueOnce(new ErrorApi('sin-red'));
 
-    const hojas = await hojasSqlite.mias(999003);
+    const hojas = await hojasSqlite.mias(999003, 1);
 
     expect(hojas).toEqual([]);
-    expect(ultimaDescarga(999003, 'mias')).toEqual({ ok: false, motivo: 'sin-red' });
+    expect(ultimaDescarga(999003, 'mias', 1)).toEqual({ ok: false, motivo: 'sin-red' });
   });
 });
 
@@ -576,7 +576,7 @@ describe('el tamaño bajado es el NOMINAL del lote, no cuánto hay para contar',
       },
     ]);
 
-    const hojas = await hojasSqlite.mias(999004);
+    const hojas = await hojasSqlite.mias(999004, 1);
 
     expect(hojas).toHaveLength(1);
     expect(hojas[0]!.tamano).toBe(50);
@@ -605,5 +605,194 @@ describe('inventarioIdSinRed: el fallback cuando no hay forma de preguntarle al 
     const db = await obtenerDbDeTest();
     await db.runAsync('DELETE FROM hojas_estructura');
     expect(await inventarioIdSinRed()).toBeNull();
+  });
+});
+
+describe('CONTEO CIEGO ENTRE RONDAS: en la ronda 2 el Contador NO ve lo que contó en la 1', () => {
+  // El requisito que no se negocia: al abrir el 2do conteo, la hoja tiene que
+  // llegar EN CERO. Si arrastrara los conteos de la 1ra, el Contador vería un
+  // número ya puesto y CONFIRMARÍA en vez de CONTAR — y el 2do conteo (que
+  // existe justo para volver a contar a ciegas lo que no cuadró) no valdría
+  // nada. La garantía es estructural: las hojas de cada ronda son filas
+  // DISTINTAS de `hojas_estructura` (ids propios, `numero_conteo` propio) con
+  // sus PROPIOS productos, y los `conteos` cuelgan de (hoja_id, producto_id) —
+  // los de la ronda 1 nunca pueden aparecer bajo una hoja de la ronda 2.
+  const INV = 888001;
+
+  const prod = (id: number) => ({
+    id,
+    codigo: String(id).padStart(4, '0'),
+    codigoBarras: `771000000${id}`,
+    descripcion: `Producto ${id}`,
+    empaques: [{ nombre: 'Caja', factor: 12 }],
+  });
+
+  // Mismo `numero` de hoja ('001') en las dos rondas — es la MISMA góndola
+  // recontada — pero id de hoja y de productos distintos, como los
+  // materializa el backend al abrir el reconteo.
+  const PROD_R1 = 88100011;
+  const hojaR1 = {
+    id: 8810001,
+    inventarioId: INV,
+    numero: '001',
+    zona: 'Zona R',
+    gondola: 'R1',
+    tamano: 50,
+    estado: 'pendiente' as const,
+    sync: 'sincronizado' as const,
+    asignados: ['Conteo'],
+    productos: [prod(PROD_R1), prod(88100012)],
+    conteos: [],
+  };
+  const hojaR2 = {
+    id: 8820001,
+    inventarioId: INV,
+    numero: '001',
+    zona: 'Zona R',
+    gondola: 'R1',
+    tamano: 50,
+    estado: 'pendiente' as const,
+    sync: 'sincronizado' as const,
+    asignados: ['Conteo'],
+    productos: [prod(88200011)],
+    conteos: [],
+  };
+
+  it('la hoja de la ronda 2 llega en 0 conteos y con OTROS productos — el conteo de la ronda 1 no la roza', async () => {
+    // El backend devuelve las hojas de la ronda pedida: acá el mock ramifica
+    // por `ronda`, exactamente como filtra el `?ronda=` del servidor.
+    vi.mocked(hojasApi.mias).mockImplementation(async (_inv: number, ronda: number) =>
+      ronda === 1 ? [hojaR1] : ronda === 2 ? [hojaR2] : [],
+    );
+
+    // --- Ronda 1: se baja y se cuenta un producto ---
+    const ronda1 = await hojasSqlite.mias(INV, 1);
+    const h1 = ronda1.find((h) => h.numero === '001')!;
+    expect(avance(h1).contados).toBe(0); // arranca en 0, claro
+
+    await hojasSqlite.guardarConteo(h1.id, {
+      productoId: PROD_R1,
+      empaques: [{ empaqueNombre: 'Caja', cantidad: 1 }],
+      sueltas: 0,
+      confirmadoPorEscaner: false,
+      contadoEn: 't-ronda-1',
+    });
+
+    const ronda1DespuesDeContar = await hojasSqlite.mias(INV, 1);
+    // La ronda 1 SÍ tiene su conteo — para que "0 en la ronda 2" signifique
+    // algo, primero hay que probar que en la 1 el conteo existe de verdad.
+    expect(avance(ronda1DespuesDeContar.find((h) => h.numero === '001')!).contados).toBe(1);
+
+    // --- Ronda 2: el reconteo. LO QUE NO PUEDE FALLAR ---
+    const ronda2 = await hojasSqlite.mias(INV, 2);
+    const h2 = ronda2.find((h) => h.numero === '001')!;
+
+    expect(avance(h2).contados).toBe(0); // EN CERO: se cuenta, no se confirma.
+    expect(h2.conteos).toHaveLength(0);
+    // Es OTRA hoja, con OTROS productos: el producto contado en la 1 ni
+    // siquiera existe en la 2, así que no hay dónde arrastrar su conteo.
+    expect(h2.id).not.toBe(h1.id);
+    expect(h2.productos.some((p) => p.id === PROD_R1)).toBe(false);
+
+    // Prueba estructural en la base: el conteo cuelga de la hoja de la ronda
+    // 1, y la hoja de la ronda 2 no tiene ninguno.
+    const db = await obtenerDbDeTest();
+    const conteosR1 = await db.getAllAsync('SELECT * FROM conteos WHERE hoja_id = ?', [h1.id]);
+    const conteosR2 = await db.getAllAsync('SELECT * FROM conteos WHERE hoja_id = ?', [h2.id]);
+    expect(conteosR1).toHaveLength(1);
+    expect(conteosR2).toHaveLength(0);
+
+    // Coexistencia: cada `mias(inv, ronda)` devuelve SOLO las hojas de esa
+    // ronda (filtro por `numero_conteo` en la consulta), nunca las de la otra.
+    expect(ronda1DespuesDeContar.every((h) => h.id === h1.id)).toBe(true);
+    expect(ronda2.every((h) => h.id === h2.id)).toBe(true);
+  });
+});
+
+describe('migración v4 (numero_conteo): aditiva — nunca le cuesta a nadie un conteo ya hecho', () => {
+  // Base v3 FRESCA, aparte del archivo compartido de los otros tests: así se
+  // controla el "antes de v4" (estructura sin `numero_conteo`, más conteos y
+  // cola ya sembrados) tal como está un teléfono ya instalado, y se corre
+  // SOLO la migración v4 encima.
+  async function crearDbV3(): Promise<{ db: DbDeTest; raw: DatabaseSync; dir: string }> {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'inventario-mig-v4-'));
+    const raw = new DatabaseSync(path.join(dir, 'inventario.db'));
+    const db = envolverNodeSqlite(raw);
+    // Los 3 primeros elementos de MIGRACIONES_SQLITE = v1, v2, v3.
+    for (let i = 0; i < 3; i++) await db.execAsync(MIGRACIONES_SQLITE[i]);
+    await db.execAsync('PRAGMA user_version = 3');
+    return { db, raw, dir };
+  }
+
+  function limpiar(raw: DatabaseSync, dir: string): void {
+    raw.close();
+    try {
+      fs.rmSync(dir, { recursive: true, force: true });
+    } catch {
+      // Mismo motivo que el afterAll: Windows tarda en soltar el handle.
+    }
+  }
+
+  it('las filas viejas quedan en ronda 1 (su ronda REAL, no un relleno) y volver a migrar no rompe', async () => {
+    const { db, raw, dir } = await crearDbV3();
+    try {
+      // Una hoja bajada cuando el front solo pedía la 1ra: sin `numero_conteo`.
+      await db.runAsync(
+        'INSERT INTO hojas_estructura (id, inventario_id, numero, zona, gondola, tamano, asignados) VALUES (?,?,?,?,?,?,?)',
+        [5001, 400, '001', 'Zona A', 'A1', 50, JSON.stringify(['Conteo'])],
+      );
+
+      await migrarSqlite(db);
+
+      const fila = await db.getFirstAsync<{ numero_conteo: number }>('SELECT numero_conteo FROM hojas_estructura WHERE id = ?', [5001]);
+      expect(fila?.numero_conteo).toBe(1); // su ronda real: se bajó cuando solo existía la 1ra.
+      const ver = await db.getFirstAsync<{ user_version: number }>('PRAGMA user_version');
+      expect(ver?.user_version).toBe(MIGRACIONES_SQLITE.length);
+
+      // Idempotente: ya está en la última versión, no vuelve a correr el
+      // ALTER (que fallaría porque la columna ya existe).
+      await expect(migrarSqlite(db)).resolves.toBeUndefined();
+      const fila2 = await db.getFirstAsync<{ numero_conteo: number }>('SELECT numero_conteo FROM hojas_estructura WHERE id = ?', [5001]);
+      expect(fila2?.numero_conteo).toBe(1);
+    } finally {
+      limpiar(raw, dir);
+    }
+  });
+
+  it('LO QUE NO PUEDE FALLAR: un conteo offline y su ítem en la cola sobreviven intactos a la migración', async () => {
+    const { db, raw, dir } = await crearDbV3();
+    try {
+      // El operario contó sin señal antes de actualizar la app: el conteo y su
+      // ítem pendiente en la cola ya están en la base v3.
+      await db.runAsync(
+        'INSERT INTO conteos (hoja_id, producto_id, lineas, sueltas, confirmado_por_escaner, contado_en) VALUES (?,?,?,?,?,?)',
+        [5001, 700, JSON.stringify([{ empaqueNombre: 'Caja', cantidad: 7 }]), 2, 0, 't-offline'],
+      );
+      await db.runAsync(
+        "INSERT INTO cola_sync (hoja_id, tipo, producto_id, creado_en, intentos, estado) VALUES (?, 'conteo', ?, ?, 0, 'pendiente')",
+        [5001, 700, 't-offline'],
+      );
+
+      await migrarSqlite(db);
+
+      // El conteo sigue ahí, con el MISMO valor — la migración ni nombró la tabla.
+      const conteo = await db.getFirstAsync<{ lineas: string; sueltas: number }>(
+        'SELECT lineas, sueltas FROM conteos WHERE hoja_id = ? AND producto_id = ?',
+        [5001, 700],
+      );
+      expect(conteo).not.toBeNull();
+      expect(JSON.parse(conteo!.lineas)).toEqual([{ empaqueNombre: 'Caja', cantidad: 7 }]);
+      expect(conteo!.sueltas).toBe(2);
+
+      // Y su ítem en la cola sigue pendiente de mandar: no se perdió el "falta subir esto".
+      const item = await db.getFirstAsync<{ estado: string; intentos: number }>(
+        "SELECT estado, intentos FROM cola_sync WHERE hoja_id = ? AND producto_id = ? AND tipo = 'conteo'",
+        [5001, 700],
+      );
+      expect(item?.estado).toBe('pendiente');
+      expect(item?.intentos).toBe(0);
+    } finally {
+      limpiar(raw, dir);
+    }
   });
 });

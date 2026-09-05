@@ -363,7 +363,7 @@ describe('el ciclo offline de punta a punta: los 5 pasos del operario, con SQLit
 
     await procesarColaDeSincronizacion(enviarViaApiReal as never);
 
-    const hoja = await hojasSqlite.porNumero((await hoja002()).inventarioId, '002');
+    const hoja = await hojasSqlite.porNumero((await hoja002()).inventarioId, '002', 1);
     expect(hoja!.sync).toBe('sincronizado');
   });
 
@@ -386,7 +386,7 @@ describe('el ciclo offline de punta a punta: los 5 pasos del operario, con SQLit
 
     await expect(procesarColaDeSincronizacion(enviarViaApiReal as never)).resolves.toBeUndefined(); // nunca tira.
 
-    const hoja = await hojasSqlite.porNumero((await hoja002()).inventarioId, '002');
+    const hoja = await hojasSqlite.porNumero((await hoja002()).inventarioId, '002', 1);
     // Sigue local -- el dato NO se perdió, solo no pudo salir del teléfono.
     expect(hoja!.conteos.some((c) => c.productoId === 61)).toBe(true);
     expect(hoja!.sync).not.toBe('sincronizado');
@@ -394,13 +394,13 @@ describe('el ciclo offline de punta a punta: los 5 pasos del operario, con SQLit
 
   it('3) cierra la app y la vuelve a abrir: el conteo local sigue ahí (32/50 equivalente: nada se perdió)', async () => {
     const { inventarioId } = await hoja002();
-    const antesDeCerrar = await hojasSqlite.porNumero(inventarioId, '002');
+    const antesDeCerrar = await hojasSqlite.porNumero(inventarioId, '002', 1);
     const contadosAntes = avance(antesDeCerrar!).contados;
     expect(antesDeCerrar!.conteos.some((c) => c.productoId === 61)).toBe(true); // el del paso 2, sin sincronizar, sigue local.
 
     simularReinicioDeApp();
 
-    const despuesDeReabrir = await hojasSqlite.porNumero(inventarioId, '002');
+    const despuesDeReabrir = await hojasSqlite.porNumero(inventarioId, '002', 1);
     expect(avance(despuesDeReabrir!).contados).toBe(contadosAntes);
     expect(despuesDeReabrir!.conteos).toEqual(antesDeCerrar!.conteos);
   });
@@ -411,7 +411,7 @@ describe('el ciclo offline de punta a punta: los 5 pasos del operario, con SQLit
 
     await procesarColaDeSincronizacion(enviarViaApiReal as never);
 
-    const hoja = await hojasSqlite.porNumero((await hoja002()).inventarioId, '002');
+    const hoja = await hojasSqlite.porNumero((await hoja002()).inventarioId, '002', 1);
     expect(hoja!.sync).toBe('sincronizado');
     void hojaId;
   });

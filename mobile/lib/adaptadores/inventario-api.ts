@@ -99,6 +99,10 @@ interface SnapshotDto {
 interface InventarioActivoDto extends SnapshotDto {
   tamanoHoja: TamanoHoja | null;
   totalHojas: number;
+  // El backend ya lo manda (max(numeroConteo) de las hojas, o null sin
+  // hojas). `activo()` devuelve el DTO tal cual, así que el campo pasa
+  // derecho — no hay traducción, solo declararlo para que el tipo cierre.
+  rondaActiva: number | null;
 }
 
 /**

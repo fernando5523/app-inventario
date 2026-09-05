@@ -250,7 +250,11 @@ export default function HojasScreen(): JSX.Element {
         setItems(activo.items);
         setTomadoEn(activo.tomadoEn);
         setTamanoCreado(activo.tamanoHoja);
-        const todas = await repositorioHojas.todas(activo.inventarioId);
+        // Las hojas de la ronda activa (`?? 1`: si todavía no hay hojas,
+        // rondaActiva es null y no hay ninguna que traer de ninguna ronda —
+        // el 1 es inocuo). El paso 3 (asignar) también reparte las hojas
+        // nuevas de un reconteo, que nacen sin asignar.
+        const todas = await repositorioHojas.todas(activo.inventarioId, activo.rondaActiva ?? 1);
         if (vigente) setHojas(todas);
       }
       if (vigente) setCargandoInicial(false);

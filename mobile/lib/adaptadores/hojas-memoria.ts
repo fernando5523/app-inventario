@@ -12,9 +12,18 @@ import { finalizarDominio, puedeEditar, buscarHojaPorId, obtenerInventario, reem
 import { sesionMemoria } from './sesion-memoria';
 import type { RepositorioHojas } from '../puertos/repositorios';
 
+/**
+ * El dataset de ejemplo (`_compartido.ts`) solo tiene la ronda 1 sembrada:
+ * no modela el reconteo. Para una ronda > 1 no hay nada que devolver — vacío,
+ * en vez de hacer pasar las hojas de la ronda 1 por otra ronda. Contra el
+ * backend real las rondas 2/3 sí existen; esto es solo el mock de dev.
+ */
+const RONDA_SEMBRADA = 1;
+
 export const hojasMemoria: RepositorioHojas = {
-  async mias(inventarioId) {
+  async mias(inventarioId, ronda) {
     await simularLatencia();
+    if (ronda !== RONDA_SEMBRADA) return [];
     const inventario = await obtenerInventario(inventarioId);
     if (!inventario) return [];
 
@@ -24,14 +33,16 @@ export const hojasMemoria: RepositorioHojas = {
     return inventario.hojas.filter((hoja) => hoja.asignados.includes(sesion.colaborador.nombre));
   },
 
-  async todas(inventarioId) {
+  async todas(inventarioId, ronda) {
     await simularLatencia();
+    if (ronda !== RONDA_SEMBRADA) return [];
     const inventario = await obtenerInventario(inventarioId);
     return inventario ? inventario.hojas : [];
   },
 
-  async porNumero(inventarioId, numero) {
+  async porNumero(inventarioId, numero, ronda) {
     await simularLatencia();
+    if (ronda !== RONDA_SEMBRADA) return null;
     const inventario = await obtenerInventario(inventarioId);
     if (!inventario) return null;
     return inventario.hojas.find((hoja) => hoja.numero === numero) ?? null;

@@ -179,6 +179,9 @@ export const inventarioMemoria: RepositorioInventario = {
       tomadoEn: inventario.snapshotTomadoEn,
       tamanoHoja: inventario.tamanoHoja,
       totalHojas: inventario.hojas.length,
+      // El mock solo tiene la ronda 1 sembrada: con hojas, la activa es la 1;
+      // sin hojas, null (mismo momento que `tamanoHoja: null`).
+      rondaActiva: inventario.hojas.length > 0 ? 1 : null,
     };
   },
 };

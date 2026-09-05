@@ -15,7 +15,7 @@ import {
   type RechazoEscaneo,
 } from '../../components/ui';
 import { PantallaConTabs } from '../../components/navegacion/PantallaConTabs';
-import { inventarioIdSinRed } from '../../lib/adaptadores/hojas-sqlite';
+import { inventarioIdSinRed, rondaActivaSinRed } from '../../lib/adaptadores/hojas-sqlite';
 import { repositorioCatalogo, repositorioHojas, repositorioInventario, sincronizador } from '../../lib/contenedor';
 import { avance, puedeEditar, puedeFinalizar } from '../../lib/dominio/hoja';
 import type { Conteo, Empaque, HojaConteo, Producto } from '../../lib/dominio/tipos';
@@ -45,6 +45,10 @@ export default function ContarScreen(): JSX.Element {
 
   const [cargando, setCargando] = useState(true);
   const [inventarioId, setInventarioId] = useState<number | null>(null);
+  // La ronda ACTIVA del inventario. El Contador cuenta la ronda en curso, no
+  // siempre la 1ra: se resuelve junto con el inventarioId (del servidor, o de
+  // SQLite sin red) y se pasa a cada lectura de hojas.
+  const [ronda, setRonda] = useState<number | null>(null);
   const [numeroActivo, setNumeroActivo] = useState<string | null>(params.numero ?? null);
   const [hoja, setHoja] = useState<HojaConteo | null>(null);
   const [busqueda, setBusqueda] = useState('');
@@ -102,9 +106,11 @@ export default function ContarScreen(): JSX.Element {
 
     async function iniciar(): Promise<void> {
       let inventarioIdResuelto: number | null;
+      let rondaResuelta: number | null;
       try {
         const activo = await repositorioInventario.activo(sesion!.sucursal!.id);
         inventarioIdResuelto = activo?.inventarioId ?? null;
+        rondaResuelta = activo?.rondaActiva ?? null;
       } catch {
         // Sin red (u otra falla): no hay forma de preguntarle al servidor
         // cuál es el inventario activo, pero el avance de HOY puede estar
@@ -114,17 +120,21 @@ export default function ContarScreen(): JSX.Element {
         // señal, cerré la app, la reabrí y vi un spinner infinito" con el
         // trabajo sano en el teléfono, pero invisible).
         inventarioIdResuelto = await inventarioIdSinRed();
+        rondaResuelta = inventarioIdResuelto ? await rondaActivaSinRed(inventarioIdResuelto) : null;
       }
       if (!vigente) return;
-      if (!inventarioIdResuelto) {
+      // Sin inventario o sin ronda (no hay hojas todavía) no hay nada que
+      // contar: la ronda es tan requisito como el inventario.
+      if (!inventarioIdResuelto || rondaResuelta === null) {
         setCargando(false);
         return;
       }
       setInventarioId(inventarioIdResuelto);
+      setRonda(rondaResuelta);
 
       let numero = numeroActivo;
       if (!numero) {
-        const mias = await repositorioHojas.mias(inventarioIdResuelto);
+        const mias = await repositorioHojas.mias(inventarioIdResuelto, rondaResuelta);
         const actual = mias.find((h) => h.estado === 'en-proceso' && h.productos.length > 0) ?? mias.find((h) => h.productos.length > 0);
         numero = actual?.numero ?? null;
         if (vigente && numero) setNumeroActivo(numero);
@@ -135,7 +145,7 @@ export default function ContarScreen(): JSX.Element {
         return;
       }
 
-      const encontrada = await repositorioHojas.porNumero(inventarioIdResuelto, numero);
+      const encontrada = await repositorioHojas.porNumero(inventarioIdResuelto, numero, rondaResuelta);
       if (vigente) {
         setHoja(encontrada);
         setCargando(false);
@@ -149,10 +159,10 @@ export default function ContarScreen(): JSX.Element {
   }, [sesion, numeroActivo]);
 
   const refrescarHoja = useCallback(async () => {
-    if (!inventarioId || !numeroActivo) return;
-    const actualizada = await repositorioHojas.porNumero(inventarioId, numeroActivo);
+    if (!inventarioId || !numeroActivo || ronda === null) return;
+    const actualizada = await repositorioHojas.porNumero(inventarioId, numeroActivo, ronda);
     setHoja(actualizada);
-  }, [inventarioId, numeroActivo]);
+  }, [inventarioId, numeroActivo, ronda]);
 
   // useFocusEffect: si se vuelve a esta pantalla por el tab (no por "Abrir
   // hoja" en Mis hojas), la hoja ya cargada puede haber cambiado mientras

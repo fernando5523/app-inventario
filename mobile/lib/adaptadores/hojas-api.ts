@@ -40,8 +40,12 @@ const RUTAS = {
    * identidad: un Contador que pudiera pedir las hojas de otro rompería el
    * conteo ciego. Acá solo se dice "las mías".
    */
-  listar: (inventarioId: number, alcance: 'mias' | 'todas', numero?: string) => {
-    const q = new URLSearchParams({ inventarioId: String(inventarioId), alcance });
+  listar: (inventarioId: number, alcance: 'mias' | 'todas', ronda: number, numero?: string) => {
+    // `ronda` SIEMPRE explícita, no se deja al default del backend: la
+    // pantalla decidió de qué ronda habla y ese dato tiene que viajar dicho.
+    // Antes se omitía y el backend traía siempre la 1ra — el hueco que esto
+    // cierra.
+    const q = new URLSearchParams({ inventarioId: String(inventarioId), alcance, ronda: String(ronda) });
     if (numero) q.set('numero', numero);
     return `${BASE}?${q.toString()}`;
   },
@@ -50,19 +54,19 @@ const RUTAS = {
 };
 
 export const hojasApi: RepositorioHojas = {
-  async mias(inventarioId) {
-    return pedir<HojaConteo[]>(RUTAS.listar(inventarioId, 'mias'));
+  async mias(inventarioId, ronda) {
+    return pedir<HojaConteo[]>(RUTAS.listar(inventarioId, 'mias', ronda));
   },
 
-  async todas(inventarioId) {
-    return pedir<HojaConteo[]>(RUTAS.listar(inventarioId, 'todas'));
+  async todas(inventarioId, ronda) {
+    return pedir<HojaConteo[]>(RUTAS.listar(inventarioId, 'todas', ronda));
   },
 
-  async porNumero(inventarioId, numero) {
+  async porNumero(inventarioId, numero, ronda) {
     // El backend resuelve `porNumero` como un filtro del listado: devuelve
     // una lista de 0 o 1. El puerto pide `null`, no una excepción — "no
     // existe esa hoja" es una respuesta válida de esta consulta.
-    const hojas = await pedir<HojaConteo[]>(RUTAS.listar(inventarioId, 'mias', numero));
+    const hojas = await pedir<HojaConteo[]>(RUTAS.listar(inventarioId, 'mias', ronda, numero));
     return hojas[0] ?? null;
   },
 

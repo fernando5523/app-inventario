@@ -80,7 +80,7 @@ interface FilaCola {
   estado: string;
 }
 
-/** `hojas_estructura` (migración v3) — ver sqlite-esquema.ts para el porqué. */
+/** `hojas_estructura` (migración v3, `numero_conteo` en v4) — ver sqlite-esquema.ts. */
 interface FilaHojaEstructura {
   id: number;
   inventario_id: number;
@@ -90,6 +90,8 @@ interface FilaHojaEstructura {
   tamano: number;
   /** JSON de string[]. */
   asignados: string;
+  /** La ronda del ciclo (v4). Las filas anteriores a v4 quedan en 1. */
+  numero_conteo: number;
 }
 
 /** `productos_estructura` (migración v3). */
@@ -219,10 +221,14 @@ async function hojaEstructuraDb(db: DbSqlite, hojaId: number): Promise<HojaConte
   return filaAHojaBase(fila, await productosDeHojaDb(db, fila.id));
 }
 
-async function hojasEstructuraDeInventarioDb(db: DbSqlite, inventarioId: number): Promise<HojaConteo[]> {
+async function hojasEstructuraDeInventarioDb(db: DbSqlite, inventarioId: number, ronda: number): Promise<HojaConteo[]> {
+  // Filtra por ronda EN LA CONSULTA: las hojas de la ronda 1 y la 2 conviven
+  // en la tabla (ids distintos), pero el Contador solo ve las de la ronda
+  // activa. Traer las dos y filtrar después dejaría entrar el conteo ciego
+  // por la ventana — la hoja de otra ronda no tiene por qué llegar acá.
   const filas = await db.getAllAsync<FilaHojaEstructura>(
-    'SELECT * FROM hojas_estructura WHERE inventario_id = ? ORDER BY numero ASC',
-    [inventarioId],
+    'SELECT * FROM hojas_estructura WHERE inventario_id = ? AND numero_conteo = ? ORDER BY numero ASC',
+    [inventarioId, ronda],
   );
   const resultado: HojaConteo[] = [];
   for (const fila of filas) resultado.push(filaAHojaBase(fila, await productosDeHojaDb(db, fila.id)));
@@ -255,11 +261,15 @@ interface HojasDeInventarioBase {
   origen: 'real' | 'mock';
 }
 
-async function hojasDeInventarioBase(inventarioId: number): Promise<HojasDeInventarioBase> {
+async function hojasDeInventarioBase(inventarioId: number, ronda: number): Promise<HojasDeInventarioBase> {
   const db = await obtenerDb();
-  const reales = await hojasEstructuraDeInventarioDb(db, inventarioId);
+  const reales = await hojasEstructuraDeInventarioDb(db, inventarioId, ronda);
   if (reales.length > 0) return { hojas: reales, origen: 'real' };
 
+  // El dataset de ejemplo (`_compartido.ts`) solo tiene la ronda 1 sembrada:
+  // no modela reconteo. Para una ronda > 1 no hay mock que ofrecer — vacío,
+  // en vez de devolver las de la ronda 1 haciéndolas pasar por otra ronda.
+  if (ronda !== 1) return { hojas: [], origen: 'real' };
   const inventario = await obtenerInventario(inventarioId);
   return { hojas: inventario?.hojas ?? [], origen: 'mock' };
 }
@@ -282,6 +292,24 @@ export async function inventarioIdSinRed(): Promise<number | null> {
   const db = await obtenerDb();
   const fila = await db.getFirstAsync<{ inventario_id: number }>('SELECT inventario_id FROM hojas_estructura LIMIT 1');
   return fila?.inventario_id ?? null;
+}
+
+/**
+ * La ronda activa SIN preguntarle al servidor — la compañera de
+ * `inventarioIdSinRed` para el mismo caso (Contador contando sin señal, ver
+ * su comentario). Es la ronda MÁS ALTA que se descargó localmente
+ * (`max(numero_conteo)`): si en algún momento con WiFi se bajó la ronda 2,
+ * esa es la activa; si solo hay la 1, es la 1. `null` = nunca se descargó
+ * ninguna hoja de este inventario. Con red manda `activo().rondaActiva`;
+ * esto es el único dato que queda cuando no la hay.
+ */
+export async function rondaActivaSinRed(inventarioId: number): Promise<number | null> {
+  const db = await obtenerDb();
+  const fila = await db.getFirstAsync<{ ronda: number | null }>(
+    'SELECT MAX(numero_conteo) AS ronda FROM hojas_estructura WHERE inventario_id = ?',
+    [inventarioId],
+  );
+  return fila?.ronda ?? null;
 }
 
 // ---------------------------------------------------------------------------
@@ -343,18 +371,22 @@ async function insertarProductosEnLote(db: DbSqlite, hojaId: number, productos: 
  *     sync, ni la tabla `conteos`. Es la garantía que pide el bug: si el
  *     operario ya contó 32 de 50 sin señal, esta función NUNCA se lo pisa.
  */
-async function guardarEstructuraDeHoja(db: DbSqlite, hoja: HojaConteo): Promise<void> {
+async function guardarEstructuraDeHoja(db: DbSqlite, hoja: HojaConteo, ronda: number): Promise<void> {
+  // `ronda` viene de la descarga (qué ronda se pidió), no de `hoja`:
+  // `HojaConteo` del dominio no lleva `numeroConteo` — la ronda es del
+  // pedido, y el backend ya devolvió solo hojas de esa ronda.
   await db.runAsync(
-    `INSERT INTO hojas_estructura (id, inventario_id, numero, zona, gondola, tamano, asignados)
-     VALUES (?, ?, ?, ?, ?, ?, ?)
+    `INSERT INTO hojas_estructura (id, inventario_id, numero, zona, gondola, tamano, asignados, numero_conteo)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT(id) DO UPDATE SET
        inventario_id = excluded.inventario_id,
        numero = excluded.numero,
        zona = excluded.zona,
        gondola = excluded.gondola,
        tamano = excluded.tamano,
-       asignados = excluded.asignados`,
-    [hoja.id, hoja.inventarioId, hoja.numero, hoja.zona, hoja.gondola, hoja.tamano, JSON.stringify(hoja.asignados)],
+       asignados = excluded.asignados,
+       numero_conteo = excluded.numero_conteo`,
+    [hoja.id, hoja.inventarioId, hoja.numero, hoja.zona, hoja.gondola, hoja.tamano, JSON.stringify(hoja.asignados), ronda],
   );
 
   if (hoja.productos.length > 0) {
@@ -383,8 +415,11 @@ export type ResultadoDescarga =
 
 const ultimosResultados = new Map<string, ResultadoDescarga>();
 
-function claveResultado(inventarioId: number, alcance: 'mias' | 'todas'): string {
-  return `${inventarioId}:${alcance}`;
+function claveResultado(inventarioId: number, alcance: 'mias' | 'todas', ronda: number): string {
+  // La ronda entra en la clave: "0 hojas" de la ronda 2 (todavía no
+  // descargada) no es lo mismo que "0 hojas" de la ronda 1, y la pantalla
+  // decide su mensaje según el último resultado de ESTA ronda.
+  return `${inventarioId}:${alcance}:${ronda}`;
 }
 
 /**
@@ -394,8 +429,8 @@ function claveResultado(inventarioId: number, alcance: 'mias' | 'todas'): string
  * pudo bajar nada" — son dos mensajes distintos, y confundirlos es
  * exactamente la pantalla vacía sin explicación que reportó el cliente.
  */
-export function ultimaDescarga(inventarioId: number, alcance: 'mias' | 'todas'): ResultadoDescarga | null {
-  return ultimosResultados.get(claveResultado(inventarioId, alcance)) ?? null;
+export function ultimaDescarga(inventarioId: number, alcance: 'mias' | 'todas', ronda: number): ResultadoDescarga | null {
+  return ultimosResultados.get(claveResultado(inventarioId, alcance, ronda)) ?? null;
 }
 
 /**
@@ -409,10 +444,10 @@ export function ultimaDescarga(inventarioId: number, alcance: 'mias' | 'todas'):
  * `{ ok: false, ... }` y el que llama sigue con lo que ya tenía local.
  * Bajar hojas es un refresco, no un requisito para poder seguir contando.
  */
-async function descargarHojas(inventarioId: number, alcance: 'mias' | 'todas'): Promise<ResultadoDescarga> {
+async function descargarHojas(inventarioId: number, alcance: 'mias' | 'todas', ronda: number): Promise<ResultadoDescarga> {
   let remotas: HojaConteo[];
   try {
-    const respuesta = alcance === 'mias' ? await hojasApi.mias(inventarioId) : await hojasApi.todas(inventarioId);
+    const respuesta = alcance === 'mias' ? await hojasApi.mias(inventarioId, ronda) : await hojasApi.todas(inventarioId, ronda);
     // Defensivo a propósito: un `200` que no trae un array (un backend de
     // prueba que no conoce esta ruta y devuelve `{}` genérico, o un proxy
     // que reescribe la respuesta) no es una falla de red que capturar acá
@@ -426,7 +461,7 @@ async function descargarHojas(inventarioId: number, alcance: 'mias' | 'todas'): 
         ? 'sesion-vencida'
         : 'error';
     const resultado: ResultadoDescarga = { ok: false, motivo };
-    ultimosResultados.set(claveResultado(inventarioId, alcance), resultado);
+    ultimosResultados.set(claveResultado(inventarioId, alcance, ronda), resultado);
     return resultado;
   }
 
@@ -453,10 +488,10 @@ async function descargarHojas(inventarioId: number, alcance: 'mias' | 'todas'): 
   // transacciones anidadas sin SAVEPOINT. Atomicidad por hoja alcanza:
   // no hace falta que las 25 se guarden todas o ninguna.
   const db = await obtenerDb();
-  for (const hoja of completas) await guardarEstructuraDeHoja(db, hoja);
+  for (const hoja of completas) await guardarEstructuraDeHoja(db, hoja, ronda);
 
   const resultado: ResultadoDescarga = { ok: true, hojas: completas.length };
-  ultimosResultados.set(claveResultado(inventarioId, alcance), resultado);
+  ultimosResultados.set(claveResultado(inventarioId, alcance, ronda), resultado);
   return resultado;
 }
 
@@ -469,15 +504,15 @@ async function descargarHojas(inventarioId: number, alcance: 'mias' | 'todas'): 
  *    vale la pena esperar el intento (es el caso "primera vez, con WiFi,
  *    en la tienda" del punto 1).
  */
-async function descargarSiHaceFalta(inventarioId: number, alcance: 'mias' | 'todas'): Promise<void> {
+async function descargarSiHaceFalta(inventarioId: number, alcance: 'mias' | 'todas', ronda: number): Promise<void> {
   const db = await obtenerDb();
-  const yaHayLocal = (await hojasEstructuraDeInventarioDb(db, inventarioId)).length > 0;
+  const yaHayLocal = (await hojasEstructuraDeInventarioDb(db, inventarioId, ronda)).length > 0;
 
   if (yaHayLocal) {
-    void descargarHojas(inventarioId, alcance);
+    void descargarHojas(inventarioId, alcance, ronda);
     return;
   }
-  await descargarHojas(inventarioId, alcance);
+  await descargarHojas(inventarioId, alcance, ronda);
 }
 
 // ---------------------------------------------------------------------------
@@ -542,13 +577,13 @@ async function hojasConEstadoLocal(hojasBase: HojaConteo[]): Promise<HojaConteo[
 // ---------------------------------------------------------------------------
 
 export const hojasSqlite: RepositorioHojas = {
-  async mias(inventarioId) {
+  async mias(inventarioId, ronda) {
     // La descarga que faltaba (bug real): antes de leer nada, se le
     // pregunta al backend. Ver `descargarSiHaceFalta` para cuándo se
     // espera esa respuesta y cuándo se muestra lo local sin esperar.
-    await descargarSiHaceFalta(inventarioId, 'mias');
+    await descargarSiHaceFalta(inventarioId, 'mias', ronda);
 
-    const { hojas, origen } = await hojasDeInventarioBase(inventarioId);
+    const { hojas, origen } = await hojasDeInventarioBase(inventarioId, ronda);
     if (origen === 'real') {
       // El backend ya resolvió "mías" del lado del servidor
       // (alcance=mias, ver backend/README.md) — lo que hay en
@@ -571,19 +606,19 @@ export const hojasSqlite: RepositorioHojas = {
     return hojasConEstadoLocal(propias);
   },
 
-  async todas(inventarioId) {
-    await descargarSiHaceFalta(inventarioId, 'todas');
-    const { hojas } = await hojasDeInventarioBase(inventarioId);
+  async todas(inventarioId, ronda) {
+    await descargarSiHaceFalta(inventarioId, 'todas', ronda);
+    const { hojas } = await hojasDeInventarioBase(inventarioId, ronda);
     return hojasConEstadoLocal(hojas);
   },
 
-  async porNumero(inventarioId, numero) {
+  async porNumero(inventarioId, numero, ronda) {
     // `porNumero` lo usa `contar.tsx` para reabrir UNA hoja propia
     // (siempre después de haber pasado por `mias()`), así que alcanza con
     // refrescar el mismo alcance — no hace falta esperar acá si `mias()`
     // ya disparó la descarga hace un instante.
-    await descargarSiHaceFalta(inventarioId, 'mias');
-    const { hojas } = await hojasDeInventarioBase(inventarioId);
+    await descargarSiHaceFalta(inventarioId, 'mias', ronda);
+    const { hojas } = await hojasDeInventarioBase(inventarioId, ronda);
     const hojaBase = hojas.find((h) => h.numero === numero);
     if (!hojaBase) return null;
     return hojaConEstadoLocal(hojaBase);

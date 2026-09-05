@@ -167,6 +167,38 @@ export const MIGRACIONES_SQLITE: string[] = [
     PRIMARY KEY (hoja_id, id)
   );
   `,
+  /**
+   * v4 — la RONDA del ciclo de conteos. Hasta acá el front pedía siempre la
+   * 1ra (`hojas-api.ts` no mandaba `ronda`), así que `hojas_estructura` no
+   * necesitaba distinguirla: todo lo que había bajado ERA de la ronda 1. Al
+   * abrir el 2do conteo, el Contador tiene que ver las hojas de reconteo, no
+   * las de la 1ra — para eso la estructura local tiene que saber de qué ronda
+   * es cada hoja.
+   *
+   * ADITIVA A PROPÓSITO — `ADD COLUMN ... DEFAULT 1`, nada más:
+   *
+   *  - Las filas que ya están en un teléfono instalado se bajaron cuando el
+   *    front solo pedía la 1ra. `DEFAULT 1` las marca ronda 1, que es su ronda
+   *    REAL — no un relleno inventado.
+   *  - NO toca `conteos` ni `cola_sync`: un conteo hecho sin señal, esperando
+   *    el WiFi en la cola, SOBREVIVE intacto. Esas tablas viven aparte de la
+   *    estructura (por diseño, ver v3) y esta migración ni las nombra. Es lo
+   *    que no puede fallar: la migración nunca puede costarle a nadie un
+   *    conteo que ya hizo.
+   *  - Nada de DROP + re-descarga: eso dejaría los conteos pendientes de la
+   *    ronda 1 apuntando a hojas que ya no están en la estructura local. La
+   *    re-descarga de la ronda activa es trabajo de hojas-sqlite.ts (con red),
+   *    no de la migración de esquema.
+   *
+   * `numero_conteo` y no `ronda` para espejar el nombre de la columna del
+   * backend (`HojaConteo.numeroConteo`).
+   */
+  `
+  ALTER TABLE hojas_estructura ADD COLUMN numero_conteo INTEGER NOT NULL DEFAULT 1;
+
+  CREATE INDEX IF NOT EXISTS idx_hojas_estructura_inv_ronda
+    ON hojas_estructura(inventario_id, numero_conteo);
+  `,
 ];
 
 export async function migrarSqlite(db: DbMigrable): Promise<void> {

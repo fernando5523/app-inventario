@@ -14,17 +14,6 @@ import { colors, fonts, fontSize, radius, spacing } from '../../lib/theme';
 import { PantallaConTabs } from '../navegacion/PantallaConTabs';
 import { BandaSync, Badge, BarraApp, Button, formatoMiles, formatoPct, type BadgeVariant } from '../ui';
 
-/**
- * La ronda que esta pantalla sabe cerrar HOY: la 1ra. Es el hueco que
- * trababa el ciclo — el 1er conteo se terminaba y no había forma de cerrarlo.
- * Las rondas 2 y 3 dependen de que el puerto de hojas soporte `ronda` (hoy
- * `repositorioHojas.todas()` siempre trae la 1ra, ver el comentario de arriba
- * del componente); cuando exista, esta misma pantalla las maneja con el mismo
- * bloque, cambiando este número por la ronda activa. El puerto ya está listo
- * para las tres: `resumenRonda`/`cerrarRonda` reciben la ronda por parámetro.
- */
-const RONDA_A_CERRAR = 1;
-
 /** "1er", "2do", "3er" -- para hablar de una ronda sin repetir el switch. */
 const ORDINAL: Record<number, string> = { 1: '1er', 2: '2do', 3: '3er' };
 
@@ -190,11 +179,17 @@ export function CicloScreen({ rol }: CicloScreenProps): JSX.Element {
   // se ve ANTES de decidir. Ver RepositorioInventario.resumenRonda.
   const [resumen, setResumen] = useState<ResumenRonda | null>(null);
   const [cerrandoRonda, setCerrandoRonda] = useState(false);
+  // La ronda que HOY admite cierre: la activa que devuelve el backend
+  // (max(numeroConteo), null si no hay ninguna). NO es siempre la 1ra — cuando
+  // el 1er conteo ya se cerró y corre el 2do, esto vale 2 y el bloque cierra el
+  // 2do. Si es null no hay ronda que cerrar: el bloque no se muestra y NUNCA
+  // cae a 1 por defecto ("no hay ronda" ≠ "ronda 1").
+  const [rondaActiva, setRondaActiva] = useState<number | null>(null);
   const esCoordinador = rol === 'coordinador';
 
-  const cargarResumen = useCallback(async (invId: number): Promise<void> => {
+  const cargarResumen = useCallback(async (invId: number, ronda: number): Promise<void> => {
     try {
-      setResumen(await repositorioInventario.resumenRonda(invId, RONDA_A_CERRAR));
+      setResumen(await repositorioInventario.resumenRonda(invId, ronda));
     } catch {
       // Sin resumen la pantalla no se rompe: el bloque de cierre no aparece y
       // el resto del ciclo (Paso 1, embudo) se ve igual. Un error acá es "no
@@ -245,6 +240,7 @@ export function CicloScreen({ rol }: CicloScreenProps): JSX.Element {
       if (!vigente) return;
       setItems(activo?.items ?? null);
       setInventarioId(activo?.inventarioId ?? null);
+      setRondaActiva(activo?.rondaActiva ?? null);
       if (!activo) {
         setCargando(false);
         return;
@@ -252,15 +248,19 @@ export function CicloScreen({ rol }: CicloScreenProps): JSX.Element {
       // `todas()`, no `mias()`: el embudo es del inventario entero, no de
       // lo que le toca a quien mira la pantalla (mismo puerto que ya usa
       // InicioScreen.tsx para el Coordinador — ver el comentario de arriba).
-      const todas = await repositorioHojas.todas(activo.inventarioId);
+      // Ronda 1 FIJA: `hojasT1` alimenta el "Paso 1 · 1er Conteo", que es
+      // siempre la 1ra pasada. La ronda activa gobierna el CIERRE, no este
+      // embudo; el avance de las rondas 2/3 sale de `resumenRonda`, abajo.
+      const todas = await repositorioHojas.todas(activo.inventarioId, 1);
       if (!vigente) return;
       setHojasT1(todas);
       // El comparativo de las 3 rondas lo ven los DOS roles: es el embudo del
       // ciclo, no una herramienta de cierre.
       await cargarResumenDeRondas(activo.inventarioId);
       if (!vigente) return;
-      // El preview del cierre, en cambio, solo lo necesita quien puede cerrar.
-      if (esCoordinador) await cargarResumen(activo.inventarioId);
+      // El preview del cierre, en cambio, solo lo necesita quien puede cerrar,
+      // y solo si hay una ronda activa que cerrar (null = ninguna).
+      if (esCoordinador && activo.rondaActiva !== null) await cargarResumen(activo.inventarioId, activo.rondaActiva);
       if (!vigente) return;
       setCargando(false);
     }
@@ -279,24 +279,26 @@ export function CicloScreen({ rol }: CicloScreenProps): JSX.Element {
   }
 
   async function cerrarRondaAhora(): Promise<void> {
-    if (inventarioId === null || resumen === null || !resumen.sePuedeCerrar) return;
+    if (inventarioId === null || rondaActiva === null || resumen === null || !resumen.sePuedeCerrar) return;
     setCerrandoRonda(true);
     try {
-      const cierre = await repositorioInventario.cerrarRonda(inventarioId, RONDA_A_CERRAR);
+      const cierre = await repositorioInventario.cerrarRonda(inventarioId, rondaActiva);
       if (cierre.rondaAbierta !== null) {
         Alert.alert(
-          `2do conteo abierto`,
+          `${ORDINAL[cierre.rondaAbierta]} conteo abierto`,
           `Se abrió la ronda ${cierre.rondaAbierta} con ${formatoMiles(cierre.hojas.length)} hoja${cierre.hojas.length === 1 ? '' : 's'} nueva${cierre.hojas.length === 1 ? '' : 's'}, sin asignar. Repartilas desde Gestión de hojas.`,
         );
       } else {
         // No se abrió ronda nueva: el ciclo terminó (todo cuadró, o se llegó
         // al último conteo). No es un error — el backend lo dice en el motivo.
-        Alert.alert('1er conteo cerrado', cierre.motivoSinSiguiente ?? 'El ciclo de conteos terminó.');
+        Alert.alert(`${ORDINAL[rondaActiva]} conteo cerrado`, cierre.motivoSinSiguiente ?? 'El ciclo de conteos terminó.');
       }
-      // Recargar hojas y preview: el estado de la pantalla cambió.
-      const todas = await repositorioHojas.todas(inventarioId);
+      // Recargar hojas y preview: el estado de la pantalla cambió. `hojasT1`
+      // sigue siendo la ronda 1 (Paso 1); el preview se recarga para la misma
+      // ronda que se acaba de cerrar.
+      const todas = await repositorioHojas.todas(inventarioId, 1);
       setHojasT1(todas);
-      await cargarResumen(inventarioId);
+      await cargarResumen(inventarioId, rondaActiva);
     } catch (error) {
       // El backend rechaza con mensaje claro (hojas sin finalizar, o ya
       // cerrada): se muestra tal cual, no un "no se pudo" genérico.
@@ -422,10 +424,10 @@ export function CicloScreen({ rol }: CicloScreenProps): JSX.Element {
             }
           />
 
-          {esCoordinador && resumen ? (
+          {esCoordinador && resumen && rondaActiva !== null ? (
             <View style={styles.tarjeta}>
               <View style={styles.tarjetaCabecera}>
-                <Text style={styles.tarjetaTitulo}>Cerrar el 1er conteo</Text>
+                <Text style={styles.tarjetaTitulo}>Cerrar el {ORDINAL[rondaActiva]} conteo</Text>
                 <Badge
                   label={resumen.sePuedeCerrar ? 'Listo para cerrar' : 'Faltan hojas'}
                   variant={resumen.sePuedeCerrar ? 'ok' : 'espera'}

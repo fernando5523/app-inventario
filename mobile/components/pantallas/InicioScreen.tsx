@@ -2,7 +2,7 @@ import { router, useFocusEffect } from 'expo-router';
 import { useCallback, useEffect, useState, type JSX } from 'react';
 import { ActivityIndicator, StyleSheet, Text, View } from 'react-native';
 
-import { inventarioIdSinRed } from '../../lib/adaptadores/hojas-sqlite';
+import { inventarioIdSinRed, rondaActivaSinRed } from '../../lib/adaptadores/hojas-sqlite';
 import { repositorioHojas, repositorioInventario, repositorioTiendas, repositorioUsuarios, sincronizador } from '../../lib/contenedor';
 import { avance, avanceConjunto, estadoConjunto } from '../../lib/dominio/hoja';
 import type { HojaConteo, Rol } from '../../lib/dominio/tipos';
@@ -105,11 +105,13 @@ export function InicioScreen(): JSX.Element {
         // Ya se descartó 'administrador' arriba (return temprano): acá el
         // rol siempre tiene sucursal real.
         let inventarioId: number | null;
+        let ronda: number | null = null;
         let items = 0;
         let totalHojas = 0;
         try {
           const activo = await repositorioInventario.activo(sesion!.sucursal!.id);
           inventarioId = activo?.inventarioId ?? null;
+          ronda = activo?.rondaActiva ?? null;
           items = activo?.items ?? 0;
           totalHojas = activo?.totalHojas ?? 0;
         } catch {
@@ -121,6 +123,10 @@ export function InicioScreen(): JSX.Element {
           // servidor — no son lo que el operario necesita ver acá: lo que
           // importa es SU avance, que sale de `repositorioHojas` abajo.
           inventarioId = await inventarioIdSinRed();
+          // La ronda activa, sin red: sale de MAX(numero_conteo) en la
+          // estructura local (ver rondaActivaSinRed). Sin esto, el Contador
+          // offline en la ronda 2 leería la 1 y confirmaría en vez de contar.
+          ronda = inventarioId ? await rondaActivaSinRed(inventarioId) : null;
         }
         if (!vigente) return;
 
@@ -132,11 +138,12 @@ export function InicioScreen(): JSX.Element {
         setInventario({ inventarioId, items, totalHojas });
 
         if (sesion!.colaborador.rol === 'coordinador' || sesion!.colaborador.rol === 'auditor') {
-          const todas = await repositorioHojas.todas(inventarioId);
+          // Sin ronda activa (null = ninguna abierta) no hay hojas que traer.
+          const todas = ronda !== null ? await repositorioHojas.todas(inventarioId, ronda) : [];
           if (vigente) setHojasRonda1(todas);
         } else if (sesion!.colaborador.rol === 'conteo') {
           // mias(), NUNCA todas(): un Contador no puede ver el lote entero.
-          const mias = await repositorioHojas.mias(inventarioId);
+          const mias = ronda !== null ? await repositorioHojas.mias(inventarioId, ronda) : [];
           if (vigente) setMisHojas(mias);
         }
         if (vigente) setCargando(false);
