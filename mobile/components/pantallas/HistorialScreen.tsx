@@ -1,5 +1,5 @@
 import { useFocusEffect } from 'expo-router';
-import { ChevronLeft, History, Lock } from 'lucide-react-native';
+import { ChevronLeft, History, Lock, ShieldAlert, ShieldCheck } from 'lucide-react-native';
 import { useCallback, useState, type JSX } from 'react';
 import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
@@ -10,6 +10,8 @@ import type {
   EstadoInventario,
   InventarioHistorico,
   ResultadoInventario,
+  SeccionSellada,
+  VerificacionSello,
 } from '../../lib/puertos/repositorios';
 import { useSesion } from '../../lib/sesion-contexto';
 import { colors, fonts, radius, spacing } from '../../lib/theme';
@@ -45,6 +47,22 @@ const ESTADOS: Record<EstadoInventario, { etiqueta: string; badge: BadgeVariant;
   liquidado: { etiqueta: 'Liquidado', badge: 'default', sellado: false },
   lacrado: { etiqueta: 'Lacrado', badge: 'ok', sellado: true },
   anulado: { etiqueta: 'Anulado', badge: 'espera', sellado: false },
+};
+
+/**
+ * Orden en que se listan las secciones alteradas: primero las tres que
+ * cubre el sello sustantivamente (resultado, diferencias, planilla — la
+ * regla del cliente de liquidar antes de lacrar), después el control de
+ * dos personas, y al final la metadata agrupada.
+ */
+const ORDEN_SECCIONES: SeccionSellada[] = ['resultado', 'diferencias', 'planilla', 'aprobaciones', 'datosDelInventario'];
+
+const NOMBRE_SECCION: Record<SeccionSellada, string> = {
+  resultado: 'Resultado del ciclo',
+  diferencias: 'Diferencias detectadas',
+  planilla: 'Planilla (liquidación)',
+  aprobaciones: 'Firmas de aprobación',
+  datosDelInventario: 'Datos del inventario (sucursal, período, hojas)',
 };
 
 const FILTROS: { clave: EstadoInventario | 'todos'; etiqueta: string }[] = [
@@ -85,6 +103,10 @@ export function HistorialScreen({ rol }: HistorialScreenProps): JSX.Element {
   const [detalle, setDetalle] = useState<DetalleInventarioHistorico | null>(null);
   const [cargandoDetalle, setCargandoDetalle] = useState(false);
 
+  const [verificacion, setVerificacion] = useState<VerificacionSello | null>(null);
+  const [verificandoSello, setVerificandoSello] = useState(false);
+  const [errorVerificacion, setErrorVerificacion] = useState<string | null>(null);
+
   const cargar = useCallback(async () => {
     if (!sesion) return;
     setError(null);
@@ -113,12 +135,28 @@ export function HistorialScreen({ rol }: HistorialScreenProps): JSX.Element {
 
   async function abrirDetalle(id: number): Promise<void> {
     setCargandoDetalle(true);
+    // Un inventario nuevo no hereda el resultado de verificación del anterior.
+    setVerificacion(null);
+    setErrorVerificacion(null);
     try {
       setDetalle(await repositorioHistorial.detalle(id));
     } catch (e) {
       setError(e instanceof Error ? e.message : 'No se pudo abrir el inventario.');
     } finally {
       setCargandoDetalle(false);
+    }
+  }
+
+  async function verificarSello(): Promise<void> {
+    if (!detalle) return;
+    setVerificandoSello(true);
+    setErrorVerificacion(null);
+    try {
+      setVerificacion(await repositorioHistorial.verificarSello(detalle.id));
+    } catch (e) {
+      setErrorVerificacion(e instanceof Error ? e.message : 'No se pudo verificar el sello.');
+    } finally {
+      setVerificandoSello(false);
     }
   }
 
@@ -240,6 +278,77 @@ export function HistorialScreen({ rol }: HistorialScreenProps): JSX.Element {
                 hash recalculado no coincidiría.
               </Text>
               <Text style={styles.hash}>{detalle.lacrado.hash}</Text>
+
+              {/* Recalcula el hash contra el contenido ACTUAL y compara. No
+                  muta nada -- es una lectura que compara, nunca una
+                  escritura, por eso no hace falta ningún control de dos
+                  personas para tocarla. */}
+              <Pressable
+                style={[styles.verificarBtn, verificandoSello && styles.verificarBtnDeshabilitado]}
+                onPress={verificarSello}
+                disabled={verificandoSello}
+                accessibilityRole="button"
+              >
+                {verificandoSello ? (
+                  <ActivityIndicator color={colors.blanco} size="small" />
+                ) : (
+                  <Text style={styles.verificarBtnTexto}>Verificar sello</Text>
+                )}
+              </Pressable>
+
+              {errorVerificacion ? (
+                <View style={styles.verifTarjeta}>
+                  <Text style={styles.ayuda}>{errorVerificacion}</Text>
+                </View>
+              ) : null}
+
+              {/* El resultado tiene que ser inequívoco: un "hash: a3f9..."
+                  no le dice nada a nadie. Verde = nada cambió. Rojo = QUÉ
+                  cambió, sección por sección, no solo que algo cambió. */}
+              {verificacion ? (
+                verificacion.intacto ? (
+                  <View style={[styles.verifTarjeta, styles.verifOk]}>
+                    <View style={styles.verifCabecera}>
+                      <ShieldCheck size={18} color={colors.ok} />
+                      <Text style={[styles.verifTitulo, styles.verifTituloOk]}>
+                        El sello coincide: nada cambió desde el lacrado
+                      </Text>
+                    </View>
+                    <Text style={styles.ayuda}>Verificado el {formatoFechaHora(verificacion.verificadoEn)}.</Text>
+                  </View>
+                ) : (
+                  <View style={[styles.verifTarjeta, styles.verifAlerta]}>
+                    <View style={styles.verifCabecera}>
+                      <ShieldAlert size={18} color={colors.falta} />
+                      <Text style={[styles.verifTitulo, styles.verifTituloAlerta]}>
+                        El sello NO coincide: esto cambió desde el lacrado
+                      </Text>
+                    </View>
+                    {ORDEN_SECCIONES.filter((s) => verificacion.seccionesAlteradas.includes(s)).map((s) => (
+                      <Text key={s} style={styles.verifSeccion}>
+                        • {NOMBRE_SECCION[s]}
+                      </Text>
+                    ))}
+                    <Text style={styles.ayuda}>Verificado el {formatoFechaHora(verificacion.verificadoEn)}.</Text>
+                  </View>
+                )
+              ) : null}
+
+              {/* Aparte de intacto/alterado a propósito: si cambió el
+                  FORMATO del contenido sellado (una migración del backend
+                  entre el lacrado y hoy), la comparación campo por campo ya
+                  no es 100% confiable aunque diga "intacto". Mezclarlo con
+                  "alterado" confundiría un cambio de formato con una
+                  manipulación real. */}
+              {verificacion?.versionDistinta ? (
+                <View style={[styles.verifTarjeta, styles.verifAdvertencia]}>
+                  <Text style={styles.ayuda}>
+                    El formato con el que se guarda el sello cambió desde que se lacró este inventario. La
+                    comparación de arriba no es 100% concluyente: si hay dudas, contrastá el hash a mano contra el
+                    acta.
+                  </Text>
+                </View>
+              ) : null}
             </View>
 
             <Text style={styles.seccion}>Doble validación</Text>
@@ -563,4 +672,24 @@ const styles = StyleSheet.create({
   hojaMini: { gap: 2, paddingVertical: 9, paddingHorizontal: 11, borderWidth: 1, borderColor: colors.borde, borderRadius: radius.md },
   hojaMiniTitulo: { fontSize: 12.5, color: colors.tinta, fontFamily: fonts.semibold },
   hojaMiniMeta: { fontSize: 11.5, color: colors.gris, fontFamily: fonts.regular },
+
+  verificarBtn: {
+    alignSelf: 'flex-start',
+    paddingVertical: 9,
+    paddingHorizontal: 16,
+    borderRadius: radius.md,
+    backgroundColor: colors.rojo,
+  },
+  verificarBtnDeshabilitado: { opacity: 0.6 },
+  verificarBtnTexto: { fontSize: 12.5, color: colors.blanco, fontFamily: fonts.bold },
+
+  verifTarjeta: { gap: 6, padding: 12, borderRadius: radius.md, borderWidth: 1, borderColor: colors.borde },
+  verifOk: { backgroundColor: colors.okSuave, borderColor: 'rgba(10,107,87,0.3)' },
+  verifAlerta: { backgroundColor: colors.faltaSuave, borderColor: 'rgba(162,59,46,0.3)' },
+  verifAdvertencia: { backgroundColor: colors.procesoSuave, borderColor: 'rgba(138,90,5,0.3)' },
+  verifCabecera: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  verifTitulo: { flex: 1, fontSize: 13, fontFamily: fonts.bold },
+  verifTituloOk: { color: colors.ok },
+  verifTituloAlerta: { color: colors.falta },
+  verifSeccion: { fontSize: 12.5, color: colors.tinta, fontFamily: fonts.semibold, paddingLeft: 4 },
 });

@@ -48,16 +48,24 @@ export interface RepositorioSesion {
 }
 
 export interface RepositorioHojas {
-  /** Hojas asignadas al colaborador de la sesion. */
-  mias(inventarioId: number): Promise<HojaConteo[]>;
   /**
-   * Todas las hojas del inventario, asignadas o no. Solo la usa el
+   * Hojas de la RONDA dada, asignadas al colaborador de la sesion.
+   *
+   * `ronda` es obligatoria a proposito: antes no existia y el front pedia
+   * siempre la 1ra (bug real — el Contador no veia sus hojas de reconteo).
+   * Hacerla parametro y sin default fuerza a cada pantalla a decir de que
+   * ronda habla, en vez de caer en la 1 por olvido. La ronda activa sale de
+   * `RepositorioInventario.activo().rondaActiva`.
+   */
+  mias(inventarioId: number, ronda: number): Promise<HojaConteo[]>;
+  /**
+   * Todas las hojas de la RONDA dada, asignadas o no. Solo la usa el
    * Coordinador (vista de conjunto de la pantalla 2/pantalla "Mis
    * hojas" del equipo) — un Contador nunca deberia ver el lote entero,
    * por eso es un metodo aparte de `mias` y no un filtro sobre el mismo.
    */
-  todas(inventarioId: number): Promise<HojaConteo[]>;
-  porNumero(inventarioId: number, numero: string): Promise<HojaConteo | null>;
+  todas(inventarioId: number, ronda: number): Promise<HojaConteo[]>;
+  porNumero(inventarioId: number, numero: string, ronda: number): Promise<HojaConteo | null>;
 
   /**
    * Guarda o corrige el conteo de un producto.
@@ -281,9 +289,26 @@ export interface RepositorioInventario {
   cerrarRonda(inventarioId: number, ronda: number): Promise<CierreRonda>;
 
   /** Inventario en curso de una sucursal, o null si el Coordinador todavia no trajo el snapshot. */
-  activo(
-    sucursalId: number,
-  ): Promise<{ inventarioId: number; items: number; tomadoEn: string; tamanoHoja: TamanoHoja | null; totalHojas: number } | null>;
+  activo(sucursalId: number): Promise<{
+    inventarioId: number;
+    items: number;
+    tomadoEn: string;
+    tamanoHoja: TamanoHoja | null;
+    totalHojas: number;
+    /**
+     * La ronda MAS ALTA con hojas creadas (`max(numeroConteo)`), o `null` si
+     * todavia no hay hojas (mismo momento que `tamanoHoja: null` — el
+     * Coordinador esta en el paso 1). Es lo que el Contador necesita para
+     * ver las hojas de la ronda ACTIVA y el Coordinador para cerrar esa
+     * ronda, no siempre la 1. `null` NO es 1: "no hay ronda" y "ronda 1" son
+     * cosas distintas — con null no se pide hojas ni se ofrece cerrar.
+     *
+     * El backend garantiza que si viene un numero, esa ronda todavia admite
+     * conteo (activo() filtra `estado: en_curso`, y cerrar la ultima ronda
+     * pasa el inventario a `conteo_cerrado` en la misma transaccion).
+     */
+    rondaActiva: number | null;
+  } | null>;
 }
 
 /** Una hoja de la ronda que todavía no se finalizó: es lo que bloquea el cierre. */
@@ -800,6 +825,52 @@ export interface PaginaHistorial {
 }
 
 /**
+ * Las secciones que el sello cubre, en el orden en que le importan a quien
+ * lee el resultado. El backend guarda claves técnicas del contenido
+ * canónico (backend/historial.lacrado.ts#armarContenidoLacrado); acá se
+ * traducen a lo que la persona reconoce:
+ *   - `resultado`/`diferencias`: el cierre del conteo en sí.
+ *   - `planilla`: la clave técnica es `liquidaciones` — se liquida ANTES de
+ *     lacrar (decisión del cliente), así que el sello también cubre cuánto
+ *     se le descuenta a cada persona. Es la sección que más le importa al
+ *     colaborador.
+ *   - `aprobaciones`: las firmas del control de dos personas.
+ *   - `datosDelInventario`: el resto del contenido (sucursal, período,
+ *     tamaño de hoja, snapshot) — metadata que casi nunca cambia sola, así
+ *     que se agrupa en vez de listar cada clave técnica.
+ */
+export type SeccionSellada = 'resultado' | 'diferencias' | 'planilla' | 'aprobaciones' | 'datosDelInventario';
+
+/**
+ * El resultado de recalcular el hash del sello contra el contenido actual
+ * (backend/historial.lacrado.ts#verificarLacrado). No muta nada — es una
+ * lectura que compara, nunca una escritura.
+ *
+ * `intacto: true` es la única lectura tranquilizadora: nada cambió desde el
+ * lacrado. `intacto: false` viene siempre con `seccionesAlteradas` no
+ * vacío, para señalar QUÉ se movió, no solo que algo se movió.
+ *
+ * `versionDistinta` es un caso aparte: el formato del contenido canónico
+ * cambió entre el lacrado y ahora (una migración de `armarContenidoLacrado`
+ * en el backend), así que la comparación campo por campo no es 100%
+ * confiable aunque diga `intacto`. La pantalla tiene que decirlo aparte, no
+ * mezclarlo con "alterado".
+ */
+export interface VerificacionSello {
+  inventarioId: number;
+  folio: string;
+  lacradoEn: string;
+  /** Cuándo se hizo ESTA verificación — no es un dato guardado, se calcula al pedirla. */
+  verificadoEn: string;
+  intacto: boolean;
+  hashGuardado: string;
+  hashRecalculado: string;
+  /** Vacío cuando `intacto` es true. */
+  seccionesAlteradas: SeccionSellada[];
+  versionDistinta: boolean;
+}
+
+/**
  * El registro de todos los inventarios: en qué estado está cada uno, cómo
  * cerró y quién lo firmó. Responde la pregunta del cliente ("falta el
  * registro de todos los inventarios, dónde llevaremos el control y el
@@ -814,10 +885,20 @@ export interface PaginaHistorial {
  * Es de solo lectura a propósito: firmar y lacrar viven en la pantalla de
  * Lacrado (RepositorioLacrado), donde el control de dos personas ya está
  * resuelto. Un histórico que además escribe es un histórico que se puede
- * reescribir.
+ * reescribir. `verificarSello` no rompe esto: recalcula y compara, no
+ * escribe nada — por eso comparte el mismo acceso que `detalle`, sin una
+ * regla de permisos propia (backend/historial.permisos.ts no tiene ninguna
+ * función "quién puede verificar"; el único guard es el de leer el
+ * histórico: administrador y auditor, este último recortado a su sucursal).
  */
 export interface RepositorioHistorial {
   listar(filtro?: FiltroHistorial): Promise<PaginaHistorial>;
   /** Rechaza con 403 si el inventario es de otra sucursal y quien pide es Auditor. */
   detalle(inventarioId: number): Promise<DetalleInventarioHistorico>;
+  /**
+   * Recalcula el hash del sello y lo compara contra el guardado. Rechaza
+   * con 409 si el inventario todavía no está lacrado — no hay sello que
+   * verificar. Mismo acceso que `detalle`.
+   */
+  verificarSello(inventarioId: number): Promise<VerificacionSello>;
 }

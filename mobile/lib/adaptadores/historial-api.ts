@@ -12,6 +12,10 @@
  *       → { total, limite, desplazamiento, inventarios: InventarioDto[] }
  *   GET /api/historial/inventarios/:id
  *       → DetalleDto
+ *   GET /api/historial/inventarios/:id/lacrado/verificacion
+ *       → VerificacionDto — verificado contra historial.service.ts#verificarSello
+ *       y historial.controller.ts (devuelve el DTO tal cual, sin envoltorio).
+ *       409 si el inventario todavía no está lacrado (`Conflicto` del backend).
  *
  * Todo el router va detrás de `requiereSesion` + `requiereRol('administrador',
  * 'auditor')`. Un Coordinador o un Contador reciben 403 — y está bien que
@@ -22,7 +26,12 @@
  * es exactamente el dato que nadie debería poder fabricar. Sin backend, la
  * pantalla dice que no pudo cargar; no muestra un histórico de mentira.
  *
- * DOS TRADUCCIONES QUE HACE ESTE ARCHIVO (que es para lo que existe un adaptador):
+ * Lo mismo aplica a `verificarSello`, con un motivo todavía más fuerte: un
+ * mock que responda "intacto" sin haber recalculado nada no sería un dato de
+ * demo inocuo, sería fabricar la PROMESA misma que este endpoint existe para
+ * sostener. Sin backend, no hay verificación — no una verificación falsa.
+ *
+ * TRES TRADUCCIONES QUE HACE ESTE ARCHIVO (que es para lo que existe un adaptador):
  *
  * 1. `lacrado` en el LISTADO viene como objeto completo o null, pero la
  *    lista solo necesita saber SI hay sello y cuál es el folio. Se aplana a
@@ -35,6 +44,18 @@
  *    vacío", y son lo mismo — todavía no se calculó. Lo que NO se hace es
  *    convertirlos a 0: "cero de faltante" y "todavía no se sabe" son cosas
  *    distintas, y confundirlas en un inventario es grave.
+ *
+ * 3. `seccionesAlteradas` llega como las claves técnicas del contenido
+ *    canónico (`resultado`, `diferencias`, `liquidaciones`, `aprobaciones`,
+ *    más metadata como `sucursalId`/`periodoAnio`/`snapshotItems`/etc — ver
+ *    historial.lacrado.ts#armarContenidoLacrado). Se traducen a
+ *    `SeccionSellada`: `liquidaciones` → `planilla` (es la clave técnica de
+ *    lo que el cliente llama "la planilla"), y toda clave de metadata que no
+ *    es una de las secciones nombradas se agrupa bajo `datosDelInventario`
+ *    — nadie necesita leer "cambió periodoMes", necesita saber que cambió
+ *    algo del encabezado del inventario. `Array.from(new Set(...))` dedupe:
+ *    si cambian dos claves de metadata, `datosDelInventario` aparece una
+ *    sola vez.
  */
 
 import type {
@@ -45,6 +66,8 @@ import type {
   PaginaHistorial,
   RepositorioHistorial,
   ResultadoInventario,
+  SeccionSellada,
+  VerificacionSello,
 } from '../puertos/repositorios';
 import { pedir } from './_http';
 
@@ -120,6 +143,31 @@ function aInventario(dto: InventarioDto): InventarioHistorico {
   };
 }
 
+interface VerificacionDto {
+  inventarioId: number;
+  folio: string;
+  lacradoEn: string;
+  verificadoEn: string;
+  intacto: boolean;
+  hashGuardado: string;
+  hashRecalculado: string;
+  /** Claves técnicas del contenido canónico — ver la traducción 3 de la cabecera. */
+  seccionesAlteradas: string[];
+  versionDistinta: boolean;
+}
+
+/** Ver la traducción 3 de la cabecera. */
+const NOMBRE_DE_SECCION: Record<string, SeccionSellada> = {
+  resultado: 'resultado',
+  diferencias: 'diferencias',
+  liquidaciones: 'planilla',
+  aprobaciones: 'aprobaciones',
+};
+
+function aSeccionesAlteradas(claves: string[]): SeccionSellada[] {
+  return Array.from(new Set(claves.map((clave) => NOMBRE_DE_SECCION[clave] ?? 'datosDelInventario')));
+}
+
 function consulta(filtro?: FiltroHistorial): string {
   if (!filtro) return '';
   const partes: string[] = [];
@@ -165,6 +213,21 @@ export const historialApi: RepositorioHistorial = {
       // number. Mejor quedarse sin firmas que reventar el histórico.
       aprobaciones: Array.isArray(dto.aprobaciones) ? dto.aprobaciones : [],
       lacrado: dto.lacrado,
+    };
+  },
+
+  async verificarSello(inventarioId): Promise<VerificacionSello> {
+    const dto = await pedir<VerificacionDto>(`${BASE}/${inventarioId}/lacrado/verificacion`);
+    return {
+      inventarioId: dto.inventarioId,
+      folio: dto.folio,
+      lacradoEn: dto.lacradoEn,
+      verificadoEn: dto.verificadoEn,
+      intacto: dto.intacto,
+      hashGuardado: dto.hashGuardado,
+      hashRecalculado: dto.hashRecalculado,
+      seccionesAlteradas: aSeccionesAlteradas(dto.seccionesAlteradas),
+      versionDistinta: dto.versionDistinta,
     };
   },
 };

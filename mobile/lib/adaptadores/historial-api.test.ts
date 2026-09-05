@@ -203,3 +203,106 @@ describe('historialApi.detalle', () => {
     expect(d.lacrado).toBeNull();
   });
 });
+
+describe('historialApi.verificarSello', () => {
+  it('pega contra /lacrado/verificacion y pasa intacto=true tal cual, sin secciones', async () => {
+    const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) =>
+      json({
+        inventarioId: 8002,
+        folio: 'INV-2026-07-LUZ-8000-844',
+        lacradoEn: '2026-07-29T16:00:00.000Z',
+        verificadoEn: '2026-09-05T10:00:00.000Z',
+        intacto: true,
+        hashGuardado: '844f71b9',
+        hashRecalculado: '844f71b9',
+        seccionesAlteradas: [],
+        versionDistinta: false,
+      }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    const v = await historialApi.verificarSello(8002);
+
+    expect(String(fetchMock.mock.calls[0][0])).toContain('/api/historial/inventarios/8002/lacrado/verificacion');
+    expect(v.intacto).toBe(true);
+    expect(v.seccionesAlteradas).toEqual([]);
+    expect(v.hashGuardado).toBe('844f71b9');
+    expect(v.hashRecalculado).toBe('844f71b9');
+  });
+
+  it('traduce `liquidaciones` (clave técnica) a `planilla` (lo que el cliente reconoce)', async () => {
+    // Se liquida ANTES de lacrar: el sello cubre la planilla, y si esa
+    // sección cambió la pantalla tiene que decir "planilla", no la clave
+    // interna del contenido canónico.
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () =>
+        json({
+          inventarioId: 8002,
+          folio: 'INV-2026-07-LUZ-8000-844',
+          lacradoEn: '2026-07-29T16:00:00.000Z',
+          verificadoEn: '2026-09-05T10:00:00.000Z',
+          intacto: false,
+          hashGuardado: 'aaa',
+          hashRecalculado: 'bbb',
+          seccionesAlteradas: ['resultado', 'diferencias', 'liquidaciones', 'aprobaciones'],
+          versionDistinta: false,
+        }),
+      ),
+    );
+
+    const v = await historialApi.verificarSello(8002);
+
+    expect(v.seccionesAlteradas).toEqual(['resultado', 'diferencias', 'planilla', 'aprobaciones']);
+  });
+
+  it('agrupa toda clave de metadata desconocida bajo `datosDelInventario`, deduplicada', async () => {
+    // Si cambian sucursalId Y periodoMes Y snapshotItems, son 3 claves
+    // técnicas pero UNA sola sección que le importa a quien lee: "algo del
+    // encabezado del inventario cambió". Listarlas una por una sería ruido.
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () =>
+        json({
+          inventarioId: 8002,
+          folio: 'INV-2026-07-LUZ-8000-844',
+          lacradoEn: '2026-07-29T16:00:00.000Z',
+          verificadoEn: '2026-09-05T10:00:00.000Z',
+          intacto: false,
+          hashGuardado: 'aaa',
+          hashRecalculado: 'bbb',
+          seccionesAlteradas: ['sucursalId', 'periodoMes', 'snapshotItems'],
+          versionDistinta: false,
+        }),
+      ),
+    );
+
+    const v = await historialApi.verificarSello(8002);
+
+    expect(v.seccionesAlteradas).toEqual(['datosDelInventario']);
+  });
+
+  it('pasa `versionDistinta` sin mezclarlo con las secciones alteradas', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () =>
+        json({
+          inventarioId: 8002,
+          folio: 'INV-2026-07-LUZ-8000-844',
+          lacradoEn: '2026-07-29T16:00:00.000Z',
+          verificadoEn: '2026-09-05T10:00:00.000Z',
+          intacto: true,
+          hashGuardado: 'aaa',
+          hashRecalculado: 'aaa',
+          seccionesAlteradas: [],
+          versionDistinta: true,
+        }),
+      ),
+    );
+
+    const v = await historialApi.verificarSello(8002);
+
+    expect(v.intacto).toBe(true);
+    expect(v.versionDistinta).toBe(true);
+  });
+});
