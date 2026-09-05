@@ -10,8 +10,13 @@ export interface AccionesIngreso {
    * — ese orden es el arreglo del bug, no un detalle (ver abajo).
    */
   vaciarPin: () => void;
-  /** Mostrar el error y dejar el foco listo para reintentar. */
-  alRechazar: (mensaje: string) => void;
+  /**
+   * Mostrar el rechazo y dejar el foco listo para reintentar. Recibe el ERROR
+   * crudo, no un texto ya armado: quién muestra decide el mensaje — un 429 con
+   * tiempo de espera del servidor dice el minuto exacto (ver
+   * mensaje-error-ingreso.ts), y eso este orquestador no tiene por qué saberlo.
+   */
+  alRechazar: (error: unknown) => void;
   /** Prender/apagar el spinner del botón Ingresar. */
   marcarIngresando: (activo: boolean) => void;
 }
@@ -41,6 +46,6 @@ export async function ejecutarIngreso(colaboradorId: number, pin: string, accion
   } catch (error) {
     acciones.vaciarPin();
     acciones.marcarIngresando(false);
-    acciones.alRechazar(error instanceof Error ? error.message : 'Intentá de nuevo.');
+    acciones.alRechazar(error);
   }
 }

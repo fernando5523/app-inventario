@@ -16,6 +16,7 @@ import {
 } from '../components/ui';
 import { repositorioSesion } from '../lib/contenedor';
 import { ejecutarIngreso } from '../lib/ejecutar-ingreso';
+import { mensajeDeErrorIngreso } from '../lib/mensaje-error-ingreso';
 import type { Colaborador, Sucursal } from '../lib/dominio/tipos';
 import { useSesion } from '../lib/sesion-contexto';
 import { colors, fonts, fontSize, radius, spacing } from '../lib/theme';
@@ -122,9 +123,13 @@ export default function LoginScreen(): JSX.Element {
       // colaborador, la persona se autobloquea sin entender por qué.
       vaciarPin: () => setPin(''),
       // Al cerrar el aviso, reabrir el teclado: el campo ya quedó vacío y el
-      // foco listo para reintentar, sin tener que volver a tocar "Clave".
-      alRechazar: (mensaje) =>
-        Alert.alert('No se pudo ingresar', mensaje, [{ text: 'Reintentar', onPress: () => setModalPinVisible(true) }]),
+      // foco listo para reintentar, sin tener que volver a tocar "Clave". El
+      // mensaje lo arma `mensajeDeErrorIngreso`: para un 429 con tiempo del
+      // servidor, dice el minuto exacto en vez del "unos minutos" vago.
+      alRechazar: (error) =>
+        Alert.alert('No se pudo ingresar', mensajeDeErrorIngreso(error), [
+          { text: 'Reintentar', onPress: () => setModalPinVisible(true) },
+        ]),
       marcarIngresando: setIngresando,
     });
   }
