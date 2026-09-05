@@ -73,19 +73,28 @@ export interface LiquidacionDto {
   /** "Agosto 2026" -- legible, como lo muestra la pantalla. */
   periodo: string;
   faltanteBruto: number;
-  negativosDelMes: number;
+  /** null = todavía no se cargaron los ajustes del mes -- NUNCA 0 con ese significado (ver AdvertenciaLiquidacion). */
+  negativosDelMes: number | null;
   faltanteEmpresa: number;
-  faltanteNeto: number;
-  cuotaBase: number;
+  /**
+   * null cuando `advertencia.asistenciaSinRegistrar` o
+   * `ajustesSinRegistrar` son true: un número que depende de un dato que
+   * no existe todavía NO se deriva con un placeholder -- se deja sin
+   * calcular, y la advertencia dice por qué.
+   */
+  faltanteNeto: number | null;
+  cuotaBase: number | null;
   multaInasistencia: number;
   /**
    * El PISO del reparto del fondo de multas -- lo que muestra el encabezado.
    * Cuando el fondo no divide exacto, a algunos asistentes les toca un
    * centavo mas; el monto de cada uno esta en su fila de la planilla, y la
-   * suma da el fondo al centavo (ver dominio/reparto-de-fondo.ts).
+   * suma da el fondo al centavo (ver dominio/reparto-de-fondo.ts). null,
+   * mismo criterio que `faltanteNeto`.
    */
-  bonoAsistencia: number;
-  totalFaltas: number;
+  bonoAsistencia: number | null;
+  /** null, mismo criterio que `faltanteNeto`: sin asistencia registrada no hay "cuántos faltaron" que valga. */
+  totalFaltas: number | null;
   planilla: DetalleLiquidacionDto[];
   /**
    * Campo NUEVO respecto del puerto del front (`Liquidacion`): hay que
@@ -200,34 +209,38 @@ export async function deSucursal(actor: ColaboradorAutenticado, sucursalId: numb
 
   const r = inventario.resultado;
   // NULL en estos dos campos es "todavía no se capturó", NUNCA "cero" (ver
-  // el comentario largo de AdvertenciaLiquidacion) -- acá es donde el 0
-  // entra como PLACEHOLDER para que el cálculo no se rompa, nunca antes.
-  // La diferencia real vive en `asistenciaSinRegistrar`/`ajustesSinRegistrar`,
-  // que sí llegan a la pantalla.
+  // el comentario largo de AdvertenciaLiquidacion). Mientras falte
+  // cualquiera de los dos, NO se deriva el neto/cuota/bono/faltas: un
+  // número que depende de un dato que no existe no es un número, es una
+  // adivinanza con apariencia de dato -- se deja sin calcular, y
+  // `advertencia` dice por qué.
   const asistenciaSinRegistrar = r.colaboradoresAsistieron === null;
   const ajustesSinRegistrar = r.montoNegativos === null;
+  const datosCompletos = !asistenciaSinRegistrar && !ajustesSinRegistrar;
 
-  const resumen = calcularResumenLiquidacion({
-    montoFaltanteBruto: r.montoFaltanteBruto.toNumber(),
-    montoNegativos: r.montoNegativos?.toNumber() ?? 0,
-    montoFaltanteEmpresa: r.montoFaltanteEmpresa.toNumber(),
-    colaboradoresAlcanzados: r.colaboradoresAlcanzados,
-    colaboradoresAsistieron: r.colaboradoresAsistieron ?? 0,
-    multaInasistencia: r.multaInasistencia.toNumber(),
-  });
+  const resumen = datosCompletos
+    ? calcularResumenLiquidacion({
+        montoFaltanteBruto: r.montoFaltanteBruto.toNumber(),
+        montoNegativos: r.montoNegativos!.toNumber(),
+        montoFaltanteEmpresa: r.montoFaltanteEmpresa.toNumber(),
+        colaboradoresAlcanzados: r.colaboradoresAlcanzados,
+        colaboradoresAsistieron: r.colaboradoresAsistieron!,
+        multaInasistencia: r.multaInasistencia.toNumber(),
+      })
+    : null;
 
   const itemsSinPrecio = await contarItemsSinPrecio(inventario.id);
 
   return {
     periodo: nombreDePeriodo(inventario.periodoAnio, inventario.periodoMes),
     faltanteBruto: r.montoFaltanteBruto.toNumber(),
-    negativosDelMes: r.montoNegativos?.toNumber() ?? 0,
+    negativosDelMes: r.montoNegativos?.toNumber() ?? null,
     faltanteEmpresa: r.montoFaltanteEmpresa.toNumber(),
-    faltanteNeto: resumen.montoFaltanteNeto,
-    cuotaBase: resumen.cuotaBase,
+    faltanteNeto: resumen?.montoFaltanteNeto ?? null,
+    cuotaBase: resumen?.cuotaBase ?? null,
     multaInasistencia: r.multaInasistencia.toNumber(),
-    bonoAsistencia: resumen.bonoAsistencia,
-    totalFaltas: resumen.faltantes,
+    bonoAsistencia: resumen?.bonoAsistencia ?? null,
+    totalFaltas: resumen?.faltantes ?? null,
     planilla: inventario.liquidaciones.map((l) => ({
       colaboradorId: l.colaboradorId,
       // El nombre CONGELADO al liquidar, no el actual: es lo que decia el
@@ -261,20 +274,35 @@ export async function conciliacion(
   const liquidacion = await deSucursal(actor, sucursalId);
   if (liquidacion === null) return null;
 
+  // `faltanteNeto`/`cuotaBase`/`totalFaltas` son null cuando falta
+  // asistencia/ajustes (ver LiquidacionDto) -- ninguna de las cuentas de
+  // acá abajo se puede hacer con eso en null, así que se corta ANTES en
+  // vez de calcular con un valor inventado. La advertencia ya explica por
+  // qué; acá no hay que repetirla con números falsos al lado.
+  if (liquidacion.faltanteNeto === null || liquidacion.cuotaBase === null || liquidacion.totalFaltas === null) {
+    return {
+      periodo: liquidacion.periodo,
+      calculable: false,
+      advertencia: liquidacion.advertencia,
+    };
+  }
+  const faltanteNeto = liquidacion.faltanteNeto;
+  const cuotaBase = liquidacion.cuotaBase;
+  const totalFaltas = liquidacion.totalFaltas;
+
   const sumaPlanilla = redondear(liquidacion.planilla.reduce((total, p) => total + p.monto, 0));
 
   // Lo que EFECTIVAMENTE se repartió en bonos: la suma de lo que recibió cada
   // asistente, no `bonoAsistencia × asistentes`. Esa multiplicación es
   // justamente la que no cerraba, porque a algunos les toca un centavo más.
   const repartido = redondear(
-    liquidacion.planilla
-      .filter((p) => p.asistio)
-      .reduce((total, p) => total + (liquidacion.cuotaBase - p.monto), 0),
+    liquidacion.planilla.filter((p) => p.asistio).reduce((total, p) => total + (cuotaBase - p.monto), 0),
   );
 
   return {
     periodo: liquidacion.periodo,
-    faltanteNeto: liquidacion.faltanteNeto,
+    calculable: true,
+    faltanteNeto,
     sumaPlanilla,
     /**
      * Los centavos que deja el redondeo de la cuota (1390 / 11 = 126.36 x 11
@@ -283,10 +311,10 @@ export async function conciliacion(
      * respuesta esta en la respuesta del endpoint y no hay que auditar nada.
      * PENDIENTE DE DEFINIR CON EL CLIENTE: hoy queda a favor del personal.
      */
-    diferenciaPorRedondeo: redondear(liquidacion.faltanteNeto - sumaPlanilla),
+    diferenciaPorRedondeo: redondear(faltanteNeto - sumaPlanilla),
     colaboradores: liquidacion.planilla.length,
     asistieron: liquidacion.planilla.filter((p) => p.asistio).length,
-    faltaron: liquidacion.totalFaltas,
+    faltaron: totalFaltas,
 
     /**
      * EL FONDO DE MULTAS TIENE QUE CERRAR: lo que se recauda de quienes
@@ -299,11 +327,11 @@ export async function conciliacion(
      * vez de aparecer como un descuadre en la nomina tres meses despues.
      */
     fondoDeMultas: {
-      recaudado: redondear(liquidacion.totalFaltas * liquidacion.multaInasistencia),
+      recaudado: redondear(totalFaltas * liquidacion.multaInasistencia),
       repartido: repartido,
       /** Tiene que ser 0. Positivo = la empresa pone; negativo = se queda. */
-      diferencia: redondear(repartido - liquidacion.totalFaltas * liquidacion.multaInasistencia),
-      cierra: redondear(repartido - liquidacion.totalFaltas * liquidacion.multaInasistencia) === 0,
+      diferencia: redondear(repartido - totalFaltas * liquidacion.multaInasistencia),
+      cierra: redondear(repartido - totalFaltas * liquidacion.multaInasistencia) === 0,
     },
 
     /** Lo que hay que decirle a quien firma -- ver AdvertenciaLiquidacion. */

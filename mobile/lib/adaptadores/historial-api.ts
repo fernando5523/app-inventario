@@ -62,6 +62,8 @@ interface ResultadoDto {
   itemsTercerConteo?: number;
   unidadesFaltantes?: number;
   unidadesSobrantes?: number;
+  asistenciaSinRegistrar?: boolean;
+  ajustesSinRegistrar?: boolean;
 }
 
 interface InventarioDto {

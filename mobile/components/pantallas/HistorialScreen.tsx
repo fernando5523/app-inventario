@@ -9,6 +9,7 @@ import type {
   DetalleInventarioHistorico,
   EstadoInventario,
   InventarioHistorico,
+  ResultadoInventario,
 } from '../../lib/puertos/repositorios';
 import { useSesion } from '../../lib/sesion-contexto';
 import { colors, fonts, radius, spacing } from '../../lib/theme';
@@ -180,15 +181,19 @@ export function HistorialScreen({ rol }: HistorialScreenProps): JSX.Element {
               ) : null}
               <Dato etiqueta="Faltante bruto" valor={`S/ ${formatoMoneda(r.montoFaltanteBruto)}`} />
               {/* null NO es 0: "todavía no se liquidó" y "no falta nada" son
-                  cosas distintas, y confundirlas en un inventario es grave. */}
+                  cosas distintas, y confundirlas en un inventario es grave.
+                  Y "sin liquidar todavía" tampoco es lo mismo que "el conteo
+                  ya cerró pero falta un dato que hoy no se puede cargar" --
+                  motivoSinNeto distingue las dos razones, no las une en un
+                  mismo cartel. */}
               <Dato
                 etiqueta="Faltante neto"
-                valor={r.montoFaltanteNeto === null ? 'Sin liquidar todavía' : `S/ ${formatoMoneda(r.montoFaltanteNeto)}`}
+                valor={r.montoFaltanteNeto === null ? motivoSinNeto(r) : `S/ ${formatoMoneda(r.montoFaltanteNeto)}`}
                 tono={r.montoFaltanteNeto === null ? undefined : 'falta'}
               />
               <Dato
                 etiqueta="Cuota por colaborador"
-                valor={r.cuotaBase === null ? 'Sin liquidar todavía' : `S/ ${formatoMoneda(r.cuotaBase)}`}
+                valor={r.cuotaBase === null ? motivoSinNeto(r) : `S/ ${formatoMoneda(r.cuotaBase)}`}
               />
             </>
           ) : (
@@ -321,18 +326,50 @@ export function HistorialScreen({ rol }: HistorialScreenProps): JSX.Element {
 }
 
 /**
- * Por qué este inventario no tiene cifras todavía.
+ * Por qué este inventario no tiene NI SIQUIERA el bloque de resultado
+ * (`r === null`) todavía.
  *
- * El backend devuelve `resultado: null` hasta que se liquida, así que un
- * `conteo_cerrado` llega sin números igual que uno `en_curso` — pero por
- * motivos distintos, y decir "conteo en marcha" sobre un conteo que YA
- * cerró es informar mal sobre en qué punto del ciclo está el mes.
+ * El backend calcula `ResultadoInventario` en el momento de cerrar el
+ * conteo, no al liquidar -- así que un `conteo_cerrado` normalmente YA
+ * trae el bloque entero (itemsTotales, montoFaltanteBruto, el embudo),
+ * aunque `montoFaltanteNeto`/`cuotaBase` adentro puedan seguir en null
+ * (ver `motivoSinNeto`, más abajo, para ESA distinción). La rama
+ * `conteo_cerrado` de acá solo debería verse en inventarios cerrados
+ * ANTES de que este cálculo existiera.
  */
 function sinResultado(estado: EstadoInventario): string {
   if (estado === 'en_curso') return 'Conteo en marcha: los resultados se calculan al cerrar el ciclo.';
-  if (estado === 'conteo_cerrado') return 'Conteo cerrado. Las cifras se calculan al liquidar.';
+  if (estado === 'conteo_cerrado') return 'Conteo cerrado, pero este inventario es de antes de que se calculara el resultado al cierre.';
   if (estado === 'anulado') return 'Inventario anulado: no produjo resultados.';
   return 'Sin resultados calculados.';
+}
+
+/**
+ * Por qué `montoFaltanteNeto`/`cuotaBase` son null CON el resto del
+ * bloque ya real (itemsTotales, montoFaltanteBruto). Dos razones
+ * DISTINTAS que no se pueden confundir bajo el mismo "sin liquidar
+ * todavía": el inventario en curso -- eso ya lo cubre `sinResultado` --
+ * y el conteo ya cerrado pero sin asistencia/ajustes capturados, que es
+ * lo que este texto explica.
+ */
+function motivoSinNeto(r: ResultadoInventario): string {
+  const razones: string[] = [];
+  if (r.asistenciaSinRegistrar) razones.push('falta registrar la asistencia');
+  if (r.ajustesSinRegistrar) razones.push('faltan los ajustes del mes');
+  return razones.length > 0 ? `No se puede calcular: ${razones.join(' y ')}.` : 'No se puede calcular todavía.';
+}
+
+/**
+ * Misma razón que `motivoSinNeto`, en el espacio angosto de la tarjeta del
+ * listado (`Cifra`, `width: '46%'`) -- corto pero sigue diciendo POR QUÉ,
+ * nunca un guión ni "Sin liquidar" genérico que confundiría esto con un
+ * inventario que todavía ni cerró.
+ */
+function motivoSinNetoCorto(r: ResultadoInventario): string {
+  if (r.asistenciaSinRegistrar && r.ajustesSinRegistrar) return 'Falta asistencia y ajustes';
+  if (r.asistenciaSinRegistrar) return 'Falta asistencia';
+  if (r.ajustesSinRegistrar) return 'Faltan ajustes';
+  return 'No calculado';
 }
 
 /** El rol congelado al firmar, capitalizado para mostrar. */
@@ -387,7 +424,7 @@ function TarjetaInventario({ inventario, onAbrir }: { inventario: InventarioHist
             <Cifra etiqueta="Faltante bruto" valor={`S/ ${formatoMoneda(r.montoFaltanteBruto)}`} />
             <Cifra
               etiqueta="Faltante neto"
-              valor={r.montoFaltanteNeto === null ? 'Sin liquidar' : `S/ ${formatoMoneda(r.montoFaltanteNeto)}`}
+              valor={r.montoFaltanteNeto === null ? motivoSinNetoCorto(r) : `S/ ${formatoMoneda(r.montoFaltanteNeto)}`}
               tono={r.montoFaltanteNeto === null ? undefined : 'falta'}
             />
           </View>

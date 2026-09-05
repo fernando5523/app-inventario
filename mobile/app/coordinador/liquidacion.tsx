@@ -14,6 +14,24 @@ import { colors, fonts, fontSize, radius, spacing } from '../../lib/theme';
 const nf = new Intl.NumberFormat('es-PE', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const soles = (n: number) => `S/ ${nf.format(n)}`;
 
+/**
+ * Por qué un monto vino en `null`: nunca "cero", nunca un guión sin
+ * explicación. `ResultadoInventario.colaboradoresAsistieron`/
+ * `montoNegativos` son NULLABLE en la base (ver el schema) porque hoy no
+ * existe ningún mecanismo para registrar asistencia ni cargar los ajustes
+ * del mes — un campo vacío sin decir por qué es casi tan malo como un
+ * número inventado: quien lo ve piensa que la app se rompió.
+ */
+function motivoSinCalcular(advertencia: Liquidacion['advertencia']): string {
+  const razones: string[] = [];
+  if (advertencia.asistenciaSinRegistrar) razones.push('falta registrar la asistencia');
+  if (advertencia.ajustesSinRegistrar) razones.push('faltan los ajustes del mes');
+  return razones.length > 0 ? `No se puede calcular: ${razones.join(' y ')}.` : 'No se puede calcular todavía.';
+}
+
+/** Igual criterio, para el monto que depende ÚNICAMENTE de los ajustes del mes. */
+const MOTIVO_SIN_AJUSTES = 'No se puede calcular: faltan los ajustes del mes.';
+
 type Filtro = 'todos' | 'asistio' | 'falto';
 
 const NOMBRE_ROL: Record<string, string> = { coordinador: 'Coordinador', conteo: 'Conteo', auditor: 'Auditor' };
@@ -61,13 +79,25 @@ export default function LiquidacionScreen(): JSX.Element {
     router.replace('/');
   }
 
-  const asistieron = liquidacion ? liquidacion.planilla.length - liquidacion.totalFaltas : 0;
+  /**
+   * `totalFaltas`/`cuotaBase`/`bonoAsistencia` nacen o faltan JUNTOS: los
+   * tres dependen de los mismos dos datos (asistencia/ajustes del mes, ver
+   * motivoSinCalcular) — nunca uno sin los otros dos. Un solo flag en vez
+   * de tres chequeos sueltos evita que un caso quede a medio blindar.
+   */
+  const datosCompletos =
+    liquidacion !== null &&
+    liquidacion.totalFaltas !== null &&
+    liquidacion.cuotaBase !== null &&
+    liquidacion.bonoAsistencia !== null;
+
+  const asistieron = datosCompletos ? liquidacion.planilla.length - liquidacion.totalFaltas! : null;
 
   // A cuántos asistentes les tocó el centavo extra del reparto. La regla vive
   // en lib/dominio/reparto-visible.ts, no acá: así se prueba sin montar la
   // pantalla (ver reparto-visible.test.ts).
-  const conCentavoExtra = liquidacion
-    ? asistentesConCentavoExtra(liquidacion.planilla, liquidacion.cuotaBase, liquidacion.bonoAsistencia)
+  const conCentavoExtra = datosCompletos
+    ? asistentesConCentavoExtra(liquidacion.planilla, liquidacion.cuotaBase!, liquidacion.bonoAsistencia!)
     : 0;
   const hayCentavoDeReparto = conCentavoExtra > 0;
 
@@ -96,7 +126,9 @@ export default function LiquidacionScreen(): JSX.Element {
               </View>
               <View style={styles.resumenFila}>
                 <Text style={styles.resumenEtiqueta}>(–) Negativos del mes</Text>
-                <Text style={styles.resumenValor}>-{soles(liquidacion.negativosDelMes)}</Text>
+                <Text style={[styles.resumenValor, liquidacion.negativosDelMes === null && styles.resumenSinCalcular]}>
+                  {liquidacion.negativosDelMes === null ? MOTIVO_SIN_AJUSTES : `-${soles(liquidacion.negativosDelMes)}`}
+                </Text>
               </View>
               <View style={styles.resumenFila}>
                 <Text style={styles.resumenEtiqueta}>(–) Faltante empresa</Text>
@@ -104,11 +136,15 @@ export default function LiquidacionScreen(): JSX.Element {
               </View>
               <View style={[styles.resumenFila, styles.resumenFilaSeparada]}>
                 <Text style={styles.resumenEtiqueta}>Faltante neto a descontar</Text>
-                <Text style={[styles.resumenValor, styles.resumenFalta]}>{soles(liquidacion.faltanteNeto)}</Text>
+                <Text style={[styles.resumenValor, styles.resumenFalta, liquidacion.faltanteNeto === null && styles.resumenSinCalcular]}>
+                  {liquidacion.faltanteNeto === null ? motivoSinCalcular(liquidacion.advertencia) : soles(liquidacion.faltanteNeto)}
+                </Text>
               </View>
               <View style={styles.resumenFila}>
                 <Text style={styles.resumenEtiqueta}>Cuota base ({liquidacion.planilla.length} colaboradores)</Text>
-                <Text style={styles.resumenValor}>{soles(liquidacion.cuotaBase)} / persona</Text>
+                <Text style={[styles.resumenValor, liquidacion.cuotaBase === null && styles.resumenSinCalcular]}>
+                  {liquidacion.cuotaBase === null ? motivoSinCalcular(liquidacion.advertencia) : `${soles(liquidacion.cuotaBase)} / persona`}
+                </Text>
               </View>
             </View>
 
@@ -133,14 +169,23 @@ export default function LiquidacionScreen(): JSX.Element {
             <View style={styles.tarjetaCabecera}>
               <Wallet size={18} color={colors.rojo} />
               <Text style={styles.tarjetaTitulo}>Fondo de multas por inasistencia</Text>
-              <Badge label={`${liquidacion.totalFaltas} faltas`} />
+              {datosCompletos ? <Badge label={`${liquidacion.totalFaltas!} faltas`} /> : null}
             </View>
-            <Text style={styles.tarjetaTexto}>
-              {liquidacion.totalFaltas} faltas × {soles(liquidacion.multaInasistencia)} ={' '}
-              {soles(liquidacion.totalFaltas * liquidacion.multaInasistencia)}, redistribuido entre los {asistieron}{' '}
-              colaboradores que sí asistieron.
-            </Text>
-            <Text style={styles.resultado}>-{soles(liquidacion.bonoAsistencia)} de descuento adicional para cada asistente</Text>
+            {/* Toda la tarjeta depende de totalFaltas/bonoAsistencia -- si
+                cualquiera falta, no hay números parciales que mostrar: se
+                explica por qué en vez de armar una cuenta con huecos. */}
+            {!datosCompletos ? (
+              <Text style={styles.tarjetaTexto}>{motivoSinCalcular(liquidacion.advertencia)}</Text>
+            ) : (
+              <>
+                <Text style={styles.tarjetaTexto}>
+                  {liquidacion.totalFaltas} faltas × {soles(liquidacion.multaInasistencia)} ={' '}
+                  {soles(liquidacion.totalFaltas! * liquidacion.multaInasistencia)}, redistribuido entre los {asistieron}{' '}
+                  colaboradores que sí asistieron.
+                </Text>
+                <Text style={styles.resultado}>-{soles(liquidacion.bonoAsistencia!)} de descuento adicional para cada asistente</Text>
+              </>
+            )}
 
             {/*
               EL CENTAVO DEL REPARTO, explicado donde se ve.
@@ -158,7 +203,7 @@ export default function LiquidacionScreen(): JSX.Element {
             {hayCentavoDeReparto ? (
               <Text style={styles.notaReparto}>
                 A {conCentavoExtra} de ellos les toca S/ 0.01 más, para que la suma dé exactamente{' '}
-                {soles(liquidacion.totalFaltas * liquidacion.multaInasistencia)}.
+                {soles(liquidacion.totalFaltas! * liquidacion.multaInasistencia)}.
               </Text>
             ) : null}
           </View>
@@ -172,8 +217,10 @@ export default function LiquidacionScreen(): JSX.Element {
             {(
               [
                 { id: 'todos', etiqueta: 'Todos', cuenta: liquidacion.planilla.length },
-                { id: 'asistio', etiqueta: 'Asistieron', cuenta: asistieron },
-                { id: 'falto', etiqueta: 'Faltaron', cuenta: liquidacion.totalFaltas },
+                // '—' y no el número: "asistieron"/"faltaron" no se pueden
+                // afirmar sin asistencia registrada (ver motivoSinCalcular).
+                { id: 'asistio', etiqueta: 'Asistieron', cuenta: asistieron ?? '—' },
+                { id: 'falto', etiqueta: 'Faltaron', cuenta: liquidacion.totalFaltas ?? '—' },
               ] as const
             ).map((f) => {
               const activo = filtro === f.id;
@@ -201,7 +248,9 @@ export default function LiquidacionScreen(): JSX.Element {
                   <Text style={styles.personaSub}>
                     {NOMBRE_ROL[p.rol] ?? p.rol} ·{' '}
                     {p.asistio
-                      ? `Asistió (–${soles(liquidacion.bonoAsistencia)} bono)`
+                      ? liquidacion.bonoAsistencia !== null
+                        ? `Asistió (–${soles(liquidacion.bonoAsistencia)} bono)`
+                        : 'Asistió'
                       : `Faltó (+${soles(liquidacion.multaInasistencia)} multa)`}
                   </Text>
                 </View>
@@ -276,6 +325,8 @@ const styles = StyleSheet.create({
   resumenEtiqueta: { fontSize: 12.5, color: colors.gris, fontFamily: fonts.regular },
   resumenValor: { fontSize: 16, color: colors.tinta, fontFamily: fonts.bold, fontVariant: ['tabular-nums'] },
   resumenFalta: { color: colors.proceso },
+  /** El motivo de "no se puede calcular" -- texto, no cifra: tamaño menor y sin negrita para no leerse como un monto. */
+  resumenSinCalcular: { fontSize: 11.5, fontFamily: fonts.regular, color: colors.gris, textAlign: 'right', flexShrink: 1 },
 
   seccion: { flexDirection: 'row', alignItems: 'baseline', justifyContent: 'space-between', gap: spacing.sm },
   seccionTitulo: { fontSize: 11, letterSpacing: 1.2, textTransform: 'uppercase', color: colors.gris, fontFamily: fonts.semibold },

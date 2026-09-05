@@ -75,10 +75,12 @@ export const liquidacionMemoria: RepositorioLiquidacion = {
       totalFaltas: faltaron.length,
       planilla,
       // Los datos en memoria salen de la maqueta, donde todos los ítems
-      // tienen precio: no hay nada que advertir. Se manda igual con
-      // `mensaje: null` en vez de omitirlo, así la pantalla no tiene que
-      // preguntarse si el campo existe según de dónde vengan los datos.
-      advertencia: { itemsSinPrecio: 0, mensaje: null },
+      // tienen precio Y la asistencia de ASISTENCIA_LUZURIAGA ya está
+      // completa (arriba): no hay nada que advertir. Se manda igual con
+      // los tres flags en su valor "todo bien" en vez de omitirlos, así
+      // la pantalla no tiene que preguntarse si el campo existe según de
+      // dónde vengan los datos.
+      advertencia: { itemsSinPrecio: 0, asistenciaSinRegistrar: false, ajustesSinRegistrar: false, mensaje: null },
     };
     return liquidacion;
   },

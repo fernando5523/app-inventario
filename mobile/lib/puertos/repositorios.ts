@@ -357,21 +357,38 @@ export interface DetalleLiquidacion {
  * monto SUBESTIMADO. Quien autoriza un descuento a la nómina de otra persona
  * tiene derecho a saber que el número está incompleto — y a saberlo ANTES de
  * firmar, no después.
+ *
+ * `asistenciaSinRegistrar`/`ajustesSinRegistrar` son la MISMA idea aplicada
+ * a que hoy no existe ningún mecanismo para registrar quién asistió al
+ * inventario ni para cargar los ajustes del mes: mientras eso no exista,
+ * `Liquidacion.faltanteNeto`/`cuotaBase`/`bonoAsistencia`/`totalFaltas`
+ * vienen en `null` — NO en 0 — y estos dos flags son la razón, para que la
+ * pantalla pueda decir POR QUÉ en vez de mostrar un hueco sin explicación.
  */
 export interface AdvertenciaLiquidacion {
   /** Ítems con diferencia real que no se pudieron valorizar. */
   itemsSinPrecio: number;
-  /** Texto listo para mostrar tal cual. `null` cuando no hay nada que advertir. */
+  /** true = no se puede registrar todavía quién asistió: el neto/cuota/bono/faltas de esta liquidación son null. */
+  asistenciaSinRegistrar: boolean;
+  /** true = los ajustes del mes todavía no se cargaron: mismo efecto que arriba. */
+  ajustesSinRegistrar: boolean;
+  /** Texto listo para mostrar tal cual, combinando todas las razones. `null` cuando no hay nada que advertir. */
   mensaje: string | null;
 }
 
 export interface Liquidacion {
   periodo: string;
   faltanteBruto: number;
-  negativosDelMes: number;
+  /** null = todavía no se cargaron los ajustes del mes. Nunca 0 con ese significado — ver AdvertenciaLiquidacion. */
+  negativosDelMes: number | null;
   faltanteEmpresa: number;
-  faltanteNeto: number;
-  cuotaBase: number;
+  /**
+   * null cuando `advertencia.asistenciaSinRegistrar` o `ajustesSinRegistrar`
+   * son true: sin esos dos datos este número no se puede calcular de
+   * verdad, así que no se inventa con un placeholder — se deja sin venir.
+   */
+  faltanteNeto: number | null;
+  cuotaBase: number | null;
   multaInasistencia: number;
   /**
    * El PISO del reparto del fondo de multas, no el promedio.
@@ -381,9 +398,12 @@ export interface Liquidacion {
    * entre 7 = seis de 11.43 y uno de 11.42). Por eso este número puede ser un
    * centavo MENOR que el que aparece en algunas filas de la planilla: es el
    * reparto, no un error de cálculo. La pantalla lo aclara cuando pasa.
+   *
+   * null, mismo criterio que `faltanteNeto`.
    */
-  bonoAsistencia: number;
-  totalFaltas: number;
+  bonoAsistencia: number | null;
+  /** null, mismo criterio que `faltanteNeto`: sin asistencia registrada no hay "cuántos faltaron" que valga. */
+  totalFaltas: number | null;
   planilla: DetalleLiquidacion[];
   /** Ver AdvertenciaLiquidacion. Siempre viene; `mensaje: null` si no hay nada que decir. */
   advertencia: AdvertenciaLiquidacion;
@@ -463,6 +483,16 @@ export interface EstadoCola {
   pendientes: number;
   ultimaSync: string | null;
   error: string | null;
+  /**
+   * Conectividad ACTUAL del teléfono, no derivada de la cola. Sin esto, la
+   * banda de sincronización solo puede decir "guardado, pendiente" DESPUÉS
+   * de que una pasada de sincronización falle — y guardar un conteo no
+   * dispara ninguna pasada por sí solo, así que alguien sin señal contando
+   * su primer producto no vería ningún aviso hasta minutos después. Se
+   * actualiza en cuanto cambia la conectividad (sincronizador.ts), no
+   * cuando corre una sincronización.
+   */
+  sinRed: boolean;
 }
 
 /**
@@ -649,7 +679,22 @@ export interface RepositorioConfigDynamics {
  */
 export type EstadoInventario = 'en_curso' | 'conteo_cerrado' | 'liquidado' | 'lacrado' | 'anulado';
 
-/** Cifras del cierre. Casi todo es `number | null`: un inventario en curso todavía no tiene resultado calculado, y `0` no es lo mismo que "no se calculó". */
+/**
+ * Cifras del cierre. Casi todo es `number | null`: un inventario en curso
+ * todavía no tiene resultado calculado, y `0` no es lo mismo que "no se
+ * calculó".
+ *
+ * `montoFaltanteNeto`/`cuotaBase` tienen DOS razones distintas para ser
+ * null, y son razones que la pantalla tiene que poder distinguir:
+ *   1. El conteo todavía no se cerró (`resultado` en sí es `null` más
+ *      arriba, en `InventarioHistorico`/`DetalleInventarioHistorico`).
+ *   2. El conteo YA se cerró (itemsTotales/montoFaltanteBruto/el embudo ya
+ *      son reales) pero falta capturar `asistenciaSinRegistrar`/
+ *      `ajustesSinRegistrar` -- ver esos dos flags, más abajo.
+ * Mostrar el mismo "Sin liquidar todavía" para las dos confunde "todavía
+ * no llegamos" con "llegamos, pero falta un dato que hoy no se puede
+ * cargar".
+ */
 export interface ResultadoInventario {
   itemsTotales: number;
   itemsConDiferencia: number;
@@ -663,6 +708,14 @@ export interface ResultadoInventario {
   itemsTercerConteo?: number;
   unidadesFaltantes?: number;
   unidadesSobrantes?: number;
+  /**
+   * Solo en el detalle. true = `montoFaltanteNeto`/`cuotaBase` son null
+   * PORQUE todavía no existe forma de registrar asistencia, no porque el
+   * inventario esté sin liquidar.
+   */
+  asistenciaSinRegistrar?: boolean;
+  /** Solo en el detalle. Mismo criterio, para los ajustes del mes. */
+  ajustesSinRegistrar?: boolean;
 }
 
 /** Una fila del listado. Sin hojas ni firmas: eso lo trae el detalle. */
