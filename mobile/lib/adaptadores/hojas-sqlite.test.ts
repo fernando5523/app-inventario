@@ -1155,3 +1155,107 @@ describe('AVANCE OFFLINE: la ronda activa NO suma las dos rondas', () => {
     expect(mias.reduce((acc, h) => acc + h.productos.length, 0)).toBe(25);
   });
 });
+
+describe('OFFLINE MULTI-TIENDA: sin red, cada colaborador ve SOLO su sucursal y su ronda', () => {
+  // Caso real (min-1, emulador, 2026-09-06): un Contador de Bolívar bajó
+  // sus hojas de las rondas 1 y 2 en este mismo teléfono; después, Luis
+  // Shuan (Contador de Luzuriaga) cierra y reabre la app SIN RED, y "Mis
+  // hojas" le mostraba 50 hojas / 2.470 ítems de BOLÍVAR, con la #001
+  // duplicada (las dos rondas). `hojas_estructura` es una tabla COMPARTIDA
+  // por todo lo que se haya descargado alguna vez en el equipo, y el
+  // camino sin red (`inventarioIdSinRed`/`rondaActivaSinRed`) no
+  // distinguía ni sucursal ni colaborador: devolvía la primera fila que
+  // encontraba (`LIMIT 1`, sin condición), y de ahí en más TODO heredaba
+  // el inventario equivocado.
+  const INV_LUZURIAGA = 999200;
+  const INV_BOLIVAR = 999201;
+  const SUC_LUZURIAGA = 1;
+  const SUC_BOLIVAR = 2;
+
+  const prod = (id: number) => ({
+    id,
+    codigo: String(id).padStart(4, '0'),
+    codigoBarras: `775000000${id}`,
+    descripcion: `Producto ${id}`,
+    empaques: [{ nombre: 'Caja', factor: 12 }],
+  });
+  const hoja = (inventarioId: number, id: number, numero: string, asignados: string[]) => ({
+    id,
+    inventarioId,
+    numero,
+    zona: 'Zona Y',
+    gondola: 'Y1',
+    tamano: 50,
+    estado: 'pendiente' as const,
+    sync: 'sincronizado' as const,
+    asignados,
+    productos: [prod(id * 10 + 1)],
+    conteos: [],
+  });
+
+  const sesionDeTienda = (nombre: string, sucursalId: number, sucursalNombre: string) =>
+    ({
+      colaborador: { id: 900 + sucursalId, nombre, dni: '0000', rol: 'conteo' },
+      sucursal: { id: sucursalId, nombre: sucursalNombre, colaboradores: 1 },
+      token: 'token-de-prueba',
+      expiraEn: '2099-01-01T00:00:00.000Z',
+    }) as unknown as Sesion;
+
+  const hojasLuzuriaga = Array.from({ length: 10 }, (_, i) =>
+    hoja(INV_LUZURIAGA, 9992000 + i, String(i + 1).padStart(3, '0'), ['Luis Paredes']),
+  );
+  const hojasBolivarR1 = Array.from({ length: 25 }, (_, i) =>
+    hoja(INV_BOLIVAR, 9992100 + i, String(i + 1).padStart(3, '0'), ['Contador 30']),
+  );
+  const hojasBolivarR2 = Array.from({ length: 25 }, (_, i) =>
+    hoja(INV_BOLIVAR, 9992200 + i, String(i + 1).padStart(3, '0'), ['Contador 30']),
+  );
+
+  it('dos tiendas, dos rondas, mismo teléfono, sin red: Luis Paredes ve SOLO sus 10 de Luzuriaga, nunca las 50 de Bolívar, sin duplicados', async () => {
+    // 1) Contador 30 (Bolívar) baja sus dos rondas en este equipo.
+    vi.mocked(sesionApi.sesionActiva).mockResolvedValue(sesionDeTienda('Contador 30', SUC_BOLIVAR, 'Market Bolívar'));
+    vi.mocked(hojasApi.todas).mockResolvedValueOnce(hojasBolivarR1);
+    await hojasSqlite.todas(INV_BOLIVAR, 1);
+    vi.mocked(hojasApi.todas).mockResolvedValueOnce(hojasBolivarR2);
+    await hojasSqlite.todas(INV_BOLIVAR, 2);
+
+    // 2) Luis (Luzuriaga) entra en el MISMO teléfono y baja su ronda 1.
+    vi.mocked(sesionApi.sesionActiva).mockResolvedValue(sesionDeTienda('Luis Paredes', SUC_LUZURIAGA, 'Market Central Luzuriaga'));
+    vi.mocked(hojasApi.mias).mockResolvedValueOnce(hojasLuzuriaga);
+    await hojasSqlite.mias(INV_LUZURIAGA, 1);
+
+    // 3) Luis cierra la app y la reabre SIN RED -- el camino offline
+    // entero, exactamente como en el reporte.
+    vi.mocked(hojasApi.mias).mockRejectedValue(new ErrorApi('sin-red'));
+    vi.mocked(hojasApi.todas).mockRejectedValue(new ErrorApi('sin-red'));
+
+    const inventarioId = await inventarioIdSinRed();
+    expect(inventarioId).toBe(INV_LUZURIAGA); // NUNCA Bolívar.
+
+    const ronda = await rondaActivaSinRed(inventarioId!);
+    expect(ronda).toBe(1);
+
+    const mias = await hojasSqlite.mias(inventarioId!, ronda!);
+    expect(mias).toHaveLength(10); // las suyas -- nunca las 50 de Bolívar.
+    expect(mias.every((h) => h.inventarioId === INV_LUZURIAGA)).toBe(true);
+    expect(new Set(mias.map((h) => h.numero)).size).toBe(10); // sin la #001 duplicada.
+    // El avance cuenta SOLO esto: 10 hojas, 10 productos (uno por hoja en este fixture).
+    expect(mias.reduce((acc, h) => acc + h.productos.length, 0)).toBe(10);
+  });
+
+  it('Contador 30 (Bolívar), mismo teléfono, sin red: ve sus 25 de la ronda activa (2) -- ni las 10 de Luzuriaga, ni su propia ronda 1', async () => {
+    vi.mocked(sesionApi.sesionActiva).mockResolvedValue(sesionDeTienda('Contador 30', SUC_BOLIVAR, 'Market Bolívar'));
+    vi.mocked(hojasApi.mias).mockRejectedValue(new ErrorApi('sin-red'));
+    vi.mocked(hojasApi.todas).mockRejectedValue(new ErrorApi('sin-red'));
+
+    const inventarioId = await inventarioIdSinRed();
+    expect(inventarioId).toBe(INV_BOLIVAR);
+
+    const ronda = await rondaActivaSinRed(inventarioId!);
+    expect(ronda).toBe(2); // la más alta ENTRE SUS PROPIAS hojas de este inventario.
+
+    const mias = await hojasSqlite.mias(inventarioId!, ronda!);
+    expect(mias).toHaveLength(25);
+    expect(mias.every((h) => h.inventarioId === INV_BOLIVAR)).toBe(true);
+  });
+});

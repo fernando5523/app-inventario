@@ -82,7 +82,7 @@ interface FilaCola {
   razon: string | null;
 }
 
-/** `hojas_estructura` (migración v3, `numero_conteo` en v4) — ver sqlite-esquema.ts. */
+/** `hojas_estructura` (migración v3, `numero_conteo` en v4, `sucursal_id` en v6) — ver sqlite-esquema.ts. */
 interface FilaHojaEstructura {
   id: number;
   inventario_id: number;
@@ -94,6 +94,8 @@ interface FilaHojaEstructura {
   asignados: string;
   /** La ronda del ciclo (v4). Las filas anteriores a v4 quedan en 1. */
   numero_conteo: number;
+  /** De qué sucursal es esta hoja (v6). NULL = se bajó antes de que existiera esta columna. */
+  sucursal_id: number | null;
 }
 
 /** `productos_estructura` (migración v3). */
@@ -278,6 +280,45 @@ async function hojasDeInventarioBase(inventarioId: number, ronda: number): Promi
 }
 
 /**
+ * Quién es la sesión activa, para el camino SIN RED — nombre (para filtrar
+ * `asignados`) y sucursal (para no cruzar hojas de otra tienda). Misma
+ * fuente que `nombreDeColaboradorEnSesion` (más abajo, la usan `mias`/
+ * `porNumero`) — se separa en su propia función porque las de acá arriba
+ * (`inventarioIdSinRed`/`rondaActivaSinRed`) corren ANTES de saber siquiera
+ * qué inventario existe, y necesitan los dos datos, no solo el nombre.
+ *
+ * `sucursalId: null` es un caso real, no un error: el Administrador no
+ * pertenece a ninguna sucursal (ver dominio/tipos.ts#Sesion). Para él,
+ * el filtro de sucursal simplemente no descarta nada por esa vía — igual
+ * que una fila vieja con `sucursal_id` NULL (ver migración v6).
+ */
+interface IdentidadSinRed {
+  nombre: string;
+  sucursalId: number | null;
+}
+
+async function identidadSinRed(): Promise<IdentidadSinRed | null> {
+  const sesion = (await sesionApi.sesionActiva()) ?? (await sesionMemoria.sesionActiva());
+  if (!sesion) return null;
+  return { nombre: sesion.colaborador.nombre, sucursalId: sesion.sucursal?.id ?? null };
+}
+
+/**
+ * Una hoja local es "de la persona que está usando el teléfono ahora"
+ * cuando las DOS cosas dan: está en sus `asignados` (por nombre — es el
+ * único dato de pertenencia que existía antes de v6) Y es de su sucursal
+ * (por `sucursal_id` — más duro que un nombre, no se confunde con un
+ * homónimo de otra tienda). `sucursal_id` NULL (fila de antes de v6, o el
+ * Administrador sin sucursal) no descarta por esa vía: no se puede
+ * inventar un dato que no está, así que ahí manda el nombre solo.
+ */
+function esDeLaPersona(fila: { asignados: string; sucursal_id: number | null }, identidad: IdentidadSinRed): boolean {
+  const deSuSucursal = fila.sucursal_id === null || identidad.sucursalId === null || fila.sucursal_id === identidad.sucursalId;
+  const asignadaAElla = (JSON.parse(fila.asignados) as string[]).includes(identidad.nombre);
+  return deSuSucursal && asignadaAElla;
+}
+
+/**
  * El `inventarioId` sin preguntarle al servidor — para cuando
  * `repositorioInventario.activo()` no puede responder (sin red: es HTTP
  * puro, sin caché local, ver contenedor.ts). Sin este fallback, Inicio,
@@ -285,34 +326,61 @@ async function hojasDeInventarioBase(inventarioId: number, ronda: number): Promi
  * cualquier cosa, aunque el avance completo ya estuviera acá adentro: el
  * operario sin señal veía un spinner infinito en vez de su trabajo.
  *
- * Se resuelve leyendo `hojas_estructura`, que ya tiene el `inventario_id`
- * de cualquier hoja que se haya descargado alguna vez. Un colaborador
- * cuenta en UN inventario a la vez, así que cualquier fila sirve — no es
- * la fuente de verdad (`repositorioInventario.activo()` lo es cuando hay
- * red), es el único dato que queda cuando no la hay.
+ * HALLAZGO (2026-09-06, min-1 en el emulador): `hojas_estructura` es una
+ * tabla COMPARTIDA por TODO lo que se haya descargado alguna vez en ese
+ * teléfono — un Coordinador que bajó `todas()` de su tienda, o un Contador
+ * de OTRA sucursal que usó el mismo equipo, dejan filas ahí. La versión
+ * vieja de esta función (`SELECT inventario_id FROM hojas_estructura LIMIT
+ * 1`, sin `ORDER BY` ni condición) devolvía UNA fila cualquiera — en el
+ * caso real, la de Bolívar, para un Contador de Luzuriaga. Ahora se
+ * exige que la fila sea DE ESA PERSONA (`esDeLaPersona`, arriba): nunca
+ * "cualquier inventario descargado", siempre "un inventario donde YO
+ * tengo una hoja asignada". Sin sesión local, no hay de quién ser: `null`.
+ *
+ * Si la persona tiene hojas de más de un inventario (no debería pasar en
+ * uso normal — un colaborador cuenta en uno a la vez — pero el teléfono
+ * puede tener restos de un mes anterior), se queda con el de la hoja de
+ * `numero_conteo` más alto: es la más probable de ser la actual.
  */
 export async function inventarioIdSinRed(): Promise<number | null> {
+  const identidad = await identidadSinRed();
+  if (!identidad) return null;
+
   const db = await obtenerDb();
-  const fila = await db.getFirstAsync<{ inventario_id: number }>('SELECT inventario_id FROM hojas_estructura LIMIT 1');
-  return fila?.inventario_id ?? null;
+  const filas = await db.getAllAsync<{ inventario_id: number; asignados: string; sucursal_id: number | null; numero_conteo: number }>(
+    'SELECT inventario_id, asignados, sucursal_id, numero_conteo FROM hojas_estructura',
+  );
+  const propias = filas.filter((f) => esDeLaPersona(f, identidad));
+  if (propias.length === 0) return null;
+
+  propias.sort((a, b) => b.numero_conteo - a.numero_conteo);
+  return propias[0]!.inventario_id;
 }
 
 /**
  * La ronda activa SIN preguntarle al servidor — la compañera de
  * `inventarioIdSinRed` para el mismo caso (Contador contando sin señal, ver
- * su comentario). Es la ronda MÁS ALTA que se descargó localmente
- * (`max(numero_conteo)`): si en algún momento con WiFi se bajó la ronda 2,
- * esa es la activa; si solo hay la 1, es la 1. `null` = nunca se descargó
- * ninguna hoja de este inventario. Con red manda `activo().rondaActiva`;
- * esto es el único dato que queda cuando no la hay.
+ * su comentario). Es la ronda MÁS ALTA entre las hojas de ESA PERSONA en
+ * este inventario (`max(numero_conteo)` acotado por `esDeLaPersona`) — NO
+ * la más alta del inventario entero: si el Coordinador bajó `todas()` con
+ * la ronda 1 y la 2 de la tienda, pero esta persona solo tiene hoja en la
+ * 1 (la suya cuadró y no fue a recontar), su ronda activa sigue siendo la
+ * 1, no la 2 de otro colaborador. `null` = nunca se descargó ninguna hoja
+ * de este inventario asignada a esta persona. Con red manda
+ * `activo().rondaActiva`; esto es el único dato que queda cuando no la hay.
  */
 export async function rondaActivaSinRed(inventarioId: number): Promise<number | null> {
+  const identidad = await identidadSinRed();
+  if (!identidad) return null;
+
   const db = await obtenerDb();
-  const fila = await db.getFirstAsync<{ ronda: number | null }>(
-    'SELECT MAX(numero_conteo) AS ronda FROM hojas_estructura WHERE inventario_id = ?',
+  const filas = await db.getAllAsync<{ numero_conteo: number; asignados: string; sucursal_id: number | null }>(
+    'SELECT numero_conteo, asignados, sucursal_id FROM hojas_estructura WHERE inventario_id = ?',
     [inventarioId],
   );
-  return fila?.ronda ?? null;
+  const rondas = filas.filter((f) => esDeLaPersona(f, identidad)).map((f) => f.numero_conteo);
+  if (rondas.length === 0) return null;
+  return Math.max(...rondas);
 }
 
 // ---------------------------------------------------------------------------
@@ -378,9 +446,17 @@ async function guardarEstructuraDeHoja(db: DbSqlite, hoja: HojaConteo, ronda: nu
   // `ronda` viene de la descarga (qué ronda se pidió), no de `hoja`:
   // `HojaConteo` del dominio no lleva `numeroConteo` — la ronda es del
   // pedido, y el backend ya devolvió solo hojas de esa ronda.
+  //
+  // `sucursalId` sale de la sesión local ACTIVA en este instante — quien
+  // dispara esta descarga es, necesariamente, quien está usando la app
+  // ahora, así que su sucursal es la sucursal real de esta hoja (v6, ver
+  // sqlite-esquema.ts). Sin sesión (no debería pasar: hace falta estar
+  // logueado para llegar hasta acá) queda NULL, el mismo valor "no se
+  // sabe" que ya tenían las filas de antes de v6.
+  const identidad = await identidadSinRed();
   await db.runAsync(
-    `INSERT INTO hojas_estructura (id, inventario_id, numero, zona, gondola, tamano, asignados, numero_conteo)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `INSERT INTO hojas_estructura (id, inventario_id, numero, zona, gondola, tamano, asignados, numero_conteo, sucursal_id)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT(id) DO UPDATE SET
        inventario_id = excluded.inventario_id,
        numero = excluded.numero,
@@ -388,8 +464,19 @@ async function guardarEstructuraDeHoja(db: DbSqlite, hoja: HojaConteo, ronda: nu
        gondola = excluded.gondola,
        tamano = excluded.tamano,
        asignados = excluded.asignados,
-       numero_conteo = excluded.numero_conteo`,
-    [hoja.id, hoja.inventarioId, hoja.numero, hoja.zona, hoja.gondola, hoja.tamano, JSON.stringify(hoja.asignados), ronda],
+       numero_conteo = excluded.numero_conteo,
+       sucursal_id = excluded.sucursal_id`,
+    [
+      hoja.id,
+      hoja.inventarioId,
+      hoja.numero,
+      hoja.zona,
+      hoja.gondola,
+      hoja.tamano,
+      JSON.stringify(hoja.asignados),
+      ronda,
+      identidad?.sucursalId ?? null,
+    ],
   );
 
   if (hoja.productos.length > 0) {

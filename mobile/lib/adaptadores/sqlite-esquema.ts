@@ -217,6 +217,42 @@ export const MIGRACIONES_SQLITE: string[] = [
   `
   ALTER TABLE cola_sync ADD COLUMN razon TEXT;
   `,
+  /**
+   * v6 — la SUCURSAL de cada hoja local (hallazgo min-1/min-4, 2026-09-06:
+   * en un teléfono que se usó para más de un inventario, el camino SIN RED
+   * -- `inventarioIdSinRed`/`rondaActivaSinRed` -- no distinguía de qué
+   * sucursal ni de qué colaborador eran las filas de `hojas_estructura`,
+   * una tabla COMPARTIDA por todo lo que se haya descargado alguna vez en
+   * ese equipo. Un Contador de Luzuriaga sin red terminaba viendo las
+   * hojas de Bolívar, de las dos rondas juntas.
+   *
+   * Antes de esto, el único dato de "de quién es" que existía local era
+   * `asignados` (JSON de NOMBRES) — suficiente para filtrar por persona,
+   * pero frágil ante un homónimo entre dos sucursales (dos Contadores
+   * distintos que casualmente se llaman igual). `sucursal_id` es la
+   * segunda pertenencia, más dura que un nombre: se independiza de que el
+   * nombre coincida o no.
+   *
+   * NULLABLE a propósito: las filas que ya están en un teléfono instalado
+   * se bajaron ANTES de que este código supiera guardar la sucursal. NULL
+   * significa "no se sabe" -- el filtro que la usa (`inventarioIdSinRed`)
+   * trata un NULL como "no se puede descartar por sucursal, pero SÍ hay
+   * que exigir el nombre" en vez de inventar un valor. La próxima
+   * descarga de esa hoja (con red) la completa sola, vía
+   * `guardarEstructuraDeHoja`, que a partir de acá SIEMPRE la escribe.
+   *
+   * De dónde sale el valor al guardar: la sesión local activa en ESE
+   * momento (`sesionApi`/`sesionMemoria`, igual que ya hace
+   * `nombreDeColaboradorEnSesion`) — quien dispara una descarga es,
+   * necesariamente, quien está usando la app en ese instante, así que su
+   * sucursal es la sucursal real de esa hoja. No hace falta agregar un
+   * parámetro nuevo a ningún puerto (`RepositorioHojas` no cambia).
+   */
+  `
+  ALTER TABLE hojas_estructura ADD COLUMN sucursal_id INTEGER;
+
+  CREATE INDEX IF NOT EXISTS idx_hojas_estructura_sucursal ON hojas_estructura(sucursal_id);
+  `,
 ];
 
 export async function migrarSqlite(db: DbMigrable): Promise<void> {
