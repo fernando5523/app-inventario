@@ -16,6 +16,11 @@
  *       → VerificacionDto — verificado contra historial.service.ts#verificarSello
  *       y historial.controller.ts (devuelve el DTO tal cual, sin envoltorio).
  *       409 si el inventario todavía no está lacrado (`Conflicto` del backend).
+ *   GET /api/historial/inventarios/:id/diferencias[?limite=&desplazamiento=&tipo=&resueltoEnConteo=]
+ *       → { total, limite, desplazamiento, diferencias: DiferenciaDto[] } —
+ *       verificado contra historial.service.ts#listarDiferencias.
+ *   GET /api/historial/inventarios/:id/liquidacion
+ *       → LiquidacionDto — verificado contra historial.service.ts#obtenerLiquidacion.
  *
  * Todo el router va detrás de `requiereSesion` + `requiereRol('administrador',
  * 'auditor')`. Un Coordinador o un Contador reciben 403 — y está bien que
@@ -56,16 +61,28 @@
  *    algo del encabezado del inventario. `Array.from(new Set(...))` dedupe:
  *    si cambian dos claves de metadata, `datosDelInventario` aparece una
  *    sola vez.
+ *
+ * 4. `diferencias` reordena lo que trae el backend. El servidor pagina
+ *    ordenado por UNIDADES (`diferencia` asc, ver listarDiferencias) porque
+ *    esa es la pregunta de la pantalla de Auditoría en curso ("cuántas
+ *    unidades faltan"). Acá el criterio del histórico es otro -- cuánta
+ *    PLATA movió cada ítem -- así que el adaptador reordena por
+ *    `Math.abs(montoDiferencia)` descendente; los sin precio (`null`) se
+ *    tratan como 0 y quedan al final, porque no mueven nada cuantificable.
  */
 
 import type {
   DetalleInventarioHistorico,
+  DiferenciaHistorica,
   EstadoInventario,
   FiltroHistorial,
   InventarioHistorico,
+  LiquidacionColaboradorHistorica,
+  LiquidacionInventario,
   PaginaHistorial,
   RepositorioHistorial,
   ResultadoInventario,
+  ResumenLiquidacion,
   SeccionSellada,
   VerificacionSello,
 } from '../puertos/repositorios';
@@ -168,6 +185,49 @@ function aSeccionesAlteradas(claves: string[]): SeccionSellada[] {
   return Array.from(new Set(claves.map((clave) => NOMBRE_DE_SECCION[clave] ?? 'datosDelInventario')));
 }
 
+interface DiferenciaDto {
+  codigo: string;
+  descripcion: string;
+  stockSistema: number;
+  conteoFinal: number;
+  diferencia: number;
+  tipo: 'faltante' | 'sobrante';
+  resueltoEnConteo: number;
+  precioUnitario: number | null;
+  montoDiferencia: number | null;
+}
+
+/** El máximo que acepta el endpoint (historial.schema.ts#listarDiferenciasQuerySchema). */
+const MAXIMO_DIFERENCIAS = 500;
+
+/** Ver la traducción 4 de la cabecera: orden por plata, no por unidades; sin precio va al final. */
+function aDiferencias(dtos: DiferenciaDto[]): DiferenciaHistorica[] {
+  return [...dtos].sort((a, b) => Math.abs(b.montoDiferencia ?? 0) - Math.abs(a.montoDiferencia ?? 0));
+}
+
+interface LiquidacionColaboradorDto {
+  colaboradorId: number;
+  nombre: string;
+  nombreActual: string;
+  dni: string;
+  rol: LiquidacionColaboradorHistorica['rol'];
+  asistio: boolean;
+  cuotaBase: number;
+  multaInasistencia: number;
+  bonoAsistencia: number;
+  totalDescuento: number;
+}
+
+interface LiquidacionDto {
+  inventarioId: number;
+  sucursal: { id: number; nombre: string };
+  periodo: string;
+  resumen: ResumenLiquidacion | null;
+  asistenciaSinRegistrar: boolean;
+  ajustesSinRegistrar: boolean;
+  planilla: LiquidacionColaboradorDto[];
+}
+
 function consulta(filtro?: FiltroHistorial): string {
   if (!filtro) return '';
   const partes: string[] = [];
@@ -228,6 +288,23 @@ export const historialApi: RepositorioHistorial = {
       hashRecalculado: dto.hashRecalculado,
       seccionesAlteradas: aSeccionesAlteradas(dto.seccionesAlteradas),
       versionDistinta: dto.versionDistinta,
+    };
+  },
+
+  async diferencias(inventarioId): Promise<DiferenciaHistorica[]> {
+    const dto = await pedir<{ diferencias: DiferenciaDto[] }>(`${BASE}/${inventarioId}/diferencias?limite=${MAXIMO_DIFERENCIAS}`);
+    return aDiferencias(dto.diferencias);
+  },
+
+  async liquidacion(inventarioId): Promise<LiquidacionInventario> {
+    const dto = await pedir<LiquidacionDto>(`${BASE}/${inventarioId}/liquidacion`);
+    return {
+      inventarioId: dto.inventarioId,
+      periodo: dto.periodo,
+      resumen: dto.resumen,
+      asistenciaSinRegistrar: dto.asistenciaSinRegistrar,
+      ajustesSinRegistrar: dto.ajustesSinRegistrar,
+      planilla: dto.planilla,
     };
   },
 };

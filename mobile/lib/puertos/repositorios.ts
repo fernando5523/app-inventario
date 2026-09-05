@@ -880,6 +880,81 @@ export interface VerificacionSello {
 }
 
 /**
+ * Una fila de las diferencias del cierre: lo que dijo el ERP contra lo que
+ * fijó el 3er conteo, ya valorizado. Espeja `DiferenciaItem`
+ * (backend/prisma/schema.prisma) vía `GET /inventarios/:id/diferencias`.
+ *
+ * `precioUnitario`/`montoDiferencia` son `null` cuando el snapshot de
+ * Dynamics no trajo precio para ese ítem — la diferencia en UNIDADES sigue
+ * siendo válida, pero no se puede valorizar. Es precio de VENTA, no costo
+ * (ver el comentario de `DiferenciaItem.precioUnitario` en el schema): el
+ * cliente definió valorizar a precio de venta, nunca de compra.
+ */
+export interface DiferenciaHistorica {
+  codigo: string;
+  descripcion: string;
+  stockSistema: number;
+  conteoFinal: number;
+  /** conteoFinal - stockSistema. Negativo = faltante, positivo = sobrante. */
+  diferencia: number;
+  tipo: 'faltante' | 'sobrante';
+  /** En qué ronda (1, 2 o 3) quedó resuelto este ítem. */
+  resueltoEnConteo: number;
+  precioUnitario: number | null;
+  montoDiferencia: number | null;
+}
+
+/**
+ * El reparto del faltante neto entre quienes asistieron — lo que muestra el
+ * encabezado de la planilla. Espeja `ResumenLiquidacion`
+ * (backend/historial.calculos.ts).
+ */
+export interface ResumenLiquidacion {
+  montoFaltanteNeto: number;
+  cuotaBase: number;
+  faltantes: number;
+  fondoMultas: number;
+  /** El PISO del reparto: a algunos les toca un centavo más (ver residuoCentavos). */
+  bonoAsistencia: number;
+  residuoCentavos: number;
+}
+
+/** Una fila de la planilla: qué se le descuenta a UN colaborador y por qué. */
+export interface LiquidacionColaboradorHistorica {
+  colaboradorId: number;
+  /** Nombre CONGELADO al liquidar — es lo que decía el recibo, no cambia si la persona se renombra después. */
+  nombre: string;
+  /** El nombre actual de la cuenta, para poder identificar a la persona si se renombró. */
+  nombreActual: string;
+  dni: string;
+  rol: Rol;
+  asistio: boolean;
+  cuotaBase: number;
+  multaInasistencia: number;
+  bonoAsistencia: number;
+  /** cuotaBase + multaInasistencia - bonoAsistencia. Derivado, nunca guardado — el backend lo calcula, acá se recibe listo. */
+  totalDescuento: number;
+}
+
+/**
+ * La planilla completa del cierre. Espeja `GET /inventarios/:id/liquidacion`.
+ *
+ * `resumen: null` — NUNCA un objeto con ceros de relleno — cuando falta
+ * capturar asistencia o ajustes: mostrar un resumen calculado sobre datos
+ * que no llegaron sería peor que decir que todavía no se puede calcular.
+ * `asistenciaSinRegistrar`/`ajustesSinRegistrar` dicen CUÁL de las dos cosas
+ * falta.
+ */
+export interface LiquidacionInventario {
+  inventarioId: number;
+  periodo: string;
+  resumen: ResumenLiquidacion | null;
+  asistenciaSinRegistrar: boolean;
+  ajustesSinRegistrar: boolean;
+  planilla: LiquidacionColaboradorHistorica[];
+}
+
+/**
  * El registro de todos los inventarios: en qué estado está cada uno, cómo
  * cerró y quién lo firmó. Responde la pregunta del cliente ("falta el
  * registro de todos los inventarios, dónde llevaremos el control y el
@@ -910,4 +985,15 @@ export interface RepositorioHistorial {
    * verificar. Mismo acceso que `detalle`.
    */
   verificarSello(inventarioId: number): Promise<VerificacionSello>;
+  /**
+   * Las diferencias del cierre, ordenadas por VALOR ABSOLUTO descendente:
+   * lo que más plata mueve primero. Es un criterio DISTINTO al que usa el
+   * backend para paginar (`diferencia` en unidades) — el adaptador reordena.
+   * Trae hasta 500 (el máximo del endpoint): un inventario con más de 500
+   * ítems con diferencia sería inusual, pero si pasara, esta lista queda
+   * truncada a las 500 que más plata mueven.
+   */
+  diferencias(inventarioId: number): Promise<DiferenciaHistorica[]>;
+  /** La planilla del cierre: quién, cuánto, por qué. Mismo acceso que `detalle`. */
+  liquidacion(inventarioId: number): Promise<LiquidacionInventario>;
 }

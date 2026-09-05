@@ -306,3 +306,141 @@ describe('historialApi.verificarSello', () => {
     expect(v.versionDistinta).toBe(true);
   });
 });
+
+/**
+ * Forma REAL de GET /inventarios/:id/diferencias -- verificada leyendo
+ * historial.service.ts#listarDiferencias (devuelve
+ * {total, limite, desplazamiento, diferencias: [...]}, cada fila con
+ * codigo/descripcion/stockSistema/conteoFinal/diferencia/tipo/
+ * resueltoEnConteo/precioUnitario/montoDiferencia).
+ */
+describe('historialApi.diferencias', () => {
+  it('ordena por VALOR ABSOLUTO de montoDiferencia descendente -- lo que mas plata mueve arriba', async () => {
+    // El backend pagina ordenado por UNIDADES (diferencia asc); acá el
+    // criterio es otro -- cuanta plata mueve -- así que el adaptador
+    // reordena, no confía en el orden que trae la página.
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () =>
+        json({
+          total: 3,
+          limite: 500,
+          desplazamiento: 0,
+          diferencias: [
+            { codigo: 'A1', descripcion: 'Leche', stockSistema: 40, conteoFinal: 38, diferencia: -2, tipo: 'faltante', resueltoEnConteo: 1, precioUnitario: 5, montoDiferencia: -10 },
+            { codigo: 'B2', descripcion: 'Aceite', stockSistema: 10, conteoFinal: 4, diferencia: -6, tipo: 'faltante', resueltoEnConteo: 2, precioUnitario: 25, montoDiferencia: -150 },
+            { codigo: 'C3', descripcion: 'Fideos', stockSistema: 5, conteoFinal: 8, diferencia: 3, tipo: 'sobrante', resueltoEnConteo: 3, precioUnitario: 4, montoDiferencia: 12 },
+          ],
+        }),
+      ),
+    );
+
+    const diferencias = await historialApi.diferencias(8002);
+
+    expect(diferencias.map((d) => d.codigo)).toEqual(['B2', 'C3', 'A1']);
+  });
+
+  it('las diferencias SIN precio (montoDiferencia null) van al final, no rompen el orden', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () =>
+        json({
+          total: 2,
+          limite: 500,
+          desplazamiento: 0,
+          diferencias: [
+            { codigo: 'X1', descripcion: 'Sin precio', stockSistema: 10, conteoFinal: 8, diferencia: -2, tipo: 'faltante', resueltoEnConteo: 1, precioUnitario: null, montoDiferencia: null },
+            { codigo: 'Y2', descripcion: 'Con precio', stockSistema: 10, conteoFinal: 8, diferencia: -2, tipo: 'faltante', resueltoEnConteo: 1, precioUnitario: 3, montoDiferencia: -6 },
+          ],
+        }),
+      ),
+    );
+
+    const diferencias = await historialApi.diferencias(8002);
+
+    expect(diferencias.map((d) => d.codigo)).toEqual(['Y2', 'X1']);
+    expect(diferencias[1].montoDiferencia).toBeNull();
+  });
+
+  it('pide el maximo del backend (limite=500) y pega contra la ruta correcta', async () => {
+    const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => json({ total: 0, limite: 500, desplazamiento: 0, diferencias: [] }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await historialApi.diferencias(8002);
+
+    const url = String(fetchMock.mock.calls[0][0]);
+    expect(url).toContain('/api/historial/inventarios/8002/diferencias');
+    expect(url).toContain('limite=500');
+  });
+});
+
+/**
+ * Forma REAL de GET /inventarios/:id/liquidacion -- verificada leyendo
+ * historial.service.ts#obtenerLiquidacion.
+ */
+describe('historialApi.liquidacion', () => {
+  const LIQUIDACION_DTO = {
+    inventarioId: 8002,
+    sucursal: { id: 1, nombre: 'Market Central Luzuriaga' },
+    periodo: '2026-07',
+    resumen: {
+      montoFaltanteNeto: 1550,
+      cuotaBase: 140.91,
+      faltantes: 1,
+      fondoMultas: 20,
+      bonoAsistencia: 2,
+      residuoCentavos: 0.01,
+    },
+    asistenciaSinRegistrar: false,
+    ajustesSinRegistrar: false,
+    planilla: [
+      {
+        colaboradorId: 30,
+        nombre: 'Elena Príncipe',
+        nombreActual: 'Elena Príncipe',
+        dni: '12345678',
+        rol: 'conteo',
+        asistio: true,
+        cuotaBase: 140.91,
+        multaInasistencia: 0,
+        bonoAsistencia: 2,
+        totalDescuento: 138.91,
+      },
+      {
+        colaboradorId: 31,
+        nombre: 'Julio Rivas',
+        nombreActual: 'Julio Rivas',
+        dni: '87654321',
+        rol: 'conteo',
+        asistio: false,
+        cuotaBase: 140.91,
+        multaInasistencia: 20,
+        bonoAsistencia: 0,
+        totalDescuento: 160.91,
+      },
+    ],
+  };
+
+  it('mapea el resumen y la planilla tal cual, con el total ya calculado por el backend', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => json(LIQUIDACION_DTO)));
+
+    const liq = await historialApi.liquidacion(8002);
+
+    expect(liq.resumen?.cuotaBase).toBe(140.91);
+    expect(liq.planilla).toHaveLength(2);
+    expect(liq.planilla[1].asistio).toBe(false);
+    expect(liq.planilla[1].totalDescuento).toBe(160.91);
+  });
+
+  it('resumen null cuando falta asistencia o ajustes -- no inventa un resumen con ceros', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => json({ ...LIQUIDACION_DTO, resumen: null, asistenciaSinRegistrar: true, planilla: [] })),
+    );
+
+    const liq = await historialApi.liquidacion(8002);
+
+    expect(liq.resumen).toBeNull();
+    expect(liq.asistenciaSinRegistrar).toBe(true);
+  });
+});

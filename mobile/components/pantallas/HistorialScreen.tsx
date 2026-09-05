@@ -7,8 +7,10 @@ import { repositorioHistorial } from '../../lib/contenedor';
 import type { Rol } from '../../lib/dominio/tipos';
 import type {
   DetalleInventarioHistorico,
+  DiferenciaHistorica,
   EstadoInventario,
   InventarioHistorico,
+  LiquidacionInventario,
   ResultadoInventario,
   SeccionSellada,
   VerificacionSello,
@@ -107,6 +109,10 @@ export function HistorialScreen({ rol }: HistorialScreenProps): JSX.Element {
   const [verificandoSello, setVerificandoSello] = useState(false);
   const [errorVerificacion, setErrorVerificacion] = useState<string | null>(null);
 
+  const [diferencias, setDiferencias] = useState<DiferenciaHistorica[]>([]);
+  const [liquidacion, setLiquidacion] = useState<LiquidacionInventario | null>(null);
+  const [errorCierre, setErrorCierre] = useState<string | null>(null);
+
   const cargar = useCallback(async () => {
     if (!sesion) return;
     setError(null);
@@ -135,11 +141,29 @@ export function HistorialScreen({ rol }: HistorialScreenProps): JSX.Element {
 
   async function abrirDetalle(id: number): Promise<void> {
     setCargandoDetalle(true);
-    // Un inventario nuevo no hereda el resultado de verificación del anterior.
+    // Un inventario nuevo no hereda nada del anterior.
     setVerificacion(null);
     setErrorVerificacion(null);
+    setDiferencias([]);
+    setLiquidacion(null);
+    setErrorCierre(null);
     try {
-      setDetalle(await repositorioHistorial.detalle(id));
+      const det = await repositorioHistorial.detalle(id);
+      setDetalle(det);
+      // "En curso" todavía no cerró el conteo: no hay diferencias fijadas
+      // (recién se calculan al cerrar la última ronda) ni planilla (se
+      // liquida después de cerrar). Pedirlas ahí solo traería listas vacías.
+      if (det.estado !== 'en_curso') {
+        try {
+          const [difs, liq] = await Promise.all([repositorioHistorial.diferencias(id), repositorioHistorial.liquidacion(id)]);
+          setDiferencias(difs);
+          setLiquidacion(liq);
+        } catch (e) {
+          // El detalle YA cargó bien: un fallo acá no debe tirar abajo toda
+          // la pantalla, solo estas dos secciones.
+          setErrorCierre(e instanceof Error ? e.message : 'No se pudieron cargar las diferencias y la planilla.');
+        }
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : 'No se pudo abrir el inventario.');
     } finally {
@@ -239,6 +263,46 @@ export function HistorialScreen({ rol }: HistorialScreenProps): JSX.Element {
           )}
         </View>
 
+        {/* Igual que las diferencias: no existen hasta que se cierra el
+            conteo (recién ahí se fija el resultado de los 3 conteos contra
+            el ERP). "En curso" no las pide -- ver abrirDetalle. */}
+        {detalle.estado !== 'en_curso' ? (
+          <>
+            <Text style={styles.seccion}>Diferencias</Text>
+            <View style={styles.tarjeta}>
+              {errorCierre ? (
+                <Text style={styles.ayuda}>{errorCierre}</Text>
+              ) : diferencias.length === 0 ? (
+                <Text style={styles.sinDatos}>Sin diferencias: el conteo cuadró contra el ERP.</Text>
+              ) : (
+                // Ya vienen ordenadas por valor absoluto descendente (ver
+                // historial-api.ts#aDiferencias): lo que más plata mueve arriba.
+                diferencias.map((d) => (
+                  <View key={d.codigo} style={styles.difFila}>
+                    <View style={styles.difCabecera}>
+                      <Text style={styles.difCodigo}>
+                        {d.codigo} · {d.descripcion}
+                      </Text>
+                      <Badge label={d.tipo === 'faltante' ? 'Faltante' : 'Sobrante'} variant={d.tipo === 'faltante' ? 'falta' : 'ok'} />
+                    </View>
+                    <Text style={styles.difMeta}>
+                      ERP {formatoMiles(d.stockSistema)} · contado {formatoMiles(d.conteoFinal)} · resuelto en el {d.resueltoEnConteo}º conteo
+                    </Text>
+                    <View style={styles.difValores}>
+                      <Text style={[styles.difCifra, d.tipo === 'faltante' ? styles.datoFalta : styles.datoOk]}>
+                        {formatoMiles(Math.abs(d.diferencia))} und
+                      </Text>
+                      <Text style={styles.difMonto}>
+                        {d.montoDiferencia === null ? 'Sin precio para valorizar' : `S/ ${formatoMoneda(Math.abs(d.montoDiferencia))}`}
+                      </Text>
+                    </View>
+                  </View>
+                ))
+              )}
+            </View>
+          </>
+        ) : null}
+
         <Text style={styles.seccion}>Hojas de conteo</Text>
         <View style={styles.tarjeta}>
           {detalle.hojas.length === 0 ? (
@@ -258,6 +322,62 @@ export function HistorialScreen({ rol }: HistorialScreenProps): JSX.Element {
             ))
           )}
         </View>
+
+        {/* Se liquida ANTES de lacrar (regla del cliente): un `conteo_cerrado`
+            recién cerrado puede no tener planilla todavía -- la sección lo
+            dice, no lo esconde. */}
+        {detalle.estado !== 'en_curso' ? (
+          <>
+            <Text style={styles.seccion}>Planilla de liquidación</Text>
+            <View style={styles.tarjeta}>
+              {errorCierre ? (
+                <Text style={styles.ayuda}>{errorCierre}</Text>
+              ) : liquidacion === null ? (
+                <Text style={styles.sinDatos}>Todavía no se liquidó este inventario.</Text>
+              ) : liquidacion.planilla.length === 0 ? (
+                <Text style={styles.sinDatos}>Todavía no se liquidó este inventario.</Text>
+              ) : (
+                <>
+                  {liquidacion.resumen ? (
+                    <>
+                      <Dato etiqueta="Faltante neto a repartir" valor={`S/ ${formatoMoneda(liquidacion.resumen.montoFaltanteNeto)}`} tono="falta" />
+                      <Dato etiqueta="Cuota base por colaborador" valor={`S/ ${formatoMoneda(liquidacion.resumen.cuotaBase)}`} />
+                      {liquidacion.resumen.faltantes > 0 ? (
+                        <Dato
+                          etiqueta={`Multa por inasistencia (${liquidacion.resumen.faltantes})`}
+                          valor={`S/ ${formatoMoneda(liquidacion.resumen.fondoMultas)}`}
+                        />
+                      ) : null}
+                    </>
+                  ) : (
+                    // null NO es un resumen con ceros: falta un dato de captura,
+                    // no falta plata. Mismo criterio que motivoSinNeto.
+                    <Text style={styles.sinDatos}>
+                      {liquidacion.asistenciaSinRegistrar && liquidacion.ajustesSinRegistrar
+                        ? 'Falta registrar la asistencia y los ajustes del mes: el resumen no se puede calcular todavía.'
+                        : liquidacion.asistenciaSinRegistrar
+                          ? 'Falta registrar la asistencia: el resumen no se puede calcular todavía.'
+                          : 'Faltan los ajustes del mes: el resumen no se puede calcular todavía.'}
+                    </Text>
+                  )}
+
+                  {liquidacion.planilla.map((p) => (
+                    <View key={p.colaboradorId} style={[styles.planillaFila, !p.asistio && styles.planillaFilaFalto]}>
+                      <View style={styles.planillaDatos}>
+                        <Text style={styles.planillaNombre}>{p.nombre}</Text>
+                        <Text style={styles.planillaSub}>
+                          {ESTADOS_ROL(p.rol)} · {p.asistio ? 'Asistió' : 'Faltó'}
+                          {p.nombreActual !== p.nombre ? ` · ahora: ${p.nombreActual}` : ''}
+                        </Text>
+                      </View>
+                      <Text style={[styles.planillaMonto, !p.asistio && styles.datoFalta]}>S/ {formatoMoneda(p.totalDescuento)}</Text>
+                    </View>
+                  ))}
+                </>
+              )}
+            </View>
+          </>
+        ) : null}
 
         {/* Que este bloque exista o no es, en sí mismo, la señal más fuerte:
             un inventario que todavía se puede tocar no tiene sello, ni folio,
@@ -692,4 +812,27 @@ const styles = StyleSheet.create({
   verifTituloOk: { color: colors.ok },
   verifTituloAlerta: { color: colors.falta },
   verifSeccion: { fontSize: 12.5, color: colors.tinta, fontFamily: fonts.semibold, paddingLeft: 4 },
+
+  difFila: { gap: 5, paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: colors.borde },
+  difCabecera: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 },
+  difCodigo: { flex: 1, fontSize: 12.5, color: colors.tinta, fontFamily: fonts.semibold },
+  difMeta: { fontSize: 11, color: colors.gris, fontFamily: fonts.regular },
+  difValores: { flexDirection: 'row', alignItems: 'baseline', justifyContent: 'space-between' },
+  difCifra: { fontSize: 13, fontFamily: fonts.bold },
+  difMonto: { fontSize: 12.5, color: colors.tinta, fontFamily: fonts.bold },
+
+  planillaFila: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 10,
+    paddingVertical: 9,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.borde,
+  },
+  planillaFilaFalto: { backgroundColor: colors.faltaSuave, marginHorizontal: -15, paddingHorizontal: 15, borderBottomColor: 'transparent' },
+  planillaDatos: { flex: 1, gap: 2 },
+  planillaNombre: { fontSize: 13, color: colors.tinta, fontFamily: fonts.semibold },
+  planillaSub: { fontSize: 11, color: colors.gris, fontFamily: fonts.regular },
+  planillaMonto: { fontSize: 13.5, color: colors.tinta, fontFamily: fonts.bold },
 });
