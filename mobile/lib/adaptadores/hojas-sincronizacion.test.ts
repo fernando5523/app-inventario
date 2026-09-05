@@ -300,7 +300,7 @@ vi.mock('./_sqlite', () => ({
   obtenerDb: () => obtenerDbDeTest(),
 }));
 
-const { hojasSqlite, procesarColaDeSincronizacion } = await import('./hojas-sqlite');
+const { hojasSqlite, procesarColaDeSincronizacion, estadoDeLaCola } = await import('./hojas-sqlite');
 const { obtenerInventarioDeSucursal } = await import('./_compartido');
 
 afterAll(() => {
@@ -400,6 +400,58 @@ describe('el ciclo offline de punta a punta: los 5 pasos del operario, con SQLit
     // Sigue local -- el dato NO se perdió, solo no pudo salir del teléfono.
     expect(hoja!.conteos.some((c) => c.productoId === 61)).toBe(true);
     expect(hoja!.sync).not.toBe('sincronizado');
+    // HALLAZGO DE min-4 (2026-09-05): esto ANTES daba 'error' -- un fallo
+    // de red (ECONNREFUSED real, ni siquiera llegó al servidor) no es un
+    // rechazo. 'local' es lo correcto: se reintenta solo, no hace falta
+    // que nadie "pida ayuda".
+    expect(hoja!.sync).toBe('local');
+  });
+
+  it('2b) sin red con VARIOS conteos en cola: ninguno queda en error -- la cola sigue "pendiente", nunca "rechazada"', async () => {
+    // Reproduce el reporte exacto: force-stop y reabrir con 2 conteos en
+    // cola, sin red. `estadoDeLaCola` es lo que `sincronizador.ts` usa
+    // para armar `EstadoCola.error`, que es lo que decide el mensaje de
+    // BandaSync (ver BandaSync.test.ts) -- si esto da `enError > 0`, la
+    // banda dice "revisá la conexión" en vez de "Sin conexión, seguí
+    // contando", que es exactamente el bug reportado.
+    const { hojaId } = await hoja002();
+    process.env.EXPO_PUBLIC_API_URL = `http://127.0.0.1:${await puertoCerrado()}`;
+
+    await hojasSqlite.guardarConteo(hojaId, {
+      productoId: 63,
+      empaques: [{ empaqueNombre: 'Caja', cantidad: 1 }],
+      sueltas: 0,
+      confirmadoPorEscaner: false,
+      contadoEn: 'paso-2b-a',
+    });
+    await hojasSqlite.guardarConteo(hojaId, {
+      productoId: 64,
+      empaques: [{ empaqueNombre: 'Caja', cantidad: 2 }],
+      sueltas: 0,
+      confirmadoPorEscaner: false,
+      contadoEn: 'paso-2b-b',
+    });
+
+    // Intenta sincronizar sin red (dispara al guardar, o al volver a
+    // primer plano) -- exactamente el momento del reporte.
+    await procesarColaDeSincronizacion(enviarViaApiReal as never);
+
+    // "Force-stop y reabrir": nueva conexión al MISMO archivo.
+    simularReinicioDeApp();
+
+    const estado = await estadoDeLaCola();
+    // Al menos los 2 de este test -- puede haber más en la cola por el
+    // paso 2 (todavía sin backend en ese momento de la suite), y eso no
+    // le resta nada al punto de este test.
+    expect(estado.pendientes).toBeGreaterThanOrEqual(2);
+    // EL PUNTO: cero en error. Con el bug, esto daba al menos 2, y la banda armaba
+    // "2 ítems no se pudieron sincronizar -- revisá la conexión o pedí
+    // ayuda" para alguien que ya sabe que no tiene señal.
+    expect(estado.enError).toBe(0);
+    expect(estado.razonRechazo).toBeNull();
+
+    const hoja = await hojasSqlite.porNumero((await hoja002()).inventarioId, '002', 1);
+    expect(hoja!.sync).toBe('local'); // nunca 'error' por esto.
   });
 
   it('3) cierra la app y la vuelve a abrir: el conteo local sigue ahí (32/50 equivalente: nada se perdió)', async () => {

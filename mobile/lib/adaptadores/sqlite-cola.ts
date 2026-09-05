@@ -64,6 +64,11 @@ export function ordenarCola(items: ItemCola[]): ItemCola[] {
  * se pueda desincronizar de la cola real. `error` gana sobre
  * `sincronizando` (si algo falló, no se puede decir que "va bien" porque
  * otro item de la misma hoja esté en curso).
+ *
+ * OJO: un item que falló por `sin-red` (ver `aplicarResultadoEnvio`)
+ * queda en `pendiente`, NO en `error` — así que estar sin conexión da
+ * `local`, nunca `error`. `error` significa de verdad "esto no se va a
+ * arreglar solo insistiendo".
  */
 export function estadoSyncDeHoja(itemsDeLaHoja: ItemCola[]): EstadoSync {
   if (itemsDeLaHoja.length === 0) return 'sincronizado';
@@ -89,22 +94,35 @@ export const RECHAZO_SIN_MOTIVO = 'Rechazado por el servidor.';
  * no lo hace. `null` = se sincronizó, sale de la cola. Un objeto = se
  * queda, con el estado que le corresponde.
  *
- * Rechazado (el servidor dijo que no — ej. la hoja ya la finalizó otra
- * persona) y sin-red se tratan IGUAL en el `estado`: los dos dejan el
- * item en `error`, visible, nunca en un limbo silencioso ni en un
- * reintento infinito sin que nadie se entere. Donde SÍ se distinguen es
- * en `razon`: un rechazo real guarda el motivo del servidor (o el
- * fallback fijo si no mandó ninguno) para que la pantalla pueda decir
- * POR QUÉ en vez de mandar a buscar señal cuando el problema no es de
- * red — un `sin-red` no tiene "razón del servidor" que guardar, así que
- * queda en `null`.
+ * HALLAZGO DE min-4 (2026-09-05): sin red, tras force-stop y reabrir con
+ * conteos en cola, la banda decía "N ítems no se pudieron sincronizar —
+ * revisá la conexión o pedí ayuda" — el mensaje de un RECHAZO, para
+ * alguien que está sin red mirando sus propios conteos ya guardados. La
+ * causa: `sin-red` y `rechazado` dejaban el mismo `estado: 'error'`, así
+ * que `estadoDeLaCola`/`sincronizacionDeHojas` (BandaSync.tsx) no podían
+ * distinguirlos — `cola.error` ganaba SIEMPRE sobre `cola.sinRed`.
+ *
+ * LA REGLA, desde acá: un fallo de RED nunca marca `error` — el pedido ni
+ * siquiera SALIÓ, no hay nada que el servidor haya "rechazado". Queda
+ * `pendiente`, igual que antes de intentarlo: se reintenta solo en el
+ * próximo disparo (sincronizador.ts), sin que nadie tenga que hacer nada,
+ * y la banda puede mostrar "Sin conexión — seguí contando" en vez de
+ * mandar a buscar ayuda para algo que se arregla solo con la WiFi.
+ *
+ * `error` queda RESERVADO para un rechazo real del servidor (4xx/5xx que
+ * sí respondió) — eso es lo que de verdad "no se va a arreglar solo
+ * insistiendo", y ahí SÍ se guarda `razon` (el motivo del servidor, o el
+ * fallback fijo si no mandó ninguno).
  */
 export function aplicarResultadoEnvio(item: ItemCola, resultado: ResultadoEnvio): ItemCola | null {
   if (resultado.ok) return null;
+  if (resultado.motivo === 'sin-red') {
+    return { ...item, estado: 'pendiente', intentos: item.intentos + 1, razon: null };
+  }
   return {
     ...item,
     estado: 'error',
     intentos: item.intentos + 1,
-    razon: resultado.motivo === 'rechazado' ? (resultado.mensaje?.trim() || RECHAZO_SIN_MOTIVO) : null,
+    razon: resultado.mensaje?.trim() || RECHAZO_SIN_MOTIVO,
   };
 }

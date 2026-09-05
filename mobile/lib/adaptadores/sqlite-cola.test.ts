@@ -67,6 +67,18 @@ describe('estadoSyncDeHoja', () => {
     const items = [item({ id: 1, estado: 'pendiente' }), item({ id: 2, estado: 'enviando' }), item({ id: 3, estado: 'error' })];
     expect(estadoSyncDeHoja(items)).toBe('error');
   });
+
+  it('items que fallaron por sin-red (aplicarResultadoEnvio los deja en pendiente): la hoja da "local", NUNCA "error"', () => {
+    // Reproduce el hallazgo de min-4 desde el otro lado: lo que
+    // `aplicarResultadoEnvio` produce para un fallo de red (estado
+    // 'pendiente') tiene que verse acá como "todavía no salió", no como
+    // "esto está roto".
+    const dosConteosFallidosPorRed = [
+      item({ id: 1, productoId: 60, estado: 'pendiente', intentos: 1 }),
+      item({ id: 2, productoId: 61, estado: 'pendiente', intentos: 1 }),
+    ];
+    expect(estadoSyncDeHoja(dosConteosFallidosPorRed)).toBe('local');
+  });
 });
 
 describe('aplicarResultadoEnvio', () => {
@@ -81,10 +93,16 @@ describe('aplicarResultadoEnvio', () => {
     expect(resultado?.intentos).toBe(1);
   });
 
-  it('sin red: mismo tratamiento que rechazado — error visible, no un reintento infinito silencioso', () => {
+  it('sin red: queda PENDIENTE, nunca error -- un fallo de red no es un rechazo del servidor', () => {
+    // Hallazgo de min-4 (2026-09-05): con esto en 'error', estadoDeLaCola
+    // contaba el item como rechazo y la banda decía "revisá la conexión o
+    // pedí ayuda" a alguien que YA SABE que está sin red y solo necesita
+    // saber que su conteo está a salvo. Un fallo de red se reintenta solo
+    // en el próximo disparo (sincronizador.ts) -- no hace falta que nadie
+    // "pida ayuda" para que vuelva la WiFi.
     const resultado = aplicarResultadoEnvio(item({ intentos: 2 }), { ok: false, motivo: 'sin-red' });
-    expect(resultado?.estado).toBe('error');
-    expect(resultado?.intentos).toBe(3);
+    expect(resultado?.estado).toBe('pendiente');
+    expect(resultado?.intentos).toBe(3); // sigue contando intentos, solo no se marca como rechazo.
   });
 
   it('no muta el item original', () => {
