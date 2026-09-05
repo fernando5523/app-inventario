@@ -1,5 +1,5 @@
 import { router } from 'expo-router';
-import { AlertTriangle, Layers, Wallet } from 'lucide-react-native';
+import { AlertTriangle, Layers, Scale, Wallet } from 'lucide-react-native';
 import { useEffect, useMemo, useState, type JSX } from 'react';
 import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
 
@@ -7,7 +7,7 @@ import { PantallaConTabs } from '../../components/navegacion/PantallaConTabs';
 import { BarraApp, Badge } from '../../components/ui';
 import { repositorioLiquidacion } from '../../lib/contenedor';
 import { asistentesConCentavoExtra } from '../../lib/dominio/reparto-visible';
-import type { DetalleLiquidacion, Liquidacion } from '../../lib/puertos/repositorios';
+import type { Conciliacion, DetalleLiquidacion, Liquidacion } from '../../lib/puertos/repositorios';
 import { useSesion } from '../../lib/sesion-contexto';
 import { colors, fonts, fontSize, radius, spacing } from '../../lib/theme';
 
@@ -55,16 +55,23 @@ export default function LiquidacionScreen(): JSX.Element {
   const { sesion, cerrar } = useSesion();
   const [cargando, setCargando] = useState(true);
   const [liquidacion, setLiquidacion] = useState<Liquidacion | null>(null);
+  const [conciliacion, setConciliacion] = useState<Conciliacion | null>(null);
   const [filtro, setFiltro] = useState<Filtro>('todos');
 
   useEffect(() => {
     if (!sesion) return;
     let vigente = true;
-    repositorioLiquidacion.deSucursal(sesion.sucursal!.id).then((resultado) => {
-      if (!vigente) return;
-      setLiquidacion(resultado);
-      setCargando(false);
-    });
+    // Piden lo mismo (el último ciclo cerrado de la sucursal): si uno es
+    // null el otro también lo es, pero se piden en paralelo en vez de
+    // encadenados porque no dependen entre sí.
+    Promise.all([repositorioLiquidacion.deSucursal(sesion.sucursal!.id), repositorioLiquidacion.conciliacion(sesion.sucursal!.id)]).then(
+      ([resultadoLiq, resultadoConc]) => {
+        if (!vigente) return;
+        setLiquidacion(resultadoLiq);
+        setConciliacion(resultadoConc);
+        setCargando(false);
+      },
+    );
     return () => {
       vigente = false;
     };
@@ -208,6 +215,66 @@ export default function LiquidacionScreen(): JSX.Element {
             ) : null}
           </View>
 
+          {/* Por qué el total de la planilla no da EXACTO contra el
+              faltante neto -- el residuo de redondeo de la cuota, y si lo
+              recaudado por inasistencia se repartió entero. Para que el
+              Coordinador lo vea ANTES de lacrar, no después de que alguien
+              de Contabilidad pregunte por qué no cierra. */}
+          {conciliacion ? (
+            <View style={styles.tarjeta}>
+              <View style={styles.tarjetaCabecera}>
+                <Scale size={18} color={colors.rojo} />
+                <Text style={styles.tarjetaTitulo}>Conciliación</Text>
+              </View>
+              {!conciliacion.calculable ? (
+                <Text style={styles.tarjetaTexto}>{motivoSinCalcular(conciliacion.advertencia)}</Text>
+              ) : (
+                <>
+                  <View style={styles.resumen}>
+                    <View style={styles.resumenFila}>
+                      <Text style={styles.resumenEtiqueta}>Suma real de la planilla</Text>
+                      <Text style={styles.resumenValor}>{soles(conciliacion.sumaPlanilla)}</Text>
+                    </View>
+                    <View style={styles.resumenFila}>
+                      <Text style={styles.resumenEtiqueta}>Diferencia por redondeo</Text>
+                      <Text style={styles.resumenValor}>{soles(conciliacion.diferenciaPorRedondeo)}</Text>
+                    </View>
+                  </View>
+                  <Text style={styles.notaReparto}>
+                    Son los centavos que deja el redondeo de la cuota por persona ({conciliacion.colaboradores} colaboradores) —
+                    hoy quedan a favor del personal.
+                  </Text>
+
+                  <View style={styles.conciliacionFondo}>
+                    <View style={styles.resumenFila}>
+                      <Text style={styles.resumenEtiqueta}>Fondo de multas recaudado</Text>
+                      <Text style={styles.resumenValor}>{soles(conciliacion.fondoDeMultas.recaudado)}</Text>
+                    </View>
+                    <View style={styles.resumenFila}>
+                      <Text style={styles.resumenEtiqueta}>Repartido entre asistentes</Text>
+                      <Text style={styles.resumenValor}>{soles(conciliacion.fondoDeMultas.repartido)}</Text>
+                    </View>
+                  </View>
+
+                  {conciliacion.fondoDeMultas.cierra ? (
+                    <Badge label="El fondo de multas cierra" variant="ok" />
+                  ) : (
+                    // Color de AVISO (proceso/procesoSuave), no de error: es
+                    // un descuadre a mirar, no una falla que rompió algo.
+                    <View style={styles.aviso}>
+                      <AlertTriangle size={16} color={colors.proceso} />
+                      <Text style={styles.avisoTexto}>
+                        El fondo de multas no cierra: se repartió {soles(conciliacion.fondoDeMultas.repartido)} de{' '}
+                        {soles(conciliacion.fondoDeMultas.recaudado)} recaudados (diferencia de{' '}
+                        {soles(conciliacion.fondoDeMultas.diferencia)}).
+                      </Text>
+                    </View>
+                  )}
+                </>
+              )}
+            </View>
+          ) : null}
+
           <View style={styles.seccion}>
             <Text style={styles.seccionTitulo}>Planilla de descuentos</Text>
             <Text style={styles.seccionTotal}>{liquidacion.planilla.length} colaboradores</Text>
@@ -322,6 +389,7 @@ const styles = StyleSheet.create({
   resumen: { gap: spacing.sm + 1 },
   resumenFila: { flexDirection: 'row', alignItems: 'baseline', justifyContent: 'space-between', gap: spacing.sm },
   resumenFilaSeparada: { paddingTop: 9, borderTopWidth: 1, borderTopColor: colors.borde },
+  conciliacionFondo: { gap: spacing.sm + 1, marginTop: spacing.sm, paddingTop: 9, borderTopWidth: 1, borderTopColor: colors.borde },
   resumenEtiqueta: { fontSize: 12.5, color: colors.gris, fontFamily: fonts.regular },
   resumenValor: { fontSize: 16, color: colors.tinta, fontFamily: fonts.bold, fontVariant: ['tabular-nums'] },
   resumenFalta: { color: colors.proceso },

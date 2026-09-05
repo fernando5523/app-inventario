@@ -12,7 +12,12 @@
 
 import { simularLatencia } from './_compartido';
 import { sesionMemoria } from './sesion-memoria';
-import type { DetalleLiquidacion, Liquidacion, RepositorioLiquidacion } from '../puertos/repositorios';
+import type { Conciliacion, DetalleLiquidacion, Liquidacion, RepositorioLiquidacion } from '../puertos/repositorios';
+
+/** Espeja historial.calculos.ts#redondear (2 decimales) -- no existe una lib compartida entre backend y mobile. */
+function redondear(n: number): number {
+  return Math.round(n * 100) / 100;
+}
 
 const SUCURSAL_LUZURIAGA_ID = 1;
 
@@ -83,5 +88,45 @@ export const liquidacionMemoria: RepositorioLiquidacion = {
       advertencia: { itemsSinPrecio: 0, asistenciaSinRegistrar: false, ajustesSinRegistrar: false, mensaje: null },
     };
     return liquidacion;
+  },
+
+  /**
+   * Mismo patrón que el backend (liquidacion.service.ts#conciliacion): parte
+   * de `deSucursal` y desglosa de dónde sale el número, en vez de recalcular
+   * la planilla desde cero con otra fórmula.
+   */
+  async conciliacion(sucursalId): Promise<Conciliacion | null> {
+    const liquidacion = await liquidacionMemoria.deSucursal(sucursalId);
+    if (liquidacion === null) return null;
+
+    if (liquidacion.faltanteNeto === null || liquidacion.cuotaBase === null || liquidacion.totalFaltas === null) {
+      return { calculable: false, periodo: liquidacion.periodo, advertencia: liquidacion.advertencia };
+    }
+    const { faltanteNeto, cuotaBase, totalFaltas, multaInasistencia, planilla } = liquidacion;
+
+    const sumaPlanilla = redondear(planilla.reduce((total, p) => total + p.monto, 0));
+    // Lo que EFECTIVAMENTE recibió cada asistente (cuotaBase - su monto),
+    // no bonoAsistencia × asistentes: esa multiplicación es la que no
+    // cerraba cuando el reparto no daba parejo.
+    const repartido = redondear(planilla.filter((p) => p.asistio).reduce((total, p) => total + (cuotaBase - p.monto), 0));
+    const recaudado = redondear(totalFaltas * multaInasistencia);
+
+    return {
+      calculable: true,
+      periodo: liquidacion.periodo,
+      faltanteNeto,
+      sumaPlanilla,
+      diferenciaPorRedondeo: redondear(faltanteNeto - sumaPlanilla),
+      colaboradores: planilla.length,
+      asistieron: planilla.length - totalFaltas,
+      faltaron: totalFaltas,
+      fondoDeMultas: {
+        recaudado,
+        repartido,
+        diferencia: redondear(repartido - recaudado),
+        cierra: redondear(repartido - recaudado) === 0,
+      },
+      advertencia: liquidacion.advertencia,
+    };
   },
 };
