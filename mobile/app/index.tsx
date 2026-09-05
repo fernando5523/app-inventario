@@ -15,6 +15,7 @@ import {
   type SelectOpcion,
 } from '../components/ui';
 import { repositorioSesion } from '../lib/contenedor';
+import { ejecutarIngreso } from '../lib/ejecutar-ingreso';
 import type { Colaborador, Sucursal } from '../lib/dominio/tipos';
 import { useSesion } from '../lib/sesion-contexto';
 import { colors, fonts, fontSize, radius, spacing } from '../lib/theme';
@@ -113,14 +114,19 @@ export default function LoginScreen(): JSX.Element {
 
   async function manejarIngreso(): Promise<void> {
     if (!persona) return;
-    setIngresando(true);
-    try {
-      const nuevaSesion = await ingresar(persona.id, pin);
-      router.replace(`/${nuevaSesion.colaborador.rol}`);
-    } catch (error) {
-      Alert.alert('No se pudo ingresar', error instanceof Error ? error.message : 'Intentá de nuevo.');
-      setIngresando(false);
-    }
+    await ejecutarIngreso(persona.id, pin, {
+      ingresar,
+      alEntrar: (nuevaSesion) => router.replace(`/${nuevaSesion.colaborador.rol}`),
+      // Vaciar el PIN ANTES del aviso: sin esto los 6 puntos quedan puestos y
+      // el reintento cae sobre un campo lleno — con 8 intentos/15 min por
+      // colaborador, la persona se autobloquea sin entender por qué.
+      vaciarPin: () => setPin(''),
+      // Al cerrar el aviso, reabrir el teclado: el campo ya quedó vacío y el
+      // foco listo para reintentar, sin tener que volver a tocar "Clave".
+      alRechazar: (mensaje) =>
+        Alert.alert('No se pudo ingresar', mensaje, [{ text: 'Reintentar', onPress: () => setModalPinVisible(true) }]),
+      marcarIngresando: setIngresando,
+    });
   }
 
   const version = Constants.expoConfig?.version ?? '—';
