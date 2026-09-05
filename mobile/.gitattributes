@@ -1,0 +1,6 @@
+# Los scripts de shell tienen que mantener LF siempre, sin importar el
+# core.autocrlf de quien clona: un `.sh` con CRLF falla al ejecutarse en
+# bash (el shebang y cualquier línea con `\r` al final se leen mal). Sin
+# esto, git en Windows podía convertir mobile/scripts/*.sh a CRLF al
+# hacer checkout.
+*.sh text eol=lf
