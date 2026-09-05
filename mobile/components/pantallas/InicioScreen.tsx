@@ -11,7 +11,7 @@ import { useSesion } from '../../lib/sesion-contexto';
 import { colors, fonts, fontSize, spacing } from '../../lib/theme';
 import { ACCESOS_POR_ROL } from '../navegacion/accesos';
 import { PantallaConTabs } from '../navegacion/PantallaConTabs';
-import { AccesoTarjeta, BandaSync, BarraApp, GrupoRol, formatoMiles, formatoPct, sincronizacionDeHojas, type EstadoSincronizacion } from '../ui';
+import { AccesoTarjeta, BandaSync, BarraApp, Button, GrupoRol, formatoMiles, formatoPct, sincronizacionDeHojas, type EstadoSincronizacion } from '../ui';
 
 const NOMBRE_ROL: Record<Rol, string> = {
   administrador: 'Administrador',
@@ -62,6 +62,16 @@ const ETIQUETA_ESTADO_1ER_CONTEO: Record<ReturnType<typeof estadoConjunto>, stri
 export function InicioScreen(): JSX.Element {
   const { sesion, cerrar } = useSesion();
   const [cargando, setCargando] = useState(true);
+  // Solo la usa la rama Administrador: las otras 3 ramas ya caen a datos
+  // locales sin red (ver inventarioIdSinRed más abajo) y no necesitan
+  // mostrar un mensaje de error — el Administrador no tiene un SQLite
+  // equivalente al avance de conteo, así que sin red no hay nada que
+  // mostrar salvo decirlo.
+  const [errorSistema, setErrorSistema] = useState<string | null>(null);
+  // Incrementarlo desde el botón "Reintentar" fuerza al useFocusEffect de
+  // abajo a correr de nuevo sin reestructurar la función (que ya maneja su
+  // propio `vigente` para las 3 ramas) — recarga sin salir de la pantalla.
+  const [intentoManual, setIntentoManual] = useState(0);
   const [inventario, setInventario] = useState<InventarioActivo | null>(null);
   // `todas()` del inventario -- Coordinador y Auditor ven el MISMO dato
   // (los dos pueden pedir alcance=todas, ver backend/README.md), nunca
@@ -87,18 +97,30 @@ export function InicioScreen(): JSX.Element {
         // sentido pedir repositorioInventario.activo(sesion.sucursal.id)
         // para él, su vista es del sistema entero.
         if (sesion!.colaborador.rol === 'administrador') {
-          const [tiendas, usuarios] = await Promise.all([repositorioTiendas.listar(), repositorioUsuarios.listar()]);
-          if (!vigente) return;
-          const inventariosPorTienda = await Promise.all(tiendas.map((t) => repositorioInventario.activo(t.id)));
-          if (!vigente) return;
-          setEstadoSistema({
-            tiendasActivas: tiendas.filter((t) => t.activa !== false).length,
-            totalTiendas: tiendas.length,
-            usuariosActivos: usuarios.filter((u) => u.activo).length,
-            totalUsuarios: usuarios.length,
-            inventariosEnCurso: inventariosPorTienda.filter((i) => i !== null).length,
-          });
-          setCargando(false);
+          setErrorSistema(null);
+          try {
+            const [tiendas, usuarios] = await Promise.all([repositorioTiendas.listar(), repositorioUsuarios.listar()]);
+            if (!vigente) return;
+            const inventariosPorTienda = await Promise.all(tiendas.map((t) => repositorioInventario.activo(t.id)));
+            if (!vigente) return;
+            setEstadoSistema({
+              tiendasActivas: tiendas.filter((t) => t.activa !== false).length,
+              totalTiendas: tiendas.length,
+              usuariosActivos: usuarios.filter((u) => u.activo).length,
+              totalUsuarios: usuarios.length,
+              inventariosEnCurso: inventariosPorTienda.filter((i) => i !== null).length,
+            });
+          } catch (e) {
+            // A diferencia de las otras 3 ramas (ver más abajo), acá no hay
+            // ningún dato local al que caer -- "tiendas activas" y
+            // "usuarios habilitados" son cifras del sistema entero, no del
+            // avance de conteo de esta persona. Sin este catch, el spinner
+            // quedaba girando para siempre (mismo bug que f558689 arregló
+            // en las otras ramas, sin llegar a tocar esta).
+            if (vigente) setErrorSistema(e instanceof Error ? e.message : 'No se pudo cargar el estado del sistema.');
+          } finally {
+            if (vigente) setCargando(false);
+          }
           return;
         }
 
@@ -153,7 +175,7 @@ export function InicioScreen(): JSX.Element {
       return () => {
         vigente = false;
       };
-    }, [sesion]),
+    }, [sesion, intentoManual]),
   );
 
   // El layout del grupo (RolTabsLayout) ya garantiza que no se llega acá
@@ -315,6 +337,11 @@ export function InicioScreen(): JSX.Element {
         <Text style={styles.estadoTitulo}>{tituloEstado}</Text>
         {cargando ? (
           <ActivityIndicator color={colors.rojo} style={styles.cargandoEstado} />
+        ) : errorSistema ? (
+          <View style={styles.errorSistema}>
+            <Text style={styles.estadoPendiente}>{errorSistema}</Text>
+            <Button label="Reintentar" size="sm" onPress={() => setIntentoManual((n) => n + 1)} />
+          </View>
         ) : filasEstado.length > 0 ? (
           filasEstado.map((f) => (
             <View key={f.etiqueta} style={styles.filaEstado}>
@@ -358,6 +385,7 @@ const styles = StyleSheet.create({
   },
   estadoTitulo: { fontSize: 14.5, color: colors.tinta, fontFamily: fonts.bold },
   estadoPendiente: { fontSize: 12.5, color: colors.grisClaro, fontFamily: fonts.regular },
+  errorSistema: { gap: 10, alignItems: 'flex-start' },
   cargandoEstado: { alignSelf: 'flex-start' },
   filaEstado: { flexDirection: 'row', alignItems: 'baseline', justifyContent: 'space-between', gap: 10 },
   filaEtiqueta: { fontSize: 12.5, color: colors.gris, fontFamily: fonts.regular },

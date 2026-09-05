@@ -1,10 +1,11 @@
-import { router } from 'expo-router';
+import { router, useFocusEffect } from 'expo-router';
 import { Check, CloudDownload, LayoutGrid, Users } from 'lucide-react-native';
-import { useEffect, useMemo, useRef, useState, type JSX, type ReactNode } from 'react';
+import { useCallback, useMemo, useRef, useState, type JSX, type ReactNode } from 'react';
 import { ActivityIndicator, Alert, Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { PantallaConTabs } from '../../components/navegacion/PantallaConTabs';
 import { AvanceFila, BarraApp, Badge, Button, formatoFechaHora, formatoMiles, type BadgeVariant } from '../../components/ui';
+import { inventarioIdSinRed } from '../../lib/adaptadores/hojas-sqlite';
 import { repositorioHojas, repositorioInventario, repositorioSesion } from '../../lib/contenedor';
 import { partirEnHojas } from '../../lib/dominio/lote';
 import { TAMANOS_HOJA, type Colaborador, type HojaConteo, type TamanoHoja } from '../../lib/dominio/tipos';
@@ -212,6 +213,7 @@ export default function HojasScreen(): JSX.Element {
   const { sesion, cerrar } = useSesion();
 
   const [cargandoInicial, setCargandoInicial] = useState(true);
+  const [errorInicial, setErrorInicial] = useState<string | null>(null);
   const [inventarioId, setInventarioId] = useState<number | null>(null);
   const [items, setItems] = useState<number | null>(null);
   const [tomadoEn, setTomadoEn] = useState<string | null>(null);
@@ -232,39 +234,82 @@ export default function HojasScreen(): JSX.Element {
   // puerto (RepositorioInventario.traerSnapshot) toma el mismo `signal`.
   const controladorSnapshotRef = useRef<AbortController | null>(null);
 
-  useEffect(() => {
+  const cargar = useCallback(async () => {
     if (!sesion) return;
-    let vigente = true;
+    setErrorInicial(null);
+    // El snapshot (items/tomadoEn/rondaActiva) SOLO lo tiene el servidor —
+    // sin red, se cae al inventario que ya se descargó localmente (mismo
+    // patrón que f558689 en Inicio/Mis hojas): sin eso, el Coordinador
+    // quedaba con un spinner infinito por no poder ni siquiera VER las
+    // hojas que ya existen, aunque estén completas en SQLite.
+    let inventarioActivo: number | null;
+    let itemsSnapshot: number | null = null;
+    let tomadoEnSnapshot: string | null = null;
+    let tamanoSnapshot: TamanoHoja | null = null;
+    let rondaActiva = 1;
+    // Distingue "el servidor contestó y no hay inventario todavía" (estado
+    // normal: hay que tomar el snapshot en el paso 1) de "no se pudo ni
+    // preguntar" (sin red) — confundirlas mostraría "no se pudo conectar"
+    // en el arranque normal de un inventario nuevo.
+    let activoFallo = false;
+    try {
+      const activo = await repositorioInventario.activo(sesion.sucursal!.id);
+      inventarioActivo = activo?.inventarioId ?? null;
+      itemsSnapshot = activo?.items ?? null;
+      tomadoEnSnapshot = activo?.tomadoEn ?? null;
+      tamanoSnapshot = activo?.tamanoHoja ?? null;
+      rondaActiva = activo?.rondaActiva ?? 1;
+    } catch {
+      activoFallo = true;
+      inventarioActivo = await inventarioIdSinRed();
+    }
 
-    async function cargar(): Promise<void> {
-      const [activo, colaboradores] = await Promise.all([
-        repositorioInventario.activo(sesion!.sucursal!.id),
-        repositorioSesion.colaboradores(sesion!.sucursal!.id),
-      ]);
-      if (!vigente) return;
+    // El padrón de colaboradores no tiene fallback local ni bloquea ver las
+    // hojas ya creadas: si falla, se sigue con la lista vacía (el paso 3 de
+    // "asignar" simplemente no tendrá a quién repartir hasta que vuelva la red).
+    let colaboradores: Colaborador[] = [];
+    try {
+      colaboradores = await repositorioSesion.colaboradores(sesion.sucursal!.id);
+    } catch {
+      // silencioso a propósito, ver el comentario de arriba.
+    }
+    setContadores(colaboradores.filter((c) => c.rol === 'conteo'));
 
-      setContadores(colaboradores.filter((c) => c.rol === 'conteo'));
-
-      if (activo) {
-        setInventarioId(activo.inventarioId);
-        setItems(activo.items);
-        setTomadoEn(activo.tomadoEn);
-        setTamanoCreado(activo.tamanoHoja);
+    if (inventarioActivo) {
+      setInventarioId(inventarioActivo);
+      setItems(itemsSnapshot);
+      setTomadoEn(tomadoEnSnapshot);
+      setTamanoCreado(tamanoSnapshot);
+      try {
         // Las hojas de la ronda activa (`?? 1`: si todavía no hay hojas,
         // rondaActiva es null y no hay ninguna que traer de ninguna ronda —
         // el 1 es inocuo). El paso 3 (asignar) también reparte las hojas
-        // nuevas de un reconteo, que nacen sin asignar.
-        const todas = await repositorioHojas.todas(activo.inventarioId, activo.rondaActiva ?? 1);
-        if (vigente) setHojas(todas);
+        // nuevas de un reconteo, que nacen sin asignar. `repositorioHojas`
+        // ya cae solo a SQLite sin red (hojas-sqlite.ts), así que esto no
+        // necesita su propio fallback — solo no dejar que un error acá
+        // tire abajo el `setCargandoInicial(false)` de más abajo.
+        const todas = await repositorioHojas.todas(inventarioActivo, rondaActiva);
+        setHojas(todas);
+      } catch (e) {
+        setErrorInicial(e instanceof Error ? e.message : 'No se pudieron cargar las hojas.');
       }
-      if (vigente) setCargandoInicial(false);
+    } else if (activoFallo) {
+      // Sin red Y sin nada descargado localmente: ahí sí es un fallo real
+      // que hay que decir, no el "todavía no hay inventario" normal del
+      // arranque de un ciclo.
+      setErrorInicial('No se pudo conectar con el servidor ni encontrar un inventario descargado localmente.');
     }
-
-    cargar();
-    return () => {
-      vigente = false;
-    };
+    setCargandoInicial(false);
   }, [sesion]);
+
+  // useFocusEffect, no useEffect: volver a esta pantalla (por ejemplo tras
+  // recuperar la señal) tiene que reintentar sola, igual que el resto de
+  // las pantallas de acceso ya arregladas.
+  useFocusEffect(
+    useCallback(() => {
+      cargar();
+    }, [cargar]),
+  );
 
   /**
    * ¿Sabemos que esta sucursal NO tiene almacén de Dynamics asociado?
@@ -443,6 +488,12 @@ export default function HojasScreen(): JSX.Element {
 
       {cargandoInicial ? (
         <ActivityIndicator color={colors.rojo} style={styles.cargandoInicial} />
+      ) : errorInicial ? (
+        <View style={styles.tarjeta}>
+          <Text style={styles.tarjetaTitulo}>No se pudo cargar la gestión de hojas</Text>
+          <Text style={styles.tarjetaTexto}>{errorInicial}</Text>
+          <Button label="Reintentar" onPress={cargar} />
+        </View>
       ) : (
         <>
           <PasoTarjeta

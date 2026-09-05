@@ -1,6 +1,6 @@
-import { router } from 'expo-router';
+import { router, useFocusEffect } from 'expo-router';
 import { Check, Cloud, Lock, ShieldCheck } from 'lucide-react-native';
-import { useEffect, useState, type JSX } from 'react';
+import { useCallback, useState, type JSX } from 'react';
 import { ActivityIndicator, Alert, Modal, StyleSheet, Text, View } from 'react-native';
 
 import { PantallaConTabs } from '../../components/navegacion/PantallaConTabs';
@@ -28,6 +28,7 @@ import { colors, fonts, spacing } from '../../lib/theme';
 export default function LacradoScreen(): JSX.Element {
   const { sesion, cerrar } = useSesion();
   const [cargando, setCargando] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const [inventarioId, setInventarioId] = useState<number | null>(null);
   const [items, setItems] = useState<number | null>(null);
   const [periodo, setPeriodo] = useState<string | null>(null);
@@ -39,16 +40,14 @@ export default function LacradoScreen(): JSX.Element {
   const [registrando, setRegistrando] = useState(false);
   const [modalVisible, setModalVisible] = useState(false);
 
-  useEffect(() => {
+  const cargar = useCallback(async () => {
     if (!sesion) return;
-    let vigente = true;
-
-    async function cargar(): Promise<void> {
+    setError(null);
+    try {
       const [pagina, colaboradores] = await Promise.all([
-        repositorioHistorial.listar({ sucursalId: sesion!.sucursal!.id }),
-        repositorioSesion.colaboradores(sesion!.sucursal!.id),
+        repositorioHistorial.listar({ sucursalId: sesion.sucursal!.id }),
+        repositorioSesion.colaboradores(sesion.sucursal!.id),
       ]);
-      if (!vigente) return;
 
       setAuditores(colaboradores.filter((c) => c.rol === 'auditor'));
 
@@ -72,16 +71,27 @@ export default function LacradoScreen(): JSX.Element {
         setItems(pendiente.snapshotItems);
         setPeriodo(pendiente.periodo);
         const estadoLacrado = await repositorioLacrado.estado(pendiente.id);
-        if (vigente) setEstado(estadoLacrado);
+        setEstado(estadoLacrado);
       }
-      if (vigente) setCargando(false);
+    } catch (e) {
+      // Sin esto, un fallo sin red dejaba el spinner girando para siempre
+      // (mismo bug que f558689 arregló) — y encima esta pantalla usaba
+      // `useEffect` con deps `[sesion]`, así que ni siquiera reintentaba
+      // solo al volver a visitarla.
+      setError(e instanceof Error ? e.message : 'No se pudo cargar el estado del lacrado.');
+    } finally {
+      setCargando(false);
     }
-
-    cargar();
-    return () => {
-      vigente = false;
-    };
   }, [sesion]);
+
+  // useFocusEffect, no useEffect: volver a esta pantalla (por ejemplo,
+  // después de que la otra persona firme desde su sesión) tiene que
+  // reflejar el estado real, no el que había al entrar la primera vez.
+  useFocusEffect(
+    useCallback(() => {
+      cargar();
+    }, [cargar]),
+  );
 
   if (!sesion) return <View />;
 
@@ -196,6 +206,12 @@ export default function LacradoScreen(): JSX.Element {
 
       {cargando ? (
         <ActivityIndicator color={colors.rojo} style={styles.cargando} />
+      ) : error ? (
+        <View style={styles.tarjeta}>
+          <Text style={styles.tarjetaTitulo}>No se pudo cargar el lacrado</Text>
+          <Text style={styles.tarjetaTexto}>{error}</Text>
+          <Button label="Reintentar" onPress={cargar} />
+        </View>
       ) : !inventarioId ? (
         <Text style={styles.tarjetaTexto}>
           No hay ningún inventario listo para lacrar en esta sucursal. El lacrado llega cuando el conteo del ciclo ya

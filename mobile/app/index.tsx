@@ -32,8 +32,11 @@ type CampoAbierto = 'sucursal' | 'persona' | null;
 export default function LoginScreen(): JSX.Element {
   const { sesion, cargando, ingresar } = useSesion();
   const [sucursales, setSucursales] = useState<Sucursal[]>([]);
+  const [errorSucursales, setErrorSucursales] = useState<string | null>(null);
   const [colaboradoresDisponibles, setColaboradoresDisponibles] = useState<Colaborador[]>([]);
+  const [errorColaboradores, setErrorColaboradores] = useState<string | null>(null);
   const [administradores, setAdministradores] = useState<Colaborador[]>([]);
+  const [errorAdministradores, setErrorAdministradores] = useState<string | null>(null);
 
   /**
    * El Administrador es del sistema, no de una tienda (`sesion.sucursal`
@@ -60,24 +63,56 @@ export default function LoginScreen(): JSX.Element {
     if (!cargando && sesion) router.replace(`/${sesion.colaborador.rol}`);
   }, [cargando, sesion]);
 
-  useEffect(() => {
-    repositorioSesion.sucursales().then(setSucursales);
-  }, []);
+  function cargarSucursales(): void {
+    setErrorSucursales(null);
+    repositorioSesion
+      .sucursales()
+      .then(setSucursales)
+      .catch((e) => {
+        // Sin esto, un fallo acá (sin red, servidor caído) dejaba el combo
+        // de Sucursal vacío para siempre y sin ningún aviso: la persona no
+        // podía ni empezar a loguearse y no sabía por qué.
+        setErrorSucursales(e instanceof Error ? e.message : 'No se pudieron cargar las sucursales.');
+      });
+  }
+
+  useEffect(cargarSucursales, []);
+
+  function cargarColaboradores(sucursalId: number): void {
+    setErrorColaboradores(null);
+    repositorioSesion
+      .colaboradores(sucursalId)
+      .then(setColaboradoresDisponibles)
+      .catch((e) => {
+        setErrorColaboradores(e instanceof Error ? e.message : 'No se pudieron cargar las personas de esta sucursal.');
+      });
+  }
 
   useEffect(() => {
     if (!sucursal) {
       setColaboradoresDisponibles([]);
+      setErrorColaboradores(null);
       return;
     }
-    repositorioSesion.colaboradores(sucursal.id).then(setColaboradoresDisponibles);
+    cargarColaboradores(sucursal.id);
   }, [sucursal]);
+
+  function cargarAdministradores(): void {
+    setErrorAdministradores(null);
+    repositorioSesion
+      .administradores()
+      .then(setAdministradores)
+      .catch((e) => {
+        setErrorAdministradores(e instanceof Error ? e.message : 'No se pudieron cargar los administradores.');
+      });
+  }
 
   // Se pide recién al entrar en modoAdmin (no en el arranque de la
   // pantalla): es el mismo criterio que ya se usa para colaboradores de una
   // sucursal — no traer del backend lo que todavía nadie pidió ver.
   useEffect(() => {
     if (!modoAdmin) return;
-    repositorioSesion.administradores().then(setAdministradores);
+    cargarAdministradores();
   }, [modoAdmin]);
 
   function alternarModoAdmin(): void {
@@ -174,6 +209,14 @@ export default function LoginScreen(): JSX.Element {
                   setPersona(null);
                 }}
               />
+              {errorSucursales ? (
+                <View style={styles.errorCampo}>
+                  <Text style={styles.errorTexto}>{errorSucursales}</Text>
+                  <Pressable onPress={cargarSucursales} accessibilityRole="button">
+                    <Text style={styles.olvide}>Reintentar</Text>
+                  </Pressable>
+                </View>
+              ) : null}
             </View>
           )}
 
@@ -195,6 +238,17 @@ export default function LoginScreen(): JSX.Element {
                 setPersona(elegida);
               }}
             />
+            {(modoAdmin ? errorAdministradores : errorColaboradores) ? (
+              <View style={styles.errorCampo}>
+                <Text style={styles.errorTexto}>{modoAdmin ? errorAdministradores : errorColaboradores}</Text>
+                <Pressable
+                  onPress={() => (modoAdmin ? cargarAdministradores() : sucursal && cargarColaboradores(sucursal.id))}
+                  accessibilityRole="button"
+                >
+                  <Text style={styles.olvide}>Reintentar</Text>
+                </Pressable>
+              </View>
+            ) : null}
             <Pressable onPress={alternarModoAdmin} accessibilityRole="button">
               <Text style={styles.olvide}>
                 {modoAdmin ? '← Volver al ingreso de tienda' : '¿Sos administrador del sistema? Ingresá acá'}
@@ -302,6 +356,8 @@ const styles = StyleSheet.create({
   },
   valorVacio: { flex: 1, fontSize: fontSize.base, color: colors.grisClaro, fontFamily: fonts.regular },
   olvide: { alignSelf: 'flex-start', marginTop: 2, fontSize: 13.5, color: colors.rojo, fontFamily: fonts.regular },
+  errorCampo: { gap: 2 },
+  errorTexto: { fontSize: 12, color: colors.falta, fontFamily: fonts.regular },
   rolCabecera: { flexDirection: 'row', alignItems: 'baseline', justifyContent: 'space-between', gap: spacing.sm },
   rolNota: { fontSize: fontSize.xs, color: colors.grisClaro, fontFamily: fonts.medium },
   pie: { alignItems: 'center', gap: 5, paddingTop: spacing.xl },

@@ -36,6 +36,7 @@ function opcionDeAlmacen(tienda: Sucursal): SelectOpcion | null {
 export default function TiendasScreen(): JSX.Element {
   const insets = useSafeAreaInsets();
   const [cargando, setCargando] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   /**
    * SELECCIONAR-Y-DESPUES-ACTUAR, el mismo patron ya aprobado en Usuarios.
    *
@@ -95,18 +96,27 @@ export default function TiendasScreen(): JSX.Element {
   }
 
   const cargar = useCallback(async () => {
-    const [lista, listaAlmacenes] = await Promise.all([
-      repositorioTiendas.listar(),
-      // Si Dynamics no responde, la pantalla de tiendas no se puede quedar
-      // en blanco por eso: se sigue viendo y gestionando la lista, solo
-      // que el selector de almacén queda vacío (con su propio aviso, ver
-      // más abajo) en vez de tirar toda la pantalla abajo.
-      repositorioTiendas.listarAlmacenes().catch(() => []),
-    ]);
-    setTiendas(lista);
-    setAlmacenes(listaAlmacenes);
-    setMostrandoTodos(false);
-    setCargando(false);
+    setError(null);
+    try {
+      const [lista, listaAlmacenes] = await Promise.all([
+        repositorioTiendas.listar(),
+        // Si Dynamics no responde, la pantalla de tiendas no se puede quedar
+        // en blanco por eso: se sigue viendo y gestionando la lista, solo
+        // que el selector de almacén queda vacío (con su propio aviso, ver
+        // más abajo) en vez de tirar toda la pantalla abajo.
+        repositorioTiendas.listarAlmacenes().catch(() => []),
+      ]);
+      setTiendas(lista);
+      setAlmacenes(listaAlmacenes);
+      setMostrandoTodos(false);
+    } catch (e) {
+      // A diferencia de listarAlmacenes (Dynamics, ya con su propio
+      // fallback), esto es Postgres: si falla, no hay tiendas que mostrar
+      // y sin este catch el spinner quedaba girando para siempre.
+      setError(e instanceof Error ? e.message : 'No se pudieron cargar las tiendas.');
+    } finally {
+      setCargando(false);
+    }
   }, []);
 
   useFocusEffect(
@@ -324,6 +334,12 @@ export default function TiendasScreen(): JSX.Element {
 
       {cargando ? (
         <ActivityIndicator color={colors.rojo} style={styles.cargando} />
+      ) : error ? (
+        <Card style={styles.formulario}>
+          <Text style={styles.formularioTitulo}>No se pudo cargar el listado</Text>
+          <Text style={styles.ayudaAlmacen}>{error}</Text>
+          <Button label="Reintentar" onPress={cargar} />
+        </Card>
       ) : tiendas.length === 0 ? (
         <EmptyState icon={Store} title="Todavía no hay tiendas" subtitle="Creá la primera con el botón de arriba." />
       ) : (

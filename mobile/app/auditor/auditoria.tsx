@@ -43,36 +43,38 @@ function formatoMoneda(valor: number): string {
 export default function AuditoriaScreen(): JSX.Element {
   const { sesion, cerrar } = useSesion();
   const [cargando, setCargando] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const [items, setItems] = useState<ItemAuditoria[]>([]);
   const [filtro, setFiltro] = useState<FiltroId>('todos');
+
+  const cargar = useCallback(async () => {
+    if (!sesion) return;
+    setError(null);
+    try {
+      const activo = await repositorioInventario.activo(sesion.sucursal!.id);
+      if (!activo) {
+        setCargando(false);
+        return;
+      }
+      const matriz = await repositorioAuditoria.matriz(activo.inventarioId);
+      setItems(matriz);
+    } catch (e) {
+      // Sin esto, un fallo sin red dejaba el spinner girando para siempre:
+      // la excepción cortaba la función antes de llegar al
+      // `setCargando(false)` de abajo (mismo bug que f558689 arregló).
+      setError(e instanceof Error ? e.message : 'No se pudo cargar la matriz de auditoría.');
+    } finally {
+      setCargando(false);
+    }
+  }, [sesion]);
 
   // useFocusEffect, no useEffect: los tabs quedan montados una vez
   // visitados — sin esto, la matriz sigue mostrando datos viejos si el
   // ciclo de conteos avanzó mientras el Auditor estaba en otra pestaña.
   useFocusEffect(
     useCallback(() => {
-      if (!sesion) return;
-      let vigente = true;
-
-      async function cargar(): Promise<void> {
-        const activo = await repositorioInventario.activo(sesion!.sucursal!.id);
-        if (!vigente) return;
-        if (!activo) {
-          setCargando(false);
-          return;
-        }
-        const matriz = await repositorioAuditoria.matriz(activo.inventarioId);
-        if (vigente) {
-          setItems(matriz);
-          setCargando(false);
-        }
-      }
-
       cargar();
-      return () => {
-        vigente = false;
-      };
-    }, [sesion]),
+    }, [cargar]),
   );
 
   if (!sesion) return <View />;
@@ -167,6 +169,14 @@ export default function AuditoriaScreen(): JSX.Element {
 
       {cargando ? (
         <ActivityIndicator color={colors.rojo} style={styles.cargando} />
+      ) : error ? (
+        <View style={styles.tarjetaResumen}>
+          <Text style={styles.resumenTitulo}>No se pudo cargar la auditoría</Text>
+          <Text style={styles.tarjetaTexto}>{error}</Text>
+          <Pressable style={styles.accion} onPress={cargar}>
+            <Text style={styles.accionTexto}>Reintentar</Text>
+          </Pressable>
+        </View>
       ) : items.length === 0 ? (
         <EmptyState
           icon={BarChart3}
@@ -260,6 +270,7 @@ const styles = StyleSheet.create({
   cargando: { marginTop: 24 },
   tarjetaResumen: { padding: 15, gap: 10, borderRadius: 13, borderWidth: 1, borderColor: colors.borde, backgroundColor: colors.campo },
   resumenTitulo: { fontSize: 14.5, color: colors.tinta, fontFamily: fonts.bold },
+  tarjetaTexto: { fontSize: 12.5, lineHeight: 18, color: colors.gris, fontFamily: fonts.regular },
   resumenFila: { flexDirection: 'row', alignItems: 'baseline', justifyContent: 'space-between', gap: 10 },
   resumenEtiqueta: { fontSize: 12.5, color: colors.gris, fontFamily: fonts.regular },
   resumenValor: { fontSize: 16, color: colors.tinta, fontFamily: fonts.bold },

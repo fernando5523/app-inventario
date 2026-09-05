@@ -56,6 +56,7 @@ export function UsuariosScreen({ rol }: UsuariosScreenProps): JSX.Element {
   const { sesion } = useSesion();
   const insets = useSafeAreaInsets();
   const [cargando, setCargando] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const [usuarios, setUsuarios] = useState<Usuario[]>([]);
   const [tiendas, setTiendas] = useState<Sucursal[]>([]);
   const [usuarioSeleccionado, setUsuarioSeleccionado] = useState<Usuario | null>(null);
@@ -86,24 +87,33 @@ export function UsuariosScreen({ rol }: UsuariosScreenProps): JSX.Element {
 
   const cargar = useCallback(async () => {
     if (!sesion) return;
-    // `!`, no `?.`: si sucursal fuera null para un auditor (no debería
-    // pasar nunca), un `?.` degradaría en silencio a `undefined` → listar
-    // TODAS las cuentas — una fuga de privacidad, no un detalle visual.
-    // Mejor que truene acá a que un auditor vea cuentas de otra sucursal.
-    const sucursalId = rol === 'auditor' ? sesion.sucursal!.id : undefined;
-    // Las tiendas SOLO las pide el Administrador. `GET /api/tiendas` está
-    // detrás de requiereRol('administrador'): con el backend real, pedirlas
-    // como Auditor devuelve 403 y dejaría esta pantalla cargando para
-    // siempre. Y no le hacen falta — el Auditor no elige sucursal al crear
-    // (crea para la suya) ni muestra el nombre de sucursal en las fichas,
-    // porque todas las que ve son de la misma.
-    const [listaUsuarios, listaTiendas] = await Promise.all([
-      repositorioUsuarios.listar(sucursalId),
-      rol === 'administrador' ? repositorioTiendas.listar() : Promise.resolve<Sucursal[]>([]),
-    ]);
-    setUsuarios(listaUsuarios);
-    setTiendas(listaTiendas);
-    setCargando(false);
+    setError(null);
+    try {
+      // `!`, no `?.`: si sucursal fuera null para un auditor (no debería
+      // pasar nunca), un `?.` degradaría en silencio a `undefined` → listar
+      // TODAS las cuentas — una fuga de privacidad, no un detalle visual.
+      // Mejor que truene acá a que un auditor vea cuentas de otra sucursal.
+      const sucursalId = rol === 'auditor' ? sesion.sucursal!.id : undefined;
+      // Las tiendas SOLO las pide el Administrador. `GET /api/tiendas` está
+      // detrás de requiereRol('administrador'): con el backend real, pedirlas
+      // como Auditor devuelve 403 y dejaría esta pantalla cargando para
+      // siempre. Y no le hacen falta — el Auditor no elige sucursal al crear
+      // (crea para la suya) ni muestra el nombre de sucursal en las fichas,
+      // porque todas las que ve son de la misma.
+      const [listaUsuarios, listaTiendas] = await Promise.all([
+        repositorioUsuarios.listar(sucursalId),
+        rol === 'administrador' ? repositorioTiendas.listar() : Promise.resolve<Sucursal[]>([]),
+      ]);
+      setUsuarios(listaUsuarios);
+      setTiendas(listaTiendas);
+    } catch (e) {
+      // Sin esto, un fallo sin red dejaba el spinner girando para siempre
+      // (mismo bug que f558689 arregló): la excepción cortaba la función
+      // antes de llegar al `setCargando(false)` de abajo.
+      setError(e instanceof Error ? e.message : 'No se pudieron cargar las cuentas.');
+    } finally {
+      setCargando(false);
+    }
   }, [sesion, rol]);
 
   // useFocusEffect: habilitar/deshabilitar o crear una cuenta y volver a
@@ -354,6 +364,12 @@ export function UsuariosScreen({ rol }: UsuariosScreenProps): JSX.Element {
 
         {cargando ? (
           <ActivityIndicator color={colors.rojo} style={styles.cargando} />
+        ) : error ? (
+          <Card style={styles.formulario}>
+            <Text style={styles.formularioTitulo}>No se pudo cargar el listado</Text>
+            <Text style={styles.ayuda}>{error}</Text>
+            <Button label="Reintentar" onPress={cargar} />
+          </Card>
         ) : usuarios.length === 0 ? (
           <EmptyState icon={Users} title="Todavía no hay cuentas" subtitle="Creá la primera con el botón de arriba." />
         ) : (
@@ -658,6 +674,7 @@ const styles = StyleSheet.create({
   formulario: { gap: 12 },
   formularioCabecera: { flexDirection: 'row', alignItems: 'center', gap: 10 },
   formularioTitulo: { flex: 1, fontSize: 14.5, color: colors.tinta, fontFamily: fonts.bold },
+  ayuda: { fontSize: 12.5, lineHeight: 17.5, color: colors.gris, fontFamily: fonts.regular },
   // Encabezado de sección del design system (.seccion en controles.css):
   // versalita gris a la izquierda, total tenue a la derecha.
   seccion: { flexDirection: 'row', alignItems: 'baseline', justifyContent: 'space-between', gap: 10 },

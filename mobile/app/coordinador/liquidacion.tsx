@@ -1,10 +1,10 @@
-import { router } from 'expo-router';
+import { router, useFocusEffect } from 'expo-router';
 import { AlertTriangle, Layers, Scale, Wallet } from 'lucide-react-native';
-import { useEffect, useMemo, useState, type JSX } from 'react';
+import { useCallback, useMemo, useState, type JSX } from 'react';
 import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { PantallaConTabs } from '../../components/navegacion/PantallaConTabs';
-import { BarraApp, Badge } from '../../components/ui';
+import { BarraApp, Badge, Button } from '../../components/ui';
 import { repositorioLiquidacion } from '../../lib/contenedor';
 import { asistentesConCentavoExtra } from '../../lib/dominio/reparto-visible';
 import type { Conciliacion, DetalleLiquidacion, Liquidacion } from '../../lib/puertos/repositorios';
@@ -54,28 +54,39 @@ function filtrar(planilla: DetalleLiquidacion[], filtro: Filtro): DetalleLiquida
 export default function LiquidacionScreen(): JSX.Element {
   const { sesion, cerrar } = useSesion();
   const [cargando, setCargando] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const [liquidacion, setLiquidacion] = useState<Liquidacion | null>(null);
   const [conciliacion, setConciliacion] = useState<Conciliacion | null>(null);
   const [filtro, setFiltro] = useState<Filtro>('todos');
 
-  useEffect(() => {
+  const cargar = useCallback(async () => {
     if (!sesion) return;
-    let vigente = true;
-    // Piden lo mismo (el último ciclo cerrado de la sucursal): si uno es
-    // null el otro también lo es, pero se piden en paralelo en vez de
-    // encadenados porque no dependen entre sí.
-    Promise.all([repositorioLiquidacion.deSucursal(sesion.sucursal!.id), repositorioLiquidacion.conciliacion(sesion.sucursal!.id)]).then(
-      ([resultadoLiq, resultadoConc]) => {
-        if (!vigente) return;
-        setLiquidacion(resultadoLiq);
-        setConciliacion(resultadoConc);
-        setCargando(false);
-      },
-    );
-    return () => {
-      vigente = false;
-    };
+    setError(null);
+    try {
+      // Piden lo mismo (el último ciclo cerrado de la sucursal): si uno es
+      // null el otro también lo es, pero se piden en paralelo en vez de
+      // encadenados porque no dependen entre sí.
+      const [resultadoLiq, resultadoConc] = await Promise.all([
+        repositorioLiquidacion.deSucursal(sesion.sucursal!.id),
+        repositorioLiquidacion.conciliacion(sesion.sucursal!.id),
+      ]);
+      setLiquidacion(resultadoLiq);
+      setConciliacion(resultadoConc);
+    } catch (e) {
+      // Sin esto, un fallo sin red dejaba el spinner girando para siempre
+      // (mismo bug que f558689 arregló), y `useEffect` con deps `[sesion]`
+      // tampoco reintentaba solo al volver a esta pantalla.
+      setError(e instanceof Error ? e.message : 'No se pudo cargar la liquidación.');
+    } finally {
+      setCargando(false);
+    }
   }, [sesion]);
+
+  useFocusEffect(
+    useCallback(() => {
+      cargar();
+    }, [cargar]),
+  );
 
   const visibles = useMemo(() => (liquidacion ? filtrar(liquidacion.planilla, filtro) : []), [liquidacion, filtro]);
 
@@ -117,8 +128,14 @@ export default function LiquidacionScreen(): JSX.Element {
         onSalir={salir}
       />
 
-      {cargando || !liquidacion ? (
+      {cargando ? (
         <ActivityIndicator color={colors.rojo} style={styles.cargando} />
+      ) : error || !liquidacion ? (
+        <View style={styles.tarjeta}>
+          <Text style={styles.tarjetaTitulo}>No se pudo cargar la liquidación</Text>
+          <Text style={styles.tarjetaTexto}>{error ?? 'Intentá de nuevo.'}</Text>
+          <Button label="Reintentar" onPress={cargar} />
+        </View>
       ) : (
         <>
           <View style={styles.tarjeta}>

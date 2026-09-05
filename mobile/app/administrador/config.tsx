@@ -29,6 +29,7 @@ const MAX_CONTEOS = 5;
 
 export default function ConfiguracionScreen(): JSX.Element {
   const [cargando, setCargando] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const [config, setConfig] = useState<ConfigSistema | null>(null);
   const [guardando, setGuardando] = useState(false);
 
@@ -36,10 +37,20 @@ export default function ConfiguracionScreen(): JSX.Element {
   const [probando, setProbando] = useState(false);
 
   const cargar = useCallback(async () => {
-    const [actual, dynamicsActual] = await Promise.all([repositorioConfig.obtener(), repositorioConfigDynamics.obtener()]);
-    setConfig(actual);
-    setDynamics(dynamicsActual);
-    setCargando(false);
+    setError(null);
+    try {
+      const [actual, dynamicsActual] = await Promise.all([repositorioConfig.obtener(), repositorioConfigDynamics.obtener()]);
+      setConfig(actual);
+      setDynamics(dynamicsActual);
+    } catch (e) {
+      // Sin esto, un fallo acá (sin red, servidor caído) dejaba el spinner
+      // girando para siempre: `setCargando(false)` nunca se alcanzaba
+      // porque la excepción cortaba la función antes de llegar (mismo bug
+      // que f558689 arregló en Inicio/Mis hojas/Contar).
+      setError(e instanceof Error ? e.message : 'No se pudo cargar la configuración.');
+    } finally {
+      setCargando(false);
+    }
   }, []);
 
   useFocusEffect(
@@ -78,8 +89,14 @@ export default function ConfiguracionScreen(): JSX.Element {
     <PantallaConTabs scrollable contentStyle={styles.contenido}>
       <BarraApp rotulo="Configuración" cifras="Parámetros del sistema" />
 
-      {cargando || !config ? (
+      {cargando ? (
         <ActivityIndicator color={colors.rojo} style={styles.cargando} />
+      ) : error || !config ? (
+        <Card style={styles.tarjeta}>
+          <Text style={styles.titulo}>No se pudo cargar la configuración</Text>
+          <Text style={styles.texto}>{error ?? 'Intentá de nuevo.'}</Text>
+          <Button label="Reintentar" onPress={cargar} />
+        </Card>
       ) : (
         <>
           <Card style={styles.tarjeta}>
