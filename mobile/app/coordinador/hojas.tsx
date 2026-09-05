@@ -8,6 +8,15 @@ import { AvanceFila, BarraApp, Badge, Button, formatoFechaHora, formatoMiles, ty
 import { inventarioIdSinRed } from '../../lib/adaptadores/hojas-sqlite';
 import { repositorioHojas, repositorioInventario, repositorioSesion } from '../../lib/contenedor';
 import { avanceParaMostrar } from '../../lib/dominio/avance-snapshot';
+import {
+  conteoPorFiltro,
+  ETIQUETA_FILTRO,
+  filtrarHojas,
+  FILTROS_HOJAS,
+  textoMostrando,
+  type FiltroHojas,
+} from '../../lib/dominio/filtro-hojas';
+import { avance } from '../../lib/dominio/hoja';
 import { partirEnHojas } from '../../lib/dominio/lote';
 import { TAMANOS_HOJA, type Colaborador, type HojaConteo, type TamanoHoja } from '../../lib/dominio/tipos';
 import { ErrorSnapshot, type AvanceSnapshot, type DesgloseSnapshot, type TipoInventario } from '../../lib/puertos/repositorios';
@@ -635,9 +644,121 @@ export default function HojasScreen(): JSX.Element {
             disabled={sinAlmacen || (paso1Hecho && !paso2Hecho && !tamanoElegido) || paso3Hecho}
             onPress={!paso1Hecho ? traerSnapshot : !paso2Hecho ? crearHojasAhora : !paso3Hecho ? asignarAhora : undefined}
           />
+
+          {/*
+            LA LISTA CON FILTRO va DESPUÉS del wizard, y solo cuando ya hay
+            hojas: antes de crearlas no hay nada que validar, y una sección
+            vacía arriba del paso 2 competiría con lo único que hay para
+            hacer.
+
+            Es con lo que el Coordinador valida antes de cerrar la ronda
+            -- decisión del cliente: un filtro, no una notificación.
+          */}
+          {paso2Hecho ? <ListaConFiltro hojas={hojas} /> : null}
         </>
       )}
     </PantallaConTabs>
+  );
+}
+
+/**
+ * Las hojas de la ronda, filtrables por lo que le importa a quien valida:
+ * cuáles faltan cerrar y cuáles tienen productos sin contar.
+ *
+ * Las reglas de cada chip viven en `dominio/filtro-hojas.ts`, con test. Acá
+ * queda solo el dibujo.
+ */
+function ListaConFiltro({ hojas }: { hojas: HojaConteo[] }): JSX.Element {
+  const [filtro, setFiltro] = useState<FiltroHojas>('todas');
+
+  // Sobre TODAS las hojas siempre, nunca sobre las ya filtradas: si los
+  // números de los chips cambiaran al elegir uno, dejarían de servir para
+  // decidir a cuál ir.
+  const cuentas = useMemo(() => conteoPorFiltro(hojas), [hojas]);
+  const visibles = useMemo(() => filtrarHojas(hojas, filtro), [hojas, filtro]);
+
+  return (
+    <View style={styles.lista}>
+      <Text style={styles.listaTitulo}>Hojas de esta ronda</Text>
+
+      <View style={styles.chips}>
+        {FILTROS_HOJAS.map((f) => {
+          const activo = f === filtro;
+          return (
+            <Pressable
+              key={f}
+              onPress={() => setFiltro(f)}
+              style={[styles.chip, activo && styles.chipActivo]}
+              accessibilityRole="button"
+              accessibilityState={{ selected: activo }}
+            >
+              <Text style={[styles.chipTexto, activo && styles.chipTextoActivo]}>
+                {ETIQUETA_FILTRO[f]} ({cuentas[f]})
+              </Text>
+            </Pressable>
+          );
+        })}
+      </View>
+
+      <Text style={styles.listaContador}>{textoMostrando(visibles.length, hojas.length, formatoMiles)}</Text>
+
+      {visibles.length === 0 ? (
+        // Dice QUÉ filtro está vacío, no "no hay resultados": con
+        // "Con productos sin conteo" en cero, eso es una buena noticia y
+        // conviene que se lea como tal.
+        <Text style={styles.listaVacia}>
+          {filtro === 'sin-conteo'
+            ? 'Ninguna hoja sin finalizar tiene productos sin contar. Todo lo abierto está contado.'
+            : filtro === 'sin-finalizar'
+              ? 'Todas las hojas están finalizadas.'
+              : filtro === 'finalizadas'
+                ? 'Todavía no se finalizó ninguna hoja.'
+                : 'No hay hojas en esta ronda.'}
+        </Text>
+      ) : (
+        visibles.map((hoja) => <FilaHoja key={hoja.id} hoja={hoja} />)
+      )}
+    </View>
+  );
+}
+
+/** Una hoja en la lista del Coordinador: quién la tiene y qué le falta. */
+function FilaHoja({ hoja }: { hoja: HojaConteo }): JSX.Element {
+  const { contados, total, sinConteo } = avance(hoja);
+  const finalizada = hoja.estado === 'finalizada';
+
+  return (
+    <View style={styles.hojaFila}>
+      <View style={styles.hojaCabecera}>
+        <Text style={styles.hojaNumero}>Hoja #{hoja.numero}</Text>
+        {/* Mismas etiquetas y variantes que TarjetaHoja: un estado no puede
+            verse de dos colores distintos según la pantalla. */}
+        <Badge
+          label={finalizada ? 'Finalizada' : hoja.estado === 'en-proceso' ? 'En proceso' : 'Pendiente'}
+          variant={finalizada ? 'ok' : hoja.estado === 'en-proceso' ? 'proceso' : 'default'}
+        />
+      </View>
+
+      <Text style={styles.hojaZona}>
+        {hoja.zona} · {hoja.asignados.length > 0 ? hoja.asignados.join(', ') : 'Sin asignar'}
+      </Text>
+
+      <View style={styles.hojaPie}>
+        <Text style={styles.hojaAvance}>
+          {formatoMiles(contados)}/{formatoMiles(total)} contados
+        </Text>
+        {/*
+          El "N sin conteo" solo cuando N > 0: un "0 sin conteo" en cada
+          tarjeta es ruido que hace que el que sí importa se pierda entre
+          los demás.
+        */}
+        {sinConteo > 0 ? (
+          <Text style={[styles.hojaSinConteo, finalizada && styles.hojaSinConteoCerrada]}>
+            {formatoMiles(sinConteo)} sin conteo
+          </Text>
+        ) : null}
+      </View>
+    </View>
   );
 }
 
@@ -717,4 +838,56 @@ const styles = StyleSheet.create({
   resumenNota: { fontSize: 11.5, lineHeight: 16, color: colors.gris, fontFamily: fonts.regular },
 
   previaTexto: { fontSize: 12.5, fontWeight: '600', color: colors.proceso, fontFamily: fonts.semibold },
+
+  lista: { gap: spacing.sm, marginTop: spacing.xs },
+  listaTitulo: { fontSize: 14.5, color: colors.tinta, fontFamily: fonts.bold },
+  chips: { flexDirection: 'row', flexWrap: 'wrap', gap: 7 },
+  chip: {
+    paddingVertical: 7,
+    paddingHorizontal: 11,
+    borderRadius: radius.full,
+    borderWidth: 1,
+    borderColor: colors.borde,
+    backgroundColor: colors.campo,
+  },
+  chipActivo: { borderColor: colors.rojo, backgroundColor: colors.rojo },
+  chipTexto: { fontSize: 12, color: colors.gris, fontFamily: fonts.semibold },
+  chipTextoActivo: { color: colors.blanco },
+  listaContador: { fontSize: 12, color: colors.gris, fontFamily: fonts.regular },
+  listaVacia: {
+    padding: 13,
+    borderRadius: radius.md,
+    backgroundColor: colors.esperaSuave,
+    fontSize: 12.5,
+    lineHeight: 17.5,
+    color: colors.gris,
+    fontFamily: fonts.regular,
+  },
+
+  hojaFila: {
+    gap: 5,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: colors.borde,
+    borderRadius: radius.md,
+    backgroundColor: colors.campo,
+  },
+  hojaCabecera: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: spacing.sm },
+  hojaNumero: { fontSize: 13.5, color: colors.tinta, fontFamily: fonts.bold },
+  hojaZona: { fontSize: 12, color: colors.gris, fontFamily: fonts.regular },
+  hojaPie: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: spacing.sm },
+  hojaAvance: { fontSize: 12, color: colors.gris, fontFamily: fonts.medium },
+  hojaSinConteo: {
+    paddingVertical: 3,
+    paddingHorizontal: 8,
+    borderRadius: radius.full,
+    backgroundColor: colors.procesoSuave,
+    fontSize: 11.5,
+    color: colors.proceso,
+    fontFamily: fonts.semibold,
+  },
+  // En una hoja finalizada "sin conteo" ya no es algo para ir a hacer (ver
+  // filtro-hojas.ts): se muestra igual, pero apagado, para que no compita
+  // con las que sí se pueden trabajar.
+  hojaSinConteoCerrada: { backgroundColor: colors.esperaSuave, color: colors.gris },
 });

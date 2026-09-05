@@ -96,6 +96,25 @@ export interface HojaDto {
    */
   asignadoAId: number | null;
   asignadoA2Id: number | null;
+  /**
+   * ADITIVO (2026-09-06): cuantos productos de ESTA hoja no tienen ningun
+   * Conteo cargado. Es el dato con el que el Coordinador valida antes de
+   * cerrar la ronda -- decision del cliente: un FILTRO en Gestion de hojas,
+   * no una notificacion.
+   *
+   * Se calcula acá y no en el cliente aunque `productos`/`conteos` viajen
+   * completos: la pregunta "cuantos faltan" la hacen varias pantallas y
+   * repetir el recorrido en cada una es como se desincronizan dos numeros
+   * que deberian ser el mismo.
+   *
+   * OJO CON EL SIGNIFICADO EN UNA HOJA FINALIZADA: `finalizar` (min-4, en
+   * curso) registra 0 en los productos sin conteo, asi que una hoja cerrada
+   * deberia terminar en `productosSinConteo: 0`. Mientras eso no este, una
+   * finalizada puede traer N > 0 -- son las que se cerraron antes de ese
+   * cambio. Por eso el filtro de la pantalla aplica a hojas NO finalizadas:
+   * ahi el numero significa "falta contar esto", que es lo accionable.
+   */
+  productosSinConteo: number;
   productos: ProductoDto[];
   conteos: ConteoDto[];
 }
@@ -189,9 +208,27 @@ export function aHojaDto(h: HojaCompleta): HojaDto {
     asignados: [h.asignadoA?.nombre, h.asignadoA2?.nombre].filter((n): n is string => Boolean(n)),
     asignadoAId: h.asignadoA?.id ?? null,
     asignadoA2Id: h.asignadoA2?.id ?? null,
+    productosSinConteo: contarSinConteo(h),
     productos: h.productos.map(aProductoDto),
     conteos: h.conteos.map(aConteoDto),
   };
+}
+
+/**
+ * Productos de la hoja que no tienen NINGUN conteo.
+ *
+ * Un `Set` y no un `some()` por producto: con 50 productos y 50 conteos, la
+ * version cuadratica son 2.500 comparaciones por hoja y el Coordinador pide
+ * las 25 hojas de una. No es prematuro -- es la diferencia entre una
+ * pantalla que abre y una que se piensa.
+ *
+ * Cuenta por PRODUCTO, no por conteo: `Conteo` tiene @@unique([hojaId,
+ * productoId]) (schema.prisma), asi que no hay dos filas del mismo producto,
+ * pero el Set lo deja explicito y sobrevive si esa regla cambia.
+ */
+function contarSinConteo(h: HojaCompleta): number {
+  const contados = new Set(h.conteos.map((c) => c.productoId));
+  return h.productos.reduce((n, p) => (contados.has(p.id) ? n : n + 1), 0);
 }
 
 export const INCLUIR_TODO = Prisma.validator<Prisma.HojaConteoInclude>()({

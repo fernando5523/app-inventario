@@ -13,6 +13,21 @@ export interface AvanceHoja {
   total: number;
   /** Redondeado: mismo criterio que ya usa la maqueta (Math.round). */
   porcentaje: number;
+  /**
+   * Productos de la hoja SIN ningún conteo — con lo que el Coordinador
+   * valida antes de cerrar la ronda (decisión del cliente: un filtro en
+   * Gestión de hojas, no una notificación).
+   *
+   * Se deriva de `total`/`contados` en vez de leer `HojaDto.productosSinConteo`
+   * del servidor: la misma pantalla trabaja con hojas que salen de SQLite,
+   * reconstruidas de filas locales que pueden ser de antes de que ese campo
+   * existiera. Un número que a veces viene y a veces no es peor que uno
+   * calculado siempre igual — y acá los datos para calcularlo ya están.
+   *
+   * El backend expone el suyo igual (`hojas.service.ts#contarSinConteo`) para
+   * quien no tenga los productos a mano; las dos cuentas son la misma resta.
+   */
+  sinConteo: number;
 }
 
 /**
@@ -23,9 +38,14 @@ export interface AvanceHoja {
  */
 export function avance(hoja: HojaConteo): AvanceHoja {
   const total = hoja.productos.length;
-  const contados = new Set(hoja.conteos.map((c) => c.productoId)).size;
+  // Se intersecta contra los productos de la hoja: un conteo de un producto
+  // que ya no está (una hoja de la ronda anterior en el mismo cache, un
+  // adaptador viejo) haría que `contados` supere a `total` y que `sinConteo`
+  // saliera NEGATIVO. Un número negativo de productos no significa nada.
+  const idsDeLaHoja = new Set(hoja.productos.map((p) => p.id));
+  const contados = new Set(hoja.conteos.map((c) => c.productoId).filter((id) => idsDeLaHoja.has(id))).size;
   const porcentaje = total === 0 ? 0 : Math.round((contados / total) * 100);
-  return { contados, total, porcentaje };
+  return { contados, total, porcentaje, sinConteo: total - contados };
 }
 
 /**

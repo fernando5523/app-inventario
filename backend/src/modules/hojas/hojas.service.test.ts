@@ -229,6 +229,80 @@ describe('aHojaDto: el DTO manda el ID de cada asignado, no solo el nombre', () 
   });
 });
 
+/**
+ * `productosSinConteo`: con qué valida el Coordinador antes de cerrar la
+ * ronda. Decisión del cliente: un FILTRO en Gestión de hojas, no una
+ * notificación — así que el número tiene que venir por hoja, para poder
+ * ordenar y filtrar por él sin abrir ninguna.
+ */
+describe('aHojaDto: cuántos productos quedaron sin contar', () => {
+  const prod = (id: number) => ({
+    id,
+    codigo: `IT-${id}`,
+    codigoBarras: `BC${id}`,
+    descripcion: `Producto ${id}`,
+    categoria: null,
+    empaques: [],
+  });
+  const conteo = (productoId: number) => ({
+    productoId,
+    empaques: [],
+    sueltas: 3,
+    confirmadoPorEscaner: false,
+    contadoEn: new Date('2026-09-06T10:00:00.000Z'),
+  });
+
+  function hojaCon(productos: number[], contados: number[], estado: 'pendiente' | 'en_proceso' | 'finalizada' = 'en_proceso') {
+    return {
+      id: 42,
+      inventarioId: 1,
+      numero: '007',
+      zona: 'Lácteos',
+      gondola: 'B3',
+      tamano: 50,
+      estado,
+      sync: 'local' as const,
+      asignadoA: null,
+      asignadoA2: null,
+      productos: productos.map(prod),
+      conteos: contados.map(conteo),
+    };
+  }
+
+  it('cuenta los productos que no tienen ningún conteo', () => {
+    // 5 productos, 2 contados -> faltan 3.
+    expect(aHojaDto(hojaCon([1, 2, 3, 4, 5], [1, 3]) as never).productosSinConteo).toBe(3);
+  });
+
+  it('con todo contado es 0', () => {
+    expect(aHojaDto(hojaCon([1, 2, 3], [1, 2, 3]) as never).productosSinConteo).toBe(0);
+  });
+
+  it('sin ningún conteo, faltan todos', () => {
+    expect(aHojaDto(hojaCon([1, 2, 3], []) as never).productosSinConteo).toBe(3);
+  });
+
+  it('una hoja sin productos da 0, no NaN', () => {
+    expect(aHojaDto(hojaCon([], []) as never).productosSinConteo).toBe(0);
+  });
+
+  /**
+   * El conteo de un producto que ya no está en la hoja NO puede restar de
+   * más: se cuenta por PRODUCTO existente, no por diferencia de longitudes.
+   * `productos.length - conteos.length` daría -1 acá.
+   */
+  it('un conteo huérfano no hace bajar el número por debajo de 0', () => {
+    expect(aHojaDto(hojaCon([1, 2], [1, 2, 999]) as never).productosSinConteo).toBe(0);
+  });
+
+  it('el número viene por hoja aunque la hoja esté finalizada', () => {
+    // `finalizar` (min-4) va a registrar 0 en los que falten, así que una
+    // finalizada debería terminar en 0 -- pero las cerradas ANTES de ese
+    // cambio pueden traer N > 0, y el DTO dice la verdad de lo que hay.
+    expect(aHojaDto(hojaCon([1, 2, 3], [1], 'finalizada') as never).productosSinConteo).toBe(2);
+  });
+});
+
 describe('el total se calcula, nunca se guarda', () => {
   it('devuelve la suma de cada linea (cantidad x factor) mas las sueltas', async () => {
     prismaMock.hojaConteo.findUnique.mockResolvedValue(hoja('en_proceso'));

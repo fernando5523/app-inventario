@@ -45,12 +45,12 @@ describe('avance', () => {
       productos: [producto(1), producto(2), producto(3), producto(4), producto(5)],
       conteos: [conteoDe(1), conteoDe(2), conteoDe(3)],
     });
-    expect(avance(h)).toEqual({ contados: 3, total: 5, porcentaje: 60 });
+    expect(avance(h)).toEqual({ contados: 3, total: 5, porcentaje: 60, sinConteo: 2 });
   });
 
   it('hoja vacia (sin productos): 0/0, porcentaje 0 y no NaN', () => {
     const h = hoja({ productos: [], conteos: [] });
-    expect(avance(h)).toEqual({ contados: 0, total: 0, porcentaje: 0 });
+    expect(avance(h)).toEqual({ contados: 0, total: 0, porcentaje: 0, sinConteo: 0 });
   });
 
   it('no cuenta dos veces un conteo repetido para el mismo producto (correccion, no duplicado)', () => {
@@ -58,7 +58,7 @@ describe('avance', () => {
       productos: [producto(1), producto(2)],
       conteos: [conteoDe(1), { ...conteoDe(1), empaques: [{ empaqueNombre: 'Caja', cantidad: 2 }] }],
     });
-    expect(avance(h)).toEqual({ contados: 1, total: 2, porcentaje: 50 });
+    expect(avance(h)).toEqual({ contados: 1, total: 2, porcentaje: 50, sinConteo: 1 });
   });
 
   it('redondea el porcentaje cuando la division no es exacta', () => {
@@ -68,6 +68,31 @@ describe('avance', () => {
     });
     // 1/3 = 33.33...
     expect(avance(h).porcentaje).toBe(33);
+  });
+});
+
+describe('avance: sinConteo (con lo que el Coordinador valida antes de cerrar)', () => {
+  it('sin ningun conteo: faltan todos', () => {
+    const h = hoja({ productos: [producto(1), producto(2), producto(3)], conteos: [] });
+    expect(avance(h).sinConteo).toBe(3);
+  });
+
+  it('todo contado: cero (y por eso la tarjeta no muestra el aviso)', () => {
+    const h = hoja({ productos: [producto(1), producto(2)], conteos: [conteoDe(1), conteoDe(2)] });
+    expect(avance(h).sinConteo).toBe(0);
+  });
+
+  it('un conteo de un producto que NO esta en la hoja no baja el faltante ni lo vuelve negativo', () => {
+    // Pasa de verdad: una hoja reconstruida de SQLite con conteos de la
+    // ronda anterior en el mismo cache. Sin la interseccion contra los
+    // productos de la hoja, esto daba contados: 2 sobre total: 1 -> -1.
+    const h = hoja({ productos: [producto(1)], conteos: [conteoDe(1), conteoDe(99)] });
+    expect(avance(h)).toEqual({ contados: 1, total: 1, porcentaje: 100, sinConteo: 0 });
+  });
+
+  it('solo conteos huerfanos: no cuenta ninguno como contado', () => {
+    const h = hoja({ productos: [producto(1), producto(2)], conteos: [conteoDe(98), conteoDe(99)] });
+    expect(avance(h)).toEqual({ contados: 0, total: 2, porcentaje: 0, sinConteo: 2 });
   });
 });
 
