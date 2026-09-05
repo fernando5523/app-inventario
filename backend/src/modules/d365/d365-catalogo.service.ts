@@ -19,6 +19,7 @@ import {
 import { registrarAuditoria } from '../../shared/auditoria';
 import { ErrorHttp } from '../../shared/errores';
 import { d365EntityService } from './d365-entity.service';
+import * as progreso from './d365.progreso';
 import type {
   CatalogoItemDto,
   D365ProductBarcode,
@@ -460,15 +461,26 @@ export function obtenerCatalogoEjemplo(): CatalogoItemDto[] {
 async function obtenerCatalogoReal(
   tipo: TipoInventario,
   almacen?: string,
+  onProductos?: (traidos: number, total: number) => void,
 ): Promise<{ catalogo: CatalogoItemDto[]; descartes: DescartesPorStock }> {
   const dataAreaId = await d365AuthService.getDataAreaId();
   const filtroCompania = dataAreaId ? `dataAreaId eq '${dataAreaId}'` : undefined;
 
   const [productos, barcodes, conversiones, responsables, stock, categorias, precios] = await Promise.all([
-    d365EntityService.obtenerTodos<D365ReleasedProduct>('ReleasedProductsV2', {
-      $select: 'ItemNumber,SearchName,InventoryUnitSymbol,PurchaseUnitSymbol',
-      ...(filtroCompania ? { $filter: filtroCompania } : {}),
-    }),
+    // El progreso sale de ESTA entidad y no de la suma de las 7: es la que
+    // define el universo del catalogo y la que domina el tiempo. Ver el
+    // comentario largo de d365.progreso.ts sobre por que el numero que se
+    // reporta (productos bajados) no es el mismo que el del resultado
+    // (items que entraron al inventario).
+    d365EntityService.obtenerTodos<D365ReleasedProduct>(
+      'ReleasedProductsV2',
+      {
+        $select: 'ItemNumber,SearchName,InventoryUnitSymbol,PurchaseUnitSymbol',
+        ...(filtroCompania ? { $filter: filtroCompania } : {}),
+      },
+      undefined,
+      onProductos,
+    ),
     d365EntityService.obtenerTodos<D365ProductBarcode>('ProductBarcodesV2', {
       $select: 'ItemNumber,Barcode,ProductDescription,ProductQuantityUnitSymbol,ProductQuantity,IsDefaultDisplayedBarcode',
       ...(filtroCompania ? { $filter: filtroCompania } : {}),
@@ -689,11 +701,59 @@ export async function crearSnapshot(
     );
   }
 
-  const resultado =
-    modo === 'ejemplo'
-      ? { catalogo: obtenerCatalogoEjemplo(), descartes: { sinRegistro: 0, stockCero: 0 } }
-      : await obtenerCatalogoReal(tipo, almacen);
-  const { catalogo, descartes } = resultado;
+  /**
+   * PROGRESO CONSULTABLE, de punta a punta de lo que tarda.
+   *
+   * `iniciar` antes de la primera llamada a Dynamics y `terminar` en un
+   * `finally`: si esto revienta a mitad de camino, el progreso NO puede
+   * quedar colgado en "bajando" para siempre -- el proximo sondeo mostraria
+   * el avance de un snapshot que ya no existe.
+   *
+   * El modo `ejemplo` tambien lo registra aunque sea instantaneo: asi el
+   * front no tiene dos caminos distintos segun el modo.
+   */
+  progreso.iniciar(sucursalId);
+  let catalogo: CatalogoItemDto[];
+  let descartes: DescartesPorStock;
+  try {
+    const resultado =
+      modo === 'ejemplo'
+        ? { catalogo: obtenerCatalogoEjemplo(), descartes: { sinRegistro: 0, stockCero: 0 } }
+        : await obtenerCatalogoReal(tipo, almacen, (traidos, total) =>
+            progreso.reportar(sucursalId, traidos, total),
+          );
+    catalogo = resultado.catalogo;
+    descartes = resultado.descartes;
+    // La OTRA fase lenta: guardar. Son N `create` dentro de una sola
+    // transaccion (ver abajo), asi que hasta el commit no hay ni una fila
+    // visible -- por eso se marca la fase en vez de seguir contando items.
+    progreso.marcarGuardando(sucursalId);
+    return await guardarSnapshot({ sucursalId, tipo, catalogo, descartes, actorId, almacen, modo });
+  } finally {
+    progreso.terminar(sucursalId);
+  }
+}
+
+/**
+ * Progreso del snapshot en curso de esa sucursal, o `null` si no hay ninguno.
+ * Ver d365.progreso.ts para por que vive en memoria y que numero reporta.
+ */
+export function progresoDeSnapshot(sucursalId: number): progreso.ProgresoSnapshot | null {
+  return progreso.leer(sucursalId);
+}
+
+/** El guardado, separado para que `crearSnapshot` pueda envolverlo en el progreso. */
+async function guardarSnapshot(args: {
+  sucursalId: number;
+  tipo: TipoInventario;
+  catalogo: CatalogoItemDto[];
+  descartes: DescartesPorStock;
+  actorId: number;
+  /** `undefined` explícito: el proyecto corre con `exactOptionalPropertyTypes`. */
+  almacen: string | undefined;
+  modo: ModoCatalogo;
+}): Promise<SnapshotDto> {
+  const { sucursalId, tipo, catalogo, descartes, actorId, almacen } = args;
   const tomadoEn = new Date();
 
   const inventario = await prisma.inventario.create({

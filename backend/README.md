@@ -436,6 +436,29 @@ El catálogo mapeado (con barcode, empaque y **categoría** de cada ítem) se gu
 
 Errores: `400` `sucursalId` inválido, o `modo="real"` sin credenciales configuradas · `502` Dynamics respondió con error o no se pudo autenticar.
 
+#### `GET /api/d365/snapshot/progreso?sucursalId=1`
+
+Cuánto lleva bajado el snapshot **que está corriendo ahora** en esa sucursal. Mismos roles que el POST: quien no puede lanzarlo no tiene por qué ver su avance.
+
+Respuesta `200`:
+```json
+{ "traidos": 3200, "total": 8000, "fase": "bajando", "actualizadoEn": "2026-09-05T06:34:52.113Z" }
+```
+
+**Devuelve `200` con body `null`** —no `404`— cuando no hay ninguno en curso: "todavía no arrancó" y "ya terminó" son respuestas válidas del sondeo, no errores.
+
+**Por qué existe.** Medido en el emulador el 2026-09-05: traer 951 ítems tardó ~90 s y la pantalla mostró **"0 ítems traídos…" todo ese tiempo**, saltando a 951 al final. Al lado del cartel *"puede tardar varios minutos, no te vayas de la pantalla"*, un 0 inmóvil se lee como "se colgó" — y el Coordinador toca Cancelar. La causa no era la pantalla: `POST /snapshot` devuelve una sola vez, al final, y **no había ningún endpoint de estado que consultar**. `mobile/lib/adaptadores/inventario-api.ts` ya lo dejaba anotado: *"para progreso REAL hace falta que el backend deje estado consultable mientras pagina"*. Esto es ese estado, y `_http.ts#sondear` del móvil ya está escrito y testeado esperándolo.
+
+⚠️ **`traidos` y el `items` de la respuesta del POST miden cosas distintas, y las dos son ciertas.** El progreso cuenta los productos **bajados** de Dynamics (`ReleasedProductsV2`, ~8.000); el resultado cuenta los que **entraron** al inventario (951 en la prueba), después del filtro de responsabilidad y stock. La barra llega a 8.000/8.000 y el cartel final dice 951 — la pantalla ya distingue las dos cosas (*"Se contaron los productos activos, con stock en el almacén y que son responsabilidad del personal. El resto quedó afuera"*). No se reporta la suma de las 7 entidades que baja el snapshot: daría un total que no se parece a nada reconocible.
+
+`fase` distingue las dos etapas lentas: `"bajando"` (OData paginado) y `"guardando"` (la transacción de Postgres, que son N `create` en una sola transacción — hasta el commit no hay ni una fila visible, así que ahí el contador de ítems ya no puede avanzar).
+
+**Vive en memoria del proceso** (`d365.progreso.ts`), no en la base: es un contador que avanza por página y deja de importar en cuanto termina. Si el backend se reinicia a mitad de un snapshot se pierde el progreso — pero también se perdió el snapshot. Con varias instancias detrás de un balanceador el sondeo puede pegarle a la que no está bajando y ver `null`; hoy corre una sola.
+
+Dos reglas que el registro hace cumplir, ambas testeadas:
+- **El avance nunca retrocede.** Las 7 entidades se bajan con `Promise.all` y los callbacks llegan intercalados; sin esto la barra iría 500 → 120 → 800 y quien la mira deja de creerle.
+- **`traidos` se recorta al total.** El `$count` de Dynamics se calcula aparte de la página y puede quedar desactualizado: "8.100 de 8.000" se lee como un error del sistema aunque el snapshot esté perfecto.
+
 ---
 
 ### Inventarios — `/api/inventarios` (requiere sesión + rol `coordinador` o `administrador`)

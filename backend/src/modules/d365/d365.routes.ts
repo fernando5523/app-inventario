@@ -3,7 +3,7 @@ import { requiereSesion } from '../../middleware/auth.middleware';
 import { requiereRol } from '../../middleware/autorizacion.middleware';
 import { validar } from '../../middleware/validation.middleware';
 import * as controller from './d365.controller';
-import { crearSnapshotSchema } from './d365.schema';
+import { crearSnapshotSchema, progresoSnapshotQuerySchema } from './d365.schema';
 
 export const d365Router = Router();
 
@@ -20,3 +20,17 @@ d365Router.get('/estado', controller.estado);
 d365Router.get('/almacenes', requiereRol('administrador'), controller.almacenes);
 
 d365Router.post('/snapshot', requiereRol('administrador', 'coordinador'), validar(crearSnapshotSchema, 'body'), controller.snapshot);
+
+/**
+ * Progreso del snapshot en curso. MISMOS roles que el POST: es la contracara
+ * de esa operacion, y quien no puede lanzarla no tiene por que ver su avance.
+ *
+ * Va DESPUES del POST en el archivo pero es un GET a otra ruta -- no hay
+ * ambiguedad de matcheo con '/snapshot'.
+ */
+d365Router.get(
+  '/snapshot/progreso',
+  requiereRol('administrador', 'coordinador'),
+  validar(progresoSnapshotQuerySchema, 'query'),
+  controller.progresoSnapshot,
+);

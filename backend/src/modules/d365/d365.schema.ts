@@ -38,3 +38,9 @@ export const crearSnapshotSchema = z.object({
   almacen: z.string().trim().min(1).max(30).optional(),
 });
 export type CrearSnapshotInput = z.infer<typeof crearSnapshotSchema>;
+
+/** Query de `GET /api/d365/snapshot/progreso`. */
+export const progresoSnapshotQuerySchema = z.object({
+  sucursalId: z.coerce.number().int().positive(),
+});
+export type ProgresoSnapshotQuery = z.infer<typeof progresoSnapshotQuerySchema>;

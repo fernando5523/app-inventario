@@ -78,14 +78,36 @@ export class D365EntityService {
    * `tamanoLote` (nunca todo de una: con 8.000 items no es opcional, ver
    * el pedido original). Usa `calcularPaginas`, no @odata.nextLink --
    * D365 F&O a veces no lo emite en consultas con $select simple.
+   *
+   * `onPagina` se llama DESPUES de cada pagina con lo que va acumulado y el
+   * total: es lo unico que permite mostrar progreso real mientras esto tarda
+   * minutos (ver d365.progreso.ts). Se llama tambien con `(0, total)` apenas
+   * se conoce el total, ANTES de la primera pagina -- asi quien sondea deja
+   * de ver `total: null` lo antes posible y puede dibujar la barra.
+   *
+   * Un error dentro de `onPagina` NO corta la bajada: reportar progreso es
+   * accesorio, y perder un snapshot de 8.000 items porque falló un contador
+   * seria cambiar algo que importa por algo que no.
    */
   async obtenerTodos<T>(
     entidad: string,
     options?: ODataQueryOptions,
     tamanoLote: number = TAMANO_LOTE_DEFECTO,
+    onPagina?: (traidos: number, total: number) => void,
   ): Promise<T[]> {
     const total = await this.contar(entidad, options?.$filter);
     if (total === 0) return [];
+
+    const avisar = (traidos: number): void => {
+      if (onPagina === undefined) return;
+      try {
+        onPagina(traidos, total);
+      } catch {
+        // Ver el comentario de arriba: el progreso nunca voltea la bajada.
+      }
+    };
+
+    avisar(0);
 
     const paginas = calcularPaginas(total, tamanoLote);
     // Una sola vez para todas las paginas: la baseUrl no cambia en el medio
@@ -96,6 +118,7 @@ export class D365EntityService {
       const url = construirUrl(baseUrl, entidad, { ...options, $skip: pagina.skip, $top: pagina.top });
       const respuesta = await this.get<ODataResponse<T>>(url);
       resultado.push(...respuesta.value);
+      avisar(resultado.length);
     }
     return resultado;
   }
