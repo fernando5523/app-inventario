@@ -79,6 +79,23 @@ export interface HojaDto {
   estado: 'pendiente' | 'en-proceso' | 'finalizada';
   sync: 'local' | 'sincronizando' | 'sincronizado' | 'error';
   asignados: string[];
+  /**
+   * ADITIVO (2026-09-06): los ids de `asignados`, en el MISMO orden --
+   * `asignadoAId` es el id de `asignados[0]`, `asignadoA2Id` el de
+   * `asignados[1]`. Antes de esto el cliente solo tenía el NOMBRE para
+   * decidir "es mía" (`hojas_estructura.asignados`, mobile), y un nombre
+   * es frágil: dos colaboradores con el mismo nombre en dos sucursales
+   * distintas, o un cambio de nombre, rompen el filtro sin que nadie lo
+   * note (ver el hallazgo real de hojas cruzadas entre Luzuriaga y
+   * Bolívar, 2026-09-06). El id es la identidad dura que ya usa el
+   * backend (`Colaborador.id`) y nunca cambia ni se repite.
+   *
+   * `asignados` (los nombres) NO se quita: sigue siendo lo que se
+   * MUESTRA en pantalla ("Asignado: Elena Príncipe") -- los ids son para
+   * FILTRAR, los nombres para LEER.
+   */
+  asignadoAId: number | null;
+  asignadoA2Id: number | null;
   productos: ProductoDto[];
   conteos: ConteoDto[];
 }
@@ -144,8 +161,8 @@ type HojaCompleta = {
   tamano: number;
   estado: 'pendiente' | 'en_proceso' | 'finalizada';
   sync: 'local' | 'sincronizando' | 'sincronizado' | 'error';
-  asignadoA: { nombre: string } | null;
-  asignadoA2: { nombre: string } | null;
+  asignadoA: { id: number; nombre: string } | null;
+  asignadoA2: { id: number; nombre: string } | null;
   productos: Parameters<typeof aProductoDto>[0][];
   conteos: Parameters<typeof aConteoDto>[0][];
 };
@@ -167,16 +184,20 @@ export function aHojaDto(h: HojaCompleta): HojaDto {
     estado: estadoParaElFront(h.estado),
     sync: h.sync,
     // Solo los nombres, y en el orden en que se asignaron. El front muestra
-    // nombres (tipos.ts#HojaConteo.asignados: string[]), no ids.
+    // nombres (tipos.ts#HojaConteo.asignados: string[]) para LEER; los ids
+    // de abajo son para FILTRAR (ver el comentario de HojaDto).
     asignados: [h.asignadoA?.nombre, h.asignadoA2?.nombre].filter((n): n is string => Boolean(n)),
+    asignadoAId: h.asignadoA?.id ?? null,
+    asignadoA2Id: h.asignadoA2?.id ?? null,
     productos: h.productos.map(aProductoDto),
     conteos: h.conteos.map(aConteoDto),
   };
 }
 
 export const INCLUIR_TODO = Prisma.validator<Prisma.HojaConteoInclude>()({
-  asignadoA: { select: { nombre: true } },
-  asignadoA2: { select: { nombre: true } },
+  // `id` además de `nombre` (aditivo): ver el comentario de `HojaDto.asignadoAId`.
+  asignadoA: { select: { id: true, nombre: true } },
+  asignadoA2: { select: { id: true, nombre: true } },
   /**
    * ORDEN DE LOS PRODUCTOS DENTRO DE LA HOJA: por CATEGORIA y despues por
    * codigo. No es cosmetico -- es el recorrido que hace la persona.

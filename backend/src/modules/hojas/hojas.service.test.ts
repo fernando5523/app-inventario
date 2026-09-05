@@ -25,7 +25,7 @@ vi.mock('../../config/database', () => ({ prisma: prismaMock }));
 
 import { Conflicto } from '../../shared/errores';
 import type { ColaboradorAutenticado } from '../../shared/tipos';
-import { finalizar, guardarConteo } from './hojas.service';
+import { aHojaDto, finalizar, guardarConteo } from './hojas.service';
 
 const CONTADOR: ColaboradorAutenticado = { colaboradorId: 10, sucursalId: 1, rol: 'conteo' };
 
@@ -169,6 +169,63 @@ describe('INVESTIGACIÓN (sin arreglar): finalizar() no sabe si quedó algún pr
     // Ninguna consulta a producto/conteo se hizo para decidir esto --
     // finalizar() no tiene forma de saber si falta un renglón.
     expect(prismaMock.producto.findFirst).not.toHaveBeenCalled();
+  });
+});
+
+describe('aHojaDto: el DTO manda el ID de cada asignado, no solo el nombre', () => {
+  // Endurecimiento pedido tras el hallazgo de "hojas cruzadas sin red"
+  // (2026-09-06): el filtro local de `mias()` (mobile/hojas-sqlite.ts)
+  // solo tenía el NOMBRE para decidir "esta hoja es mía" -- frágil ante
+  // un homónimo entre dos sucursales, un cambio de nombre, o alguien que
+  // literalmente se llame igual que un rol ("Conteo"). El id es la
+  // identidad dura que el backend ya tiene (`Colaborador.id`) y nunca
+  // cambia ni se repite; los nombres se conservan para MOSTRAR, no para
+  // filtrar.
+  function hojaCompleta(asignadoA: { id: number; nombre: string } | null, asignadoA2: { id: number; nombre: string } | null) {
+    return {
+      id: 42,
+      inventarioId: 1,
+      numero: '007',
+      zona: 'Lácteos',
+      gondola: 'B3',
+      tamano: 50,
+      estado: 'en_proceso' as const,
+      sync: 'local' as const,
+      asignadoA,
+      asignadoA2,
+      productos: [],
+      conteos: [],
+    };
+  }
+
+  it('con dos asignados: manda asignadoAId y asignadoA2Id, en el mismo orden que los nombres', () => {
+    const dto = aHojaDto(hojaCompleta({ id: 501, nombre: 'María Rojas' }, { id: 502, nombre: 'Luis Shuan' }));
+
+    expect(dto.asignados).toEqual(['María Rojas', 'Luis Shuan']);
+    expect(dto.asignadoAId).toBe(501);
+    expect(dto.asignadoA2Id).toBe(502);
+  });
+
+  it('con un solo asignado: el segundo id es null, no undefined ni 0', () => {
+    const dto = aHojaDto(hojaCompleta({ id: 501, nombre: 'María Rojas' }, null));
+
+    expect(dto.asignados).toEqual(['María Rojas']);
+    expect(dto.asignadoAId).toBe(501);
+    expect(dto.asignadoA2Id).toBeNull();
+  });
+
+  it('sin nadie asignado: los dos ids son null', () => {
+    const dto = aHojaDto(hojaCompleta(null, null));
+
+    expect(dto.asignados).toEqual([]);
+    expect(dto.asignadoAId).toBeNull();
+    expect(dto.asignadoA2Id).toBeNull();
+  });
+
+  it('INCLUIR_TODO pide el id además del nombre para los dos asignados', async () => {
+    const { INCLUIR_TODO } = await import('./hojas.service');
+    expect(INCLUIR_TODO.asignadoA).toEqual({ select: { id: true, nombre: true } });
+    expect(INCLUIR_TODO.asignadoA2).toEqual({ select: { id: true, nombre: true } });
   });
 });
 
