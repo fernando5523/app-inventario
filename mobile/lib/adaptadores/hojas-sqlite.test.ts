@@ -528,6 +528,85 @@ describe('un conteo rechazado por el servidor no queda en un limbo silencioso', 
   });
 });
 
+describe('INVESTIGACIÓN (sin arreglar): un conteo rechazado no frena el finalizar que le sigue en la cola', () => {
+  // Escenario pedido: el Contador cuenta SIN RED, finaliza la hoja
+  // también sin red (los dos quedan en cola_sync), y cuando vuelve la
+  // red, `procesarColaDeSincronizacion` procesa la cola EN ORDEN pero SIN
+  // que el resultado de un item dependa del de otro (hojas-sqlite.ts:
+  // 778-815, `for (const item of items) { ... }` sin ningún corte ni
+  // condición entre iteraciones). Si el conteo de un producto se rechaza
+  // (motivo != 'sin-red' — cualquier error real, no necesariamente el
+  // caso de este test) y el finalizar de ESA MISMA hoja está más
+  // adelante en la cola, el finalizar se manda IGUAL y "sale bien": nada
+  // acá lo condiciona a que los conteos anteriores hayan tenido éxito.
+  //
+  // Del lado del servidor eso es exactamente lo que `hojas.service.ts
+  // #finalizar` permite: no consulta `producto`/`conteo` para decidir,
+  // marca `sync: 'sincronizado'` sin preguntar si falta algún renglón
+  // (ver el test correspondiente en hojas.service.test.ts). El resultado:
+  // el Coordinador puede cerrar la ronda (`rondas.service.ts#cerrar` solo
+  // mira `estado`/`sync` de la HOJA, nunca de sus productos) sin que nada
+  // le avise que un producto de esa hoja nunca llegó a contarse en el
+  // servidor — la única marca que existe es LOCAL, en el teléfono de
+  // quien contó, y el mensaje que ve ahí ("revisá la conexión o pedí
+  // ayuda") ni siquiera dice que la causa es un rechazo del servidor, no
+  // de red.
+  it('el finalizar de la hoja se sincroniza igual, aunque el conteo previo del mismo producto haya sido rechazado', async () => {
+    const { hojaId, inventarioId } = await hoja002();
+    const productoId = 59;
+
+    await hojasSqlite.guardarConteo(hojaId, {
+      productoId,
+      empaques: [{ empaqueNombre: 'Caja', cantidad: 1 }],
+      sueltas: 0,
+      confirmadoPorEscaner: false,
+      contadoEn: 't-riesgo-conteo',
+    });
+    // finalizar() no exige que la hoja esté completa (puedeFinalizar solo
+    // mira si YA estaba finalizada, nunca si faltan renglones) — mismo
+    // criterio que el backend, ver hojas.service.ts#finalizar.
+    await hojasSqlite.finalizar(hojaId);
+
+    await procesarColaDeSincronizacion(async (item) => {
+      // Simula un rechazo real del servidor para ESE producto puntual
+      // (no 'sin-red': un 'sin-red' sería reintentable y no probaría
+      // nada distinto de lo que ya cubren los tests de arriba) y un
+      // finalizar que sí sale bien -- exactamente lo que puede pasar si
+      // hojas.service.ts#guardarConteo rechaza ese conteo por cualquier
+      // motivo real (no necesariamente "hoja finalizada": puede ser
+      // cualquier otro rechazo) mientras el finalizar de la misma hoja,
+      // que no depende de eso, sí es aceptado.
+      if (item.tipo === 'conteo' && item.productoId === productoId) {
+        return { ok: false, motivo: 'rechazado' };
+      }
+      return { ok: true };
+    });
+
+    const db = await obtenerDbDeTest();
+
+    // El conteo de este producto NUNCA salió: sigue en la cola, en error.
+    const itemConteo = await db.getFirstAsync<{ estado: string }>(
+      "SELECT estado FROM cola_sync WHERE hoja_id = ? AND tipo = 'conteo' AND producto_id = ?",
+      [hojaId, productoId],
+    );
+    expect(itemConteo?.estado).toBe('error');
+
+    // El finalizar SÍ salió: se sacó de la cola porque "se sincronizó".
+    const itemFinalizar = await db.getFirstAsync('SELECT * FROM cola_sync WHERE hoja_id = ? AND tipo = ?', [hojaId, 'finalizar']);
+    expect(itemFinalizar).toBeNull();
+
+    // EL PUNTO: la hoja queda finalizada localmente, con el conteo de
+    // este producto perdido en la cola -- visible en ESTE teléfono
+    // (sync: 'error'), pero eso es un dato LOCAL. Lo que le llegó al
+    // servidor fue el finalizar (aceptado), sin que nada le avisara que
+    // faltaba este producto -- ver hojas.service.test.ts para el mismo
+    // hallazgo del lado del servidor.
+    const hojaLocal = await hojasSqlite.porNumero(inventarioId, '002', 1);
+    expect(hojaLocal!.estado).toBe('finalizada');
+    expect(hojaLocal!.sync).toBe('error');
+  });
+});
+
 describe('la descarga inicial distingue POR QUÉ no trajo hojas', () => {
   // Inventarios que no existen en el dataset de ejemplo (_compartido.ts):
   // así `hojasDeInventarioBase` cae a `{ hojas: [], origen: 'mock' }` sin

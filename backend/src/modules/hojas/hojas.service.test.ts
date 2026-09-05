@@ -127,6 +127,51 @@ describe('una hoja finalizada es inmutable', () => {
   });
 });
 
+describe('INVESTIGACIÓN (sin arreglar): finalizar() no sabe si quedó algún producto sin contar', () => {
+  // Pregunta del hallazgo: "el Contador cuenta SIN RED, el Coordinador
+  // cierra la ronda, y recién después la cola sincroniza un conteo de una
+  // ronda que ya no está abierta -- ¿el servidor lo acepta, lo rechaza,
+  // recalcula?". Este test prueba la otra mitad, la que hace posible que
+  // el Coordinador llegue a cerrar SIN saber que falta un producto:
+  // `finalizar()` no consulta `producto` ni `conteo` para decidir --
+  // selecciona solo `{ id, estado, asignadoAId, asignadoA2Id, inventario }`
+  // (ver hojas.service.ts, la función `finalizar`) y marca
+  // `sync: 'sincronizado'` sin preguntar si algún renglón quedó sin
+  // Conteo. `rondas.service.ts#cerrar` (hojasSinSincronizar) solo mira
+  // ESTE campo de la hoja, nunca sus productos -- así que un producto
+  // cuyo conteo se rechazó camino al servidor (ver hojas-sqlite.test.ts,
+  // mismo hallazgo del lado del teléfono) puede quedar afuera del cierre
+  // sin que nada lo detecte acá.
+  it('marca sync: sincronizado sin verificar que todos los productos tengan un Conteo', async () => {
+    prismaMock.hojaConteo.findUnique.mockResolvedValue({
+      ...hoja('en_proceso'),
+      inventarioId: 1,
+      numero: '002',
+      zona: 'Abarrotes',
+      gondola: 'A2',
+      tamano: 50,
+      sync: 'local',
+      asignadoA: { nombre: 'Maria Rojas' },
+      asignadoA2: null,
+      // A propósito vacíos: si finalizar() los necesitara para decidir
+      // algo, este test tendría que mockearlos con contenido real. No los
+      // usa -- y ESE es el hallazgo, no un detalle del mock.
+      productos: [],
+      conteos: [],
+    });
+
+    await finalizar(CONTADOR, 7);
+
+    expect(prismaMock.hojaConteo.update).toHaveBeenCalledWith({
+      where: { id: 7 },
+      data: { estado: 'finalizada', sync: 'sincronizado' },
+    });
+    // Ninguna consulta a producto/conteo se hizo para decidir esto --
+    // finalizar() no tiene forma de saber si falta un renglón.
+    expect(prismaMock.producto.findFirst).not.toHaveBeenCalled();
+  });
+});
+
 describe('el total se calcula, nunca se guarda', () => {
   it('devuelve la suma de cada linea (cantidad x factor) mas las sueltas', async () => {
     prismaMock.hojaConteo.findUnique.mockResolvedValue(hoja('en_proceso'));
