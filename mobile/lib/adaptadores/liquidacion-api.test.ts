@@ -123,6 +123,60 @@ describe('liquidacionApi.conciliacion', () => {
 });
 
 /**
+ * "NO HAY CICLO CERRADO" NO ES UN ERROR, venga como venga.
+ *
+ * El bug que originó estos tests (visto en la app el 2026-09-05): una tienda
+ * con el inventario EN CURSO —el estado normal la mayor parte del mes— veía
+ * "No se pudo cargar la liquidación / Intentá de nuevo" con un botón
+ * Reintentar que no arreglaba nada.
+ *
+ * El backend lo dice con `200` + `null`, pero un `404` significa lo mismo y
+ * llegaba como excepción. Los dos caminos tienen que terminar en `null`.
+ */
+describe('sin ciclo cerrado: null, no excepción', () => {
+  it('un 404 se traduce a null, no explota', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => json({ error: 'No existe' }, 404)));
+
+    await expect(liquidacionApi.deSucursal(1)).resolves.toBeNull();
+  });
+
+  it('en conciliacion también', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => json({ error: 'No existe' }, 404)));
+
+    await expect(liquidacionApi.conciliacion(1)).resolves.toBeNull();
+  });
+
+  /**
+   * La contracara, y es la que evita que el arreglo tape fallas reales: un
+   * error de verdad SIGUE subiendo. Si un 500 se tragara como `null`, la
+   * pantalla diría "todavía no hay nada que liquidar" cuando el servidor está
+   * roto — y nadie iría a mirar.
+   */
+  it('un 500 SÍ sube como error: no se confunde con "todavía no hay"', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => json({ error: 'boom' }, 500)));
+
+    await expect(liquidacionApi.deSucursal(1)).rejects.toThrow();
+  });
+
+  it('un fallo de red SÍ sube como error', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => {
+        throw new TypeError('Network request failed');
+      }),
+    );
+
+    await expect(liquidacionApi.deSucursal(1)).rejects.toThrow();
+  });
+
+  it('una sesión vencida SÍ sube: se arregla ingresando de nuevo, no esperando', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => json({ error: 'sin sesión' }, 401)));
+
+    await expect(liquidacionApi.deSucursal(1)).rejects.toThrow();
+  });
+});
+
+/**
  * LOS AJUSTES DEL MES. Lo que este adaptador no puede confundir:
  * `montoEmpresa` omitido CONSERVA el calculado al cerrar el conteo, y
  * `montoEmpresa: 0` lo pisa con cero. Son dos cosas distintas y las dos
@@ -140,7 +194,9 @@ describe('ajustes del mes', () => {
   };
 
   it('`ajustes` pega al inventario, no a la sucursal', async () => {
-    const fn = vi.fn(async () => json(AJUSTES));
+    // Con la firma de `fetch` declarada: sin los parámetros, `mock.calls` se
+    // tipa como tupla vacía y `calls[0][1]` no compila.
+    const fn = vi.fn(async (_url: string, _init: RequestInit) => json(AJUSTES));
     vi.stubGlobal('fetch', fn);
 
     await liquidacionApi.ajustes(29);
@@ -160,7 +216,9 @@ describe('ajustes del mes', () => {
   });
 
   it('`registrarAjustes` usa PUT: es idempotente y se puede corregir', async () => {
-    const fn = vi.fn(async () => json(AJUSTES));
+    // Con la firma de `fetch` declarada: sin los parámetros, `mock.calls` se
+    // tipa como tupla vacía y `calls[0][1]` no compila.
+    const fn = vi.fn(async (_url: string, _init: RequestInit) => json(AJUSTES));
     vi.stubGlobal('fetch', fn);
 
     await liquidacionApi.registrarAjustes(29, { montoNegativos: 380, nota: 'Mermas.' });
@@ -169,7 +227,7 @@ describe('ajustes del mes', () => {
   });
 
   it('un 0 viaja en el cuerpo: no se cae por falsy', async () => {
-    const fn = vi.fn(async () => json({ ...AJUSTES, montoNegativos: 0 }));
+    const fn = vi.fn(async (_url: string, _init: RequestInit) => json({ ...AJUSTES, montoNegativos: 0 }));
     vi.stubGlobal('fetch', fn);
 
     await liquidacionApi.registrarAjustes(29, { montoNegativos: 0, nota: 'No hubo.' });
@@ -179,7 +237,9 @@ describe('ajustes del mes', () => {
   });
 
   it('sin montoEmpresa, la clave NO viaja -- así el backend conserva el calculado', async () => {
-    const fn = vi.fn(async () => json(AJUSTES));
+    // Con la firma de `fetch` declarada: sin los parámetros, `mock.calls` se
+    // tipa como tupla vacía y `calls[0][1]` no compila.
+    const fn = vi.fn(async (_url: string, _init: RequestInit) => json(AJUSTES));
     vi.stubGlobal('fetch', fn);
 
     await liquidacionApi.registrarAjustes(29, { montoNegativos: 380, nota: 'x' });
@@ -189,7 +249,9 @@ describe('ajustes del mes', () => {
   });
 
   it('con montoEmpresa en 0, la clave SÍ viaja -- pisar con cero es distinto de omitir', async () => {
-    const fn = vi.fn(async () => json(AJUSTES));
+    // Con la firma de `fetch` declarada: sin los parámetros, `mock.calls` se
+    // tipa como tupla vacía y `calls[0][1]` no compila.
+    const fn = vi.fn(async (_url: string, _init: RequestInit) => json(AJUSTES));
     vi.stubGlobal('fetch', fn);
 
     await liquidacionApi.registrarAjustes(29, { montoNegativos: 380, montoEmpresa: 0, nota: 'x' });
@@ -199,7 +261,9 @@ describe('ajustes del mes', () => {
   });
 
   it('la nota viaja tal cual', async () => {
-    const fn = vi.fn(async () => json(AJUSTES));
+    // Con la firma de `fetch` declarada: sin los parámetros, `mock.calls` se
+    // tipa como tupla vacía y `calls[0][1]` no compila.
+    const fn = vi.fn(async (_url: string, _init: RequestInit) => json(AJUSTES));
     vi.stubGlobal('fetch', fn);
 
     await liquidacionApi.registrarAjustes(29, { montoNegativos: 380, nota: 'Mermas documentadas de agosto.' });

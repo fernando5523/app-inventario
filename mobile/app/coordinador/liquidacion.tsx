@@ -39,6 +39,19 @@ function motivoSinCalcular(advertencia: Liquidacion['advertencia']): string {
 /** Igual criterio, para el monto que depende ÚNICAMENTE de los ajustes del mes. */
 const MOTIVO_SIN_AJUSTES = 'No se puede calcular: faltan los ajustes del mes.';
 
+/**
+ * La sucursal todavía no cerró ningún ciclo. NO es un error: es el estado
+ * normal de una tienda mientras se está contando, o sea la mayor parte del
+ * mes.
+ *
+ * Dice QUÉ falta y DÓNDE se hace, en ese orden. Antes esta pantalla mostraba
+ * "No se pudo cargar la liquidación / Intentá de nuevo" con un botón
+ * Reintentar — que no arreglaba nada, porque no había nada roto, y dejaba a
+ * la persona tocando un botón en loop.
+ */
+const SIN_CICLO_CERRADO =
+  'Todavía no hay un inventario con el conteo cerrado en esta tienda. Cerrá las 3 rondas desde Ciclo de conteos y volvé acá.';
+
 type Filtro = 'todos' | 'asistio' | 'falto';
 
 const NOMBRE_ROL: Record<string, string> = { coordinador: 'Coordinador', conteo: 'Conteo', auditor: 'Auditor' };
@@ -165,13 +178,34 @@ export default function LiquidacionScreen(): JSX.Element {
         onSalir={salir}
       />
 
+      {/*
+        TRES ESTADOS, no dos. Antes eran `error || !liquidacion` juntos, y
+        eso hacía que una tienda SIN CICLO CERRADO —el caso más normal del
+        mes, mientras se está contando— viera "No se pudo cargar la
+        liquidación / Intentá de nuevo" con un botón Reintentar que no iba a
+        arreglar nada, porque no había nada roto.
+
+        Decirle "reintentá" a alguien cuyo problema es que todavía no cerró
+        las rondas lo manda a tocar un botón en loop en vez de a la pantalla
+        donde sí puede avanzar.
+      */}
       {cargando ? (
         <ActivityIndicator color={colors.rojo} style={styles.cargando} />
-      ) : error || !liquidacion ? (
+      ) : error !== null ? (
         <View style={styles.tarjeta}>
           <Text style={styles.tarjetaTitulo}>No se pudo cargar la liquidación</Text>
-          <Text style={styles.tarjetaTexto}>{error ?? 'Intentá de nuevo.'}</Text>
+          <Text style={styles.tarjetaTexto}>{error}</Text>
+          {/* Reintentar SOLO acá: es lo único que un problema de red puede arreglar. */}
           <Button label="Reintentar" onPress={cargar} />
+        </View>
+      ) : liquidacion === null ? (
+        <View style={styles.tarjeta}>
+          <View style={styles.tarjetaCabecera}>
+            <Layers size={18} color={colors.gris} />
+            <Text style={styles.tarjetaTitulo}>Todavía no hay nada que liquidar</Text>
+          </View>
+          <Text style={styles.tarjetaTexto}>{SIN_CICLO_CERRADO}</Text>
+          <Button label="Ir al ciclo de conteos" variant="outline" onPress={() => router.push('/coordinador/ciclo')} />
         </View>
       ) : (
         <>

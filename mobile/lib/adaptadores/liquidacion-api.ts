@@ -41,15 +41,37 @@ import type {
   Liquidacion,
   RepositorioLiquidacion,
 } from '../puertos/repositorios';
-import { pedir } from './_http';
+import { ErrorApi, pedir } from './_http';
+
+/**
+ * "No hay ciclo cerrado en esta tienda" NO es un error, venga como venga.
+ *
+ * El backend lo dice con `200` + body `null`, y así está documentado. Pero un
+ * `404` significaría exactamente lo mismo, y hoy llega como `ErrorApi` — o
+ * sea, como excepción que la pantalla muestra como "No se pudo cargar la
+ * liquidación", que es la falla que este helper existe para evitar.
+ *
+ * Se normaliza acá y no en la pantalla: el puerto declara `Promise<X | null>`,
+ * así que traducir el transporte a ese `null` es trabajo del adaptador. Los
+ * demás errores —sin red, sesión vencida, 500— siguen subiendo intactos: esos
+ * SÍ son fallas y la pantalla tiene que ofrecer reintentar.
+ */
+async function nullSiNoHay<T>(promesa: Promise<T | null>): Promise<T | null> {
+  try {
+    return await promesa;
+  } catch (error) {
+    if (error instanceof ErrorApi && error.clase === 'no-encontrado') return null;
+    throw error;
+  }
+}
 
 export const liquidacionApi: RepositorioLiquidacion = {
   async deSucursal(sucursalId) {
-    return await pedir<Liquidacion | null>(`/api/liquidacion/sucursales/${sucursalId}`);
+    return await nullSiNoHay(pedir<Liquidacion | null>(`/api/liquidacion/sucursales/${sucursalId}`));
   },
 
   async conciliacion(sucursalId) {
-    return await pedir<Conciliacion | null>(`/api/liquidacion/sucursales/${sucursalId}/conciliacion`);
+    return await nullSiNoHay(pedir<Conciliacion | null>(`/api/liquidacion/sucursales/${sucursalId}/conciliacion`));
   },
 
   /**
