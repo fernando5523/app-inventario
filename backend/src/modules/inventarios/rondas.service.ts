@@ -152,6 +152,75 @@ async function hojasSinFinalizar(inventarioId: number, ronda: number) {
   });
 }
 
+/** Una hoja pendiente por sincronizar, con lo justo para nombrarla en el error. */
+interface HojaSinSincronizar {
+  numero: string;
+  asignados: string[];
+}
+
+/** Cuántas hojas se nombran en el mensaje antes de resumir el resto. */
+const HOJAS_A_LISTAR = 8;
+
+/**
+ * Hojas de la ronda YA finalizadas pero cuyo conteo todavía no llegó al
+ * servidor (`sync !== 'sincronizado'`). Si se llega hasta acá,
+ * `hojasSinFinalizar` ya dio vacío -- así que estas son hojas que alguien
+ * SÍ terminó de contar, pero el teléfono no subió todavía (sin señal, o
+ * esperando el próximo intento del sincronizador).
+ *
+ * Se traen los nombres de los asignados por la misma razón que
+ * `historial.permisos.ts#mensajeHojasSinFinalizar`: el mensaje tiene que
+ * decir A QUIÉN hay que pedirle que conecte su teléfono a la WiFi, no solo
+ * qué número de hoja falta.
+ */
+async function hojasSinSincronizar(inventarioId: number, ronda: number): Promise<HojaSinSincronizar[]> {
+  const hojas = await prisma.hojaConteo.findMany({
+    where: { inventarioId, numeroConteo: ronda, sync: { not: 'sincronizado' } },
+    select: {
+      numero: true,
+      asignadoA: { select: { nombre: true } },
+      asignadoA2: { select: { nombre: true } },
+    },
+    orderBy: { numero: 'asc' },
+  });
+
+  return hojas.map((h) => ({
+    numero: h.numero,
+    asignados: [h.asignadoA?.nombre, h.asignadoA2?.nombre].filter((n): n is string => Boolean(n)),
+  }));
+}
+
+/**
+ * El mensaje del rechazo por sincronización — DISTINTO del de hojas sin
+ * finalizar a propósito, porque la acción que le toca a quien lo lee es
+ * distinta: una hoja sin finalizar dice "andá a la góndola, alguien
+ * todavía está contando"; esta dice "el conteo YA se hizo, andá a conectar
+ * ese teléfono a la WiFi para que suba".
+ *
+ * Cerrar el conteo mirando solo lo que hay en la base, con una hoja
+ * finalizada en el teléfono pero sin sincronizar, congelaría un número al
+ * que le faltan ítems reales — y ese faltante se liquida igual, contra el
+ * sueldo de alguien que sí hizo el trabajo. Mismo riesgo que ya cubre
+ * `historial.permisos.ts#validarPuedeLacrar` con `todoSincronizado`, y por
+ * la misma razón.
+ */
+function mensajeHojasSinSincronizar(hojas: HojaSinSincronizar[]): string {
+  const cuantas = hojas.length;
+  const detalle = hojas
+    .slice(0, HOJAS_A_LISTAR)
+    .map((h) => `#${h.numero} (${h.asignados.length > 0 ? h.asignados.join(' y ') : 'sin asignar'})`)
+    .join(', ');
+  const resto = cuantas > HOJAS_A_LISTAR ? ` y ${cuantas - HOJAS_A_LISTAR} más` : '';
+  const plural = cuantas === 1;
+
+  return (
+    `No se puede cerrar el conteo: ${cuantas} ${plural ? 'hoja está' : 'hojas están'} finalizada${plural ? '' : 's'} pero ` +
+    `${plural ? 'su conteo no llegó' : 'sus conteos no llegaron'} al servidor todavía. Alguien contó sin señal y ese ` +
+    `trabajo sigue en la cola del teléfono, esperando la WiFi — cerrar ahora congelaría un número al que le faltan ` +
+    `ítems reales, y ese faltante se liquida igual. Conectá a la red y esperá a que sincronice: ${detalle}${resto}.`
+  );
+}
+
 export interface ResumenRondaDto extends ResumenDeRonda {
   inventarioId: number;
   ronda: number;
@@ -218,12 +287,28 @@ export interface CierreDeRondaDto {
 }
 
 /**
- * Cierra la ronda y abre la siguiente SOLO con lo que no cuadró.
+ * Cierra la ronda y abre la siguiente SOLO con lo que no cuadró -- o, si
+ * esta era la última del ciclo (o no quedó nada por recontar), cierra EL
+ * CONTEO DEL INVENTARIO entero (`Inventario.estado -> 'conteo_cerrado'`).
+ * Las dos cosas son la misma operación: el dominio
+ * (`ciclo-conteos.ts#puedeAbrirRondaSiguiente`) decide en el mismo cálculo
+ * si el ciclo sigue o termina, así que no hay un endpoint aparte para
+ * "cerrar el conteo" que alguien tenga que acordarse de apretar después.
  *
- * REQUISITO PARA CERRAR: todas las hojas de la ronda finalizadas. Una hoja
- * sin finalizar es una hoja que alguien todavía está contando -- cerrar la
- * ronda ahí congelaría un conteo a medias y lo compararía contra el ERP como
- * si fuera definitivo.
+ * REQUISITOS PARA CERRAR, EN ORDEN (el orden importa: primero lo que hay
+ * que ir a resolver a mano, después lo que se resuelve solo):
+ *   1. Todas las hojas de la ronda finalizadas. Una hoja sin finalizar es
+ *      una hoja que alguien todavía está contando -- cerrar ahí congelaría
+ *      un conteo a medias y lo compararía contra el ERP como si fuera
+ *      definitivo.
+ *   2. Todas esas hojas SINCRONIZADAS. Finalizada no es lo mismo que
+ *      sincronizada: alguien puede haber contado sin señal y finalizado la
+ *      hoja en el teléfono, con el conteo todavía en la cola esperando la
+ *      WiFi. Cerrar mirando solo lo que hay en la base congelaría un
+ *      número al que le faltan ítems reales, y ese faltante se liquida
+ *      igual -- mismo riesgo que ya cubre
+ *      `historial.permisos.ts#validarPuedeLacrar` con `todoSincronizado`,
+ *      y por la misma razón.
  *
  * Ojo con lo que ESTO NO exige, porque es una decisión pendiente del cliente:
  * `hojas.service.ts#finalizar` permite finalizar una hoja con renglones sin
@@ -233,8 +318,11 @@ export interface CierreDeRondaDto {
  * el cliente prefiere bloquear el cierre hasta que estén todos contados, el
  * cambio es una validación más acá.
  *
- * Todo va en UNA transacción: si la creación de las hojas nuevas fallara a
- * mitad, quedaría una ronda 2 incompleta que nadie sabría interpretar.
+ * Todo va en transacción: si la creación de las hojas nuevas fallara a
+ * mitad, quedaría una ronda 2 incompleta que nadie sabría interpretar; si
+ * el cierre del conteo fallara a mitad, quedaría un inventario con la
+ * ronda ya resuelta pero el estado todavía `en_curso` -- exactamente el
+ * hueco que este cambio existe para cerrar.
  */
 export async function cerrar(
   actor: ColaboradorAutenticado,
@@ -268,12 +356,37 @@ export async function cerrar(
     );
   }
 
+  // DESPUÉS de "sin finalizar" y no antes: es el que más probablemente se
+  // resuelva solo con la WiFi de la tienda, así que primero se le dice a
+  // la persona lo que SÍ tiene que ir a resolver a mano (mismo orden que
+  // `historial.permisos.ts#validarPuedeLacrar`). Todas las hojas de la
+  // ronda ya están finalizadas en este punto -- lo que falta es que el
+  // servidor las tenga.
+  const sinSincronizar = await hojasSinSincronizar(inventarioId, ronda);
+  if (sinSincronizar.length > 0) {
+    throw new Conflicto(mensajeHojasSinSincronizar(sinSincronizar));
+  }
+
   const universo = await universoDeLaRonda(inventarioId, ronda);
   const resumenRonda = resumirRonda(universo);
   const aRecontar = itemsParaLaRondaSiguiente(universo);
   const siguiente = puedeAbrirRondaSiguiente(ronda, aRecontar.length);
 
   if (!siguiente.puede) {
+    // EL CIERRE DEL CONTEO. Ronda y estado del inventario cambian JUNTOS o
+    // no pasa nada -- por eso van en la misma transacción, aunque hoy sea
+    // una sola escritura: es el mismo punto donde, el día de mañana, entra
+    // el cálculo de ResultadoInventario/LiquidacionColaborador (a
+    // propósito NO en esta tarea -- ver el comentario de
+    // InventarioActivoDto.rondaActiva en inventarios.service.ts).
+    //
+    // Este es el ÚNICO lugar donde `Inventario.estado` pasa a
+    // 'conteo_cerrado': no hay un endpoint aparte que alguien tenga que
+    // acordarse de apretar. El dominio (`puedeAbrirRondaSiguiente`) ya
+    // decidió acá mismo que el ciclo terminó -- cerrar la última ronda Y
+    // cerrar el conteo son el mismo hecho de negocio, no dos pasos.
+    await prisma.$transaction([prisma.inventario.update({ where: { id: inventarioId }, data: { estado: 'conteo_cerrado' } })]);
+
     // No se abre ronda nueva, pero el cierre igual se audita: es el hecho de
     // negocio que dice "la ronda N terminó y este fue el resultado".
     await registrarAuditoria({

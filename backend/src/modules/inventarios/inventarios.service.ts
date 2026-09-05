@@ -49,22 +49,15 @@ export interface InventarioActivoDto {
    * null = todavia no se creo ninguna hoja, mismo momento que `tamanoHoja:
    * null` (el Coordinador esta en el paso 1, antes de partir en hojas).
    *
-   * CASO LIMITE QUE ESTE CAMPO NO DISTINGUE, a proposito: la ronda mas alta
-   * que existe no es siempre una ronda que todavia admite conteo. Mientras
-   * el ciclo sigue (rondas 1 y 2), esto no pasa nunca -- cerrar una ronda
-   * (rondas.service.ts#cerrar) crea la ronda siguiente en la MISMA
-   * transaccion en la que la deja sin mas conteo, asi que el maximo salta
-   * de una a la otra sin quedar nunca "atras". Pero si la ronda 3 (la
-   * ultima del ciclo, RONDAS_DEL_CICLO) se cierra SIN abrir una siguiente
-   * (motivoSinSiguiente != null en rondas.service.ts#cerrar), el
-   * inventario sigue en_curso -- nada lo pasa a `conteo_cerrado` todavia --
-   * y este campo sigue devolviendo 3, aunque esa ronda ya no se pueda
-   * tocar. El modelo hoy no persiste "esta ronda esta cerrada" como columna
-   * propia (rondas.service.ts lo infiere viendo si existe la ronda+1), asi
-   * que rondaActiva no inventa un estado que no existe -- devuelve la
-   * verdad simple ("la ronda que hay"), no la pregunta mas fina ("se puede
-   * seguir contando en ella"). Quien necesite esa distincion pide ademas
-   * el resumen de la ronda (GET .../rondas/:ronda/resumen).
+   * SIEMPRE es una ronda que todavia admite conteo, y no por construccion
+   * de este campo sino porque `activo()` filtra `estado: 'en_curso'`: en
+   * cuanto `rondas.service.ts#cerrar()` cierra la ultima ronda del ciclo (o
+   * cualquiera, si no queda nada para recontar), pasa el inventario a
+   * `conteo_cerrado` en la MISMA transaccion -- y ese inventario deja de
+   * aparecer aca. Un "rondaActiva: 3" de este endpoint nunca puede referirse
+   * a una ronda 3 ya cerrada, porque ese inventario ya no es el activo de la
+   * sucursal. (Antes de ese cambio esto era un caso limite sin resolver;
+   * quedo cerrado junto con el hueco que lo causaba.)
    */
   rondaActiva: number | null;
 }
