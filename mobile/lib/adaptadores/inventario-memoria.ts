@@ -97,6 +97,77 @@ export const inventarioMemoria: RepositorioInventario = {
     return asignarHojasEnInventario(inventario, colaboradorIds, colaboradores);
   },
 
+  async resumenRonda(inventarioId, ronda) {
+    await simularLatencia();
+    const inventario = await obtenerInventario(inventarioId);
+    if (!inventario) throw new Error(`Inventario ${inventarioId} no encontrado.`);
+    if (inventario.hojas.length === 0) {
+      throw new Error(`El inventario ${inventarioId} no tiene hojas de la ronda ${ronda}.`);
+    }
+
+    // Lo que el mock SÍ puede saber de verdad: finalización y cuánto se
+    // contó. Sale de las hojas reales del inventario sembrado.
+    const total = inventario.hojas.reduce((n, h) => n + h.productos.length, 0);
+    const contados = inventario.hojas.reduce((n, h) => n + h.conteos.length, 0);
+    const pendientes = inventario.hojas.filter((h) => h.estado !== 'finalizada');
+
+    // Lo que NO puede saber: el cuadre contra el ERP. El stock de Dynamics no
+    // existe en memoria, así que no se inventa un "cuadrados": todo queda como
+    // `sinDatoErp` (no hay contra qué comparar) en vez de un número falso que
+    // se leería como "tantos cuadraron". El embudo real se prueba contra el
+    // backend; acá alcanza para desarrollar la UI de finalización/bloqueo.
+    return {
+      inventarioId,
+      ronda,
+      total,
+      contados,
+      sinContar: total - contados,
+      cuadrados: 0,
+      aRecontar: 0,
+      sinDatoErp: total,
+      porcentajeCuadrado: 0,
+      hojasSinFinalizar: pendientes.map((h) => ({
+        id: h.id,
+        numero: h.numero,
+        estado: h.estado,
+        zona: h.zona,
+        asignada: h.asignados.length > 0,
+      })),
+      sePuedeCerrar: pendientes.length === 0,
+      siguienteRonda: null,
+      motivoSinSiguiente: 'El adaptador en memoria no compara contra el ERP: probá el ciclo de rondas contra el backend.',
+    };
+  },
+
+  async cerrarRonda(inventarioId, ronda) {
+    await simularLatencia();
+    const inventario = await obtenerInventario(inventarioId);
+    if (!inventario) throw new Error(`Inventario ${inventarioId} no encontrado.`);
+
+    // El mismo portón que el backend: una hoja sin finalizar es una hoja que
+    // alguien todavía está contando. No se cierra con un conteo a medias.
+    const pendientes = inventario.hojas.filter((h) => h.estado !== 'finalizada');
+    if (pendientes.length > 0) {
+      const cuales = pendientes.slice(0, 5).map((h) => h.numero).join(', ');
+      throw new Error(
+        `No se puede cerrar la ronda ${ronda}: quedan ${pendientes.length} hoja(s) sin finalizar (${cuales}${pendientes.length > 5 ? '…' : ''}).`,
+      );
+    }
+
+    // Sin ERP no se puede decidir qué ítems vuelven ni materializar la ronda
+    // siguiente de forma fiel: el mock no simula eso. Devuelve un cierre sin
+    // ronda nueva, dicho como lo que es. El camino completo (abrir la 2da con
+    // lo que no cuadró) se ejercita contra el backend.
+    return {
+      inventarioId,
+      rondaCerrada: ronda,
+      resumen: { total: 0, contados: 0, sinContar: 0, cuadrados: 0, aRecontar: 0, sinDatoErp: 0, porcentajeCuadrado: 0 },
+      rondaAbierta: null,
+      motivoSinSiguiente: 'El adaptador en memoria no abre rondas: el ciclo completo se prueba contra el backend.',
+      hojas: [],
+    };
+  },
+
   async activo(sucursalId) {
     await simularLatencia();
     const inventario = await obtenerInventarioDeSucursal(sucursalId);

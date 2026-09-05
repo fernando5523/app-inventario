@@ -178,3 +178,86 @@ describe('traerSnapshot — cada falla con su código', () => {
     expect((error as ErrorSnapshot).codigo).toBe('desconocido');
   });
 });
+
+// La forma de estos cuerpos es la de rondas.service.ts (ResumenRondaDto y
+// CierreDeRondaDto), leída del código del backend — no adivinada.
+const RESUMEN_DTO = {
+  inventarioId: 20,
+  ronda: 1,
+  total: 1236,
+  contados: 1236,
+  sinContar: 0,
+  cuadrados: 1100,
+  aRecontar: 130,
+  sinDatoErp: 6,
+  porcentajeCuadrado: 89.4,
+  hojasSinFinalizar: [],
+  sePuedeCerrar: true,
+  siguienteRonda: 2,
+  motivoSinSiguiente: null,
+};
+
+describe('resumenRonda — PREVIEW que no muta', () => {
+  it('hace GET a la ruta de resumen y devuelve el embudo tal cual', async () => {
+    const fn = fetchPorRuta({ '/rondas/1/resumen': json(RESUMEN_DTO) });
+    const r = await inventarioApi.resumenRonda(20, 1);
+
+    const llamada = fn.mock.calls[0];
+    expect(llamada[0]).toBe(`${BASE}/api/inventarios/20/rondas/1/resumen`);
+    expect((llamada[1].method ?? 'GET').toUpperCase()).toBe('GET');
+    expect(r.cuadrados).toBe(1100);
+    expect(r.aRecontar).toBe(130);
+    expect(r.sePuedeCerrar).toBe(true);
+    expect(r.siguienteRonda).toBe(2);
+  });
+
+  it('trae las hojas que bloquean el cierre, para poder decir CUÁLES', async () => {
+    const conPendientes = {
+      ...RESUMEN_DTO,
+      sePuedeCerrar: false,
+      hojasSinFinalizar: [{ id: 5, numero: '003', estado: 'en-proceso', zona: 'A', asignada: true }],
+    };
+    fetchPorRuta({ '/rondas/1/resumen': json(conPendientes) });
+    const r = await inventarioApi.resumenRonda(20, 1);
+    expect(r.sePuedeCerrar).toBe(false);
+    expect(r.hojasSinFinalizar).toHaveLength(1);
+    expect(r.hojasSinFinalizar[0].numero).toBe('003');
+  });
+});
+
+describe('cerrarRonda', () => {
+  it('hace POST con cuerpo vacío y devuelve la ronda abierta con sus hojas', async () => {
+    const CIERRE_DTO = {
+      inventarioId: 20,
+      rondaCerrada: 1,
+      resumen: { total: 1236, contados: 1236, sinContar: 0, cuadrados: 1100, aRecontar: 130, sinDatoErp: 6, porcentajeCuadrado: 89.4 },
+      rondaAbierta: 2,
+      motivoSinSiguiente: null,
+      hojas: [{ id: 40, inventarioId: 20, numero: '001', zona: 'A', gondola: '001', tamano: 50, estado: 'pendiente', sync: 'sincronizado', asignados: [], productos: [], conteos: [] }],
+    };
+    const fn = fetchPorRuta({ '/rondas/1/cerrar': json(CIERRE_DTO, 201) });
+    const cierre = await inventarioApi.cerrarRonda(20, 1);
+
+    const llamada = fn.mock.calls[0];
+    expect(llamada[0]).toBe(`${BASE}/api/inventarios/20/rondas/1/cerrar`);
+    expect((llamada[1].method ?? '').toUpperCase()).toBe('POST');
+    expect(cierre.rondaAbierta).toBe(2);
+    expect(cierre.hojas).toHaveLength(1);
+  });
+
+  it('cuando el ciclo termina, rondaAbierta es null y viene el motivo (no es un error)', async () => {
+    const finCiclo = {
+      inventarioId: 20,
+      rondaCerrada: 1,
+      resumen: { total: 1236, contados: 1236, sinContar: 0, cuadrados: 1236, aRecontar: 0, sinDatoErp: 0, porcentajeCuadrado: 100 },
+      rondaAbierta: null,
+      motivoSinSiguiente: 'Todos los ítems cuadraron contra el ERP: no queda nada para recontar.',
+      hojas: [],
+    };
+    fetchPorRuta({ '/rondas/1/cerrar': json(finCiclo, 201) });
+    const cierre = await inventarioApi.cerrarRonda(20, 1);
+    expect(cierre.rondaAbierta).toBeNull();
+    expect(cierre.motivoSinSiguiente).toMatch(/cuadraron/i);
+    expect(cierre.hojas).toHaveLength(0);
+  });
+});

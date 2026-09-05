@@ -1,16 +1,28 @@
 import { router } from 'expo-router';
-import { ArrowRightCircle, Check, FileText } from 'lucide-react-native';
-import { useEffect, useState, type JSX } from 'react';
-import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
+import { AlertTriangle, ArrowRightCircle, Check, FileText, Lock } from 'lucide-react-native';
+import { useCallback, useEffect, useState, type JSX } from 'react';
+import { ActivityIndicator, Alert, Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { repositorioHojas, repositorioInventario } from '../../lib/contenedor';
 import { avanceConjunto, estadoConjunto, type EstadoConjunto } from '../../lib/dominio/hoja';
 import { partirEnHojas } from '../../lib/dominio/lote';
 import { TAMANOS_HOJA, type HojaConteo, type Rol, type TamanoHoja } from '../../lib/dominio/tipos';
+import type { ResumenRonda } from '../../lib/puertos/repositorios';
 import { useSesion } from '../../lib/sesion-contexto';
 import { colors, fonts, fontSize, radius, spacing } from '../../lib/theme';
 import { PantallaConTabs } from '../navegacion/PantallaConTabs';
-import { BandaSync, Badge, BarraApp, formatoMiles, formatoPct, type BadgeVariant } from '../ui';
+import { BandaSync, Badge, BarraApp, Button, formatoMiles, formatoPct, type BadgeVariant } from '../ui';
+
+/**
+ * La ronda que esta pantalla sabe cerrar HOY: la 1ra. Es el hueco que
+ * trababa el ciclo — el 1er conteo se terminaba y no había forma de cerrarlo.
+ * Las rondas 2 y 3 dependen de que el puerto de hojas soporte `ronda` (hoy
+ * `repositorioHojas.todas()` siempre trae la 1ra, ver el comentario de arriba
+ * del componente); cuando exista, esta misma pantalla las maneja con el mismo
+ * bloque, cambiando este número por la ronda activa. El puerto ya está listo
+ * para las tres: `resumenRonda`/`cerrarRonda` reciben la ronda por parámetro.
+ */
+const RONDA_A_CERRAR = 1;
 
 // formatoMiles/formatoPct, no Intl.NumberFormat('es-PE'): no está
 // garantizado que Hermes traiga los datos ICU de es-PE en el emulador —
@@ -94,6 +106,16 @@ function PasoCiclo({ titulo, descripcion, estado, calculo, avance, notaSinDato }
   );
 }
 
+/** Una fila del embudo del cierre: etiqueta a la izquierda, cifra a la derecha. */
+function FilaResumen({ etiqueta, valor, tono }: { etiqueta: string; valor: string; tono?: 'ok' | 'falta' }): JSX.Element {
+  return (
+    <View style={styles.filaResumen}>
+      <Text style={styles.filaResumenEtiqueta}>{etiqueta}</Text>
+      <Text style={[styles.filaResumenValor, tono === 'ok' && styles.valorOk, tono === 'falta' && styles.valorFalta]}>{valor}</Text>
+    </View>
+  );
+}
+
 export interface CicloScreenProps {
   rol: Extract<Rol, 'coordinador' | 'auditor'>;
 }
@@ -133,8 +155,26 @@ export function CicloScreen({ rol }: CicloScreenProps): JSX.Element {
   const { sesion, cerrar } = useSesion();
   const [cargando, setCargando] = useState(true);
   const [items, setItems] = useState<number | null>(null);
+  const [inventarioId, setInventarioId] = useState<number | null>(null);
   const [hojasT1, setHojasT1] = useState<HojaConteo[] | null>(null);
   const [tamanoReconteo, setTamanoReconteo] = useState<TamanoHoja>(50);
+
+  // Cierre de ronda (solo Coordinador). El resumen es un PREVIEW que no muta:
+  // se ve ANTES de decidir. Ver RepositorioInventario.resumenRonda.
+  const [resumen, setResumen] = useState<ResumenRonda | null>(null);
+  const [cerrandoRonda, setCerrandoRonda] = useState(false);
+  const esCoordinador = rol === 'coordinador';
+
+  const cargarResumen = useCallback(async (invId: number): Promise<void> => {
+    try {
+      setResumen(await repositorioInventario.resumenRonda(invId, RONDA_A_CERRAR));
+    } catch {
+      // Sin resumen la pantalla no se rompe: el bloque de cierre no aparece y
+      // el resto del ciclo (Paso 1, embudo) se ve igual. Un error acá es "no
+      // pude traer el preview", no "el inventario está mal".
+      setResumen(null);
+    }
+  }, []);
 
   useEffect(() => {
     if (!sesion) return;
@@ -144,6 +184,7 @@ export function CicloScreen({ rol }: CicloScreenProps): JSX.Element {
       const activo = await repositorioInventario.activo(sesion!.sucursal!.id);
       if (!vigente) return;
       setItems(activo?.items ?? null);
+      setInventarioId(activo?.inventarioId ?? null);
       if (!activo) {
         setCargando(false);
         return;
@@ -154,6 +195,9 @@ export function CicloScreen({ rol }: CicloScreenProps): JSX.Element {
       const todas = await repositorioHojas.todas(activo.inventarioId);
       if (!vigente) return;
       setHojasT1(todas);
+      // El preview del cierre solo lo necesita quien puede cerrar.
+      if (esCoordinador) await cargarResumen(activo.inventarioId);
+      if (!vigente) return;
       setCargando(false);
     }
 
@@ -161,13 +205,41 @@ export function CicloScreen({ rol }: CicloScreenProps): JSX.Element {
     return () => {
       vigente = false;
     };
-  }, [sesion]);
+  }, [sesion, esCoordinador, cargarResumen]);
 
   if (!sesion) return <View />;
 
   async function salir(): Promise<void> {
     await cerrar();
     router.replace('/');
+  }
+
+  async function cerrarRondaAhora(): Promise<void> {
+    if (inventarioId === null || resumen === null || !resumen.sePuedeCerrar) return;
+    setCerrandoRonda(true);
+    try {
+      const cierre = await repositorioInventario.cerrarRonda(inventarioId, RONDA_A_CERRAR);
+      if (cierre.rondaAbierta !== null) {
+        Alert.alert(
+          `2do conteo abierto`,
+          `Se abrió la ronda ${cierre.rondaAbierta} con ${formatoMiles(cierre.hojas.length)} hoja${cierre.hojas.length === 1 ? '' : 's'} nueva${cierre.hojas.length === 1 ? '' : 's'}, sin asignar. Repartilas desde Gestión de hojas.`,
+        );
+      } else {
+        // No se abrió ronda nueva: el ciclo terminó (todo cuadró, o se llegó
+        // al último conteo). No es un error — el backend lo dice en el motivo.
+        Alert.alert('1er conteo cerrado', cierre.motivoSinSiguiente ?? 'El ciclo de conteos terminó.');
+      }
+      // Recargar hojas y preview: el estado de la pantalla cambió.
+      const todas = await repositorioHojas.todas(inventarioId);
+      setHojasT1(todas);
+      await cargarResumen(inventarioId);
+    } catch (error) {
+      // El backend rechaza con mensaje claro (hojas sin finalizar, o ya
+      // cerrada): se muestra tal cual, no un "no se pudo" genérico.
+      Alert.alert('No se pudo cerrar la ronda', error instanceof Error ? error.message : 'Intentá de nuevo.');
+    } finally {
+      setCerrandoRonda(false);
+    }
   }
 
   const totalT1 = items ?? 0;
@@ -255,6 +327,61 @@ export function CicloScreen({ rol }: CicloScreenProps): JSX.Element {
             notaSinDato="Sin datos todavía: depende de que exista el Paso 2 primero."
           />
 
+          {esCoordinador && resumen ? (
+            <View style={styles.tarjeta}>
+              <View style={styles.tarjetaCabecera}>
+                <Text style={styles.tarjetaTitulo}>Cerrar el 1er conteo</Text>
+                <Badge
+                  label={resumen.sePuedeCerrar ? 'Listo para cerrar' : 'Faltan hojas'}
+                  variant={resumen.sePuedeCerrar ? 'ok' : 'espera'}
+                />
+              </View>
+
+              {/* El embudo REAL del 1er conteo, del backend. Es lo que hace de
+                  cerrar una decisión y no un trámite: se ve el número ANTES de
+                  apretar. */}
+              <View style={styles.embudoResumen}>
+                <FilaResumen etiqueta="Cuadraron contra Dynamics" valor={`${formatoMiles(resumen.cuadrados)} (${formatoPct(resumen.porcentajeCuadrado)}%)`} tono="ok" />
+                <FilaResumen etiqueta="A recontar en el 2do conteo" valor={formatoMiles(resumen.aRecontar)} tono="falta" />
+                {resumen.sinContar > 0 ? <FilaResumen etiqueta="Sin contar todavía" valor={formatoMiles(resumen.sinContar)} /> : null}
+                {resumen.sinDatoErp > 0 ? <FilaResumen etiqueta="Sin stock del ERP (no se auditan)" valor={formatoMiles(resumen.sinDatoErp)} /> : null}
+              </View>
+
+              <Text style={styles.tarjetaTexto}>
+                Cerrar abre el 2do conteo solo con lo que no cuadró — el 1er conteo queda intacto. Si quedan pocos
+                ítems para recontar, es media hora; si quedan muchos, conviene mirar qué se contó mal antes de mandar a
+                todos a recontar.
+              </Text>
+
+              {/* El motivo del bloqueo, a la vista: qué hojas faltan finalizar.
+                  Un botón gris sin decir por qué obliga a adivinar. */}
+              {!resumen.sePuedeCerrar ? (
+                <View style={styles.bloqueoAviso}>
+                  <AlertTriangle size={16} color={colors.proceso} />
+                  <Text style={styles.bloqueoTexto}>
+                    Quedan {formatoMiles(resumen.hojasSinFinalizar.length)} hoja
+                    {resumen.hojasSinFinalizar.length === 1 ? '' : 's'} sin finalizar:{' '}
+                    {resumen.hojasSinFinalizar.slice(0, 4).map((h) => `#${h.numero}`).join(', ')}
+                    {resumen.hojasSinFinalizar.length > 4 ? ` y ${resumen.hojasSinFinalizar.length - 4} más` : ''}. Una
+                    hoja sin finalizar es una hoja que alguien todavía está contando.
+                  </Text>
+                </View>
+              ) : null}
+
+              <Button
+                label={
+                  resumen.sePuedeCerrar
+                    ? `Cerrar y abrir el 2do conteo · ${formatoMiles(resumen.aRecontar)} ítems`
+                    : 'Terminá las hojas para poder cerrar'
+                }
+                icon={Lock}
+                onPress={cerrarRondaAhora}
+                disabled={!resumen.sePuedeCerrar}
+                loading={cerrandoRonda}
+              />
+            </View>
+          ) : null}
+
           <View style={styles.resumen}>
             <Text style={styles.tarjetaTexto}>
               El resultado final de las 3 pasadas (cuántos ítems cuadraron y cuántos quedan como diferencia definitiva)
@@ -323,6 +450,23 @@ const styles = StyleSheet.create({
     borderColor: colors.borde,
     borderRadius: 13,
   },
+
+  embudoResumen: { gap: 6 },
+  filaResumen: { flexDirection: 'row', alignItems: 'baseline', justifyContent: 'space-between', gap: 10 },
+  filaResumenEtiqueta: { flex: 1, fontSize: 12.5, color: colors.gris, fontFamily: fonts.regular },
+  filaResumenValor: { fontSize: 13.5, color: colors.tinta, fontFamily: fonts.bold, fontVariant: ['tabular-nums'] },
+  valorOk: { color: colors.ok },
+  valorFalta: { color: colors.falta },
+
+  bloqueoAviso: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 8,
+    padding: 11,
+    borderRadius: radius.md,
+    backgroundColor: colors.procesoSuave,
+  },
+  bloqueoTexto: { flex: 1, fontSize: 12, lineHeight: 17, color: colors.proceso, fontFamily: fonts.medium },
   ctaAuditoria: {
     flexDirection: 'row',
     alignItems: 'center',

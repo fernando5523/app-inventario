@@ -61,10 +61,12 @@
 import type { HojaConteo, TamanoHoja } from '../dominio/tipos';
 import {
   ErrorSnapshot,
+  type CierreRonda,
   type CodigoErrorSnapshot,
   type DesgloseSnapshot,
   type OpcionesTraerSnapshot,
   type RepositorioInventario,
+  type ResumenRonda,
 } from '../puertos/repositorios';
 import { ErrorApi, pedir, TIMEOUT_LARGO_MS } from './_http';
 
@@ -76,6 +78,8 @@ const RUTAS = {
   activo: (sucursalId: number) => `/api/sucursales/${sucursalId}/inventarios/activo`,
   crearHojas: (inventarioId: number) => `/api/inventarios/${inventarioId}/hojas`,
   asignarHojas: (inventarioId: number) => `/api/inventarios/${inventarioId}/hojas/asignar`,
+  resumenRonda: (inventarioId: number, ronda: number) => `/api/inventarios/${inventarioId}/rondas/${ronda}/resumen`,
+  cerrarRonda: (inventarioId: number, ronda: number) => `/api/inventarios/${inventarioId}/rondas/${ronda}/cerrar`,
 };
 
 /**
@@ -222,6 +226,23 @@ export const inventarioApi: RepositorioInventario = {
       metodo: 'POST',
       cuerpo: { colaboradorIds },
     });
+  },
+
+  async resumenRonda(inventarioId, ronda) {
+    // Mapeo directo: la forma de `ResumenRondaDto` (rondas.service.ts) coincide
+    // campo a campo con `ResumenRonda` del puerto —los siete del embudo
+    // (total/contados/sinContar/cuadrados/aRecontar/sinDatoErp/porcentajeCuadrado)
+    // más inventarioId, ronda, hojasSinFinalizar, sePuedeCerrar, siguienteRonda
+    // y motivoSinSiguiente. Verificado contra el service, no adivinado.
+    return pedir<ResumenRonda>(RUTAS.resumenRonda(inventarioId, ronda));
+  },
+
+  async cerrarRonda(inventarioId, ronda) {
+    // Body vacío: qué se cierra y qué se abre lo decide el backend leyendo el
+    // inventario (rondas.service.ts#cerrar), igual que el lacrado. La forma de
+    // `CierreDeRondaDto` coincide con `CierreRonda`; `hojas` son `HojaDto[]`
+    // que ya calzan con `HojaConteo` (mismo mapeo que crearHojas/asignarHojas).
+    return pedir<CierreRonda>(RUTAS.cerrarRonda(inventarioId, ronda), { metodo: 'POST', cuerpo: {} });
   },
 
   async activo(sucursalId) {

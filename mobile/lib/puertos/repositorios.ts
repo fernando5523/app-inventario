@@ -247,10 +247,96 @@ export interface RepositorioInventario {
   crearHojas(inventarioId: number, tamano: TamanoHoja): Promise<HojaConteo[]>;
   /** Paso 3: reparte las hojas sin asignar entre los presentes. */
   asignarHojas(inventarioId: number, colaboradorIds: number[]): Promise<HojaConteo[]>;
+
+  /**
+   * PASO 4 — PREVIEW del cierre de una ronda del ciclo de conteos. NO MUTA
+   * NADA: solo dice qué pasaría si se cerrara ahora.
+   *
+   * Existe separado del cierre porque cerrar una ronda es una DECISIÓN, no
+   * un trámite: si de 1.236 ítems quedan 12 por recontar, la ronda 2 es media
+   * hora; si quedan 900, algo se contó mal y hay que mirar ESO antes de mandar
+   * a once personas a recontar. El Coordinador ve este resumen ANTES de
+   * apretar — nunca un botón que cierra de una.
+   *
+   * `sePuedeCerrar` es false mientras queden hojas sin finalizar: están en
+   * `hojasSinFinalizar` para poder decir CUÁLES bloquean, no solo que algo
+   * bloquea. Rechaza si el inventario no tiene hojas de esa ronda.
+   */
+  resumenRonda(inventarioId: number, ronda: number): Promise<ResumenRonda>;
+
+  /**
+   * Cierra la ronda y abre la siguiente SOLO con los ítems que no cuadraron.
+   *
+   * NO BORRA NADA: las hojas, productos y conteos de la ronda cerrada quedan
+   * intactos — la auditoría compara las tres pasadas, así que borrar una
+   * ronda sería destruir la evidencia que justifica el cierre. Las hojas
+   * nuevas nacen SIN asignar y sin conteos (conteo ciego): se reparten con
+   * `asignarHojas`, igual que la ronda 1.
+   *
+   * Rechaza si quedan hojas sin finalizar (una hoja a medias no es un conteo
+   * definitivo) o si la ronda ya se había cerrado. Cuando ya no hay nada que
+   * recontar, `rondaAbierta` es null y `motivoSinSiguiente` dice por qué: el
+   * ciclo terminó, no falló.
+   */
+  cerrarRonda(inventarioId: number, ronda: number): Promise<CierreRonda>;
+
   /** Inventario en curso de una sucursal, o null si el Coordinador todavia no trajo el snapshot. */
   activo(
     sucursalId: number,
   ): Promise<{ inventarioId: number; items: number; tomadoEn: string; tamanoHoja: TamanoHoja | null; totalHojas: number } | null>;
+}
+
+/** Una hoja de la ronda que todavía no se finalizó: es lo que bloquea el cierre. */
+export interface HojaSinFinalizar {
+  id: number;
+  numero: string;
+  estado: string;
+  zona: string;
+  /** true = ya tiene a alguien asignado; false = quedó sin repartir. */
+  asignada: boolean;
+}
+
+/**
+ * El embudo de una ronda: cuántos ítems cuadraron contra el ERP y cuántos
+ * pasan a la ronda siguiente. `contados + sinContar` siempre da `total`;
+ * `cuadrados + aRecontar + sinDatoErp` también (son los tres destinos).
+ */
+export interface EmbudoRonda {
+  /** Ítems que ENTRARON a la ronda. */
+  total: number;
+  /** De esos, cuántos tienen conteo (en esta ronda o una anterior). */
+  contados: number;
+  /** Cuántos no tiene conteo en ninguna ronda: nadie los miró. */
+  sinContar: number;
+  /** Coinciden con el stock del ERP: no se recuentan. */
+  cuadrados: number;
+  /** No cuadraron: van a la ronda siguiente. */
+  aRecontar: number;
+  /** No se pueden auditar porque falta el stock del ERP. No se recuentan. */
+  sinDatoErp: number;
+  /** % que cuadró sobre los AUDITABLES (los que tienen stock del ERP). */
+  porcentajeCuadrado: number;
+}
+
+export interface ResumenRonda extends EmbudoRonda {
+  inventarioId: number;
+  ronda: number;
+  hojasSinFinalizar: HojaSinFinalizar[];
+  sePuedeCerrar: boolean;
+  /** La ronda que se abriría al cerrar, o null si el ciclo termina. */
+  siguienteRonda: number | null;
+  motivoSinSiguiente: string | null;
+}
+
+export interface CierreRonda {
+  inventarioId: number;
+  rondaCerrada: number;
+  resumen: EmbudoRonda;
+  /** La ronda que se abrió, o null si el ciclo no sigue. */
+  rondaAbierta: number | null;
+  motivoSinSiguiente: string | null;
+  /** Hojas nuevas de la ronda siguiente, SIN asignar. Vacío si no se abrió ninguna. */
+  hojas: HojaConteo[];
 }
 
 /** Un renglón de la planilla de descuentos (pantalla 6). */
@@ -263,6 +349,22 @@ export interface DetalleLiquidacion {
   monto: number;
 }
 
+/**
+ * Lo que hay que ADVERTIR sobre el monto, antes de firmarlo.
+ *
+ * Un ítem con diferencia pero sin precio de venta en Dynamics suma 0 al
+ * faltante: no rompe el cálculo y no se le inventa un precio, pero deja el
+ * monto SUBESTIMADO. Quien autoriza un descuento a la nómina de otra persona
+ * tiene derecho a saber que el número está incompleto — y a saberlo ANTES de
+ * firmar, no después.
+ */
+export interface AdvertenciaLiquidacion {
+  /** Ítems con diferencia real que no se pudieron valorizar. */
+  itemsSinPrecio: number;
+  /** Texto listo para mostrar tal cual. `null` cuando no hay nada que advertir. */
+  mensaje: string | null;
+}
+
 export interface Liquidacion {
   periodo: string;
   faltanteBruto: number;
@@ -271,9 +373,20 @@ export interface Liquidacion {
   faltanteNeto: number;
   cuotaBase: number;
   multaInasistencia: number;
+  /**
+   * El PISO del reparto del fondo de multas, no el promedio.
+   *
+   * Cuando el fondo no divide exacto entre los asistentes, a algunos les toca
+   * UN centavo más para que la suma de los bonos dé el fondo exacto (S/80
+   * entre 7 = seis de 11.43 y uno de 11.42). Por eso este número puede ser un
+   * centavo MENOR que el que aparece en algunas filas de la planilla: es el
+   * reparto, no un error de cálculo. La pantalla lo aclara cuando pasa.
+   */
   bonoAsistencia: number;
   totalFaltas: number;
   planilla: DetalleLiquidacion[];
+  /** Ver AdvertenciaLiquidacion. Siempre viene; `mensaje: null` si no hay nada que decir. */
+  advertencia: AdvertenciaLiquidacion;
 }
 
 /** Solo lo usa el Coordinador (cierre de fin de mes, pantalla 6). */
