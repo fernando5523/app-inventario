@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState, type JSX } from 'react';
 import { ActivityIndicator, Alert, Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { repositorioHojas, repositorioInventario } from '../../lib/contenedor';
+import { comparativoDeRonda } from '../../lib/dominio/comparativo-ronda';
 import { avanceConjunto, estadoConjunto, type EstadoConjunto } from '../../lib/dominio/hoja';
 import { partirEnHojas } from '../../lib/dominio/lote';
 import { TAMANOS_HOJA, type HojaConteo, type Rol, type TamanoHoja } from '../../lib/dominio/tipos';
@@ -23,6 +24,9 @@ import { BandaSync, Badge, BarraApp, Button, formatoMiles, formatoPct, type Badg
  * para las tres: `resumenRonda`/`cerrarRonda` reciben la ronda por parámetro.
  */
 const RONDA_A_CERRAR = 1;
+
+/** "1er", "2do", "3er" -- para hablar de una ronda sin repetir el switch. */
+const ORDINAL: Record<number, string> = { 1: '1er', 2: '2do', 3: '3er' };
 
 // formatoMiles/formatoPct, no Intl.NumberFormat('es-PE'): no está
 // garantizado que Hermes traiga los datos ICU de es-PE en el emulador —
@@ -67,6 +71,21 @@ function badgeDeEstado(estado: EstadoConjunto): { label: string; variant: BadgeV
       return { label: 'Sin datos todavía', variant: 'outline' };
   }
 }
+
+/**
+ * El comparativo contra Dynamics de una ronda, listo para mostrar.
+ *
+ * `null` cuando esa ronda todavía no existe (el endpoint responde 404). La
+ * distinción importa y por eso son dos textos distintos:
+ *
+ *   "todavía no empezó"      la ronda no se abrió — es la verdad, no un hueco
+ *   "no se puede calcular"   nos falta un dato — eso sí sería una limitación
+ *
+ * Decir lo segundo cuando pasa lo primero hace que el Coordinador crea que el
+ * sistema está roto justo cuando está funcionando como debe.
+ */
+const comparativoVisible = (r: ResumenRonda | null) =>
+  comparativoDeRonda(r, (n: number) => nf.format(n), formatoPct);
 
 interface PasoCicloProps {
   titulo: string;
@@ -139,10 +158,18 @@ export interface CicloScreenProps {
  * usa InicioScreen.tsx, así que no pueden divergir: no hay dos cálculos,
  * hay uno solo aplicado dos veces.
  *
- * DATO QUE SIGUE FALTANDO EN LOS PUERTOS (Pasos 2 y 3): no hay ningún
- * Repositorio que modele una "ronda de conteo" 2da/3ra ni la comparación
- * contra el stock del ERP que decide qué ítems pasan de una ronda a la
- * siguiente — `RepositorioHojas` no tiene parámetro de ronda (el backend
+ * EL COMPARATIVO CONTRA DYNAMICS YA ESTÁ EN LOS 3 PASOS. Sale de
+ * `resumenRonda(inventarioId, ronda)` llamado con 1, 2 y 3 — el mismo
+ * endpoint que usa el cierre. Devuelve AGREGADOS (cuántos cuadraron, cuántos
+ * pasan a recontar), nunca el stock de un ítem: por eso el Coordinador puede
+ * verlo mientras todavía coordina el conteo sin romper el conteo ciego. La
+ * matriz de auditoría, que sí trae `stockErp` por ítem, NO se usa acá.
+ *
+ * Una ronda que todavía no se abrió responde 404 y el paso dice "todavía no
+ * empezó" — que es la verdad, distinto de "no lo podemos calcular".
+ *
+ * LO QUE SIGUE FALTANDO (avance de las rondas 2 y 3, no el comparativo):
+ * `RepositorioHojas` no tiene parámetro de ronda (el backend
  * sí lo soporta, `GET /api/hojas?...&ronda=`, pero el puerto del front
  * nunca lo pasa, siempre trae la 1ra) y `RepositorioAuditoria.matriz()`
  * (que sí tiene conteo1/2/3 por ítem) hoy solo trae 3 ítems de ejemplo,
@@ -176,6 +203,39 @@ export function CicloScreen({ rol }: CicloScreenProps): JSX.Element {
     }
   }, []);
 
+  /**
+   * El comparativo contra Dynamics de CADA ronda, no solo de la 1ra.
+   *
+   * Es el mismo endpoint (`resumenRonda`) llamado con 1, 2 y 3: devuelve
+   * AGREGADOS -- cuántos cuadraron, cuántos van a recontar -- y nunca el
+   * stock de un ítem puntual. Por eso el Coordinador puede verlo mientras
+   * todavía coordina el conteo sin romper el conteo ciego: de "1.100
+   * cuadraron y 136 pasan al 2do" no se deduce cuánto stock espera el ERP de
+   * ningún artículo. La matriz de auditoría, que sí trae `stockErp` por ítem,
+   * NO se usa acá y no debe usarse.
+   *
+   * Una ronda que todavía no existe responde 404 y queda en `null`: la
+   * pantalla lo muestra como "todavía no empezó", que es la verdad, y no como
+   * un dato que no sabemos calcular.
+   */
+  const [resumenPorRonda, setResumenPorRonda] = useState<Record<number, ResumenRonda | null>>({});
+
+  const cargarResumenDeRondas = useCallback(async (invId: number): Promise<void> => {
+    const rondas = [1, 2, 3];
+    const resultados = await Promise.all(
+      rondas.map(async (r) => {
+        try {
+          return [r, await repositorioInventario.resumenRonda(invId, r)] as const;
+        } catch {
+          // 404 = esa ronda todavía no se abrió. No es un fallo: es el estado
+          // normal de las rondas 2 y 3 mientras se cuenta la primera.
+          return [r, null] as const;
+        }
+      }),
+    );
+    setResumenPorRonda(Object.fromEntries(resultados));
+  }, []);
+
   useEffect(() => {
     if (!sesion) return;
     let vigente = true;
@@ -195,7 +255,11 @@ export function CicloScreen({ rol }: CicloScreenProps): JSX.Element {
       const todas = await repositorioHojas.todas(activo.inventarioId);
       if (!vigente) return;
       setHojasT1(todas);
-      // El preview del cierre solo lo necesita quien puede cerrar.
+      // El comparativo de las 3 rondas lo ven los DOS roles: es el embudo del
+      // ciclo, no una herramienta de cierre.
+      await cargarResumenDeRondas(activo.inventarioId);
+      if (!vigente) return;
+      // El preview del cierre, en cambio, solo lo necesita quien puede cerrar.
       if (esCoordinador) await cargarResumen(activo.inventarioId);
       if (!vigente) return;
       setCargando(false);
@@ -205,7 +269,7 @@ export function CicloScreen({ rol }: CicloScreenProps): JSX.Element {
     return () => {
       vigente = false;
     };
-  }, [sesion, esCoordinador, cargarResumen]);
+  }, [sesion, esCoordinador, cargarResumen, cargarResumenDeRondas]);
 
   if (!sesion) return <View />;
 
@@ -247,6 +311,23 @@ export function CicloScreen({ rol }: CicloScreenProps): JSX.Element {
   const avanceT1 = hojasT1 ? avanceConjunto(hojasT1) : null;
   const pctAvanceT1 = avanceT1 && avanceT1.totalItems > 0 ? (avanceT1.itemsContados / avanceT1.totalItems) * 100 : 0;
 
+  // El comparativo contra Dynamics de cada ronda. `null` = esa ronda todavía
+  // no se abrió, y el paso lo dice con esas palabras.
+  const comparativoT1 = comparativoVisible(resumenPorRonda[1] ?? null);
+  const comparativoT2 = comparativoVisible(resumenPorRonda[2] ?? null);
+  const comparativoT3 = comparativoVisible(resumenPorRonda[3] ?? null);
+
+  // La ronda MÁS AVANZADA que ya tiene datos: es la que dice dónde quedó el
+  // ciclo. No se suman las tres -- un ítem que pasó de la 1 a la 2 está en
+  // las dos, y sumarlas lo contaría dos veces.
+  const ultimoComparativo = comparativoT3
+    ? { ronda: 3 as const, datos: comparativoT3 }
+    : comparativoT2
+      ? { ronda: 2 as const, datos: comparativoT2 }
+      : comparativoT1
+        ? { ronda: 1 as const, datos: comparativoT1 }
+        : null;
+
   const hojasCalculoT1 = calcularHojas(totalT1, 50);
 
   return (
@@ -266,9 +347,11 @@ export function CicloScreen({ rol }: CicloScreenProps): JSX.Element {
         <>
           <PasoCiclo
             titulo="Paso 1 · 1er Conteo General"
-            descripcion="100% del catálogo. El comparativo contra el stock de Dynamics (cuántos cuadran y cuántos pasan al 2do conteo) se calcula al cerrar este paso."
+            descripcion="100% del catálogo, comparado contra el stock de Dynamics a medida que se cuenta."
             estado={estadoT1}
-            calculo={textoCalculo(hojasCalculoT1, 50)}
+            // El cálculo de hojas Y, cuando ya hay conteos, el comparativo
+            // contra el ERP: cuántos cuadraron y cuántos pasarían al 2do.
+            calculo={[textoCalculo(hojasCalculoT1, 50), comparativoT1?.detalle].filter(Boolean).join(' ')}
             avance={
               avanceT1 && hojasT1 && hojasT1.length > 0
                 ? {
@@ -316,15 +399,27 @@ export function CicloScreen({ rol }: CicloScreenProps): JSX.Element {
           <PasoCiclo
             titulo="Paso 2 · 2do Reconteo"
             descripcion="Solo los ítems que no coincidieron con el stock de Dynamics en el 1er conteo."
-            estado="sin-hojas"
-            notaSinDato="Sin datos todavía: falta el comparativo contra Dynamics del 1er conteo y un puerto que traiga las hojas de esta ronda (hoy el front solo pide siempre la 1ra)."
+            estado={comparativoT2 ? 'en-proceso' : 'sin-hojas'}
+            calculo={comparativoT2?.detalle}
+            avance={comparativoT2?.avance}
+            notaSinDato={
+              comparativoT2
+                ? undefined
+                : 'El 2do conteo todavía no empezó: se abre al cerrar el 1ero, y entra solo con los ítems que no cuadraron.'
+            }
           />
 
           <PasoCiclo
             titulo="Paso 3 · 3er Reconteo Definitivo"
             descripcion={`Los ítems que persistieron tras la 2da pasada, auditados directamente${rol === 'auditor' ? ' por vos' : ''}. Las cantidades resultantes quedan fijas para la liquidación — no hay un 4to conteo.`}
-            estado="sin-hojas"
-            notaSinDato="Sin datos todavía: depende de que exista el Paso 2 primero."
+            estado={comparativoT3 ? 'en-proceso' : 'sin-hojas'}
+            calculo={comparativoT3?.detalle}
+            avance={comparativoT3?.avance}
+            notaSinDato={
+              comparativoT3
+                ? undefined
+                : 'El 3er conteo todavía no empezó: se abre al cerrar el 2do, y solo si quedan ítems sin cuadrar.'
+            }
           />
 
           {esCoordinador && resumen ? (
@@ -382,11 +477,25 @@ export function CicloScreen({ rol }: CicloScreenProps): JSX.Element {
             </View>
           ) : null}
 
+          {/*
+            El cierre del embudo: dónde quedó parado el ciclo. Sale de la
+            ÚLTIMA ronda que tiene datos -- no de una suma de las tres, que
+            contaría dos veces a los ítems que pasaron de una a otra.
+          */}
           <View style={styles.resumen}>
-            <Text style={styles.tarjetaTexto}>
-              El resultado final de las 3 pasadas (cuántos ítems cuadraron y cuántos quedan como diferencia definitiva)
-              todavía no tiene datos reales — depende del mismo comparativo que falta en los Pasos 2 y 3.
-            </Text>
+            {ultimoComparativo ? (
+              <Text style={styles.tarjetaTexto}>
+                Al cierre del {ORDINAL[ultimoComparativo.ronda]} conteo: {ultimoComparativo.datos.detalle}
+                {ultimoComparativo.datos.avance.pct >= 100
+                  ? ' El ciclo puede cerrarse: no queda nada por recontar.'
+                  : ` Los que no cuadren tras el ${ORDINAL[3]} quedan como diferencia definitiva para la liquidación.`}
+              </Text>
+            ) : (
+              <Text style={styles.tarjetaTexto}>
+                El resultado final de las 3 pasadas se arma a medida que se cuenta: todavía no hay ningún conteo
+                cargado en este inventario.
+              </Text>
+            )}
           </View>
 
           {rol === 'auditor' ? (
