@@ -92,23 +92,37 @@ Consecuencia en sesión: `POST /api/sesion/ingresar` devuelve `sucursal: null` c
 
 ## ⚠️ PIN de desarrollo — hay que rotarlo antes de la tienda
 
-El seed genera el PIN de cada colaborador como **su propio id con ceros
-adelante**:
+El seed genera el PIN de cada colaborador **fijo por rol** (`PIN_DEV_POR_ROL`
+en `prisma/seed.ts`), no derivado del id — reemplazó al generador viejo que
+se describe más abajo:
 
-| Persona | id | PIN |
-|---|---|---|
-| José Tarazona (coordinador) | 101 | `000101` |
-| María Rojas (conteo) | 102 | `000102` |
-| Admin Sistema (administrador) | 1000 | `001000` |
+| Rol | PIN |
+|---|---|
+| coordinador | `724193` |
+| conteo | `518274` |
+| auditor | `306581` |
+| administrador | `947260` |
 
-**Por qué esto es una puerta abierta, no solo un placeholder feo:** la
-pantalla de login **lista a todas las personas** de la sucursal con nombre y
-rol (`GET /api/sesion/sucursales/:id/colaboradores`, público). Cualquiera que
-abra la app ve la lista y de ahí deduce el PIN de todos — incluido el del
-administrador, que gestiona las cuentas de las 4 sucursales.
+Eso es lo que trae una base **nueva** (`prisma migrate reset` + seed desde
+cero). **Una base ya sembrada conserva los PIN con los que se sembró**:
+`npm run prisma:seed` (sin `migrate reset`) sí actualiza el PIN de los 29
+colaboradores normales en cada corrida, pero **no** el del administrador —
+su `update` no toca `pinHash` (ver `prisma/seed.ts`). La base de desarrollo
+actual quedó sembrada con el generador viejo antes de que existiera
+`PIN_DEV_POR_ROL`, así que hoy `Admin Sistema` entra con `001000`, no con
+`947260`.
 
-Que sean predecibles es **deliberado**: sin eso no se puede probar `/ingresar`
-en local. El algoritmo del seed **no se cambia**. Lo que hay que hacer es
+**Por qué el generador viejo (`id` con ceros adelante) era una puerta
+abierta, no solo un placeholder feo:** la pantalla de login **lista a todas
+las personas** de la sucursal con nombre y rol (`GET
+/api/sesion/sucursales/:id/colaboradores`, público). Cualquiera que abriera
+la app veía la lista y de ahí deducía el PIN de todos — incluido el del
+administrador, que gestiona las cuentas de las 4 sucursales. El hallazgo
+completo y la corrección están en "Los PIN del seed ya no se derivan del
+id", más abajo.
+
+Que sean predecibles/fijos sigue siendo **deliberado**: sin eso no se puede
+probar `/ingresar` en local sin leer el repo. Lo que hay que hacer es
 rotarlos antes de cualquier uso real.
 
 ### Cómo rotarlos
