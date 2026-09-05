@@ -492,6 +492,50 @@ async function guardarEstructuraDeHoja(db: DbSqlite, hoja: HojaConteo, ronda: nu
 }
 
 /**
+ * HALLAZGO (2026-09-06, min-1): el Coordinador cerró rondas por script
+ * contra el backend, y "Ciclo de conteos"/"Gestión de hojas" en su
+ * teléfono siguieron diciendo "Quedan N hojas sin finalizar" — aun
+ * reiniciando la app por completo. Causa: `asegurarSembrada` (arriba)
+ * siembra `hoja_estado_local`/`conteos` UNA sola vez y nunca más los
+ * toca — la protección correcta para un CONTADOR (nunca pisarle un
+ * conteo propio sin sincronizar), pero un desastre para quien solo MIRA
+ * `todas()` (Coordinador/Auditor): una vez que este dispositivo vio una
+ * hoja ajena por primera vez, quedaba congelada en ESE estado para
+ * siempre, sin importar cuántas veces se refrescara la estructura.
+ *
+ * `alcance === 'todas'` es de solo lectura para quien lo pide -- nunca
+ * cuenta, nunca tiene un conteo propio que proteger acá -- así que esta
+ * función SIEMPRE pisa con lo que acaba de responder el servidor. La
+ * única excepción: si ESTE MISMO dispositivo tiene algo pendiente de
+ * sincronizar para esa hoja (`cola_sync`), no se toca -- sería el caso
+ * (fuera de lo normal, pero posible en un teléfono compartido entre
+ * roles) de que la persona que mira `todas()` sea TAMBIÉN quien está
+ * contando esa hoja sin haber podido subirla todavía.
+ */
+async function refrescarEstadoDesdeServidor(db: DbSqlite, hoja: HojaConteo): Promise<void> {
+  const pendientes = await db.getFirstAsync<{ n: number }>('SELECT COUNT(*) as n FROM cola_sync WHERE hoja_id = ?', [hoja.id]);
+  if ((pendientes?.n ?? 0) > 0) return;
+
+  await db.withTransactionAsync(async () => {
+    await db.runAsync(
+      `INSERT INTO hoja_estado_local (hoja_id, estado, sync) VALUES (?, ?, ?)
+       ON CONFLICT(hoja_id) DO UPDATE SET estado = excluded.estado, sync = excluded.sync`,
+      [hoja.id, hoja.estado, hoja.sync],
+    );
+    // Reemplaza los conteos ENTEROS de esta hoja por los que acaba de
+    // mandar el servidor -- mismo criterio que ModalConteo.tsx ya usa
+    // para un conteo individual (nunca mezcla lo viejo con lo nuevo).
+    await db.runAsync('DELETE FROM conteos WHERE hoja_id = ?', [hoja.id]);
+    for (const c of hoja.conteos) {
+      await db.runAsync(
+        'INSERT OR REPLACE INTO conteos (hoja_id, producto_id, lineas, sueltas, confirmado_por_escaner, contado_en) VALUES (?, ?, ?, ?, ?, ?)',
+        [hoja.id, c.productoId, JSON.stringify(c.empaques), c.sueltas, c.confirmadoPorEscaner ? 1 : 0, c.contadoEn],
+      );
+    }
+  });
+}
+
+/**
  * Lo que le hace falta a la pantalla para el mensaje del punto 4 — ver
  * mis-hojas.tsx. Cuatro motivos, no tres, porque "sin red desde el
  * arranque" y "la descarga se cortó a mitad de camino" piden acciones
@@ -507,12 +551,28 @@ async function guardarEstructuraDeHoja(db: DbSqlite, hoja: HojaConteo, ronda: nu
  * dato la pantalla no puede distinguir "no se guardó nada" de "se guardó
  * una parte", que es justo la diferencia entre reintentar desde cero o
  * seguir viendo lo que ya hay mientras se reintenta.
+ *
+ * `en` en la rama `ok: true` es CUÁNDO se completó esa descarga (ISO
+ * 8601) — lo necesita la pantalla del Coordinador para decir "sin red,
+ * datos de las 14:32" cuando la siguiente consulta falla por falta de
+ * señal: sin este dato no hay forma de distinguir "esto es de hace un
+ * minuto" de "esto es de la semana pasada".
  */
 export type ResultadoDescarga =
-  | { ok: true; hojas: number }
+  | { ok: true; hojas: number; en: string }
   | { ok: false; motivo: 'sin-red' | 'sesion-vencida' | 'error' | 'incompleta'; hojas: number };
 
 const ultimosResultados = new Map<string, ResultadoDescarga>();
+
+/**
+ * CUÁNDO fue la última descarga que SÍ salió bien -- aparte de
+ * `ultimosResultados`, que guarda el último INTENTO (éxito o no). Si se
+ * guardara solo ahí, un intento fallido pisaría el resultado anterior y
+ * "sin red, datos de las 14:32" perdería justo el dato que necesita
+ * mostrar: la hora de la ÚLTIMA VEZ que hubo datos de verdad, no la del
+ * último intento (que fue el que falló).
+ */
+const ultimasDescargasExitosas = new Map<string, string>();
 
 function claveResultado(inventarioId: number, alcance: 'mias' | 'todas', ronda: number): string {
   // La ronda entra en la clave: "0 hojas" de la ronda 2 (todavía no
@@ -530,6 +590,18 @@ function claveResultado(inventarioId: number, alcance: 'mias' | 'todas', ronda: 
  */
 export function ultimaDescarga(inventarioId: number, alcance: 'mias' | 'todas', ronda: number): ResultadoDescarga | null {
   return ultimosResultados.get(claveResultado(inventarioId, alcance, ronda)) ?? null;
+}
+
+/**
+ * CUÁNDO fue la última vez que `alcance` bajó datos de verdad para este
+ * inventario -- sobrevive a un intento fallido posterior (ver el
+ * comentario de `ultimasDescargasExitosas`). `null` = nunca se bajó nada
+ * con éxito. Es lo que arma "sin red, datos de las 14:32" en la pantalla
+ * del Coordinador (Ciclo de conteos / Gestión de hojas) cuando `todas()`
+ * falla por falta de señal pero ya había datos de una vez anterior.
+ */
+export function ultimaDescargaExitosa(inventarioId: number, alcance: 'mias' | 'todas', ronda: number): string | null {
+  return ultimasDescargasExitosas.get(claveResultado(inventarioId, alcance, ronda)) ?? null;
 }
 
 /**
@@ -602,6 +674,12 @@ async function descargarHojas(inventarioId: number, alcance: 'mias' | 'todas', r
   try {
     for (const hoja of completas) {
       await guardarEstructuraDeHoja(db, hoja, ronda);
+      // Solo para `todas()` (Coordinador/Auditor, solo lectura): refresca
+      // el estado/conteos locales con la respuesta FRESCA del servidor.
+      // `mias()` no pasa por acá -- `asegurarSembrada` (adentro de
+      // guardarEstructuraDeHoja) ya protege el trabajo propio del
+      // Contador, sembrando una sola vez, y eso es lo correcto ahí.
+      if (alcance === 'todas') await refrescarEstadoDesdeServidor(db, hoja);
       guardadas++;
     }
   } catch {
@@ -610,21 +688,39 @@ async function descargarHojas(inventarioId: number, alcance: 'mias' | 'todas', r
     return resultado;
   }
 
-  const resultado: ResultadoDescarga = { ok: true, hojas: completas.length };
+  const ahora = new Date().toISOString();
+  const resultado: ResultadoDescarga = { ok: true, hojas: completas.length, en: ahora };
   ultimosResultados.set(claveResultado(inventarioId, alcance, ronda), resultado);
+  ultimasDescargasExitosas.set(claveResultado(inventarioId, alcance, ronda), ahora);
   return resultado;
 }
 
 /**
  * Dispara la descarga y decide si HAY que esperarla:
- *  - ya hay estructura local para este inventario → se muestra YA (no hace
- *    esperar un timeout de red para terminar mostrando lo mismo que ya
- *    había); la descarga corre en segundo plano para refrescar.
- *  - no hay nada local todavía → no hay nada más que mostrar, así que sí
- *    vale la pena esperar el intento (es el caso "primera vez, con WiFi,
- *    en la tienda" del punto 1).
+ *  - `mias()` (Contador) con estructura local ya presente → se muestra YA
+ *    (no hace esperar un timeout de red para terminar mostrando lo mismo
+ *    que ya había); la descarga corre en segundo plano para refrescar.
+ *    Sin nada local todavía, sí vale la pena esperar el intento (es el
+ *    caso "primera vez, con WiFi, en la tienda" del punto 1).
+ *  - `todas()` (Coordinador/Auditor) SIEMPRE espera el intento, tenga o
+ *    no estructura local. Es de solo lectura y la razón de ser de la
+ *    pantalla es ver el estado REAL de lo que hicieron los demás — la
+ *    optimización de "mostrar la cache ya y refrescar en segundo plano"
+ *    es correcta para el Contador (que solo necesita ver SU propio
+ *    avance sin esperar), pero acá dejaba "Quedan N hojas sin finalizar"
+ *    clavado para siempre (hallazgo 2026-09-06, min-1): la promesa de
+ *    fondo terminaba de escribir en SQLite, pero nada volvía a pintar la
+ *    pantalla con eso, así que la MISMA lectura vieja se repetía en cada
+ *    visita, cada reinicio, indefinidamente. Sin red, `descargarHojas`
+ *    falla rápido (timeout de `_http.ts`, no un cuelgue) y esta función
+ *    sigue con lo local — la pantalla lo distingue con `ultimaDescarga`.
  */
 async function descargarSiHaceFalta(inventarioId: number, alcance: 'mias' | 'todas', ronda: number): Promise<void> {
+  if (alcance === 'todas') {
+    await descargarHojas(inventarioId, alcance, ronda);
+    return;
+  }
+
   const db = await obtenerDb();
   const yaHayLocal = (await hojasEstructuraDeInventarioDb(db, inventarioId, ronda)).length > 0;
 

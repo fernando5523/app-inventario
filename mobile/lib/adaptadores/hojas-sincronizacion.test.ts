@@ -300,7 +300,7 @@ vi.mock('./_sqlite', () => ({
   obtenerDb: () => obtenerDbDeTest(),
 }));
 
-const { hojasSqlite, procesarColaDeSincronizacion, estadoDeLaCola } = await import('./hojas-sqlite');
+const { hojasSqlite, procesarColaDeSincronizacion, estadoDeLaCola, ultimaDescarga, ultimaDescargaExitosa } = await import('./hojas-sqlite');
 const { obtenerInventarioDeSucursal } = await import('./_compartido');
 
 afterAll(() => {
@@ -511,5 +511,108 @@ describe('el ciclo offline de punta a punta: los 5 pasos del operario, con SQLit
     const db = await obtenerDbDeTest();
     const filas = await db.getAllAsync('SELECT * FROM conteos WHERE hoja_id = ? AND producto_id = ?', [hojaId, productoId]);
     expect(filas).toHaveLength(1); // una sola fila en la base, nunca dos.
+  });
+});
+
+describe('todas() (Coordinador/Auditor): con red siempre trae la respuesta fresca, sin red cae al último dato bueno', () => {
+  // Hallazgo real (min-1, 2026-09-06): un Coordinador cerró rondas por
+  // script contra el backend, y "Ciclo de conteos"/"Gestión de hojas" en
+  // su teléfono siguieron diciendo "Quedan N hojas sin finalizar" aun
+  // reiniciando la app por completo. Causa doble:
+  //   1) `descargarSiHaceFalta` mostraba la cache local YA y refrescaba
+  //      en 2do plano -- correcto para `mias()` (Contador), pero para
+  //      `todas()` (solo lectura) la promesa de fondo nunca volvía a
+  //      pintar la pantalla: la MISMA lectura vieja se repetía siempre.
+  //   2) `asegurarSembrada` sembraba `hoja_estado_local`/`conteos` UNA
+  //      sola vez -- protege el trabajo propio de un Contador, pero
+  //      congelaba para siempre el estado que ve un Coordinador de una
+  //      hoja ajena.
+  const stub = crearServidorControlable();
+  let puerto = 0;
+  const INV = 555300;
+  const HOJA_ID = 5553001;
+
+  const hojaDeTest = (estado: 'pendiente' | 'en-proceso' | 'finalizada', conteos: Conteo[]) => ({
+    id: HOJA_ID,
+    inventarioId: INV,
+    numero: '001',
+    zona: 'Zona T',
+    gondola: 'T1',
+    tamano: 50,
+    estado,
+    sync: 'sincronizado' as const,
+    asignados: ['Otra Persona'], // el Coordinador mira, no cuenta -- no hace falta que sea "suya".
+    productos: [
+      {
+        id: 70001,
+        codigo: '0001',
+        codigoBarras: '7770000000001',
+        descripcion: 'Producto de prueba',
+        empaques: [{ nombre: 'Caja', factor: 12 }],
+      },
+    ],
+    conteos,
+  });
+
+  beforeAll(async () => {
+    puerto = await stub.escuchar();
+    recordarToken('token-de-prueba');
+  });
+
+  afterAll(() => stub.cerrar());
+
+  it('con red: la SEGUNDA consulta trae el estado fresco, no el que se sembró en la primera', async () => {
+    process.env.EXPO_PUBLIC_API_URL = `http://127.0.0.1:${puerto}`;
+
+    // 1ra consulta: la hoja todavía en proceso, sin conteos.
+    stub.setResponder(() => ({ status: 200, cuerpo: [hojaDeTest('en-proceso', [])] }));
+    const primera = await hojasSqlite.todas(INV, 1);
+    expect(primera[0]!.estado).toBe('en-proceso');
+    expect(primera[0]!.conteos).toHaveLength(0);
+
+    // Alguien (otro colaborador, otro teléfono) finaliza la hoja en el
+    // servidor. El backend ahora responde distinto.
+    const conteoFresco: Conteo = {
+      productoId: 70001,
+      empaques: [{ empaqueNombre: 'Caja', cantidad: 1 }],
+      sueltas: 0,
+      confirmadoPorEscaner: false,
+      contadoEn: '2026-09-06T10:00:00.000Z',
+    };
+    stub.setResponder(() => ({ status: 200, cuerpo: [hojaDeTest('finalizada', [conteoFresco])] }));
+
+    // 2da consulta, MISMO dispositivo: tiene que traer lo fresco, no lo
+    // que sembró la primera vez.
+    const segunda = await hojasSqlite.todas(INV, 1);
+    expect(segunda[0]!.estado).toBe('finalizada');
+    expect(segunda[0]!.conteos).toHaveLength(1);
+    expect(segunda[0]!.conteos[0]).toMatchObject({ productoId: 70001, sueltas: 0 });
+
+    // Y quedó escrito en LOCAL -- no es que cada consulta pegue a la red
+    // sin guardar nada: la próxima lectura (aunque sea sin red) tiene que
+    // ver esto mismo.
+    const tercera = await hojasSqlite.todas(INV, 1);
+    expect(tercera[0]!.estado).toBe('finalizada');
+  });
+
+  it('sin red: cae al último dato bueno (no cuelga, no tira) y queda registrada la hora de esa última descarga exitosa', async () => {
+    // Sigue el test anterior: ya hay estructura local de INV/ronda 1,
+    // "finalizada". Ahora se cae el backend.
+    process.env.EXPO_PUBLIC_API_URL = `http://127.0.0.1:${await puertoCerrado()}`;
+
+    const antes = ultimaDescargaExitosa(INV, 'todas', 1);
+    expect(antes).not.toBeNull(); // ya hubo una descarga buena (el test anterior).
+
+    const hojas = await hojasSqlite.todas(INV, 1);
+
+    // Se sigue viendo el ÚLTIMO dato bueno -- no una lista vacía, no un cuelgue.
+    expect(hojas).toHaveLength(1);
+    expect(hojas[0]!.estado).toBe('finalizada');
+
+    // El intento de ESTA vez quedó marcado como fallido...
+    expect(ultimaDescarga(INV, 'todas', 1)).toMatchObject({ ok: false, motivo: 'sin-red' });
+    // ...pero la hora de la última vez que SÍ hubo datos no se perdió --
+    // es lo que arma "sin red, datos de las {hora}" en la pantalla.
+    expect(ultimaDescargaExitosa(INV, 'todas', 1)).toBe(antes);
   });
 });
