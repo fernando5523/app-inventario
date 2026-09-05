@@ -45,6 +45,15 @@ export interface RepositorioSesion {
   ingresar(colaboradorId: number, pin: string): Promise<Sesion>;
   sesionActiva(): Promise<Sesion | null>;
   cerrar(): Promise<void>;
+  /**
+   * Cambio de PIN PROPIO — nunca lleva `colaboradorId`: es el de la sesión
+   * (sale del token en el backend, ver sesion.schema.ts#cambiarPinSchema).
+   * El backend cierra TODAS las sesiones de esa persona al aplicar el
+   * cambio, la que llama incluida (sesion.service.ts#cambiarPinPropio) —
+   * quien invoca esto tiene que tratar la sesión actual como inválida
+   * apenas la promesa resuelve y mandar a la persona de nuevo al login.
+   */
+  cambiarPin(pinActual: string, pinNuevo: string): Promise<void>;
 }
 
 export interface RepositorioHojas {

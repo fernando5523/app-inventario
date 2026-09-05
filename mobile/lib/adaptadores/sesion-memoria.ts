@@ -11,6 +11,7 @@
  * inventados para este adaptador.
  */
 
+import { validarPinNuevo } from '../dominio/pin';
 import type { Colaborador, Sesion, Sucursal } from '../dominio/tipos';
 import type { RepositorioSesion } from '../puertos/repositorios';
 
@@ -130,6 +131,21 @@ export const sesionMemoria: RepositorioSesion = {
   },
 
   async cerrar() {
+    sesionActual = null;
+  },
+
+  async cambiarPin(pinActual, pinNuevo) {
+    if (!sesionActual) throw new Error('No hay una sesión activa.');
+    // Este adaptador no guarda ningún PIN de verdad (`ingresar` acepta
+    // cualquiera, ver ahí arriba) — no hay forma honesta de verificar
+    // `pinActual` contra algo. Se valida lo único que SÍ se puede decidir
+    // sin backend: que el PIN nuevo sea elegible (mismo criterio que el
+    // HTTP, ver lib/dominio/pin.ts). La validación real del actual llega
+    // con el adaptador HTTP.
+    const rechazo = validarPinNuevo(pinActual, pinNuevo, sesionActual.colaborador.id);
+    if (rechazo) throw new Error(rechazo);
+    // Mismo efecto observable que el HTTP: cambiar el PIN cierra la
+    // sesión actual, así que quien llama tiene que volver al login.
     sesionActual = null;
   },
 };
