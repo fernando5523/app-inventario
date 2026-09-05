@@ -3,7 +3,7 @@ import { ClipboardList, Lock, TriangleAlert, WifiOff } from 'lucide-react-native
 import { useCallback, useEffect, useState, type JSX } from 'react';
 import { ActivityIndicator, Alert, StyleSheet, Text, View } from 'react-native';
 
-import { AvanceFila, BandaSync, BarraApp, EmptyState, TarjetaHoja, sincronizacionDeHojas } from '../../components/ui';
+import { AvanceFila, BandaSync, BarraApp, Button, EmptyState, TarjetaHoja, sincronizacionDeHojas } from '../../components/ui';
 import { PantallaConTabs } from '../../components/navegacion/PantallaConTabs';
 import { inventarioIdSinRed, rondaActivaSinRed, ultimaDescarga } from '../../lib/adaptadores/hojas-sqlite';
 import { repositorioHojas, repositorioInventario, sincronizador } from '../../lib/contenedor';
@@ -17,7 +17,7 @@ import { colors, fonts } from '../../lib/theme';
  * reconectando a la WiFi de la tienda, así que cada motivo tiene su propio
  * mensaje en vez de caer todos en el cartel de "sin conexión".
  */
-function estadoVacio(motivo: 'sin-red' | 'sesion-vencida' | 'error' | null): {
+function estadoVacio(motivo: 'sin-red' | 'sesion-vencida' | 'error' | 'incompleta' | null): {
   icon: typeof WifiOff;
   title: string;
   subtitle: string;
@@ -43,6 +43,13 @@ function estadoVacio(motivo: 'sin-red' | 'sesion-vencida' | 'error' | null): {
       subtitle: 'Hubo un problema al bajar tus hojas. Volvé a entrar a esta pantalla en un momento.',
     };
   }
+  if (motivo === 'incompleta') {
+    return {
+      icon: TriangleAlert,
+      title: 'Descarga incompleta',
+      subtitle: 'La descarga de tus hojas se cortó a mitad de camino y no se guardó ninguna. Volvé a entrar a esta pantalla para reintentar.',
+    };
+  }
   return {
     icon: ClipboardList,
     title: 'Todavía no tenés hojas asignadas',
@@ -62,7 +69,12 @@ export default function MisHojasScreen(): JSX.Element {
   //   - sesión vencida → decirle que vuelva a entrar con su PIN.
   //   - el servidor respondió mal (500, etc.) → error genérico, reintentar.
   //   - con red y sin error, pero de verdad no tiene ninguna asignada → mensaje neutro.
-  const [motivoSinHojas, setMotivoSinHojas] = useState<'sin-red' | 'sesion-vencida' | 'error' | null>(null);
+  const [motivoSinHojas, setMotivoSinHojas] = useState<'sin-red' | 'sesion-vencida' | 'error' | 'incompleta' | null>(null);
+  // Caso distinto del de arriba: la descarga se cortó a medias pero SÍ
+  // alcanzó a guardar algunas hojas antes del corte — la lista no está
+  // vacía (por eso `estadoVacio` no aplica acá), pero mostrarla sin avisar
+  // sería dejar creer que esas son TODAS las hojas del lote.
+  const [descargaIncompleta, setDescargaIncompleta] = useState(false);
   const [estadoCola, setEstadoCola] = useState<EstadoCola>(sincronizador.estado());
   useEffect(() => sincronizador.suscribir(setEstadoCola), []);
 
@@ -91,6 +103,7 @@ export default function MisHojasScreen(): JSX.Element {
       // a esperar a que el coordinador reparta, cuando el problema real es
       // que no hay señal.
       setMotivoSinHojas(sinRedYsinLocal ? 'sin-red' : null);
+      setDescargaIncompleta(false);
       setCargando(false);
       return;
     }
@@ -102,6 +115,11 @@ export default function MisHojasScreen(): JSX.Element {
     setHojas(mias);
     const resultado = ultimaDescarga(inventarioId, 'mias', ronda);
     setMotivoSinHojas(mias.length === 0 && resultado?.ok === false ? resultado.motivo : null);
+    // Con hojas para mostrar (mias.length > 0) el corte no deja la lista
+    // vacía, así que `motivoSinHojas`/`estadoVacio` no llegan a verse —
+    // pero la descarga SÍ se cortó, y sin este aviso las hojas guardadas
+    // hasta el corte se ven idénticas a un lote completo.
+    setDescargaIncompleta(mias.length > 0 && resultado?.ok === false && resultado.motivo === 'incompleta');
     setCargando(false);
   }, [sesion]);
 
@@ -165,6 +183,14 @@ export default function MisHojasScreen(): JSX.Element {
         <EmptyState {...estadoVacio(motivoSinHojas)} />
       ) : (
         <>
+          {descargaIncompleta && (
+            <View style={styles.avisoIncompleta}>
+              <Text style={styles.avisoIncompletaTexto}>
+                Descarga incompleta: se cortó a mitad de camino. Puede faltar alguna hoja.
+              </Text>
+              <Button label="Reintentar" size="sm" onPress={cargar} />
+            </View>
+          )}
           <View style={styles.lista}>
             {hojas.map((hoja) => (
               <TarjetaHoja
@@ -197,6 +223,16 @@ const styles = StyleSheet.create({
   cabeceraHoja: { gap: 13, paddingBottom: 14, borderBottomWidth: 1, borderBottomColor: colors.borde },
   cargando: { marginTop: 24 },
   lista: { gap: 10 },
+  avisoIncompleta: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 10,
+    padding: 12,
+    borderRadius: 11,
+    backgroundColor: colors.faltaSuave,
+  },
+  avisoIncompletaTexto: { flex: 1, fontSize: 12.5, color: colors.falta, fontFamily: fonts.medium },
   pieLista: { padding: 12, borderRadius: 11, backgroundColor: colors.esperaSuave },
   pieTexto: { fontSize: 12.5, color: colors.gris, fontFamily: fonts.regular },
   pieFuerte: { color: colors.tinta, fontFamily: fonts.bold },

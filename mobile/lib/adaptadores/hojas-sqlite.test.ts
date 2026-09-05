@@ -539,7 +539,7 @@ describe('la descarga inicial distingue POR QUÉ no trajo hojas', () => {
     const hojas = await hojasSqlite.mias(999001, 1);
 
     expect(hojas).toEqual([]);
-    expect(ultimaDescarga(999001, 'mias', 1)).toEqual({ ok: false, motivo: 'sesion-vencida' });
+    expect(ultimaDescarga(999001, 'mias', 1)).toEqual({ ok: false, motivo: 'sesion-vencida', hojas: 0 });
   });
 
   it('un 500 del servidor tampoco es "sin conexión": es un error de servidor', async () => {
@@ -548,7 +548,7 @@ describe('la descarga inicial distingue POR QUÉ no trajo hojas', () => {
     const hojas = await hojasSqlite.mias(999002, 1);
 
     expect(hojas).toEqual([]);
-    expect(ultimaDescarga(999002, 'mias', 1)).toEqual({ ok: false, motivo: 'error' });
+    expect(ultimaDescarga(999002, 'mias', 1)).toEqual({ ok: false, motivo: 'error', hojas: 0 });
   });
 
   it('la falla de red genérica sigue siendo "sin-red"', async () => {
@@ -557,7 +557,69 @@ describe('la descarga inicial distingue POR QUÉ no trajo hojas', () => {
     const hojas = await hojasSqlite.mias(999003, 1);
 
     expect(hojas).toEqual([]);
-    expect(ultimaDescarga(999003, 'mias', 1)).toEqual({ ok: false, motivo: 'sin-red' });
+    expect(ultimaDescarga(999003, 'mias', 1)).toEqual({ ok: false, motivo: 'sin-red', hojas: 0 });
+  });
+});
+
+describe('la descarga que se corta A MEDIAS no queda marcada como completa', () => {
+  // El caso pedido: hojasApi devuelve N hojas y el guardado en SQLite
+  // falla en la K-ésima (disco lleno, cualquier error del motor — acá se
+  // simula rompiendo el propio `runAsync` para esa hoja puntual). Lo que
+  // importa: ¿las hojas guardadas ANTES del corte quedan mostradas como
+  // si fueran el total, sin ningún aviso de que se cortó?
+  const INV = 666001;
+  const productoDeTest = (id: number) => ({
+    id,
+    codigo: String(id).padStart(4, '0'),
+    codigoBarras: `773000000${id}`,
+    descripcion: `Producto ${id}`,
+    empaques: [{ nombre: 'Caja', factor: 12 }],
+  });
+  const hojaDeTest = (id: number, numero: string) => ({
+    id,
+    inventarioId: INV,
+    numero,
+    zona: 'Zona T',
+    gondola: 'T1',
+    tamano: 50,
+    estado: 'pendiente' as const,
+    sync: 'sincronizado' as const,
+    asignados: ['María Rojas'],
+    productos: [productoDeTest(id * 10 + 1)],
+    conteos: [],
+  });
+
+  it('con 3 hojas y el guardado roto en la 2da: se guarda solo la 1ra, el resultado queda incompleto (no ok:true con "3")', async () => {
+    const hojas = [hojaDeTest(6660001, '001'), hojaDeTest(6660002, '002'), hojaDeTest(6660003, '003')];
+    vi.mocked(hojasApi.mias).mockResolvedValueOnce(hojas);
+
+    const db = await obtenerDbDeTest();
+    const runOriginal = db.runAsync.bind(db);
+    const rotoEn2da = vi.spyOn(db, 'runAsync').mockImplementation(async (source: string, params: unknown[] = []) => {
+      if (source.includes('INSERT INTO hojas_estructura') && (params as unknown[])[0] === 6660002) {
+        throw new Error('disco lleno (simulado)');
+      }
+      return runOriginal(source, params);
+    });
+
+    // Antes del fix esto rechazaba (la excepción se colaba sin atrapar
+    // hasta mias()) y dejaba a quien llama con una promesa que nunca
+    // resuelve — el mismo spinner infinito de f558689, en un lugar nuevo.
+    const resultado1 = await hojasSqlite.mias(INV, 1);
+
+    rotoEn2da.mockRestore();
+
+    // Solo la 1ra hoja (guardada ANTES del corte) llegó a persistirse —
+    // la 2da rompió y la 3ra ni se intentó.
+    const filas = await db.getAllAsync<{ id: number }>('SELECT id FROM hojas_estructura WHERE inventario_id = ? ORDER BY id', [INV]);
+    expect(filas.map((f) => f.id)).toEqual([6660001]);
+    expect(resultado1.map((h) => h.numero)).toEqual(['001']);
+
+    // EL PUNTO DEL BUG: el resultado de ESTA descarga no puede quedar
+    // "ok: true" con la cuenta de lo pedido (3) ni de lo guardado (1) —
+    // eso sería mostrar 1 hoja como si fuera el total sin avisar nada.
+    // Tiene que quedar marcado como incompleto, con cuántas SÍ entraron.
+    expect(ultimaDescarga(INV, 'mias', 1)).toEqual({ ok: false, motivo: 'incompleta', hojas: 1 });
   });
 });
 

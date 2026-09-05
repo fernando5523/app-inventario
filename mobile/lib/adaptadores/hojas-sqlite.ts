@@ -403,15 +403,24 @@ async function guardarEstructuraDeHoja(db: DbSqlite, hoja: HojaConteo, ronda: nu
 
 /**
  * Lo que le hace falta a la pantalla para el mensaje del punto 4 — ver
- * mis-hojas.tsx. Tres motivos, no dos, porque "sin red" y "el servidor
- * respondió pero está mal" piden acciones DISTINTAS de quien cuenta:
- * reconectarse a la WiFi de la tienda no arregla una sesión vencida ni un
- * 500 del backend, y decirle que sí es el mismo "0 hojas sin explicación"
- * que reportó el cliente, con otra causa.
+ * mis-hojas.tsx. Cuatro motivos, no tres, porque "sin red desde el
+ * arranque" y "la descarga se cortó a mitad de camino" piden acciones
+ * DISTINTAS de quien cuenta: reconectarse a la WiFi de la tienda no
+ * arregla una sesión vencida ni un 500 del backend, y "incompleta" es un
+ * cuarto caso con su propia causa (el pedido al servidor SÍ funcionó, lo
+ * que falló fue guardar alguna de las hojas ya bajadas) — confundirlo con
+ * cualquiera de los otros tres es el mismo "N hojas sin explicación" que
+ * reportó el cliente, con otra causa todavía.
+ *
+ * `hojas` en la rama `ok: false` es cuántas SÍ llegaron a guardarse antes
+ * del corte (0 si el pedido al servidor ni siquiera respondió) — sin este
+ * dato la pantalla no puede distinguir "no se guardó nada" de "se guardó
+ * una parte", que es justo la diferencia entre reintentar desde cero o
+ * seguir viendo lo que ya hay mientras se reintenta.
  */
 export type ResultadoDescarga =
   | { ok: true; hojas: number }
-  | { ok: false; motivo: 'sin-red' | 'sesion-vencida' | 'error' };
+  | { ok: false; motivo: 'sin-red' | 'sesion-vencida' | 'error' | 'incompleta'; hojas: number };
 
 const ultimosResultados = new Map<string, ResultadoDescarga>();
 
@@ -460,7 +469,7 @@ async function descargarHojas(inventarioId: number, alcance: 'mias' | 'todas', r
       : esErrorApi(error) && error.clase === 'sesion-vencida'
         ? 'sesion-vencida'
         : 'error';
-    const resultado: ResultadoDescarga = { ok: false, motivo };
+    const resultado: ResultadoDescarga = { ok: false, motivo, hojas: 0 };
     ultimosResultados.set(claveResultado(inventarioId, alcance, ronda), resultado);
     return resultado;
   }
@@ -487,8 +496,29 @@ async function descargarHojas(inventarioId: number, alcance: 'mias' | 'todas', r
   // abre OTRA — SQLite (node:sqlite y expo-sqlite por igual) no admite
   // transacciones anidadas sin SAVEPOINT. Atomicidad por hoja alcanza:
   // no hace falta que las 25 se guarden todas o ninguna.
+  //
+  // Lo que SÍ hace falta es que un corte a mitad de esa lista (la app
+  // muere, el disco se llena, cualquier falla de `guardarEstructuraDeHoja`
+  // en la hoja K) no se cuele como una excepción sin atrapar hacia
+  // `mias()`/`todas()` — eso dejaba a quien llama con una promesa que
+  // nunca resuelve (el mismo spinner infinito de f558689, en un lugar
+  // nuevo) Y, todavía peor, sin marca ninguna: las K-1 hojas que sí se
+  // guardaron (cada una en su propia transacción, ya confirmadas en
+  // disco) quedaban ahí SIN que `ultimaDescarga` se enterara del corte —
+  // la próxima lectura las mostraba como si fueran el total, sin ningún
+  // aviso de que la descarga real pedía K hojas y se cortó en la mitad.
   const db = await obtenerDb();
-  for (const hoja of completas) await guardarEstructuraDeHoja(db, hoja, ronda);
+  let guardadas = 0;
+  try {
+    for (const hoja of completas) {
+      await guardarEstructuraDeHoja(db, hoja, ronda);
+      guardadas++;
+    }
+  } catch {
+    const resultado: ResultadoDescarga = { ok: false, motivo: 'incompleta', hojas: guardadas };
+    ultimosResultados.set(claveResultado(inventarioId, alcance, ronda), resultado);
+    return resultado;
+  }
 
   const resultado: ResultadoDescarga = { ok: true, hojas: completas.length };
   ultimosResultados.set(claveResultado(inventarioId, alcance, ronda), resultado);

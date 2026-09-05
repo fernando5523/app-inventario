@@ -77,6 +77,15 @@ export function InicioScreen(): JSX.Element {
   // cuenten la misma historia (ver el comentario largo en
   // CicloScreen.tsx sobre el hallazgo I-4 de la auditoría).
   const [hojasRonda1, setHojasRonda1] = useState<HojaConteo[] | null>(null);
+  // true SOLO cuando `ronda === null` salió de la rama sin red (nunca se
+  // pudo bajar ninguna hoja de este inventario, ni siquiera localmente —
+  // ver rondaActivaSinRed). Con red, `ronda === null` es un hecho real
+  // (todavía no hay ronda activa) y esto queda en false: son dos
+  // situaciones distintas y confundirlas es el mismo "0 que miente" que
+  // ya se corrigió para totalHojas/items (ver cifra-sin-red.ts) — acá el
+  // 0 no viene de un campo vacío sino de `hojasRonda1` cayendo en `[]`
+  // por el `ronda !== null ? ... : []` de más abajo.
+  const [sinDatosDeRonda, setSinDatosDeRonda] = useState(false);
   const [misHojas, setMisHojas] = useState<HojaConteo[] | null>(null);
   const [estadoSistema, setEstadoSistema] = useState<EstadoSistema | null>(null);
   const [estadoCola, setEstadoCola] = useState<EstadoCola>(sincronizador.estado());
@@ -128,6 +137,7 @@ export function InicioScreen(): JSX.Element {
         let ronda: number | null = null;
         let items: number | null = null;
         let totalHojas: number | null = null;
+        let sinDatos = false;
         try {
           const activo = await repositorioInventario.activo(sesion!.sucursal!.id);
           inventarioId = activo?.inventarioId ?? null;
@@ -150,8 +160,16 @@ export function InicioScreen(): JSX.Element {
           // estructura local (ver rondaActivaSinRed). Sin esto, el Contador
           // offline en la ronda 2 leería la 1 y confirmaría en vez de contar.
           ronda = inventarioId ? await rondaActivaSinRed(inventarioId) : null;
+          // `ronda === null` acá significa "nunca se descargó ninguna hoja
+          // de este inventario" (ver el comentario de rondaActivaSinRed) —
+          // no "no hay ronda activa todavía", que es lo que significaría
+          // con red. Sin esta marca, Coordinador/Auditor verían "0
+          // asignadas · 0 finalizadas · 0 contando" indistinguible de un
+          // cero real.
+          sinDatos = ronda === null;
         }
         if (!vigente) return;
+        setSinDatosDeRonda(sinDatos);
 
         if (!inventarioId) {
           setInventario(null);
@@ -212,24 +230,27 @@ export function InicioScreen(): JSX.Element {
   if (rol === 'coordinador') {
     tituloEstado = 'Estado del inventario';
     if (inventario && hojasRonda1) {
-      const asignadas = hojasRonda1.filter((h) => h.asignados.length > 0).length;
-      const finalizadas = hojasRonda1.filter((h) => h.estado === 'finalizada').length;
-      const contando = new Set(
-        hojasRonda1.filter((h) => h.estado !== 'pendiente').flatMap((h) => h.asignados),
-      ).size;
+      // Sin datos de ronda (sin red y nunca se descargó nada local): las 3
+      // cifras son "no lo sé", nunca "0" — mostrar 0 acá diría "ninguna
+      // hoja asignada", que es una afirmación distinta y falsa.
+      const asignadas = sinDatosDeRonda ? null : hojasRonda1.filter((h) => h.asignados.length > 0).length;
+      const finalizadas = sinDatosDeRonda ? null : hojasRonda1.filter((h) => h.estado === 'finalizada').length;
+      const contando = sinDatosDeRonda
+        ? null
+        : new Set(hojasRonda1.filter((h) => h.estado !== 'pendiente').flatMap((h) => h.asignados)).size;
       // Sin red, totalHojas/items son null: se muestran como "—", nunca
       // como "0 hojas" (que diría "no hay ninguna" en vez de "no lo sé").
-      const sinRed = inventario.totalHojas === null || inventario.items === null;
-      cifras = `${cifraOSinRed(inventario.totalHojas)} hojas · ${cifraOSinRed(inventario.items, formatoMiles)} ítems · ${asignadas} asignadas${sinRed ? ' · sin red' : ''}`;
+      const sinRed = inventario.totalHojas === null || inventario.items === null || sinDatosDeRonda;
+      cifras = `${cifraOSinRed(inventario.totalHojas)} hojas · ${cifraOSinRed(inventario.items, formatoMiles)} ítems · ${cifraOSinRed(asignadas)} asignadas${sinRed ? ' · sin red' : ''}`;
       filasEstado = [
-        { etiqueta: 'Hojas asignadas', valor: String(asignadas), pct: filaPct(asignadas, inventario.totalHojas) },
+        { etiqueta: 'Hojas asignadas', valor: cifraOSinRed(asignadas), pct: asignadas === null ? 'sin red' : filaPct(asignadas, inventario.totalHojas) },
         {
           etiqueta: 'Hojas finalizadas',
-          valor: String(finalizadas),
-          pct: filaPct(finalizadas, inventario.totalHojas),
+          valor: cifraOSinRed(finalizadas),
+          pct: finalizadas === null ? 'sin red' : filaPct(finalizadas, inventario.totalHojas),
           color: colors.ok,
         },
-        { etiqueta: 'Contando ahora', valor: String(contando), pct: 'colaboradores' },
+        { etiqueta: 'Contando ahora', valor: cifraOSinRed(contando), pct: contando === null ? 'sin red' : 'colaboradores' },
       ];
       sync = sincronizacionDeHojas(hojasRonda1, estadoCola);
     }
@@ -270,20 +291,26 @@ export function InicioScreen(): JSX.Element {
       // MISMA sesión decía en Ciclo que faltaba terminar el 1er conteo y
       // acá que el ciclo entero ya había cerrado. Ahora las dos pantallas
       // usan la misma función sobre las mismas hojas.
-      const estado1 = estadoConjunto(hojasRonda1);
-      const avance1 = avanceConjunto(hojasRonda1);
-      const pct1 = avance1.totalItems > 0 ? (avance1.itemsContados / avance1.totalItems) * 100 : 0;
-      const etiquetaEstado1 = ETIQUETA_ESTADO_1ER_CONTEO[estado1];
+      //
+      // Sin datos de ronda (sin red, nunca se descargó nada local),
+      // `hojasRonda1` es `[]` — `estadoConjunto`/`avanceConjunto` sobre
+      // eso dirían "sin hojas todavía" y "0 / 0 (0%)", que es la MISMA
+      // afirmación falsa que ya se corrigió arriba: acá "sin red" y "no
+      // hay hojas creadas" son hechos distintos, no se puede confundirlos.
+      const estado1 = sinDatosDeRonda ? null : estadoConjunto(hojasRonda1);
+      const avance1 = sinDatosDeRonda ? null : avanceConjunto(hojasRonda1);
+      const pct1 = avance1 && avance1.totalItems > 0 ? (avance1.itemsContados / avance1.totalItems) * 100 : 0;
+      const etiquetaEstado1 = estado1 ? ETIQUETA_ESTADO_1ER_CONTEO[estado1] : 'sin red';
       // Mismo criterio que el bloque de Coordinador: sin red no se muestra
       // "0 hojas", se muestra "—" y se aclara por qué.
-      const sinRed = inventario.totalHojas === null || inventario.items === null;
+      const sinRed = inventario.totalHojas === null || inventario.items === null || sinDatosDeRonda;
       cifras = `${cifraOSinRed(inventario.totalHojas)} hojas · ${cifraOSinRed(inventario.items, formatoMiles)} ítems · ${etiquetaEstado1}${sinRed ? ' · sin red' : ''}`;
       filasEstado = [
         { etiqueta: 'Ciclo de conteos', valor: etiquetaEstado1, color: estado1 === 'finalizada' ? colors.ok : colors.proceso },
         {
           etiqueta: 'Ítems contados (1er conteo)',
-          valor: formatoMiles(avance1.itemsContados),
-          pct: `/ ${formatoMiles(avance1.totalItems)} (${formatoPct(pct1)}%)`,
+          valor: avance1 ? formatoMiles(avance1.itemsContados) : '—',
+          pct: avance1 ? `/ ${formatoMiles(avance1.totalItems)} (${formatoPct(pct1)}%)` : 'sin red',
           color: colors.ok,
         },
         { etiqueta: '2do y 3er conteo', valor: 'Sin datos todavía' },
