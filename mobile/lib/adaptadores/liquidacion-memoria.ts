@@ -74,6 +74,11 @@ export const liquidacionMemoria: RepositorioLiquidacion = {
       bonoAsistencia,
       totalFaltas: faltaron.length,
       planilla,
+      // Los datos en memoria salen de la maqueta, donde todos los ítems
+      // tienen precio: no hay nada que advertir. Se manda igual con
+      // `mensaje: null` en vez de omitirlo, así la pantalla no tiene que
+      // preguntarse si el campo existe según de dónde vengan los datos.
+      advertencia: { itemsSinPrecio: 0, mensaje: null },
     };
     return liquidacion;
   },

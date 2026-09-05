@@ -1,11 +1,12 @@
 import { router } from 'expo-router';
-import { Layers, Wallet } from 'lucide-react-native';
+import { AlertTriangle, Layers, Wallet } from 'lucide-react-native';
 import { useEffect, useMemo, useState, type JSX } from 'react';
 import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { PantallaConTabs } from '../../components/navegacion/PantallaConTabs';
 import { BarraApp, Badge } from '../../components/ui';
 import { repositorioLiquidacion } from '../../lib/contenedor';
+import { asistentesConCentavoExtra } from '../../lib/dominio/reparto-visible';
 import type { DetalleLiquidacion, Liquidacion } from '../../lib/puertos/repositorios';
 import { useSesion } from '../../lib/sesion-contexto';
 import { colors, fonts, fontSize, radius, spacing } from '../../lib/theme';
@@ -62,6 +63,14 @@ export default function LiquidacionScreen(): JSX.Element {
 
   const asistieron = liquidacion ? liquidacion.planilla.length - liquidacion.totalFaltas : 0;
 
+  // A cuántos asistentes les tocó el centavo extra del reparto. La regla vive
+  // en lib/dominio/reparto-visible.ts, no acá: así se prueba sin montar la
+  // pantalla (ver reparto-visible.test.ts).
+  const conCentavoExtra = liquidacion
+    ? asistentesConCentavoExtra(liquidacion.planilla, liquidacion.cuotaBase, liquidacion.bonoAsistencia)
+    : 0;
+  const hayCentavoDeReparto = conCentavoExtra > 0;
+
   return (
     <PantallaConTabs scrollable contentStyle={styles.contenido}>
       <BarraApp
@@ -102,6 +111,22 @@ export default function LiquidacionScreen(): JSX.Element {
                 <Text style={styles.resumenValor}>{soles(liquidacion.cuotaBase)} / persona</Text>
               </View>
             </View>
+
+            {/*
+              PEGADA AL MONTO, no al pie en letra chica: quien autoriza un
+              descuento a la nómina de otra persona tiene que ver que el
+              número está incompleto ANTES de firmar. Va dentro de la misma
+              tarjeta que el faltante neto, debajo de la cifra que califica.
+
+              Sin `numberOfLines`: el texto envuelve todas las líneas que
+              necesite. Una advertencia cortada a la mitad no advierte nada.
+            */}
+            {liquidacion.advertencia.mensaje !== null ? (
+              <View style={styles.aviso}>
+                <AlertTriangle size={16} color={colors.proceso} />
+                <Text style={styles.avisoTexto}>{liquidacion.advertencia.mensaje}</Text>
+              </View>
+            ) : null}
           </View>
 
           <View style={styles.tarjeta}>
@@ -116,6 +141,26 @@ export default function LiquidacionScreen(): JSX.Element {
               colaboradores que sí asistieron.
             </Text>
             <Text style={styles.resultado}>-{soles(liquidacion.bonoAsistencia)} de descuento adicional para cada asistente</Text>
+
+            {/*
+              EL CENTAVO DEL REPARTO, explicado donde se ve.
+
+              Cuando el fondo no divide exacto entre los asistentes, a algunos
+              les toca un centavo más para que la suma dé el fondo exacto
+              (S/80 entre 7 = seis de 11.43 y uno de 11.42). Sin esta línea,
+              quien compare el encabezado contra la planilla ve dos números
+              distintos y piensa que el sistema calcula mal — que es
+              exactamente lo que este reparto vino a evitar.
+
+              Solo aparece cuando efectivamente pasa: si el reparto da parejo,
+              una aclaración sobre un centavo que no existe solo confunde.
+            */}
+            {hayCentavoDeReparto ? (
+              <Text style={styles.notaReparto}>
+                A {conCentavoExtra} de ellos les toca S/ 0.01 más, para que la suma dé exactamente{' '}
+                {soles(liquidacion.totalFaltas * liquidacion.multaInasistencia)}.
+              </Text>
+            ) : null}
           </View>
 
           <View style={styles.seccion}>
@@ -196,6 +241,34 @@ const styles = StyleSheet.create({
   tarjetaTitulo: { flex: 1, fontSize: 14.5, color: colors.tinta, fontFamily: fonts.bold },
   tarjetaTexto: { fontSize: 12.5, lineHeight: 18, color: colors.gris, fontFamily: fonts.regular },
   resultado: { fontSize: 12.5, fontWeight: '600', color: colors.gris, fontFamily: fonts.semibold },
+
+  /**
+   * El aviso de monto incompleto. `flex: 1` en el texto y `flexShrink` en la
+   * fila: el mensaje envuelve en las líneas que necesite en vez de empujar el
+   * ícono fuera de la tarjeta o cortarse con puntos suspensivos. Una
+   * advertencia truncada no advierte.
+   *
+   * `alignItems: 'flex-start'` para que el ícono quede a la altura de la
+   * PRIMERA línea y no centrado sobre un párrafo de tres.
+   */
+  aviso: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: spacing.sm,
+    marginTop: spacing.md,
+    padding: spacing.sm + 2,
+    borderRadius: radius.sm,
+    // `proceso`/`procesoSuave`, el estado de ATENCIÓN del design system --
+    // no `rojo` (que en esta app es siempre acción, nunca estado) ni `falta`
+    // (que es un dato del inventario, no un aviso sobre el dato).
+    backgroundColor: colors.procesoSuave,
+    borderWidth: 1,
+    borderColor: colors.proceso,
+  },
+  avisoTexto: { flex: 1, fontSize: 12, lineHeight: 17, color: colors.tinta, fontFamily: fonts.regular },
+
+  /** La nota del centavo del reparto: aclaración, no alarma. Sin recuadro. */
+  notaReparto: { marginTop: 6, fontSize: 11.5, lineHeight: 16, color: colors.grisClaro, fontFamily: fonts.regular },
 
   resumen: { gap: spacing.sm + 1 },
   resumenFila: { flexDirection: 'row', alignItems: 'baseline', justifyContent: 'space-between', gap: spacing.sm },
