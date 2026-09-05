@@ -120,14 +120,18 @@ vi.mock('./sesion-api', () => ({
 // simula "sin red" siempre: descargarHojas lo captura y cae al dataset de
 // ejemplo (_compartido.ts), que es exactamente lo que estos tests de
 // persistencia local esperan seguir viendo, sin cambiar una aserción.
+// `mias`/`todas` son `vi.fn()` (no funciones sueltas) para que el describe
+// de más abajo pueda hacerlas rechazar con un `ErrorApi` puntual (401,
+// 500) sin tocar este default — que sigue siendo "sin red" para todos los
+// demás tests de este archivo, exactamente como antes.
 vi.mock('./hojas-api', () => ({
   hojasApi: {
-    mias: async () => {
+    mias: vi.fn(async () => {
       throw new Error('sin red (stub de test)');
-    },
-    todas: async () => {
+    }),
+    todas: vi.fn(async () => {
       throw new Error('sin red (stub de test)');
-    },
+    }),
     porNumero: async () => null,
     guardarConteo: async () => {},
     finalizar: async () => {
@@ -147,8 +151,10 @@ vi.mock('./catalogo-api', () => ({
 // Import DESPUÉS del vi.mock (vitest lo hoistea igual, pero así queda
 // explícito el orden real: hojas-sqlite.ts se carga con `_sqlite.ts` ya
 // reemplazado, nunca llega a tocar `expo-sqlite`).
-const { hojasSqlite, procesarColaDeSincronizacion } = await import('./hojas-sqlite');
+const { hojasSqlite, procesarColaDeSincronizacion, ultimaDescarga } = await import('./hojas-sqlite');
 const { obtenerInventarioDeSucursal } = await import('./_compartido');
+const { ErrorApi } = await import('./_http');
+const { hojasApi } = await import('./hojas-api');
 
 afterAll(() => {
   rawActual?.close();
@@ -499,5 +505,77 @@ describe('un conteo rechazado por el servidor no queda en un limbo silencioso', 
     const inventario = await obtenerInventarioDeSucursal(1);
     const hojaActualizada = await hojasSqlite.porNumero(inventario!.id, '002');
     expect(hojaActualizada!.sync).toBe('sincronizado');
+  });
+});
+
+describe('la descarga inicial distingue POR QUÉ no trajo hojas', () => {
+  // Inventarios que no existen en el dataset de ejemplo (_compartido.ts):
+  // así `hojasDeInventarioBase` cae a `{ hojas: [], origen: 'mock' }` sin
+  // tocar ninguna hoja real de otro test, y lo único que importa acá es
+  // qué motivo quedó guardado en `ultimaDescarga`.
+  it('un 401 (sesión vencida) NO es "sin conexión": reconectar a la WiFi no lo arregla', async () => {
+    vi.mocked(hojasApi.mias).mockRejectedValueOnce(new ErrorApi('sesion-vencida'));
+
+    const hojas = await hojasSqlite.mias(999001);
+
+    expect(hojas).toEqual([]);
+    expect(ultimaDescarga(999001, 'mias')).toEqual({ ok: false, motivo: 'sesion-vencida' });
+  });
+
+  it('un 500 del servidor tampoco es "sin conexión": es un error de servidor', async () => {
+    vi.mocked(hojasApi.mias).mockRejectedValueOnce(new ErrorApi('servidor'));
+
+    const hojas = await hojasSqlite.mias(999002);
+
+    expect(hojas).toEqual([]);
+    expect(ultimaDescarga(999002, 'mias')).toEqual({ ok: false, motivo: 'error' });
+  });
+
+  it('la falla de red genérica sigue siendo "sin-red"', async () => {
+    vi.mocked(hojasApi.mias).mockRejectedValueOnce(new ErrorApi('sin-red'));
+
+    const hojas = await hojasSqlite.mias(999003);
+
+    expect(hojas).toEqual([]);
+    expect(ultimaDescarga(999003, 'mias')).toEqual({ ok: false, motivo: 'sin-red' });
+  });
+});
+
+describe('el tamaño de una hoja bajada es cuánto hay REALMENTE para contar', () => {
+  // Caso real (inventario 20 del backend, hoja 025): el backend arma hojas
+  // de a 50 (tamaño nominal del lote) hasta que se acaba el catálogo — la
+  // última hoja de un inventario que no es múltiplo exacto de 50 llega con
+  // menos productos que ese nominal. Mostrar "0/50" ahí es mentir: esa
+  // hoja nunca puede pasar de 36, y el aviso de "finalizar con faltantes"
+  // hablaría de 14 ítems que no existen.
+  it('usa productos.length cuando el backend manda menos productos que su tamaño nominal', async () => {
+    const productoDeTest = (id: number) => ({
+      id,
+      codigo: String(id).padStart(4, '0'),
+      codigoBarras: `770000000${id}`,
+      descripcion: `Producto ${id}`,
+      empaques: [{ nombre: 'Caja', factor: 12 }],
+    });
+
+    vi.mocked(hojasApi.mias).mockResolvedValueOnce([
+      {
+        id: 90025,
+        inventarioId: 999004,
+        numero: '025',
+        zona: 'Zona Z',
+        gondola: 'Z9',
+        tamano: 50, // nominal del lote — el backend NO lo ajustó a lo real.
+        estado: 'pendiente',
+        sync: 'sincronizado',
+        asignados: ['Conteo'],
+        productos: Array.from({ length: 36 }, (_, i) => productoDeTest(i + 1)),
+        conteos: [],
+      },
+    ]);
+
+    const hojas = await hojasSqlite.mias(999004);
+
+    expect(hojas).toHaveLength(1);
+    expect(hojas[0]!.tamano).toBe(36);
   });
 });

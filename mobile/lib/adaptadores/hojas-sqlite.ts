@@ -35,7 +35,7 @@ import { buscarHojaPorId, finalizarDominio, obtenerInventario, puedeEditar } fro
 import { obtenerDb } from './_sqlite';
 import { aplicarResultadoEnvio, ordenarCola, estadoSyncDeHoja, type ItemCola, type ResultadoEnvio } from './sqlite-cola';
 import { catalogoApi } from './catalogo-api';
-import { esFallaDeRed } from './_http';
+import { esErrorApi, esFallaDeRed } from './_http';
 import { hojasApi } from './hojas-api';
 import { sesionApi } from './sesion-api';
 import { sesionMemoria } from './sesion-memoria';
@@ -182,7 +182,18 @@ function filaAHojaBase(fila: FilaHojaEstructura, productos: Producto[]): HojaCon
     numero: fila.numero,
     zona: fila.zona,
     gondola: fila.gondola,
-    tamano: fila.tamano,
+    // `fila.tamano` es el tamaño NOMINAL del lote (20/30/50, configurable —
+    // ver tipos.ts), no necesariamente cuántos productos le tocaron a esta
+    // hoja: el backend arma hojas de a `tamano` hasta que se acaba el
+    // catálogo, así que la ÚLTIMA hoja de un inventario real suele quedar
+    // parcial (25 hojas de 50 con un catálogo de 1.236 ítems → la hoja 025
+    // se queda con 36). Para las pantallas de conteo lo que importa es
+    // cuánto hay REALMENTE para contar — usar el nominal ahí mostraría
+    // "0/50" en una hoja que nunca puede pasar de 36, con la barra de
+    // avance y el aviso de "finalizar con faltantes" mintiendo sobre 14
+    // ítems que no existen. Cae al nominal solo si todavía no hay catálogo
+    // cargado (productos vacío, antes de que catalogoApi.deHoja complete).
+    tamano: productos.length > 0 ? productos.length : fila.tamano,
     estado: 'pendiente',
     sync: 'local',
     asignados: JSON.parse(fila.asignados) as string[],
@@ -341,8 +352,17 @@ async function guardarEstructuraDeHoja(db: DbSqlite, hoja: HojaConteo): Promise<
   await asegurarSembrada(hoja);
 }
 
-/** Lo que le hace falta a la pantalla para el mensaje "sin red" del punto 4 — ver mis-hojas.tsx. */
-export type ResultadoDescarga = { ok: true; hojas: number } | { ok: false; motivo: 'sin-red' | 'error' };
+/**
+ * Lo que le hace falta a la pantalla para el mensaje del punto 4 — ver
+ * mis-hojas.tsx. Tres motivos, no dos, porque "sin red" y "el servidor
+ * respondió pero está mal" piden acciones DISTINTAS de quien cuenta:
+ * reconectarse a la WiFi de la tienda no arregla una sesión vencida ni un
+ * 500 del backend, y decirle que sí es el mismo "0 hojas sin explicación"
+ * que reportó el cliente, con otra causa.
+ */
+export type ResultadoDescarga =
+  | { ok: true; hojas: number }
+  | { ok: false; motivo: 'sin-red' | 'sesion-vencida' | 'error' };
 
 const ultimosResultados = new Map<string, ResultadoDescarga>();
 
@@ -383,7 +403,12 @@ async function descargarHojas(inventarioId: number, alcance: 'mias' | 'todas'): 
     // nunca como un array a medio armar que rompa el resto de la función.
     remotas = Array.isArray(respuesta) ? respuesta : [];
   } catch (error) {
-    const resultado: ResultadoDescarga = { ok: false, motivo: esFallaDeRed(error) ? 'sin-red' : 'error' };
+    const motivo = esFallaDeRed(error)
+      ? 'sin-red'
+      : esErrorApi(error) && error.clase === 'sesion-vencida'
+        ? 'sesion-vencida'
+        : 'error';
+    const resultado: ResultadoDescarga = { ok: false, motivo };
     ultimosResultados.set(claveResultado(inventarioId, alcance), resultado);
     return resultado;
   }

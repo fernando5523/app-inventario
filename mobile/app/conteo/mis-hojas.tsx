@@ -1,5 +1,5 @@
 import { router, useFocusEffect } from 'expo-router';
-import { ClipboardList, WifiOff } from 'lucide-react-native';
+import { ClipboardList, Lock, TriangleAlert, WifiOff } from 'lucide-react-native';
 import { useCallback, useEffect, useState, type JSX } from 'react';
 import { ActivityIndicator, Alert, StyleSheet, Text, View } from 'react-native';
 
@@ -12,26 +12,57 @@ import type { EstadoCola } from '../../lib/puertos/repositorios';
 import { useSesion } from '../../lib/sesion-contexto';
 import { colors, fonts } from '../../lib/theme';
 
-function codigosDeHoja(hoja: HojaConteo): string | undefined {
-  // Solo se puede derivar el rango de códigos de la hoja que SÍ tiene
-  // catálogo cargado (ver Producto.codigo) — no hay un campo de rango en
-  // HojaConteo, y no se inventa una fórmula que el puerto no expone.
-  if (hoja.productos.length === 0) return undefined;
-  const primero = hoja.productos[0].codigo;
-  const ultimo = hoja.productos[hoja.productos.length - 1].codigo;
-  return `Códigos ${primero}-${ultimo}`;
+/**
+ * Qué mostrar en la lista vacía — un 401 o un 500 real NO se arreglan
+ * reconectando a la WiFi de la tienda, así que cada motivo tiene su propio
+ * mensaje en vez de caer todos en el cartel de "sin conexión".
+ */
+function estadoVacio(motivo: 'sin-red' | 'sesion-vencida' | 'error' | null): {
+  icon: typeof WifiOff;
+  title: string;
+  subtitle: string;
+} {
+  if (motivo === 'sin-red') {
+    return {
+      icon: WifiOff,
+      title: 'Sin conexión',
+      subtitle: 'Todavía no se pudieron bajar tus hojas. Conectate a la WiFi de la tienda y volvé a entrar a esta pantalla.',
+    };
+  }
+  if (motivo === 'sesion-vencida') {
+    return {
+      icon: Lock,
+      title: 'Tu sesión venció',
+      subtitle: 'Salí (arriba a la derecha) y volvé a entrar con tu PIN para que se puedan bajar tus hojas.',
+    };
+  }
+  if (motivo === 'error') {
+    return {
+      icon: TriangleAlert,
+      title: 'No se pudo conectar con el servidor',
+      subtitle: 'Hubo un problema al bajar tus hojas. Volvé a entrar a esta pantalla en un momento.',
+    };
+  }
+  return {
+    icon: ClipboardList,
+    title: 'Todavía no tenés hojas asignadas',
+    subtitle: 'Cuando el coordinador te asigne hojas de este inventario, van a aparecer acá.',
+  };
 }
 
 export default function MisHojasScreen(): JSX.Element {
   const { sesion, cerrar } = useSesion();
   const [cargando, setCargando] = useState(true);
   const [hojas, setHojas] = useState<HojaConteo[]>([]);
-  // Distingue las DOS razones muy distintas por las que esta pantalla
-  // puede terminar en "0 hojas" — confundirlas es exactamente la pantalla
-  // vacía sin explicación que reportó el cliente:
-  //   - sin red Y sin nada bajado todavía → avisar que hace falta señal.
-  //   - con red, pero de verdad no tiene ninguna asignada → mensaje neutro.
-  const [sinRedSinDatos, setSinRedSinDatos] = useState(false);
+  // Distingue las razones por las que esta pantalla puede terminar en "0
+  // hojas" — confundirlas es exactamente la pantalla vacía sin explicación
+  // que reportó el cliente, y un 401/500 real no se arregla reconectando a
+  // la WiFi de la tienda, así que necesitan un mensaje propio:
+  //   - sin red y sin nada bajado todavía → avisar que hace falta señal.
+  //   - sesión vencida → decirle que vuelva a entrar con su PIN.
+  //   - el servidor respondió mal (500, etc.) → error genérico, reintentar.
+  //   - con red y sin error, pero de verdad no tiene ninguna asignada → mensaje neutro.
+  const [motivoSinHojas, setMotivoSinHojas] = useState<'sin-red' | 'sesion-vencida' | 'error' | null>(null);
   const [estadoCola, setEstadoCola] = useState<EstadoCola>(sincronizador.estado());
   useEffect(() => sincronizador.suscribir(setEstadoCola), []);
 
@@ -49,7 +80,8 @@ export default function MisHojasScreen(): JSX.Element {
     // resultado, nunca dos veces la misma lógica.
     const mias = await repositorioHojas.mias(activo.inventarioId);
     setHojas(mias);
-    setSinRedSinDatos(mias.length === 0 && ultimaDescarga(activo.inventarioId, 'mias')?.ok === false);
+    const resultado = ultimaDescarga(activo.inventarioId, 'mias');
+    setMotivoSinHojas(mias.length === 0 && resultado?.ok === false ? resultado.motivo : null);
     setCargando(false);
   }, [sesion]);
 
@@ -105,19 +137,7 @@ export default function MisHojasScreen(): JSX.Element {
       {cargando ? (
         <ActivityIndicator color={colors.rojo} style={styles.cargando} />
       ) : hojas.length === 0 ? (
-        sinRedSinDatos ? (
-          <EmptyState
-            icon={WifiOff}
-            title="Sin conexión"
-            subtitle="Todavía no se pudieron bajar tus hojas. Conectate a la WiFi de la tienda y volvé a entrar a esta pantalla."
-          />
-        ) : (
-          <EmptyState
-            icon={ClipboardList}
-            title="Todavía no tenés hojas asignadas"
-            subtitle="Cuando el coordinador te asigne hojas de este inventario, van a aparecer acá."
-          />
-        )
+        <EmptyState {...estadoVacio(motivoSinHojas)} />
       ) : (
         <>
           <View style={styles.lista}>
@@ -126,7 +146,6 @@ export default function MisHojasScreen(): JSX.Element {
                 key={hoja.id}
                 numero={hoja.numero}
                 titulo={`${hoja.zona} (Góndola ${hoja.gondola})`}
-                codigos={codigosDeHoja(hoja)}
                 estado={hoja.estado}
                 contados={hoja.conteos.length}
                 total={hoja.tamano}
