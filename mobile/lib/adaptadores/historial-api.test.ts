@@ -41,6 +41,7 @@ const LACRADO_DTO = {
   periodoMes: 7,
   tamanoHoja: 50,
   snapshotItems: 8000,
+  abiertoEn: '2026-07-01T13:00:00.000Z',
   cerradoEn: '2026-07-28T18:00:00.000Z',
   abierto: false,
   resultado: {
@@ -103,6 +104,35 @@ describe('historialApi.listar', () => {
     expect(inventarios[0].folio).toBeNull();
   });
 
+  it('mapea abiertoEn: el registro tiene que poder decir cuándo se creó, no solo cuándo cerró', async () => {
+    // El backend ya lo manda (historial.service.ts#aListadoDto) — hasta acá
+    // se perdía en la traducción del adaptador y ninguna pantalla lo veía.
+    vi.stubGlobal('fetch', vi.fn(async () => json({ total: 1, inventarios: [LACRADO_DTO] })));
+
+    const { inventarios } = await historialApi.listar();
+    expect(inventarios[0].abiertoEn).toBe('2026-07-01T13:00:00.000Z');
+  });
+
+  it('aplana lacradoEn/lacradoPor del sello, sin arrastrar el objeto `lacrado` completo', async () => {
+    // Misma traducción que `folio`: la lista necesita CUÁNDO y QUIÉN sin el
+    // hash ni el registro ERP — eso lo sigue trayendo solo el detalle.
+    vi.stubGlobal('fetch', vi.fn(async () => json({ total: 1, inventarios: [LACRADO_DTO] })));
+
+    const { inventarios } = await historialApi.listar();
+    expect(inventarios[0].lacradoEn).toBe('2026-07-29T16:00:00.000Z');
+    expect(inventarios[0].lacradoPor).toEqual({ id: 103, nombre: 'Gilmer Quispe' });
+    expect(inventarios[0]).not.toHaveProperty('lacrado');
+    expect(inventarios[0]).not.toHaveProperty('hash');
+  });
+
+  it('lacradoEn/lacradoPor en null cuando no hay sello', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => json({ total: 1, inventarios: [SIN_RESULTADO_DTO] })));
+
+    const { inventarios } = await historialApi.listar();
+    expect(inventarios[0].lacradoEn).toBeNull();
+    expect(inventarios[0].lacradoPor).toBeNull();
+  });
+
   it('deja `resultado` en null sin inventar ceros', async () => {
     // "Cero de faltante" y "todavía no se calculó" son cosas distintas, y
     // confundirlas en un inventario es grave: diría que el mes cerró sin
@@ -147,6 +177,28 @@ describe('historialApi.listar', () => {
     expect(url).toContain('estado=lacrado');
     expect(url).not.toContain('limite=');
     expect(url).not.toContain('undefined');
+  });
+
+  it('manda periodoAnio/periodoMes cuando se filtra por período', async () => {
+    const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => json({ total: 0, inventarios: [] }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await historialApi.listar({ periodoAnio: 2026, periodoMes: 7 });
+
+    const url = String(fetchMock.mock.calls[0][0]);
+    expect(url).toContain('periodoAnio=2026');
+    expect(url).toContain('periodoMes=7');
+  });
+
+  it('manda limite y desplazamiento para "cargar más" — la página siguiente, no la primera de nuevo', async () => {
+    const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => json({ total: 0, inventarios: [] }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await historialApi.listar({ limite: 20, desplazamiento: 20 });
+
+    const url = String(fetchMock.mock.calls[0][0]);
+    expect(url).toContain('limite=20');
+    expect(url).toContain('desplazamiento=20');
   });
 });
 

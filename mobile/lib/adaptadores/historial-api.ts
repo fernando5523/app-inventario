@@ -39,9 +39,10 @@
  * TRES TRADUCCIONES QUE HACE ESTE ARCHIVO (que es para lo que existe un adaptador):
  *
  * 1. `lacrado` en el LISTADO viene como objeto completo o null, pero la
- *    lista solo necesita saber SI hay sello y cuál es el folio. Se aplana a
- *    `folio: string | null` en vez de arrastrar el hash y el registro ERP a
- *    una pantalla que no los muestra.
+ *    lista solo necesita saber SI hay sello, CUÁNDO y QUIÉN. Se aplana a
+ *    `folio`/`lacradoEn`/`lacradoPor` en vez de arrastrar el hash y el
+ *    registro ERP a una pantalla que no los muestra (eso lo sigue trayendo
+ *    solo el detalle, en `SelloLacrado`).
  *
  * 2. `montoFaltanteNeto` y `cuotaBase` llegan ausentes (no null) cuando el
  *    inventario no está liquidado todavía. Se normalizan a `null` explícito:
@@ -116,10 +117,11 @@ interface InventarioDto {
   periodoMes: number;
   tamanoHoja: number | null;
   snapshotItems: number;
+  abiertoEn: string;
   cerradoEn: string | null;
   resultado: ResultadoDto | null;
   aprobaciones: number;
-  lacrado: { folio: string } | null;
+  lacrado: { folio: string; lacradoEn: string; lacradoPor: { id: number; nombre: string } } | null;
 }
 
 interface DetalleDto extends Omit<InventarioDto, 'sucursalId' | 'sucursalNombre' | 'aprobaciones' | 'lacrado'> {
@@ -153,10 +155,13 @@ function aInventario(dto: InventarioDto): InventarioHistorico {
     periodoMes: dto.periodoMes,
     tamanoHoja: dto.tamanoHoja,
     snapshotItems: dto.snapshotItems,
+    abiertoEn: dto.abiertoEn,
     cerradoEn: dto.cerradoEn,
     resultado: aResultado(dto.resultado),
     aprobaciones: dto.aprobaciones,
     folio: dto.lacrado?.folio ?? null,
+    lacradoEn: dto.lacrado?.lacradoEn ?? null,
+    lacradoPor: dto.lacrado?.lacradoPor ?? null,
   };
 }
 
@@ -233,6 +238,8 @@ function consulta(filtro?: FiltroHistorial): string {
   const partes: string[] = [];
   if (filtro.sucursalId !== undefined) partes.push(`sucursalId=${filtro.sucursalId}`);
   if (filtro.estado !== undefined) partes.push(`estado=${filtro.estado}`);
+  if (filtro.periodoAnio !== undefined) partes.push(`periodoAnio=${filtro.periodoAnio}`);
+  if (filtro.periodoMes !== undefined) partes.push(`periodoMes=${filtro.periodoMes}`);
   if (filtro.limite !== undefined) partes.push(`limite=${filtro.limite}`);
   if (filtro.desplazamiento !== undefined) partes.push(`desplazamiento=${filtro.desplazamiento}`);
   return partes.length ? `?${partes.join('&')}` : '';
@@ -259,6 +266,7 @@ export const historialApi: RepositorioHistorial = {
       periodoMes: dto.periodoMes,
       tamanoHoja: dto.tamanoHoja,
       snapshotItems: dto.snapshotItems,
+      abiertoEn: dto.abiertoEn,
       cerradoEn: dto.cerradoEn,
       cerradoPor: dto.cerradoPor,
       resultado: aResultado(dto.resultado),

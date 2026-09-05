@@ -443,10 +443,62 @@ export interface Liquidacion {
   advertencia: AdvertenciaLiquidacion;
 }
 
+/**
+ * El fondo de multas por inasistencia TIENE QUE CERRAR: lo que se recauda de
+ * quienes faltaron es exactamente lo que se reparte entre quienes asistieron
+ * (regla textual del cliente). `cierra` se expone en vez de asumirse — si
+ * algún día vuelve a no cerrar por un cambio en el reparto, se ve acá en vez
+ * de aparecer como un descuadre en la nómina tres meses después.
+ */
+export interface FondoDeMultas {
+  recaudado: number;
+  repartido: number;
+  /** repartido - recaudado. Tiene que ser 0: positivo = la empresa puso, negativo = se quedó con algo. */
+  diferencia: number;
+  cierra: boolean;
+}
+
+/**
+ * "De dónde sale este número" del encabezado de la liquidación — por qué el
+ * total de la planilla no da EXACTO contra el faltante neto. Espeja
+ * `GET /liquidacion/sucursales/:sucursalId/conciliacion`
+ * (backend/liquidacion.service.ts#conciliacion).
+ *
+ * NO es un histórico: es el desglose aritmético del ÚLTIMO cierre de la
+ * sucursal, el mismo ciclo que devuelve `deSucursal`. Por eso es una unión
+ * discriminada por `calculable`, igual criterio que `Liquidacion.faltanteNeto`:
+ * sin asistencia u ajustes registrados, ninguna de estas cuentas se puede
+ * hacer — se corta ANTES de calcular con un valor inventado, no se calcula
+ * con un placeholder.
+ */
+export type Conciliacion =
+  | { calculable: false; periodo: string; advertencia: AdvertenciaLiquidacion }
+  | {
+      calculable: true;
+      periodo: string;
+      faltanteNeto: number;
+      /** Suma real de los montos de la planilla — no siempre igual a `faltanteNeto`, ver `diferenciaPorRedondeo`. */
+      sumaPlanilla: number;
+      /**
+       * faltanteNeto - sumaPlanilla: los centavos que deja el redondeo de la
+       * cuota (1390 / 11 = 126.3636... -> 126.36 x 11 = 1389.96, sobran 4
+       * centavos). Hoy queda a favor del personal — pendiente de definir con
+       * el cliente si eso cambia.
+       */
+      diferenciaPorRedondeo: number;
+      colaboradores: number;
+      asistieron: number;
+      faltaron: number;
+      fondoDeMultas: FondoDeMultas;
+      advertencia: AdvertenciaLiquidacion;
+    };
+
 /** Solo lo usa el Coordinador (cierre de fin de mes, pantalla 6). */
 export interface RepositorioLiquidacion {
   /** null si todavía no hay un ciclo cerrado para calcular sobre esa sucursal. */
   deSucursal(sucursalId: number): Promise<Liquidacion | null>;
+  /** null exactamente en el mismo caso que `deSucursal`: no hay ciclo cerrado que conciliar. */
+  conciliacion(sucursalId: number): Promise<Conciliacion | null>;
 }
 
 // ---------------------------------------------------------------------------
@@ -764,12 +816,21 @@ export interface InventarioHistorico {
   periodoMes: number;
   tamanoHoja: number | null;
   snapshotItems: number;
+  /** Cuándo se abrió (creó) el inventario — el otro extremo de `cerradoEn`. */
+  abiertoEn: string;
   cerradoEn: string | null;
   resultado: ResultadoInventario | null;
   /** Cuántas de las 2 firmas de auditoría ya están. */
   aprobaciones: number;
   /** Solo el folio: para la lista alcanza con saber SI hay sello y cuál es. */
   folio: string | null;
+  /**
+   * Aplanados del sello, igual criterio que `folio`: la lista necesita
+   * CUÁNDO y QUIÉN sin arrastrar el hash ni el registro ERP (eso lo sigue
+   * trayendo solo el detalle, en `SelloLacrado`). `null` cuando no hay sello.
+   */
+  lacradoEn: string | null;
+  lacradoPor: { id: number; nombre: string } | null;
 }
 
 /**
@@ -811,7 +872,8 @@ export interface HojaHistorica {
   contados: number;
 }
 
-export interface DetalleInventarioHistorico extends Omit<InventarioHistorico, 'folio' | 'aprobaciones'> {
+export interface DetalleInventarioHistorico
+  extends Omit<InventarioHistorico, 'folio' | 'aprobaciones' | 'lacradoEn' | 'lacradoPor'> {
   cerradoPor: { id: number; nombre: string } | null;
   hojas: HojaHistorica[];
   /** Cuántos ítems tienen diferencia (el listado en sí es paginado aparte). */
@@ -824,6 +886,9 @@ export interface DetalleInventarioHistorico extends Omit<InventarioHistorico, 'f
 export interface FiltroHistorial {
   sucursalId?: number;
   estado?: EstadoInventario;
+  /** Mes calendario del período (1-12). Solo tiene efecto junto con `periodoAnio`. */
+  periodoAnio?: number;
+  periodoMes?: number;
   limite?: number;
   desplazamiento?: number;
 }

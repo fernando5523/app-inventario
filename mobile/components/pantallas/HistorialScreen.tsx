@@ -1,10 +1,10 @@
 import { useFocusEffect } from 'expo-router';
 import { ChevronLeft, History, Lock, ShieldAlert, ShieldCheck } from 'lucide-react-native';
-import { useCallback, useState, type JSX } from 'react';
+import { useCallback, useEffect, useState, type JSX } from 'react';
 import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
-import { repositorioHistorial } from '../../lib/contenedor';
-import type { Rol } from '../../lib/dominio/tipos';
+import { repositorioHistorial, repositorioSesion } from '../../lib/contenedor';
+import type { Rol, Sucursal } from '../../lib/dominio/tipos';
 import type {
   DetalleInventarioHistorico,
   DiferenciaHistorica,
@@ -22,6 +22,7 @@ import {
   Badge,
   type BadgeVariant,
   BarraApp,
+  Button,
   ChipsFiltro,
   EmptyState,
   formatoFecha,
@@ -32,6 +33,23 @@ import {
   MESES_CORTOS,
   type OpcionChip,
 } from '../ui';
+
+/** Cuántos inventarios se piden por página — ver `cargar`/`cargarMas`. */
+const TAMANO_PAGINA = 20;
+
+/** Sentinel de chip para "sin filtro de esta dimensión" — nunca un id real. */
+const TODAS = 'todas';
+const TODOS = 'todos';
+
+/**
+ * Años que se ofrecen para filtrar por período. No hay un endpoint que
+ * diga "qué años tienen inventarios" — se ofrece el actual y los 3
+ * anteriores, rango razonable para un sistema que recién empezó a operar.
+ */
+function aniosDisponibles(): number[] {
+  const actual = new Date().getFullYear();
+  return [actual, actual - 1, actual - 2, actual - 3];
+}
 
 /**
  * Cada estado del ciclo de vida, con lo único que importa a nivel visual:
@@ -98,9 +116,23 @@ export interface HistorialScreenProps {
 export function HistorialScreen({ rol }: HistorialScreenProps): JSX.Element {
   const { sesion } = useSesion();
   const [cargando, setCargando] = useState(true);
+  const [cargandoMas, setCargandoMas] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [inventarios, setInventarios] = useState<InventarioHistorico[]>([]);
+  const [total, setTotal] = useState(0);
+  const [desplazamiento, setDesplazamiento] = useState(0);
   const [filtro, setFiltro] = useState<EstadoInventario | 'todos'>('todos');
+
+  // Solo el Administrador elige sucursal: el Auditor queda recortado a la
+  // suya por el backend (historial.permisos.ts#resolverSucursalConsultable),
+  // así que ofrecerle el control sería una elección sin efecto.
+  const [sucursales, setSucursales] = useState<Sucursal[]>([]);
+  const [filtroSucursalId, setFiltroSucursalId] = useState<number | typeof TODAS>(TODAS);
+
+  // Período: año primero, mes solo tiene sentido una vez elegido un año —
+  // filtrar por mes sin año mezclaría "marzo de cualquier año".
+  const [filtroAnio, setFiltroAnio] = useState<number | null>(null);
+  const [filtroMes, setFiltroMes] = useState<number | null>(null);
 
   const [detalle, setDetalle] = useState<DetalleInventarioHistorico | null>(null);
   const [cargandoDetalle, setCargandoDetalle] = useState(false);
@@ -113,16 +145,44 @@ export function HistorialScreen({ rol }: HistorialScreenProps): JSX.Element {
   const [liquidacion, setLiquidacion] = useState<LiquidacionInventario | null>(null);
   const [errorCierre, setErrorCierre] = useState<string | null>(null);
 
+  // Se pide una sola vez, no en cada refresco del historial: el padrón de
+  // sucursales no cambia entre pantallazos (mismo criterio que el modoAdmin
+  // del login, que trae administradores() recién al entrar a ese modo).
+  useEffect(() => {
+    if (rol !== 'administrador') return;
+    repositorioSesion.sucursales().then(setSucursales);
+  }, [rol]);
+
+  // El filtro completo de la pantalla, en la forma que pide el puerto. Un
+  // solo lugar arma esto: `cargar()` (primera página) y `cargarMas()` (la
+  // siguiente) tienen que mandar EXACTAMENTE los mismos filtros — si no,
+  // "cargar más" podría traer una página de un filtro distinto al que se ve.
+  const filtroActual = useCallback(
+    (desplazamientoPedido: number) => ({
+      sucursalId: rol === 'auditor' ? sesion!.sucursal!.id : filtroSucursalId === TODAS ? undefined : filtroSucursalId,
+      estado: filtro === TODOS ? undefined : filtro,
+      periodoAnio: filtroAnio ?? undefined,
+      periodoMes: filtroAnio !== null ? (filtroMes ?? undefined) : undefined,
+      limite: TAMANO_PAGINA,
+      desplazamiento: desplazamientoPedido,
+    }),
+    [rol, sesion, filtroSucursalId, filtro, filtroAnio, filtroMes],
+  );
+
+  // Trae la PRIMERA página, con los filtros actuales — reemplaza la lista.
+  // El estado (chip) y el período (año/mes) se filtran del lado del
+  // SERVIDOR, no sobre lo ya cargado: con paginación real, filtrar client-
+  // side sobre una página parcial escondería resultados que existen pero
+  // todavía no se pidieron (ver historial-como-registro.md, punto 3).
   const cargar = useCallback(async () => {
     if (!sesion) return;
     setError(null);
+    setCargando(true);
     try {
-      // El Auditor pide SU sucursal. El backend igual lo recorta si mandara
-      // otra, pero pedir de más y descartar en la pantalla sería traer datos
-      // que esta sesión no tiene por qué recibir.
-      const sucursalId = rol === 'auditor' ? sesion.sucursal!.id : undefined;
-      const pagina = await repositorioHistorial.listar({ sucursalId });
+      const pagina = await repositorioHistorial.listar(filtroActual(0));
       setInventarios(pagina.inventarios);
+      setTotal(pagina.total);
+      setDesplazamiento(0);
     } catch (e) {
       // No hay adaptador en memoria a propósito (ver contenedor.ts): sin
       // backend se dice que no se pudo cargar. Un histórico inventado es
@@ -131,8 +191,30 @@ export function HistorialScreen({ rol }: HistorialScreenProps): JSX.Element {
     } finally {
       setCargando(false);
     }
-  }, [sesion, rol]);
+  }, [sesion, filtroActual]);
 
+  // Trae la página SIGUIENTE y la agrega al final — nunca reemplaza lo que
+  // ya está en pantalla ni reinicia el desplazamiento.
+  async function cargarMas(): Promise<void> {
+    if (cargandoMas) return;
+    setCargandoMas(true);
+    try {
+      const siguiente = desplazamiento + TAMANO_PAGINA;
+      const pagina = await repositorioHistorial.listar(filtroActual(siguiente));
+      setInventarios((actuales) => [...actuales, ...pagina.inventarios]);
+      setTotal(pagina.total);
+      setDesplazamiento(siguiente);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'No se pudo traer más inventarios.');
+    } finally {
+      setCargandoMas(false);
+    }
+  }
+
+  // `cargar` cambia de identidad cada vez que cambia un filtro (está en sus
+  // deps vía `filtroActual`) — React Navigation vuelve a correr este efecto
+  // cuando eso pasa, aunque la pantalla siga enfocada. Es lo que hace que
+  // tocar un chip dispare una consulta nueva sin tener que salir y volver.
   useFocusEffect(
     useCallback(() => {
       cargar();
@@ -186,13 +268,25 @@ export function HistorialScreen({ rol }: HistorialScreenProps): JSX.Element {
 
   if (!sesion) return <View />;
 
-  const visibles = inventarios.filter((i) => filtro === 'todos' || i.estado === filtro);
-  const lacrados = inventarios.filter((i) => i.estado === 'lacrado').length;
+  // Sin contador por chip a propósito: con el filtro resuelto en el
+  // SERVIDOR (no sobre lo ya cargado), contar "cuántos lacrados hay" exigiría
+  // una consulta aparte por cada chip solo para mostrar un número — más
+  // ruido que ayuda. El total real de la vista actual ya se ve en "X de Y".
+  const opcionesChip: OpcionChip[] = FILTROS.map((f) => ({ id: f.clave, etiqueta: f.etiqueta }));
 
-  const opcionesChip: OpcionChip[] = FILTROS.map((f) => ({
-    id: f.clave,
-    etiqueta: `${f.etiqueta} (${f.clave === 'todos' ? inventarios.length : inventarios.filter((i) => i.estado === f.clave).length})`,
-  }));
+  const opcionesSucursal: OpcionChip[] = [
+    { id: TODAS, etiqueta: 'Todas' },
+    ...sucursales.map((s) => ({ id: String(s.id), etiqueta: s.nombre })),
+  ];
+
+  const opcionesAnio: OpcionChip[] = [
+    { id: TODOS, etiqueta: 'Todos' },
+    ...aniosDisponibles().map((a) => ({ id: String(a), etiqueta: String(a) })),
+  ];
+  const opcionesMes: OpcionChip[] = [
+    { id: TODOS, etiqueta: 'Todo el año' },
+    ...MESES_CORTOS.map((m, i) => ({ id: String(i + 1), etiqueta: m })),
+  ];
 
   // ---------------------------------------------------------------- detalle
   if (detalle) {
@@ -215,7 +309,7 @@ export function HistorialScreen({ rol }: HistorialScreenProps): JSX.Element {
             <Badge label={est.etiqueta} variant={est.badge} />
           </View>
           <Text style={styles.ayuda}>
-            {formatoMiles(detalle.snapshotItems)} ítems
+            Creado el {formatoFecha(detalle.abiertoEn)} · {formatoMiles(detalle.snapshotItems)} ítems
             {detalle.tamanoHoja ? ` · hojas de ${detalle.tamanoHoja}` : ''}
             {detalle.cerradoEn ? ` · conteo cerrado el ${formatoFecha(detalle.cerradoEn)}` : ' · conteo todavía abierto'}
             {detalle.cerradoPor ? ` por ${detalle.cerradoPor.nombre}` : ''}
@@ -521,7 +615,7 @@ export function HistorialScreen({ rol }: HistorialScreenProps): JSX.Element {
       <BarraApp
         rotulo="Historial"
         sede={rol === 'auditor' ? sesion.sucursal!.nombre : undefined}
-        cifras={`${inventarios.length} inventario${inventarios.length === 1 ? '' : 's'} · ${lacrados} lacrado${lacrados === 1 ? '' : 's'}`}
+        cifras={cargando ? undefined : `Mostrando ${inventarios.length} de ${total} inventario${total === 1 ? '' : 's'}`}
       />
 
       {cargando || cargandoDetalle ? (
@@ -537,15 +631,60 @@ export function HistorialScreen({ rol }: HistorialScreenProps): JSX.Element {
         </View>
       ) : (
         <>
-          <ChipsFiltro opciones={opcionesChip} activo={filtro} onCambiar={(id) => setFiltro(id as EstadoInventario | 'todos')} />
+          {/* El Auditor no ve esto: su alcance ya está fijo en su sucursal
+              (el backend lo recorta igual si mandara otra), así que
+              ofrecerle el control sería una elección sin ningún efecto. */}
+          {rol === 'administrador' ? (
+            <View style={styles.filtroBloque}>
+              <Text style={styles.filtroLabel}>Sucursal</Text>
+              <ChipsFiltro
+                opciones={opcionesSucursal}
+                activo={String(filtroSucursalId)}
+                onCambiar={(id) => setFiltroSucursalId(id === TODAS ? TODAS : Number(id))}
+              />
+            </View>
+          ) : null}
 
-          {visibles.length === 0 ? (
-            <EmptyState icon={History} title="Ningún inventario en este estado" subtitle="Probá con otro filtro." />
+          <View style={styles.filtroBloque}>
+            <Text style={styles.filtroLabel}>Estado</Text>
+            <ChipsFiltro opciones={opcionesChip} activo={filtro} onCambiar={(id) => setFiltro(id as EstadoInventario | 'todos')} />
+          </View>
+
+          <View style={styles.filtroBloque}>
+            <Text style={styles.filtroLabel}>Período</Text>
+            <ChipsFiltro
+              opciones={opcionesAnio}
+              activo={filtroAnio === null ? TODOS : String(filtroAnio)}
+              onCambiar={(id) => {
+                setFiltroAnio(id === TODOS ? null : Number(id));
+                // Cambiar de año invalida el mes elegido: "marzo de 2025"
+                // no dice nada cuando se vuelve a "todos los años".
+                setFiltroMes(null);
+              }}
+            />
+            {/* El mes solo aparece con un año ya elegido — filtrar por mes
+                sin año mezclaría todos los marzos de la historia en uno. */}
+            {filtroAnio !== null ? (
+              <ChipsFiltro
+                opciones={opcionesMes}
+                activo={filtroMes === null ? TODOS : String(filtroMes)}
+                onCambiar={(id) => setFiltroMes(id === TODOS ? null : Number(id))}
+              />
+            ) : null}
+          </View>
+
+          {inventarios.length === 0 ? (
+            <EmptyState icon={History} title="Ningún inventario con estos filtros" subtitle="Probá con otra combinación." />
           ) : (
             <ScrollView horizontal={false} scrollEnabled={false} contentContainerStyle={styles.lista}>
-              {visibles.map((inv) => (
+              {inventarios.map((inv) => (
                 <TarjetaInventario key={inv.id} inventario={inv} onAbrir={() => abrirDetalle(inv.id)} />
               ))}
+              {/* Nunca más un techo silencioso: mientras queden inventarios
+                  sin traer para este filtro, el botón sigue ahí. */}
+              {inventarios.length < total ? (
+                <Button label={`Cargar más (${total - inventarios.length} restantes)`} variant="outline" loading={cargandoMas} onPress={cargarMas} />
+              ) : null}
             </ScrollView>
           )}
         </>
@@ -639,7 +778,7 @@ function TarjetaInventario({ inventario, onAbrir }: { inventario: InventarioHist
               <Badge label={est.etiqueta} variant={est.badge} />
             </View>
             <Text style={styles.invMeta}>
-              {formatoMiles(inventario.snapshotItems)} ítems
+              Creado el {formatoFecha(inventario.abiertoEn)} · {formatoMiles(inventario.snapshotItems)} ítems
               {inventario.tamanoHoja ? ` · hojas de ${inventario.tamanoHoja}` : ''}
               {inventario.cerradoEn ? ` · cerrado el ${formatoFecha(inventario.cerradoEn)}` : ' · sin cerrar'}
             </Text>
@@ -663,11 +802,22 @@ function TarjetaInventario({ inventario, onAbrir }: { inventario: InventarioHist
       </View>
 
       {/* La franja del folio SOLO existe en un lacrado: no hay folio hasta
-          que hay sello. Es la señal más honesta de todas. */}
+          que hay sello. Es la señal más honesta de todas.
+          Fecha y quién lacró van ACÁ, en la fila — no solo en el detalle:
+          un registro de control se lee de un vistazo, no abriendo cada
+          inventario uno por uno para saber cuándo se selló y quién firmó. */}
       {inventario.folio ? (
         <View style={styles.invSello}>
           <Lock size={14} color={colors.ok} />
-          <Text style={styles.invFolio}>{inventario.folio}</Text>
+          <View style={styles.invSelloDatos}>
+            <Text style={styles.invFolio}>{inventario.folio}</Text>
+            {inventario.lacradoEn ? (
+              <Text style={styles.invSelloMeta}>
+                Lacrado el {formatoFecha(inventario.lacradoEn)}
+                {inventario.lacradoPor ? ` por ${inventario.lacradoPor.nombre}` : ''}
+              </Text>
+            ) : null}
+          </View>
         </View>
       ) : null}
 
@@ -703,6 +853,9 @@ const styles = StyleSheet.create({
   negrita: { fontFamily: fonts.bold, color: colors.tinta },
   sinDatos: { fontSize: 12, color: colors.grisClaro, fontFamily: fonts.regular, fontStyle: 'italic' },
   seccion: { fontSize: 11, letterSpacing: 1.3, textTransform: 'uppercase', color: colors.gris, fontFamily: fonts.semibold },
+
+  filtroBloque: { gap: 6 },
+  filtroLabel: { fontSize: 11, letterSpacing: 0.5, color: colors.gris, fontFamily: fonts.semibold },
 
   lista: { gap: 11 },
   inv: { backgroundColor: colors.campo, borderWidth: 1, borderColor: colors.borde, borderRadius: 13, overflow: 'hidden' },
@@ -743,7 +896,9 @@ const styles = StyleSheet.create({
     borderTopWidth: 1,
     borderTopColor: 'rgba(10,107,87,0.2)',
   },
-  invFolio: { flex: 1, fontSize: 11.5, color: colors.ok, fontFamily: fonts.bold },
+  invSelloDatos: { flex: 1, gap: 1 },
+  invFolio: { fontSize: 11.5, color: colors.ok, fontFamily: fonts.bold },
+  invSelloMeta: { fontSize: 10.5, color: colors.ok, fontFamily: fonts.regular },
   invPie: {
     flexDirection: 'row',
     alignItems: 'center',
