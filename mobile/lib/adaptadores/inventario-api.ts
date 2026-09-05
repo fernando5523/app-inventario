@@ -37,30 +37,33 @@
  * cliente: un ajuste automático mal calculado corrige stock real en el ERP.
  *
  * ---------------------------------------------------------------------------
- * ⚠️ PROGRESO: el backend no lo expone. No se inventa.
+ * PROGRESO: real, sondeando en paralelo al POST
  * ---------------------------------------------------------------------------
- * El puerto pide `onAvance` porque bajar 8.000 ítems tarda minutos. Pero
- * `POST /api/d365/snapshot` devuelve UNA sola vez, al final: no hay stream ni
- * endpoint de estado que consultar. No existe, hoy, de dónde sacar "1.200 de
- * 8.000".
+ * El puerto pide `onAvance` porque bajar 8.000 ítems tarda minutos, y
+ * `POST /api/d365/snapshot` devuelve UNA sola vez, al final: de esa respuesta
+ * no sale ningún "1.200 de 8.000".
  *
- * Así que `onAvance` se llama dos veces y con la verdad: `{traidos: 0, total:
- * null}` al arrancar y el total real al terminar. `total: null` es
- * exactamente el caso que el puerto contempla para que la pantalla muestre un
- * spinner honesto en vez de una barra que miente — el mismo criterio, ahora
- * por una razón distinta (antes: Dynamics no contesta el total; ahora:
- * nuestro backend no lo reporta).
+ * Hasta que existió `GET /api/d365/snapshot/progreso`, `onAvance` se llamaba
+ * dos veces y con la verdad —`{traidos: 0, total: null}` al arrancar y el
+ * total al terminar—, y ESO era el bug que se vio en el emulador el
+ * 2026-09-05: "0 ítems traídos…" durante 90 segundos al lado del cartel
+ * "puede tardar varios minutos", que se lee como "se colgó".
  *
- * Para progreso REAL hace falta que el backend deje estado consultable
- * mientras pagina (el módulo de referencia del proyecto hermano ya lo hace,
- * `getCurrentSyncStatus()`). `_http.ts#sondear` está escrito y testeado
- * esperando ese endpoint: el día que exista, se enchufa acá y nada más
- * cambia.
+ * Ahora el POST y el sondeo corren EN PARALELO: el POST es la operación (y
+ * quien decide si salió bien), el sondeo mira de costado y reporta. Ver
+ * `sondearProgreso` más abajo.
+ *
+ * OJO con los dos números, que son distintos y los dos ciertos: el progreso
+ * cuenta los productos BAJADOS de Dynamics (~8.000); el resultado del POST,
+ * los que ENTRARON al inventario tras el filtro de responsabilidad y stock
+ * (951 en la prueba). El último `onAvance` usa el del resultado, que es el
+ * que la pantalla tiene que dejar en firme.
  */
 
 import type { HojaConteo, TamanoHoja } from '../dominio/tipos';
 import {
   ErrorSnapshot,
+  type AvanceSnapshot,
   type CierreRonda,
   type CodigoErrorSnapshot,
   type DesgloseSnapshot,
@@ -68,12 +71,13 @@ import {
   type RepositorioInventario,
   type ResumenRonda,
 } from '../puertos/repositorios';
-import { ErrorApi, pedir, TIMEOUT_LARGO_MS } from './_http';
+import { ErrorApi, pedir, sondear, TIMEOUT_LARGO_MS } from './_http';
 
 const RUTAS = {
   // Verificadas contra el README.
   d365Estado: '/api/d365/estado',
   d365Snapshot: '/api/d365/snapshot',
+  d365Progreso: (sucursalId: number) => `/api/d365/snapshot/progreso?sucursalId=${sucursalId}`,
   // Adivinadas: el backend todavía no tiene módulo de hojas/inventario.
   activo: (sucursalId: number) => `/api/sucursales/${sucursalId}/inventarios/activo`,
   crearHojas: (inventarioId: number) => `/api/inventarios/${inventarioId}/hojas`,
@@ -161,6 +165,77 @@ function comoErrorSnapshot(error: unknown): ErrorSnapshot {
   return new ErrorSnapshot('desconocido', error.message);
 }
 
+/** Lo que devuelve `GET /api/d365/snapshot/progreso`. `null` = no hay ninguno en curso. */
+interface ProgresoDto {
+  traidos: number;
+  total: number | null;
+  fase: 'bajando' | 'guardando';
+  actualizadoEn: string;
+}
+
+/**
+ * Consulta el progreso del snapshot cada tanto y lo reporta, hasta que el
+ * POST termine.
+ *
+ * NUNCA RECHAZA. Todo lo que puede salir mal acá —red, 404, el snapshot que
+ * terminó entre dos consultas— es un progreso que no se muestra, no un
+ * inventario que se pierde. Quien llama la deja corriendo en paralelo y solo
+ * la espera para no dejar un loop huérfano.
+ *
+ * `traidos: 0, total: null` NO se reporta: sería pisar con "no sé" el estado
+ * inicial que la pantalla ya tiene, y en el peor caso hacer que una barra
+ * que ya avanzó vuelva a cero. El backend garantiza que el avance no
+ * retrocede; acá se respeta lo mismo del otro lado del cable.
+ */
+async function sondearProgreso(
+  sucursalId: number,
+  onAvance: ((avance: AvanceSnapshot) => void) | undefined,
+  finDelPost: AbortSignal,
+  senalDeLaPantalla: AbortSignal | undefined,
+): Promise<void> {
+  if (onAvance === undefined) return;
+
+  try {
+    await sondear<ProgresoDto | null>({
+      consultar: (senal) => pedir<ProgresoDto | null>(RUTAS.d365Progreso(sucursalId), { senal }),
+      // Nunca "termina" por sí solo: lo corta `finDelPost` cuando el POST
+      // resuelve. Preguntarle al progreso si terminó sería creerle al
+      // sondeo por sobre la operación real.
+      termino: () => false,
+      alAvanzar: (progreso) => {
+        if (progreso === null) return;
+        // La fase `guardando` ya no mueve el contador (el catálogo entra en
+        // una sola transacción), pero se sigue reportando el último valor:
+        // dejar de llamar a `onAvance` haría que la pantalla no sepa que
+        // sigue vivo.
+        onAvance({ traidos: progreso.traidos, total: progreso.total });
+      },
+      senal: unirSenales(finDelPost, senalDeLaPantalla),
+    });
+  } catch {
+    // Ver el comentario de arriba: el progreso nunca voltea el snapshot.
+  }
+}
+
+/**
+ * Un `AbortSignal` que se dispara cuando lo hace cualquiera de los dos.
+ *
+ * Hacen falta los dos: `finDelPost` corta el sondeo cuando el trabajo
+ * terminó, y la señal de la pantalla lo corta cuando la persona toca
+ * "Cancelar" -- sin esta última, cancelar dejaría el sondeo consultando
+ * hasta que se agote el presupuesto.
+ */
+function unirSenales(a: AbortSignal, b: AbortSignal | undefined): AbortSignal {
+  if (b === undefined) return a;
+
+  const control = new AbortController();
+  const abortar = (): void => control.abort();
+  if (a.aborted || b.aborted) control.abort();
+  a.addEventListener('abort', abortar, { once: true });
+  b.addEventListener('abort', abortar, { once: true });
+  return control.signal;
+}
+
 export const inventarioApi: RepositorioInventario = {
   async traerSnapshot(sucursalId: number, opciones: OpcionesTraerSnapshot = {}) {
     const { onAvance, signal, tipo = 'mensual' } = opciones;
@@ -201,15 +276,44 @@ export const inventarioApi: RepositorioInventario = {
       // (`Sucursal.almacenId`, ya verificado contra el ERP al guardarlo).
       // Mandarlo desde el teléfono sería dejar que el cliente elija contra
       // qué almacén se cuenta.
-      const resultado = await pedir<SnapshotDto>(RUTAS.d365Snapshot, {
-        metodo: 'POST',
-        cuerpo: { sucursalId, tipo },
-        msTimeout: TIMEOUT_LARGO_MS,
-        senal: signal,
-      });
+      // EL SONDEO VA EN PARALELO AL POST, no en vez de él.
+      //
+      // El POST sigue siendo la operación: devuelve el resultado y es quien
+      // decide si esto salió bien. El sondeo solo mira de costado y reporta
+      // avance. Por eso `sondear` acá no "espera a que termine el trabajo"
+      // como en su caso de uso original -- termina cuando el POST resolvió,
+      // y para eso está `finDelPost`.
+      //
+      // Si el sondeo se cae (red, 404 porque el snapshot ya terminó entre
+      // dos consultas, lo que sea) el snapshot NO se cae: se pierde el
+      // progreso y nada más. Es la misma decisión que del lado del backend,
+      // donde un error en el callback de página no corta la bajada.
+      const finDelPost = new AbortController();
+      const sondeo = sondearProgreso(sucursalId, onAvance, finDelPost.signal, signal);
 
-      onAvance?.({ traidos: resultado.items, total: resultado.items });
-      return resultado;
+      try {
+        const resultado = await pedir<SnapshotDto>(RUTAS.d365Snapshot, {
+          metodo: 'POST',
+          cuerpo: { sucursalId, tipo },
+          msTimeout: TIMEOUT_LARGO_MS,
+          senal: signal,
+        });
+
+        // El número final sale del RESULTADO, no del último sondeo: el
+        // progreso cuenta productos bajados de Dynamics (~8.000) y el
+        // resultado cuenta los que entraron al inventario (menos, tras el
+        // filtro de responsabilidad y stock). Ver el comentario largo de
+        // backend/src/modules/d365/d365.progreso.ts -- son dos números
+        // ciertos que miden cosas distintas, y el que la pantalla muestra al
+        // final tiene que ser el del inventario.
+        onAvance?.({ traidos: resultado.items, total: resultado.items });
+        return resultado;
+      } finally {
+        // Corta el sondeo YA, sin esperar el intervalo, y espera a que muera
+        // para no dejar un loop huérfano consultando un snapshot terminado.
+        finDelPost.abort();
+        await sondeo;
+      }
     } catch (error) {
       throw comoErrorSnapshot(error);
     }

@@ -261,3 +261,148 @@ describe('cerrarRonda', () => {
     expect(cierre.hojas).toHaveLength(0);
   });
 });
+
+/**
+ * EL PROGRESO DEL SNAPSHOT.
+ *
+ * El bug que originó esto, medido en el emulador el 2026-09-05: la pantalla
+ * mostró "0 ítems traídos…" durante 90 segundos y saltó a 951 al final, al
+ * lado del cartel "puede tardar varios minutos". Se lee como "se colgó", y
+ * el Coordinador toca Cancelar.
+ *
+ * El sondeo va EN PARALELO al POST: el POST es la operación, el sondeo solo
+ * mira y reporta. Estos tests protegen sobre todo que el segundo no pueda
+ * voltear al primero.
+ */
+describe('traerSnapshot — progreso sondeado', () => {
+  /**
+   * Un POST que no resuelve hasta que el test lo diga: sin esto, el snapshot
+   * termina antes del primer intervalo de sondeo y no hay nada que observar.
+   */
+  function postControlado() {
+    let resolver!: (r: Response) => void;
+    const pendiente = new Promise<Response>((res) => {
+      resolver = res;
+    });
+    return { pendiente, resolver };
+  }
+
+  /** Enruta poniendo `/progreso` PRIMERO: `includes` matchea la clave más general si va antes. */
+  function fetchConProgreso(progreso: Response | Error, post: Promise<Response>) {
+    const fn = vi.fn(async (url: string): Promise<Response> => {
+      if (url.includes('/snapshot/progreso')) {
+        if (progreso instanceof Error) throw progreso;
+        return progreso;
+      }
+      if (url.includes('/api/d365/estado')) return CONFIGURADO;
+      if (url.includes('/api/d365/snapshot')) return post;
+      return json({ error: 'ruta no mockeada' }, 404);
+    });
+    vi.stubGlobal('fetch', fn);
+    return fn;
+  }
+
+  it('arranca reportando 0 con total desconocido, no un total inventado', async () => {
+    // `total: null` es lo que hace que la pantalla dibuje un spinner honesto
+    // en vez de una barra completa antes de tiempo.
+    fetchPorRuta({ '/api/d365/estado': CONFIGURADO, '/api/d365/snapshot': SNAPSHOT_OK });
+    const avances: Array<{ traidos: number; total: number | null }> = [];
+    await inventarioApi.traerSnapshot(1, { onAvance: (a) => avances.push(a) });
+
+    expect(avances[0]).toEqual({ traidos: 0, total: null });
+  });
+
+  it('el ÚLTIMO avance es el del resultado, no el del sondeo', async () => {
+    // Los dos números son ciertos y distintos: el sondeo cuenta productos
+    // bajados de Dynamics (~8.000), el resultado cuenta los que entraron al
+    // inventario tras el filtro. El que queda en firme es el del inventario.
+    fetchPorRuta({ '/api/d365/estado': CONFIGURADO, '/api/d365/snapshot': SNAPSHOT_OK });
+    const avances: Array<{ traidos: number; total: number | null }> = [];
+    await inventarioApi.traerSnapshot(1, { onAvance: (a) => avances.push(a) });
+
+    expect(avances[avances.length - 1]).toEqual({ traidos: 8000, total: 8000 });
+  });
+
+  it('reporta el avance que devuelve el sondeo mientras el POST sigue abierto', async () => {
+    vi.useFakeTimers();
+    const post = postControlado();
+    fetchConProgreso(json({ traidos: 3200, total: 8000, fase: 'bajando', actualizadoEn: '2026-09-05T06:34:52.113Z' }), post.pendiente);
+
+    const avances: Array<{ traidos: number; total: number | null }> = [];
+    const trabajo = inventarioApi.traerSnapshot(1, { onAvance: (a) => avances.push(a) });
+
+    // Deja correr un intervalo de sondeo con el POST todavía sin resolver.
+    await vi.advanceTimersByTimeAsync(2_500);
+    post.resolver(SNAPSHOT_OK);
+    await trabajo;
+    vi.useRealTimers();
+
+    expect(avances).toContainEqual({ traidos: 3200, total: 8000 });
+  });
+
+  /**
+   * LA REGLA QUE MÁS IMPORTA: el progreso es accesorio. Perder un snapshot de
+   * 8.000 ítems porque el endpoint de progreso devolvió 500 sería cambiar
+   * algo que importa por algo que no. Misma decisión que del lado backend,
+   * donde un error en el callback de página no corta la bajada.
+   */
+  it('si el sondeo falla, el snapshot NO se cae', async () => {
+    fetchConProgreso(json({ error: 'explotó' }, 500), Promise.resolve(SNAPSHOT_OK));
+
+    await expect(inventarioApi.traerSnapshot(1, { onAvance: () => {} })).resolves.toMatchObject({
+      inventarioId: 7,
+      items: 8000,
+    });
+  });
+
+  it('un progreso null (ya terminó, o todavía no arrancó) no rompe ni reporta nada raro', async () => {
+    // El backend responde 200 con null cuando no hay snapshot en curso: es
+    // una respuesta válida del sondeo, no un error.
+    fetchConProgreso(json(null), Promise.resolve(SNAPSHOT_OK));
+    const avances: Array<{ traidos: number; total: number | null }> = [];
+    await inventarioApi.traerSnapshot(1, { onAvance: (a) => avances.push(a) });
+
+    expect(avances.every((a) => typeof a.traidos === 'number')).toBe(true);
+  });
+
+  it('sin onAvance no sondea: no se gasta batería en un progreso que nadie mira', async () => {
+    const fn = fetchPorRuta({ '/api/d365/estado': CONFIGURADO, '/api/d365/snapshot': SNAPSHOT_OK });
+    await inventarioApi.traerSnapshot(1);
+
+    expect(fn.mock.calls.some((c) => c[0].includes('/snapshot/progreso'))).toBe(false);
+  });
+
+  it('el sondeo pregunta por LA sucursal, no por otra', async () => {
+    vi.useFakeTimers();
+    const post = postControlado();
+    const fn = fetchConProgreso(json({ traidos: 10, total: 100, fase: 'bajando', actualizadoEn: 'x' }), post.pendiente);
+
+    const trabajo = inventarioApi.traerSnapshot(42, { onAvance: () => {} });
+    await vi.advanceTimersByTimeAsync(2_500);
+    post.resolver(SNAPSHOT_OK);
+    await trabajo;
+    vi.useRealTimers();
+
+    const consulta = fn.mock.calls.find((c) => c[0].includes('/snapshot/progreso'));
+    expect(consulta?.[0]).toContain('sucursalId=42');
+  });
+
+  it('cuando el POST termina, el sondeo deja de consultar', async () => {
+    // Sin cortarlo, quedaría un loop huérfano preguntando por un snapshot que
+    // ya no existe hasta agotar el presupuesto de tiempo.
+    vi.useFakeTimers();
+    const post = postControlado();
+    const fn = fetchConProgreso(json({ traidos: 10, total: 100, fase: 'bajando', actualizadoEn: 'x' }), post.pendiente);
+
+    const trabajo = inventarioApi.traerSnapshot(1, { onAvance: () => {} });
+    await vi.advanceTimersByTimeAsync(2_500);
+    post.resolver(SNAPSHOT_OK);
+    await trabajo;
+
+    const consultasAlTerminar = fn.mock.calls.filter((c) => c[0].includes('/snapshot/progreso')).length;
+    await vi.advanceTimersByTimeAsync(10_000);
+    vi.useRealTimers();
+
+    expect(fn.mock.calls.filter((c) => c[0].includes('/snapshot/progreso')).length).toBe(consultasAlTerminar);
+  });
+});

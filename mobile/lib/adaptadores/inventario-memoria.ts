@@ -63,6 +63,15 @@ export const inventarioMemoria: RepositorioInventario = {
     // por vez, con una demora entre página y página — nunca salta de 0 a
     // 8.000. `signal` se chequea ENTRE páginas (no se puede cancelar un
     // fetch ya en vuelo con un mock, pero sí frenar antes de la próxima).
+    //
+    // El total se avisa ANTES de la primera página, con 0 traídos: es lo
+    // mismo que hace el backend real apenas responde el `$count` de Dynamics
+    // (d365-entity.service.ts#obtenerTodos), y sin esto la pantalla se
+    // quedaría sin saber cuántos son durante toda la primera página. Los dos
+    // adaptadores tienen que verse iguales desde la pantalla, o probar
+    // contra memoria deja de probar nada.
+    opciones?.onAvance?.({ traidos: 0, total: TOTAL_ITEMS_SNAPSHOT });
+
     let traidos = 0;
     while (traidos < TOTAL_ITEMS_SNAPSHOT) {
       if (opciones?.signal?.aborted) {
