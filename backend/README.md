@@ -354,7 +354,7 @@ Integración de **solo lectura** con D365 Finance & Operations (OAuth2 `client_c
 **Paginación**: `d365-entity.service.ts` primero pide `$count`, arma los lotes con `calcularPaginas(total, tamanoLote)` (500 por defecto) y trae cada lote con `$skip`/`$top` — con 8.000 ítems no es opcional. El token OAuth2 se cachea en memoria y se renueva solo si vence en menos de 5 minutos; si Dynamics responde `401` con el token cacheado, se pide uno nuevo una sola vez y se reintenta.
 
 #### `GET /api/d365/estado`
-Cualquier rol autenticado. `{ "configurado": true | false }` — si `false`, faltan una o más `D365_*` en el entorno (ver `.env.example`).
+Cualquier rol autenticado. `{ "configurado": true | false }` — `d365AuthService.isConfigured()` mira `credenciales().origen`: `true` si hay credenciales completas en la base (`config_dynamics`) **o** en el entorno (`D365_*`, ver `.env.example`), `false` solo si `origen === "ninguno"`. Ver "Credenciales de Dynamics" más abajo para la precedencia entre las dos fuentes.
 
 #### `GET /api/d365/almacenes`
 Rol **`administrador`** unicamente. Lista los almacenes de Dynamics (entidad `Warehouses`) para que el Administrador **elija uno** al dar de alta una tienda.
@@ -397,7 +397,7 @@ Body:
 
   El filtro sale de `TRU_InventoryManagerPEEntities` (entidad CUSTOM del tenant): `ModuleType eq 'Invent'`, campo `TRU_InventoryManagerPE` con valores `Employee`/`Company`/`None`. Los `None` y los que no tienen fila NO se cuentan en el mensual: sin responsable asignado no hay a quien liquidarle una diferencia.
 
-  ⚠️ **El tipo NO se persiste todavia**: `Inventario` no tiene columna para el. Ver la nota de limitaciones abajo.
+  El tipo se persiste en `Inventario.tipo` (`d365-catalogo.service.ts:703`) — ver la sección "Tipo de inventario: mensual y anual" más abajo para las restricciones que gobierna.
 - **Solo se cuentan los productos CON EXISTENCIA en el almacen de la sucursal.** Decision del cliente, misma condicion que el desarrollo que la empresa ya usa en produccion (`qty === undefined || qty <= 0`): se descartan tanto los que el ERP no registra como los que declara en cero.
 
   La respuesta trae `descartados: { sinRegistro, stockCero }` y el snapshot lo deja ademas en `RegistroAuditoria` (`accion: "inventario.snapshot"`). Es la respuesta a "por que esta hoja no trae tal producto" sin volver a correr el snapshot.
@@ -406,11 +406,9 @@ Body:
 
   ⚠️ Contrapartida a tener presente: un producto que ESTA en la gondola pero que el ERP cree en cero **nunca se va a contar**. El inventario deja de poder descubrir ese caso.
 
-- `almacen` es opcional (`WarehouseId` de Dynamics, ej. `"MD11_CENT"`). **El stock NO viene del catalogo de productos**: vive en la data entity `WarehousesOnHandV2` y se consulta POR ALMACEN (`$filter: InventoryWarehouseId eq '<codigo>'`). Sin este parametro no se consulta stock y `stockErp` queda en **null**.
+- `almacen` es opcional (`WarehouseId` de Dynamics, ej. `"MD11_CENT"`) — por defecto sale de `Sucursal.almacenId`, ver "El almacén de Dynamics: un atributo de la sucursal" más abajo; el parámetro es un **override explícito** para probar otro almacén sin reconfigurar la tienda. **El stock NO viene del catalogo de productos**: vive en la data entity `WarehousesOnHandV2` y se consulta POR ALMACEN (`$filter: InventoryWarehouseId eq '<codigo>'`). Sin almacén (ni por la sucursal ni por parámetro) no se consulta stock y `stockErp` queda en **null**.
 
   `null` NO es `0`, y la diferencia importa: "no se cuanto hay" y "hay cero" llevan a conclusiones opuestas. Un 0 falso hace que la auditoria reporte un faltante que no existe y que alguien lo pague.
-
-  ⚠️ Va por parametro porque `Sucursal` no tiene columna de almacen. Hace falta `codigoAlmacenD365` en `Sucursal` + cargarle el valor a las 4 sucursales; el listado sale de la entidad `Warehouses` (`$select: WarehouseId,WarehouseName`).
 - `modo` es opcional, default `"real"`. `"ejemplo"` nunca toca red ni exige credenciales: devuelve siempre los mismos 4 productos ya validados en `mobile/design/conteo.html` (Aceite Vegetal Primor, Cerveza Cusqueña, Leche Evaporada, Fideos Canuto), cada uno con sus empaques — el Aceite trae dos (Emp.12 y Emp.6) para poder probar de verdad la pantalla con más de un empaque por producto. Nunca se sustituye `"real"` por datos de ejemplo en silencio — si no hay credenciales y se pide `"real"`, es un `400`, no un fallback automático.
 
 Respuesta `200`:
@@ -418,9 +416,7 @@ Respuesta `200`:
 { "inventarioId": 7, "items": 8000, "tomadoEn": "2026-09-03T14:00:00.000Z" }
 ```
 
-**Idempotente**: si la sucursal ya tiene un `Inventario`, se devuelve ese mismo (mismo `inventarioId`/`items`/`tomadoEn`) en vez de crear uno nuevo ni volver a golpear Dynamics — mismo contrato que el puerto del front. *Simplificación documentada*: como todavía no existe en este backend un módulo de hojas/inventario, "ya tiene un inventario" se resuelve como "existe al menos una fila para esa sucursal", no "hay uno en curso sin cerrar" — cuando exista ese módulo, esta regla se va a tener que afinar.
-
-> **Ya se puede afinar**: `Inventario` ahora tiene estado y el campo `abierto` (ver la sección de Histórico). El snapshot debería buscar `{ sucursalId, abierto: true }` en vez de la fila más reciente — si no, una sucursal que ya cerró su mes no puede abrir el siguiente. Además, `prisma.inventario.create` puede fallar ahora con `P2002` sobre `(sucursal_id, abierto)` si la sucursal ya tiene uno en curso: conviene traducirlo a un 409 legible. Queda anotado para quien mantiene este módulo, no se tocó desde el módulo de historial.
+**Idempotente**: si la sucursal ya tiene un `Inventario` **en curso**, se devuelve ese mismo (mismo `inventarioId`/`items`/`tomadoEn`) en vez de crear uno nuevo ni volver a golpear Dynamics — mismo contrato que el puerto del front. La búsqueda es `{ sucursalId, abierto: true }` (`d365-catalogo.service.ts:657`), no "la fila más reciente": una sucursal que ya cerró su mes puede abrir el siguiente sin que el snapshot le devuelva el cerrado.
 
 El catálogo mapeado (con barcode, empaque y **categoría** de cada ítem) se guarda en `CatalogoItem`, colgado del `Inventario` — es el catálogo crudo del snapshot, antes de partirse en hojas. Lo consume el paso 2 (`POST /api/inventarios/:id/hojas`, ver más abajo), que lo ordena por categoría y lo materializa en `HojaConteo` + `Producto`.
 
@@ -510,7 +506,7 @@ Salir de la propia sucursal da `403` (o `404` en el listado, para no confirmar q
 
 #### `GET /api/hojas?inventarioId=<n>&alcance=mias|todas&ronda=1&numero=<opcional>`
 - `alcance` opcional, default **`mias`** — el default es el restrictivo: si alguien olvida el parámetro, la respuesta segura no es el lote entero.
-- `ronda` opcional, default `1` (`HojaConteo.numeroConteo`: 1er conteo, reconteo, auditoría). El puerto del front todavía no habla de rondas.
+- `ronda` opcional, default `1` (`HojaConteo.numeroConteo`: 1er conteo, reconteo, auditoría). `RepositorioHojas` (`mias`/`todas`/`porNumero`, el que consume este endpoint) todavía no lo pasa — pero el ciclo de rondas SÍ es un concepto de primera clase en el front: `RepositorioInventario.resumenRonda(inventarioId, ronda)` / `.cerrarRonda(inventarioId, ronda)` (`mobile/lib/puertos/repositorios.ts`).
 - `numero` opcional: así se resuelve `porNumero` del puerto — devuelve una lista de 0 o 1 elemento.
 
 Respuesta `200`: array de hojas con el shape de `mobile/lib/dominio/tipos.ts#HojaConteo`.
@@ -1104,7 +1100,7 @@ El cierre del mes exige **dos aprobaciones de dos personas distintas** (Gilmer y
 
 **Quien aprueba sale SIEMPRE del token, nunca del body.** Es la misma regla que ya gobierna el rol en todo el proyecto: lo que manda el cliente no define quién es. Una doble validación que una sola persona puede completar no es un control, es un botón doble.
 
-> ⚠️ **La app móvil tiene que cambiar.** Hoy muestra los dos botones "Aprobar" a la vez en la misma pantalla, y un auditor puede tocar el de la fila del otro. Con este backend eso ya no funciona: cada firma se registra contra el colaborador de la sesión que la envía. **En la práctica hacen falta dos sesiones — dos dispositivos, o un logout/login — para lacrar.** Es correcto: es exactamente el punto de un control de dos personas. La pantalla debería mostrar un solo botón "Aprobar como <el usuario logueado>" y el estado de la otra firma como información, no como acción.
+> **La app móvil ya está corregida** (`app/auditor/lacrado.tsx`): la fila de cada auditor solo tiene botón "Aprobar" si `auditor.id === yo` (la sesión actual); la fila del otro auditor muestra un badge "Falta su firma", no tocable. **En la práctica hacen falta dos sesiones — dos dispositivos, o un logout/login — para lacrar**, que es correcto: es exactamente el punto de un control de dos personas.
 
 Quién puede firmar: `administrador` y `auditor`. **Pendiente de confirmar con el cliente**: la Decisión 1 de `docs/pantallas.md` aclara que Michell es *coordinador*, lo que haría la doble validación auditor + coordinador; la maqueta ya validada muestra dos auditores. Se tomó la lectura restrictiva porque el costo de los dos errores no es simétrico: si sobra un rol, alguien que no corresponde cierra el mes de forma irreversible; si falta, se agrega en una línea.
 
@@ -1476,9 +1472,9 @@ Escribe en `RegistroAuditoria` con `accion: "colaborador.pin_cambiado_por_si_mis
 
 ---
 
-### PIN de producción — pendiente
+### PIN de producción — Plan A implementado, B/C/D pendientes
 
-> **Estado**: diagnóstico hecho y medido el 2026-09-04. **Nada de esto está implementado todavía** — se posterga a propósito para no romper el flujo mientras se prueba conteo/auditoría/liquidación contra el catálogo real. Quien lo tome no necesita volver a investigar: la evidencia y el plan están acá.
+> **Estado**: diagnóstico hecho y medido el 2026-09-04. **Plan A ya está implementado** (`usuarios.service.ts#crear`/`resetearPin` llaman a `validarPinElegible`, ver más abajo) — B, C y D siguen pendientes, postergados a propósito para no romper el flujo mientras se prueba conteo/auditoría/liquidación contra el catálogo real. Quien tome el resto no necesita volver a investigar: la evidencia y el plan están acá.
 
 **El agujero, en una frase**: la lista de colaboradores es pública (la pantalla de login la necesita antes de que nadie se autentique) y el PIN que sembraba el seed era el id del colaborador con ceros. Cruzando las dos cosas, cualquiera con la app deducía el PIN de todos —incluido el administrador— sin leer una línea de código.
 
@@ -1487,18 +1483,19 @@ Escribe en `RegistroAuditoria` con `accion: "colaborador.pin_cambiado_por_si_mis
 - **Lista pública**: `GET /api/sesion/sucursales/:id/colaboradores` y `GET /api/sesion/administradores` responden `200` **sin token**, con id + nombre + DNI + rol. Solo `/ingresar` y `/cambiar-pin` llevan middleware de sesión.
 - **PIN derivable**: probado un intento por colaborador con `pin = String(id).padStart(6,'0')`. En la base viva de ese día, **1 de 6** entró: `Admin Sistema` (id 1000, PIN `001000`), rol **administrador** — el peor caso. Los otros 5 ya tenían PIN propio (habían sido reseteados a mano). El riesgo real no era ese 1: era el seed, que dejaba a **los 30** derivables cada vez que se corría. Eso es lo que se corrigió (arriba).
 - **Limitador** (`sesion.routes.ts#limitadorIngreso`): 8 intentos / 15 min, `key = colaboradorId ?? ip`. Verificado: el 9.º intento devuelve `429`. Es **por colaborador, no por IP** (bien: la WiFi de tienda es compartida). Dos costados: (1) permite un **DoS de cuenta** trivial — 8 intentos fallidos con el id de alguien lo dejan sin entrar 15 min; (2) comparte el cupo con `cambiar-pin` y usa MemoryStore (no se comparte entre instancias). Con PIN aleatorio, 8/15 min ≈ 768 intentos/día → ~28 % de acierto **en un año**; con PIN derivable, se acierta al primer intento y el limitador es irrelevante.
-- **Dónde NO se valida el PIN**: `esPinPredecible`/`esPinTrivial` (`sesion.pin.ts`) solo se aplican en `cambiar-pin` propio (`sesion.service.ts`). **`POST /api/usuarios` (crear) y `POST /api/usuarios/:id/resetear-pin` no las aplican**: hoy un admin puede fijar `000022` o `123456` y el backend lo acepta (`usuarios.service.ts:67,133` hashean directo).
+- **Plan A implementado (2026-09-04)**: `validarPinElegible` (`sesion.pin.ts`) ahora se llama también desde `usuarios.service.ts#crear` (solo el chequeo trivial — al crear, el id lo autogenera Prisma, así que el predecible no se puede evaluar todavía) y `#resetearPin` (los dos chequeos, predecible y trivial, porque ahí ya se conoce el id). Un admin ya **no** puede fijar `000022` ni `123456` — el backend los rechaza con `400`.
+- **B, C y D siguen sin implementar** — ver el plan abajo.
 
 **Plan, por orden de prioridad y costo:**
 
-| | Qué | Cambios | Qué rompe | Costo |
-|---|---|---|---|---|
-| **A** | Bloquear PINs predecibles/triviales también al **crear** y **resetear** | Reusar `esPinPredecible`/`esPinTrivial` en `usuarios.service.ts` crear y `resetearPin` (~10 líneas) | Nada del flujo; solo rechaza PINs malos que hoy pasan | **Bajo** (½ día) |
-| **B** | **Forzar cambio de PIN en el primer ingreso** | Columna `debeCambiarPin Boolean @default(true)` en `Colaborador` + migración; `ingresar()` devuelve el flag; `crear`/`resetearPin` lo ponen en `true`, `cambiar-pin` en `false`; el login intercala el cambio antes del token útil (toca front) | El login gana un paso obligatorio; hay que sembrar el flag en los usuarios existentes | **Medio-alto** (2-3 días, front incluido) |
-| **C** | Reset/alta genera PIN **aleatorio**, se muestra **una sola vez** | `resetearPin`/`crear` sin `pin` en el body: el server genera 6 dígitos (evitando predecible/trivial), hashea, y devuelve el valor una vez; la UI de Usuarios lo muestra en un modal "anotalo". Combina natural con B (entra como temporal) | El admin ya no teclea el PIN; cambia la UI de Usuarios | **Medio** (1-2 días) |
-| **D** | Endurecer el limitador | Bajar `limit`, backoff incremental, separar la key de `cambiar-pin` de la de `ingresar` (que un ataque no bloquee el cambio legítimo), evaluar el DoS de cuenta | Poco; calibrar para no molestar el uso normal | **Bajo** (½ día) |
+| | Qué | Estado | Cambios | Qué rompe | Costo |
+|---|---|---|---|---|---|
+| **A** | Bloquear PINs predecibles/triviales también al **crear** y **resetear** | ✅ Implementado (2026-09-04) | `validarPinElegible` en `usuarios.service.ts` crear y `resetearPin` | Nada del flujo; solo rechaza PINs malos que antes pasaban | **Bajo** (½ día) |
+| **B** | **Forzar cambio de PIN en el primer ingreso** | Pendiente | Columna `debeCambiarPin Boolean @default(true)` en `Colaborador` + migración; `ingresar()` devuelve el flag; `crear`/`resetearPin` lo ponen en `true`, `cambiar-pin` en `false`; el login intercala el cambio antes del token útil (toca front) | El login gana un paso obligatorio; hay que sembrar el flag en los usuarios existentes | **Medio-alto** (2-3 días, front incluido) |
+| **C** | Reset/alta genera PIN **aleatorio**, se muestra **una sola vez** | Pendiente | `resetearPin`/`crear` sin `pin` en el body: el server genera 6 dígitos (evitando predecible/trivial), hashea, y devuelve el valor una vez; la UI de Usuarios lo muestra en un modal "anotalo". Combina natural con B (entra como temporal) | El admin ya no teclea el PIN; cambia la UI de Usuarios | **Medio** (1-2 días) |
+| **D** | Endurecer el limitador | Pendiente | Bajar `limit`, backoff incremental, separar la key de `cambiar-pin` de la de `ingresar` (que un ataque no bloquee el cambio legítimo), evaluar el DoS de cuenta | Poco; calibrar para no molestar el uso normal | **Bajo** (½ día) |
 
-**Recomendación**: A + B como base (tapan el agujero de raíz), C encima para que un reset no deje el PIN en dos manos, D como ajuste fino. A y B rompen pruebas en curso, así que se implementan cuando el flujo esté validado, no antes.
+**Recomendación**: B como siguiente paso (tapa el resto del agujero de raíz), C encima para que un reset no deje el PIN en dos manos, D como ajuste fino. B rompe pruebas en curso, así que se implementa cuando el flujo esté validado, no antes.
 
 ---
 
