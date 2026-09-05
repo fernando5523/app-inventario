@@ -9,20 +9,34 @@
  * !! PIN DE DESARROLLO -- NO SALE A LA TIENDA ASI !!
  * ==========================================================================
  *
- * El PIN de cada colaborador es SU PROPIO ID CON CEROS ADELANTE:
- *   Maria Rojas (102)   -> 000102
- *   Jose Tarazona (101) -> 000101
- *   Admin Sistema (1000)-> 001000
+ * Para una base NUEVA (`prisma migrate reset` + este seed desde cero), el
+ * PIN de cada colaborador sale de `PIN_DEV_POR_ROL` (mas abajo): FIJO POR
+ * ROL, no derivable del id. Los cuatro son coordinador 724193, conteo
+ * 518274, auditor 306581, administrador 947260 -- el porque de este diseno
+ * (y del que reemplazo) esta en el comentario de esa constante.
  *
- * Por que eso es una puerta abierta y no solo "un placeholder feo": la
- * pantalla de login LISTA a todas las personas de la sucursal con nombre y
- * rol (GET /api/sesion/sucursales/:id/colaboradores). Cualquiera que abra
- * la app ve la lista, y de la lista se deduce el PIN de todos -- incluido
- * el del administrador, que gestiona cuentas de las 4 sucursales.
+ * UNA BASE YA SEMBRADA CONSERVA LOS PINS CON LOS QUE SE SEMBRO -- no los
+ * de la version de este archivo que tengas delante. Verificado en la base
+ * de desarrollo actual (2026-09): quedo sembrada con el generador VIEJO
+ * (`id.padStart(6,'0')`) antes de que existiera `PIN_DEV_POR_ROL`, asi que
+ * hoy Admin Sistema entra con "001000", no con "947260".
  *
- * Es DELIBERADO que sean predecibles: sin esto no se puede probar /ingresar
- * en local. NO cambiar el algoritmo -- lo que hay que hacer es ROTARLOS
- * antes de cualquier uso real, uno por uno, con:
+ * DOS FORMAS DE VOLVER A CORRER ESTE ARCHIVO, con resultados distintos:
+ *
+ *   - `npm run prisma:seed` (standalone, NO borra nada): actualiza el PIN
+ *     de los 29 colaboradores normales al vigente por rol -- el `upsert`
+ *     de cada uno reescribe `pinHash` en el `update` (mas abajo). El
+ *     ADMINISTRADOR es la excepcion tal como esta escrito hoy: su `update`
+ *     NO incluye `pinHash`, asi que sigue entrando con el PIN con el que se
+ *     creo la fila.
+ *   - `npx prisma migrate reset` (BORRA TODAS LAS TABLAS y recien despues
+ *     corre este seed, ver `"seed"` en package.json): al recrear cada fila
+ *     desde cero con `create`, ahi si el administrador tambien queda con
+ *     "947260". No es un camino para "actualizar los PINs" de una base con
+ *     inventarios o conteos que importen -- se lleva puesto todo lo demas.
+ *
+ * Para llevar el PIN del ADMINISTRADOR (el unico que `prisma:seed` no
+ * toca) al vigente sin perder ningun dato, se rota a mano:
  *
  *   POST /api/usuarios/:id/resetear-pin   { "pin": "<6 digitos>" }
  *
@@ -32,7 +46,8 @@
  * desarrollo".
  *
  * El PIN se hashea igual que en produccion (argon2) y nunca se guarda en
- * claro: el problema no es como se almacena, es que se puede ADIVINAR.
+ * claro: el problema no es como se almacena, es que se pueda ADIVINAR --
+ * ver el comentario de `PIN_DEV_POR_ROL` para el porque del diseno actual.
  */
 
 import { PrismaClient } from '@prisma/client';
