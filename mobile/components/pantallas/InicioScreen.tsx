@@ -2,14 +2,7 @@ import { router, useFocusEffect } from 'expo-router';
 import { useCallback, useEffect, useState, type JSX } from 'react';
 import { ActivityIndicator, StyleSheet, Text, View } from 'react-native';
 
-import { repositorioHojas, repositorioInventario, sincronizador } from '../../lib/contenedor';
-// TEMPORAL: no van en lib/contenedor.ts a propósito — esta tarea no lo
-// toca (lo cambia el agente de integración cuando enchufe el HTTP real).
-// La pantalla solo conoce el tipo del puerto (RepositorioUsuarios /
-// RepositorioTiendas), no el adaptador concreto — mover este import a
-// contenedor.ts el día de mañana es un cambio de una sola línea.
-import { tiendasMemoria as repositorioTiendas } from '../../lib/adaptadores/tiendas-memoria';
-import { usuariosMemoria as repositorioUsuarios } from '../../lib/adaptadores/usuarios-memoria';
+import { repositorioHojas, repositorioInventario, repositorioTiendas, repositorioUsuarios, sincronizador } from '../../lib/contenedor';
 import { avanceConjunto, estadoConjunto } from '../../lib/dominio/hoja';
 import type { HojaConteo, Rol } from '../../lib/dominio/tipos';
 import type { EstadoCola } from '../../lib/puertos/repositorios';
