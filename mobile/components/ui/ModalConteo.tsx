@@ -1,10 +1,11 @@
-import { Minus, Plus, ScanLine, X } from 'lucide-react-native';
+import { ScanLine, X } from 'lucide-react-native';
 import { useEffect, useState, type JSX } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Keyboard, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 
 import { totalUnidades, validarConteo } from '../../lib/dominio/empaque';
 import type { Conteo, LineaEmpaque, Producto } from '../../lib/dominio/tipos';
 import { colors, fonts, fontSize, radius, shadow, spacing } from '../../lib/theme';
+import { interpretarCantidad } from './cantidad-numerica';
 
 export interface ModalConteoProps {
   visible: boolean;
@@ -30,20 +31,27 @@ function plural(nombre: string, cantidad: number): string {
 }
 
 /**
- * Modal de registro de conteo — una fila de stepper por cada empaque
+ * Modal de registro de conteo — un campo numérico por cada empaque
  * cerrado que el producto puede traer (decisión del cliente: puede
  * tener más de uno, Caja Y Pack del mismo producto) más las unidades
  * sueltas, con el total calculado en vivo. `totalUnidades()` es la
  * ÚNICA fuente de esa cuenta (lib/dominio/empaque.ts): nunca se suma a
  * mano acá.
  *
- * Con UN solo empaque (el caso común) se ve exactamente tan simple como
- * antes de este cambio: una fila de stepper, los mismos atajos rápidos.
- * Con más de uno, cada empaque extra sí suma su propia fila — pero los
- * atajos de "+1"/"+5" siguen siendo solo para el PRIMERO (`empaques[0]`,
- * el más común): que el formulario crezca con la cantidad de empaques
- * sería justo lo que no puede pasar, el operario cuenta con las manos
- * ocupadas.
+ * Decisión del cliente (5 sep 2026): tipear la cantidad en vez de tocar
+ * +/- (hasta 47 toques para cargar una caja grande). `cantidades` sigue
+ * siendo el número que se usa para el total; `textos` es lo que el
+ * campo muestra mientras se tipea — se separan porque un texto a medio
+ * escribir ("1" antes de completar "12") no puede pisar el total en
+ * vivo con un valor a medias, y "12a" no puede tirar el conteo a NaN
+ * silenciosamente. `interpretarCantidad()` (cantidad-numerica.ts) es la
+ * única que decide si lo tipeado es un entero válido.
+ *
+ * Con UN solo empaque (el caso común) el campo del primero recibe foco
+ * automático al abrir. Los chips de "+1"/"+5" siguen existiendo como
+ * atajo opcional sobre el mismo estado — solo para el empaque más común
+ * (`empaques[0]`), sin recalibrar sus valores (no hay datos reales de
+ * un conteo aún para justificar otro número).
  */
 export function ModalConteo({
   visible,
@@ -55,7 +63,11 @@ export function ModalConteo({
   onCerrar,
 }: ModalConteoProps): JSX.Element | null {
   const [cantidades, setCantidades] = useState<Record<string, number>>({});
+  const [textos, setTextos] = useState<Record<string, string>>({});
+  const [erroresCantidad, setErroresCantidad] = useState<Record<string, string | null>>({});
   const [sueltas, setSueltas] = useState(0);
+  const [textoSueltas, setTextoSueltas] = useState('0');
+  const [errorSueltas, setErrorSueltas] = useState<string | null>(null);
 
   useEffect(() => {
     if (!visible) return;
@@ -70,15 +82,56 @@ export function ModalConteo({
       iniciales[empaquePreseleccionado] = 1;
     }
     setCantidades(iniciales);
+    setTextos(Object.fromEntries(Object.entries(iniciales).map(([nombre, valor]) => [nombre, String(valor)])));
+    setErroresCantidad({});
     setSueltas(conteoInicial?.sueltas ?? 0);
+    setTextoSueltas(String(conteoInicial?.sueltas ?? 0));
+    setErrorSueltas(null);
   }, [visible, producto?.id, conteoInicial, empaquePreseleccionado]);
 
   if (!visible || !producto) return null;
 
   const empaqueDefault = producto.empaques[0];
 
+  // Usada por los chips "+1"/"+5" y por "Borrar": pisan `textos` con el
+  // mismo valor que dejan en `cantidades` para que el campo no muestre un
+  // número viejo mientras el atajo ya cambió el total.
   function cambiarCantidad(empaqueNombre: string, delta: number): void {
-    setCantidades((actual) => ({ ...actual, [empaqueNombre]: Math.max(0, (actual[empaqueNombre] ?? 0) + delta) }));
+    const nuevo = Math.max(0, (cantidades[empaqueNombre] ?? 0) + delta);
+    setCantidades((actual) => ({ ...actual, [empaqueNombre]: nuevo }));
+    setTextos((actual) => ({ ...actual, [empaqueNombre]: String(nuevo) }));
+    setErroresCantidad((actual) => ({ ...actual, [empaqueNombre]: null }));
+  }
+
+  function cambiarTexto(empaqueNombre: string, texto: string): void {
+    setTextos((actual) => ({ ...actual, [empaqueNombre]: texto }));
+    const resultado = interpretarCantidad(texto);
+    if (resultado.ok) {
+      setCantidades((actual) => ({ ...actual, [empaqueNombre]: resultado.valor }));
+      setErroresCantidad((actual) => ({ ...actual, [empaqueNombre]: null }));
+    } else {
+      // No se toca `cantidades`: el total en vivo se queda en el último
+      // valor válido mientras se muestra el aviso, nunca en NaN.
+      setErroresCantidad((actual) => ({ ...actual, [empaqueNombre]: resultado.mensaje }));
+    }
+  }
+
+  function cambiarSueltas(delta: number): void {
+    const nuevo = Math.max(0, sueltas + delta);
+    setSueltas(nuevo);
+    setTextoSueltas(String(nuevo));
+    setErrorSueltas(null);
+  }
+
+  function cambiarTextoSueltas(texto: string): void {
+    setTextoSueltas(texto);
+    const resultado = interpretarCantidad(texto);
+    if (resultado.ok) {
+      setSueltas(resultado.valor);
+      setErrorSueltas(null);
+    } else {
+      setErrorSueltas(resultado.mensaje);
+    }
   }
 
   // Solo las líneas con algo cargado: un conteo no lista un empaque en 0
@@ -108,7 +161,11 @@ export function ModalConteo({
 
   function borrarTodo(): void {
     setCantidades({});
+    setTextos({});
+    setErroresCantidad({});
     setSueltas(0);
+    setTextoSueltas('0');
+    setErrorSueltas(null);
   }
 
   return (
@@ -170,7 +227,7 @@ export function ModalConteo({
               </View>
             ) : null}
 
-            {producto.empaques.map((empaque) => (
+            {producto.empaques.map((empaque, indice) => (
               <View key={empaque.nombre} style={styles.campo}>
                 <View style={styles.campoEtiquetaFila}>
                   <Text style={styles.campoEtiqueta}>{empaque.nombre}</Text>
@@ -178,41 +235,37 @@ export function ModalConteo({
                     Factor: {empaque.factor} und/{empaque.nombre.toLowerCase()}
                   </Text>
                 </View>
-                <View style={styles.stepper}>
-                  <Pressable
-                    style={styles.stepperBtn}
-                    onPress={() => cambiarCantidad(empaque.nombre, -1)}
-                    accessibilityLabel={`Restar un(a) ${empaque.nombre}`}
-                  >
-                    <Minus size={16} color={colors.tinta} />
-                  </Pressable>
-                  <Text style={styles.stepperValor}>{cantidades[empaque.nombre] ?? 0}</Text>
-                  <Pressable
-                    style={styles.stepperBtn}
-                    onPress={() => cambiarCantidad(empaque.nombre, 1)}
-                    accessibilityLabel={`Sumar un(a) ${empaque.nombre}`}
-                  >
-                    <Plus size={16} color={colors.tinta} />
-                  </Pressable>
-                </View>
+                <TextInput
+                  style={[styles.input, erroresCantidad[empaque.nombre] ? styles.inputError : null]}
+                  keyboardType="number-pad"
+                  returnKeyType="done"
+                  onSubmitEditing={() => Keyboard.dismiss()}
+                  value={textos[empaque.nombre] ?? String(cantidades[empaque.nombre] ?? 0)}
+                  onChangeText={(texto) => cambiarTexto(empaque.nombre, texto)}
+                  selectTextOnFocus
+                  autoFocus={indice === 0}
+                  accessibilityLabel={`Cantidad de ${empaque.nombre}`}
+                />
+                {erroresCantidad[empaque.nombre] ? (
+                  <Text style={styles.inputErrorTexto}>{erroresCantidad[empaque.nombre]}</Text>
+                ) : null}
               </View>
             ))}
 
             <View style={styles.campo}>
               <Text style={styles.campoEtiqueta}>Unidades sueltas</Text>
-              <View style={styles.stepper}>
-                <Pressable
-                  style={styles.stepperBtn}
-                  onPress={() => setSueltas((v) => Math.max(0, v - 1))}
-                  accessibilityLabel="Restar una unidad"
-                >
-                  <Minus size={16} color={colors.tinta} />
-                </Pressable>
-                <Text style={styles.stepperValor}>{sueltas}</Text>
-                <Pressable style={styles.stepperBtn} onPress={() => setSueltas((v) => v + 1)} accessibilityLabel="Sumar una unidad">
-                  <Plus size={16} color={colors.tinta} />
-                </Pressable>
-              </View>
+              <TextInput
+                style={[styles.input, errorSueltas ? styles.inputError : null]}
+                keyboardType="number-pad"
+                returnKeyType="done"
+                onSubmitEditing={() => Keyboard.dismiss()}
+                value={textoSueltas}
+                onChangeText={cambiarTextoSueltas}
+                selectTextOnFocus
+                autoFocus={producto.empaques.length === 0}
+                accessibilityLabel="Unidades sueltas"
+              />
+              {errorSueltas ? <Text style={styles.inputErrorTexto}>{errorSueltas}</Text> : null}
             </View>
 
             <View style={styles.atajos}>
@@ -226,7 +279,7 @@ export function ModalConteo({
                   </Pressable>
                 </>
               ) : null}
-              <Pressable style={styles.atajoChip} onPress={() => setSueltas((v) => v + 5)}>
+              <Pressable style={styles.atajoChip} onPress={() => cambiarSueltas(5)}>
                 <Text style={styles.atajoChipTexto}>+5 Und</Text>
               </Pressable>
               <Pressable style={[styles.atajoChip, styles.atajoChipBorrar]} onPress={borrarTodo}>
@@ -301,17 +354,20 @@ const styles = StyleSheet.create({
   campoEtiquetaFila: { flexDirection: 'row', alignItems: 'baseline', justifyContent: 'space-between', gap: 8 },
   campoEtiqueta: { fontSize: 13, color: colors.tinta, fontFamily: fonts.semibold },
   factor: { fontSize: fontSize.xs, color: colors.gris, fontFamily: fonts.regular },
-  stepper: { flexDirection: 'row', alignItems: 'center', gap: 10 },
-  stepperBtn: {
-    width: 36,
-    height: 36,
-    alignItems: 'center',
-    justifyContent: 'center',
+  input: {
+    height: 44,
+    paddingHorizontal: 12,
+    textAlign: 'center',
+    fontSize: 18,
+    color: colors.tinta,
+    fontFamily: fonts.bold,
     borderWidth: 1,
     borderColor: colors.borde,
     borderRadius: radius.sm,
+    backgroundColor: colors.blanco,
   },
-  stepperValor: { flex: 1, textAlign: 'center', fontSize: 18, color: colors.tinta, fontFamily: fonts.bold },
+  inputError: { borderColor: colors.falta },
+  inputErrorTexto: { marginTop: 4, fontSize: 11.5, color: colors.falta, fontFamily: fonts.medium },
   atajos: { flexDirection: 'row', flexWrap: 'wrap', gap: 7, marginBottom: 12 },
   atajoChip: { paddingVertical: 7, paddingHorizontal: 11, borderRadius: 99, backgroundColor: colors.rojoSuave },
   atajoChipTexto: { fontSize: 12, color: colors.rojo, fontFamily: fonts.bold },
