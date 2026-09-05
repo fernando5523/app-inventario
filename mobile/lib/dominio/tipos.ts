@@ -148,6 +148,25 @@ export interface HojaConteo {
   sync: EstadoSync;
   /** El backend asigna hasta dos personas por hoja (asignado_a, asignado_a_2). */
   asignados: string[];
+  /**
+   * Los ids de `asignados`, en el MISMO orden -- `asignadoAId` es el id
+   * de `asignados[0]`, `asignadoA2Id` el de `asignados[1]` (ADITIVO,
+   * 2026-09-06). `asignados` (los nombres) es para MOSTRAR ("Asignado:
+   * Elena Príncipe"); esto es para FILTRAR "es mía" sin depender de que
+   * un nombre coincida letra por letra -- dos colaboradores con el mismo
+   * nombre en dos sucursales, o un simple cambio de nombre, rompían ese
+   * filtro sin que nadie lo notara (hallazgo real: hojas cruzadas entre
+   * Luzuriaga y Bolívar, 2026-09-06).
+   *
+   * Opcional a propósito: el dataset de ejemplo (`_compartido.ts`) no
+   * tiene ids de colaborador reales que ofrecer, y una hoja reconstruida
+   * de una fila local de antes de esta migración tampoco los tiene.
+   * `undefined` = "no sé" (quien filtra cae al nombre); `null` = "sé que
+   * no hay nadie en esa posición" (el backend SÍ contestó, y no hay
+   * segundo asignado).
+   */
+  asignadoAId?: number | null;
+  asignadoA2Id?: number | null;
   productos: Producto[];
   conteos: Conteo[];
 }

@@ -1259,3 +1259,82 @@ describe('OFFLINE MULTI-TIENDA: sin red, cada colaborador ve SOLO su sucursal y 
     expect(mias.every((h) => h.inventarioId === INV_BOLIVAR)).toBe(true);
   });
 });
+
+describe('ENDURECIMIENTO: el id de colaborador resuelve lo que el nombre solo no puede -- un homónimo', () => {
+  // El filtro de `mias()` (y de `inventarioIdSinRed`/`rondaActivaSinRed`)
+  // usaba SOLO el nombre para decidir "es mía". Es frágil: dos personas
+  // DISTINTAS con el mismo nombre, en la MISMA tienda, en la MISMA ronda
+  // -- ni el inventario, ni la ronda, ni la sucursal alcanzan para
+  // separarlas, porque las dos comparten los tres. El id de colaborador
+  // (backend, hojas.service.ts#aHojaDto -- endurecimiento 2026-09-06) es
+  // lo único que sí las distingue.
+  const INV = 999400;
+  const NOMBRE_COMPARTIDO = 'Luis Pérez';
+  const COLAB_A = 5001; // el "Luis Pérez" dueño de la #001
+  const COLAB_B = 5002; // OTRO "Luis Pérez" -- misma tienda, misma ronda, dueño de la #002
+
+  const prod = (id: number) => ({
+    id,
+    codigo: String(id).padStart(4, '0'),
+    codigoBarras: `776000000${id}`,
+    descripcion: `Producto ${id}`,
+    empaques: [{ nombre: 'Caja', factor: 12 }],
+  });
+  const hoja = (id: number, numero: string, asignadoAId: number) => ({
+    id,
+    inventarioId: INV,
+    numero,
+    zona: 'Zona H',
+    gondola: 'H1',
+    tamano: 50,
+    estado: 'pendiente' as const,
+    sync: 'sincronizado' as const,
+    // MISMO nombre en las dos -- es justo el caso que el nombre solo no
+    // puede resolver.
+    asignados: [NOMBRE_COMPARTIDO],
+    asignadoAId,
+    asignadoA2Id: null,
+    productos: [prod(id * 10 + 1)],
+    conteos: [],
+  });
+
+  const sesionDe = (colaboradorId: number) =>
+    ({
+      colaborador: { id: colaboradorId, nombre: NOMBRE_COMPARTIDO, dni: '0000', rol: 'conteo' },
+      sucursal: { id: 1, nombre: 'Sucursal de prueba', colaboradores: 2 },
+      token: 't',
+      expiraEn: '2099-01-01T00:00:00.000Z',
+    }) as unknown as Sesion;
+
+  it('cada "Luis Pérez" ve SOLO su propia hoja, aunque compartan nombre, tienda y ronda', async () => {
+    const hojas = [hoja(9994001, '001', COLAB_A), hoja(9994002, '002', COLAB_B)];
+
+    vi.mocked(sesionApi.sesionActiva).mockResolvedValue(sesionDe(COLAB_A));
+    vi.mocked(hojasApi.mias).mockResolvedValueOnce(hojas);
+    const deA = await hojasSqlite.mias(INV, 1);
+
+    // Con el filtro viejo (solo `asignados.includes(nombre)`) esto habría
+    // devuelto las DOS hojas: las dos dicen "Luis Pérez". Con el id, solo
+    // la que de verdad es de COLAB_A.
+    expect(deA.map((h) => h.numero)).toEqual(['001']);
+    expect(deA.every((h) => h.asignadoAId === COLAB_A)).toBe(true);
+
+    // El otro "Luis Pérez" (mismo teléfono, sesión distinta): ve la SUYA,
+    // nunca la de su homónimo.
+    vi.mocked(sesionApi.sesionActiva).mockResolvedValue(sesionDe(COLAB_B));
+    const deB = await hojasSqlite.mias(INV, 1);
+    expect(deB.map((h) => h.numero)).toEqual(['002']);
+    expect(deB.every((h) => h.asignadoAId === COLAB_B)).toBe(true);
+  });
+
+  it('lo mismo para porNumero(): pedir la #002 como COLAB_A da null, no la hoja del homónimo', async () => {
+    vi.mocked(sesionApi.sesionActiva).mockResolvedValue(sesionDe(COLAB_A));
+    // La estructura ya quedó descargada por el test anterior (mismo INV).
+    const hojaAjena = await hojasSqlite.porNumero(INV, '002', 1);
+    expect(hojaAjena).toBeNull();
+
+    const hojaPropia = await hojasSqlite.porNumero(INV, '001', 1);
+    expect(hojaPropia).not.toBeNull();
+    expect(hojaPropia!.asignadoAId).toBe(COLAB_A);
+  });
+});

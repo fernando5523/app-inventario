@@ -253,6 +253,33 @@ export const MIGRACIONES_SQLITE: string[] = [
 
   CREATE INDEX IF NOT EXISTS idx_hojas_estructura_sucursal ON hojas_estructura(sucursal_id);
   `,
+  /**
+   * v7 — el ID de cada asignado (endurecimiento pedido tras el hallazgo de
+   * "hojas cruzadas sin red", 2026-09-06): `asignados` (v3) solo guarda
+   * NOMBRES, y filtrar "es mía" por nombre es frágil -- dos colaboradores
+   * con el mismo nombre en dos sucursales, un cambio de nombre, o alguien
+   * que literalmente se llame como un rol ("Conteo", visto en los datos
+   * reales del emulador) rompen el filtro sin que nadie lo note. El
+   * backend ahora manda `asignadoAId`/`asignadoA2Id` en el DTO
+   * (`hojas.service.ts#aHojaDto`) — la identidad dura que nunca cambia ni
+   * se repite.
+   *
+   * `asignado_a_id`/`asignado_a2_id` en el MISMO orden que `asignados`:
+   * el primero es el id de `asignados[0]`, el segundo el de
+   * `asignados[1]`. El nombre NO se quita de ningún lado -- sigue siendo
+   * lo que se MUESTRA; esto es solo para FILTRAR.
+   *
+   * NULLABLE a propósito, mismo criterio que v6 (`sucursal_id`): las
+   * filas que ya están en un teléfono instalado se bajaron con un backend
+   * que todavía no mandaba estos ids. NULL en las DOS columnas significa
+   * "no se sabe" -- el filtro que las usa cae al nombre en ese caso,
+   * exactamente el comportamiento de antes de esta migración. La próxima
+   * descarga con red las completa solas.
+   */
+  `
+  ALTER TABLE hojas_estructura ADD COLUMN asignado_a_id INTEGER;
+  ALTER TABLE hojas_estructura ADD COLUMN asignado_a2_id INTEGER;
+  `,
 ];
 
 export async function migrarSqlite(db: DbMigrable): Promise<void> {

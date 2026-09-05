@@ -82,7 +82,7 @@ interface FilaCola {
   razon: string | null;
 }
 
-/** `hojas_estructura` (migración v3, `numero_conteo` en v4, `sucursal_id` en v6) — ver sqlite-esquema.ts. */
+/** `hojas_estructura` (migración v3, `numero_conteo` en v4, `sucursal_id` en v6, `asignado_a(2)_id` en v7) — ver sqlite-esquema.ts. */
 interface FilaHojaEstructura {
   id: number;
   inventario_id: number;
@@ -96,6 +96,9 @@ interface FilaHojaEstructura {
   numero_conteo: number;
   /** De qué sucursal es esta hoja (v6). NULL = se bajó antes de que existiera esta columna. */
   sucursal_id: number | null;
+  /** Id de `asignados[0]`/`asignados[1]` (v7). NULL = se bajó antes de que el backend los mandara. */
+  asignado_a_id: number | null;
+  asignado_a2_id: number | null;
 }
 
 /** `productos_estructura` (migración v3). */
@@ -201,6 +204,16 @@ function filaAHojaBase(fila: FilaHojaEstructura, productos: Producto[]): HojaCon
     estado: 'pendiente',
     sync: 'local',
     asignados: JSON.parse(fila.asignados) as string[],
+    // Si NINGUNO de los dos ids está guardado (fila de antes de v7), se
+    // omiten los DOS -- deja el objeto sin la clave (`undefined`), para
+    // que `esAsignadaA` caiga al nombre en vez de comparar contra `null`
+    // y fallar siempre (SQL no distingue "esta fila es de antes de v7"
+    // de "el backend confirmó que no hay nadie acá": las dos dan NULL).
+    // Si CUALQUIERA de los dos SÍ está, viajan los dos tal cual -- uno
+    // puede ser legítimamente `null` ("no hay segundo asignado").
+    ...(fila.asignado_a_id !== null || fila.asignado_a2_id !== null
+      ? { asignadoAId: fila.asignado_a_id, asignadoA2Id: fila.asignado_a2_id }
+      : {}),
     productos,
     conteos: [],
   };
@@ -293,6 +306,7 @@ async function hojasDeInventarioBase(inventarioId: number, ronda: number): Promi
  * que una fila vieja con `sucursal_id` NULL (ver migración v6).
  */
 interface IdentidadSinRed {
+  colaboradorId: number;
   nombre: string;
   sucursalId: number | null;
 }
@@ -300,22 +314,40 @@ interface IdentidadSinRed {
 async function identidadSinRed(): Promise<IdentidadSinRed | null> {
   const sesion = (await sesionApi.sesionActiva()) ?? (await sesionMemoria.sesionActiva());
   if (!sesion) return null;
-  return { nombre: sesion.colaborador.nombre, sucursalId: sesion.sucursal?.id ?? null };
+  return { colaboradorId: sesion.colaborador.id, nombre: sesion.colaborador.nombre, sucursalId: sesion.sucursal?.id ?? null };
+}
+
+/**
+ * Si la fila DICE quién es (v7: `asignado_a_id`/`asignado_a2_id`, alguno
+ * de los dos no-NULL), el id manda -- es la identidad dura, no depende de
+ * que el nombre coincida letra por letra. Sin esos ids guardados (fila de
+ * antes de v7), se cae al nombre, el único dato que había entonces.
+ */
+function asignadaPorIdONombre(
+  fila: { asignados: string; asignado_a_id: number | null; asignado_a2_id: number | null },
+  identidad: IdentidadSinRed,
+): boolean {
+  if (fila.asignado_a_id !== null || fila.asignado_a2_id !== null) {
+    return fila.asignado_a_id === identidad.colaboradorId || fila.asignado_a2_id === identidad.colaboradorId;
+  }
+  return (JSON.parse(fila.asignados) as string[]).includes(identidad.nombre);
 }
 
 /**
  * Una hoja local es "de la persona que está usando el teléfono ahora"
- * cuando las DOS cosas dan: está en sus `asignados` (por nombre — es el
- * único dato de pertenencia que existía antes de v6) Y es de su sucursal
- * (por `sucursal_id` — más duro que un nombre, no se confunde con un
- * homónimo de otra tienda). `sucursal_id` NULL (fila de antes de v6, o el
- * Administrador sin sucursal) no descarta por esa vía: no se puede
- * inventar un dato que no está, así que ahí manda el nombre solo.
+ * cuando las DOS cosas dan: está entre sus asignados (`asignadaPorIdONombre`,
+ * arriba) Y es de su sucursal (por `sucursal_id` — más duro que un
+ * nombre, no se confunde con un homónimo de otra tienda). `sucursal_id`
+ * NULL (fila de antes de v6, o el Administrador sin sucursal) no
+ * descarta por esa vía: no se puede inventar un dato que no está, así
+ * que ahí manda la asignación sola.
  */
-function esDeLaPersona(fila: { asignados: string; sucursal_id: number | null }, identidad: IdentidadSinRed): boolean {
+function esDeLaPersona(
+  fila: { asignados: string; asignado_a_id: number | null; asignado_a2_id: number | null; sucursal_id: number | null },
+  identidad: IdentidadSinRed,
+): boolean {
   const deSuSucursal = fila.sucursal_id === null || identidad.sucursalId === null || fila.sucursal_id === identidad.sucursalId;
-  const asignadaAElla = (JSON.parse(fila.asignados) as string[]).includes(identidad.nombre);
-  return deSuSucursal && asignadaAElla;
+  return deSuSucursal && asignadaPorIdONombre(fila, identidad);
 }
 
 /**
@@ -347,9 +379,14 @@ export async function inventarioIdSinRed(): Promise<number | null> {
   if (!identidad) return null;
 
   const db = await obtenerDb();
-  const filas = await db.getAllAsync<{ inventario_id: number; asignados: string; sucursal_id: number | null; numero_conteo: number }>(
-    'SELECT inventario_id, asignados, sucursal_id, numero_conteo FROM hojas_estructura',
-  );
+  const filas = await db.getAllAsync<{
+    inventario_id: number;
+    asignados: string;
+    asignado_a_id: number | null;
+    asignado_a2_id: number | null;
+    sucursal_id: number | null;
+    numero_conteo: number;
+  }>('SELECT inventario_id, asignados, asignado_a_id, asignado_a2_id, sucursal_id, numero_conteo FROM hojas_estructura');
   const propias = filas.filter((f) => esDeLaPersona(f, identidad));
   if (propias.length === 0) return null;
 
@@ -374,10 +411,15 @@ export async function rondaActivaSinRed(inventarioId: number): Promise<number | 
   if (!identidad) return null;
 
   const db = await obtenerDb();
-  const filas = await db.getAllAsync<{ numero_conteo: number; asignados: string; sucursal_id: number | null }>(
-    'SELECT numero_conteo, asignados, sucursal_id FROM hojas_estructura WHERE inventario_id = ?',
-    [inventarioId],
-  );
+  const filas = await db.getAllAsync<{
+    numero_conteo: number;
+    asignados: string;
+    asignado_a_id: number | null;
+    asignado_a2_id: number | null;
+    sucursal_id: number | null;
+  }>('SELECT numero_conteo, asignados, asignado_a_id, asignado_a2_id, sucursal_id FROM hojas_estructura WHERE inventario_id = ?', [
+    inventarioId,
+  ]);
   const rondas = filas.filter((f) => esDeLaPersona(f, identidad)).map((f) => f.numero_conteo);
   if (rondas.length === 0) return null;
   return Math.max(...rondas);
@@ -453,10 +495,15 @@ async function guardarEstructuraDeHoja(db: DbSqlite, hoja: HojaConteo, ronda: nu
   // sqlite-esquema.ts). Sin sesión (no debería pasar: hace falta estar
   // logueado para llegar hasta acá) queda NULL, el mismo valor "no se
   // sabe" que ya tenían las filas de antes de v6.
+  // `asignadoAId`/`asignadoA2Id` (v7) vienen de la hoja FRESCA que mandó
+  // el backend (`hojas.service.ts#aHojaDto`) -- son la identidad dura,
+  // ninguna sesión local hace falta para saberlos. `undefined` (una hoja
+  // de un backend viejo, o el dataset de ejemplo) queda NULL, igual que
+  // el resto de las columnas ADITIVAS.
   const identidad = await identidadSinRed();
   await db.runAsync(
-    `INSERT INTO hojas_estructura (id, inventario_id, numero, zona, gondola, tamano, asignados, numero_conteo, sucursal_id)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `INSERT INTO hojas_estructura (id, inventario_id, numero, zona, gondola, tamano, asignados, numero_conteo, sucursal_id, asignado_a_id, asignado_a2_id)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT(id) DO UPDATE SET
        inventario_id = excluded.inventario_id,
        numero = excluded.numero,
@@ -465,7 +512,9 @@ async function guardarEstructuraDeHoja(db: DbSqlite, hoja: HojaConteo, ronda: nu
        tamano = excluded.tamano,
        asignados = excluded.asignados,
        numero_conteo = excluded.numero_conteo,
-       sucursal_id = excluded.sucursal_id`,
+       sucursal_id = excluded.sucursal_id,
+       asignado_a_id = excluded.asignado_a_id,
+       asignado_a2_id = excluded.asignado_a2_id`,
     [
       hoja.id,
       hoja.inventarioId,
@@ -476,6 +525,8 @@ async function guardarEstructuraDeHoja(db: DbSqlite, hoja: HojaConteo, ronda: nu
       JSON.stringify(hoja.asignados),
       ronda,
       identidad?.sucursalId ?? null,
+      hoja.asignadoAId ?? null,
+      hoja.asignadoA2Id ?? null,
     ],
   );
 
@@ -793,14 +844,22 @@ async function hojasConEstadoLocal(hojasBase: HojaConteo[]): Promise<HojaConteo[
 // ---------------------------------------------------------------------------
 
 /**
- * El nombre del colaborador de la sesión activa — la clave para filtrar "mis
- * hojas" por asignación. El login por defecto pasa por sesionApi (HTTP, con la
- * sesión en su propia tabla SQLite); el modo debug, por sesionMemoria. Se
- * prueban los dos, igual que ya hacía el filtro del dataset de ejemplo.
+ * "Es mía" a nivel del objeto de dominio ya reconstruido (`mias`/
+ * `porNumero`, después de leer `hojas_estructura` o caer al mock) —
+ * mismo criterio que `asignadaPorIdONombre` (más arriba, que opera sobre
+ * la fila cruda): el id manda si `HojaConteo` lo trae (v7 en adelante),
+ * y solo se cae al nombre cuando NINGUNO de los dos ids está presente
+ * (`undefined` — el dataset de ejemplo de `_compartido.ts`, o una hoja
+ * reconstruida de una fila de antes de v7). Usar `!== undefined` y no
+ * `!== null`: un `null` real (el backend SÍ contestó y no hay segundo
+ * asignado) tiene que poder decidir "no, no es esta", no disparar el
+ * fallback al nombre.
  */
-async function nombreDeColaboradorEnSesion(): Promise<string | null> {
-  const sesion = (await sesionApi.sesionActiva()) ?? (await sesionMemoria.sesionActiva());
-  return sesion?.colaborador.nombre ?? null;
+function esAsignadaA(hoja: HojaConteo, identidad: IdentidadSinRed): boolean {
+  if (hoja.asignadoAId !== undefined || hoja.asignadoA2Id !== undefined) {
+    return hoja.asignadoAId === identidad.colaboradorId || hoja.asignadoA2Id === identidad.colaboradorId;
+  }
+  return hoja.asignados.includes(identidad.nombre);
 }
 
 export const hojasSqlite: RepositorioHojas = {
@@ -818,12 +877,13 @@ export const hojasSqlite: RepositorioHojas = {
     // contadores del inventario quedaron ahí. Confiar en "origen real = ya vino
     // filtrado del servidor" era EL BUG (min-5): un Contador veía —y podía
     // CONTAR— hojas ajenas, rompiendo el reparto y la asistencia deducida de
-    // "hoja asignada con conteos" (ef44a2d). "Mía" es "estoy en sus asignados",
-    // nunca "está en el cache del teléfono". Sin sesión no se sabe de quién son
-    // las hojas: se devuelve vacío, jamás todas.
-    const nombre = await nombreDeColaboradorEnSesion();
-    if (!nombre) return [];
-    const propias = hojas.filter((hoja) => hoja.asignados.includes(nombre));
+    // "hoja asignada con conteos" (ef44a2d). "Mía" es "estoy en sus asignados"
+    // (por id, ver `esAsignadaA` — el nombre es frágil ante un homónimo entre
+    // sucursales), nunca "está en el cache del teléfono". Sin sesión no se
+    // sabe de quién son las hojas: se devuelve vacío, jamás todas.
+    const identidad = await identidadSinRed();
+    if (!identidad) return [];
+    const propias = hojas.filter((hoja) => esAsignadaA(hoja, identidad));
     return hojasConEstadoLocal(propias);
   },
 
@@ -840,13 +900,14 @@ export const hojasSqlite: RepositorioHojas = {
     const { hojas } = await hojasDeInventarioBase(inventarioId, ronda);
 
     // Misma regla de propiedad que `mias`: una hoja solo es abrible por el
-    // Contador si está en SUS asignados. Sin esto, entrar por ?numero=011 a una
-    // hoja de otro (deep link, o el param a mano) esquiva el filtro de la lista
-    // y deja contar una hoja ajena. "No es tuya" y "no existe" son lo mismo
-    // acá: null — y contar.tsx ya muestra el EmptyState de "hoja no encontrada".
-    const nombre = await nombreDeColaboradorEnSesion();
-    if (!nombre) return null;
-    const hojaBase = hojas.find((h) => h.numero === numero && h.asignados.includes(nombre));
+    // Contador si está entre SUS asignados (por id, ver `esAsignadaA`). Sin
+    // esto, entrar por ?numero=011 a una hoja de otro (deep link, o el
+    // param a mano) esquiva el filtro de la lista y deja contar una hoja
+    // ajena. "No es tuya" y "no existe" son lo mismo acá: null — y
+    // contar.tsx ya muestra el EmptyState de "hoja no encontrada".
+    const identidad = await identidadSinRed();
+    if (!identidad) return null;
+    const hojaBase = hojas.find((h) => h.numero === numero && esAsignadaA(h, identidad));
     if (!hojaBase) return null;
     return hojaConEstadoLocal(hojaBase);
   },
