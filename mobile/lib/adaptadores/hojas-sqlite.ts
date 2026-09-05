@@ -344,36 +344,31 @@ async function identidadSinRed(): Promise<IdentidadSinRed | null> {
 }
 
 /**
- * Si la fila DICE quién es (v7: `asignado_a_id`/`asignado_a2_id`, alguno
- * de los dos no-NULL), el id manda -- es la identidad dura, no depende de
- * que el nombre coincida letra por letra. Sin esos ids guardados (fila de
- * antes de v7), se cae al nombre, el único dato que había entonces.
- */
-function asignadaPorIdONombre(
-  fila: { asignados: string; asignado_a_id: number | null; asignado_a2_id: number | null },
-  identidad: IdentidadSinRed,
-): boolean {
-  if (fila.asignado_a_id !== null || fila.asignado_a2_id !== null) {
-    return fila.asignado_a_id === identidad.colaboradorId || fila.asignado_a2_id === identidad.colaboradorId;
-  }
-  return (JSON.parse(fila.asignados) as string[]).includes(identidad.nombre);
-}
-
-/**
- * Una hoja local es "de la persona que está usando el teléfono ahora"
- * cuando las DOS cosas dan: está entre sus asignados (`asignadaPorIdONombre`,
- * arriba) Y es de su sucursal (por `sucursal_id` — más duro que un
- * nombre, no se confunde con un homónimo de otra tienda). `sucursal_id`
- * NULL (fila de antes de v6, o el Administrador sin sucursal) no
- * descarta por esa vía: no se puede inventar un dato que no está, así
- * que ahí manda la asignación sola.
+ * Una fila de `hojas_estructura` es "de la persona que está usando el
+ * teléfono ahora" SOLO cuando trae `asignado_a_id` (v7) Y `sucursal_id`
+ * (v6) Y alguno de los dos coincide con su identidad. Sin esos dos datos
+ * la fila es VIEJA (se bajó antes de que el backend los mandara) y NO es
+ * de nadie -- ni siquiera de quien esté logueado en este instante.
+ *
+ * HALLAZGO (2026-09-06): antes, sin esos ids, se caía al NOMBRE
+ * (`asignados: string[]`) como último recurso -- y ESE fue el bug de
+ * "hojas cruzadas sin red": un colaborador de OTRA sucursal que se llama
+ * igual que un ROL ("Conteo", visto en los datos reales del emulador)
+ * coincidía por nombre con cualquiera que tuviera ese rol, sin que el
+ * dueño real de esas hojas tuviera ninguna fila propia todavía. "No se
+ * puede decidir de quién es" nunca se resuelve mostrándosela a quien esté
+ * logueado -- se resuelve NO mostrándola y dejando que la próxima
+ * descarga con red la complete (o, si nunca se completa, la migración v8
+ * la borra). El nombre sigue existiendo en la fila -- es lo que se
+ * MUESTRA en pantalla -- pero deja de usarse para decidir pertenencia.
  */
 function esDeLaPersona(
-  fila: { asignados: string; asignado_a_id: number | null; asignado_a2_id: number | null; sucursal_id: number | null },
+  fila: { asignado_a_id: number | null; asignado_a2_id: number | null; sucursal_id: number | null },
   identidad: IdentidadSinRed,
 ): boolean {
-  const deSuSucursal = fila.sucursal_id === null || identidad.sucursalId === null || fila.sucursal_id === identidad.sucursalId;
-  return deSuSucursal && asignadaPorIdONombre(fila, identidad);
+  if (fila.asignado_a_id === null || fila.sucursal_id === null) return false;
+  const deSuSucursal = identidad.sucursalId === null || fila.sucursal_id === identidad.sucursalId;
+  return deSuSucursal && (fila.asignado_a_id === identidad.colaboradorId || fila.asignado_a2_id === identidad.colaboradorId);
 }
 
 /**
@@ -407,12 +402,11 @@ export async function inventarioIdSinRed(): Promise<number | null> {
   const db = await obtenerDb();
   const filas = await db.getAllAsync<{
     inventario_id: number;
-    asignados: string;
     asignado_a_id: number | null;
     asignado_a2_id: number | null;
     sucursal_id: number | null;
     numero_conteo: number;
-  }>('SELECT inventario_id, asignados, asignado_a_id, asignado_a2_id, sucursal_id, numero_conteo FROM hojas_estructura');
+  }>('SELECT inventario_id, asignado_a_id, asignado_a2_id, sucursal_id, numero_conteo FROM hojas_estructura');
   const propias = filas.filter((f) => esDeLaPersona(f, identidad));
   if (propias.length === 0) return null;
 
@@ -439,11 +433,10 @@ export async function rondaActivaSinRed(inventarioId: number): Promise<number | 
   const db = await obtenerDb();
   const filas = await db.getAllAsync<{
     numero_conteo: number;
-    asignados: string;
     asignado_a_id: number | null;
     asignado_a2_id: number | null;
     sucursal_id: number | null;
-  }>('SELECT numero_conteo, asignados, asignado_a_id, asignado_a2_id, sucursal_id FROM hojas_estructura WHERE inventario_id = ?', [
+  }>('SELECT numero_conteo, asignado_a_id, asignado_a2_id, sucursal_id FROM hojas_estructura WHERE inventario_id = ?', [
     inventarioId,
   ]);
   const rondas = filas.filter((f) => esDeLaPersona(f, identidad)).map((f) => f.numero_conteo);
@@ -872,19 +865,25 @@ async function hojasConEstadoLocal(hojasBase: HojaConteo[]): Promise<HojaConteo[
 /**
  * "Es mía" a nivel del objeto de dominio ya reconstruido (`mias`/
  * `porNumero`, después de leer `hojas_estructura` o caer al mock) —
- * mismo criterio que `asignadaPorIdONombre` (más arriba, que opera sobre
- * la fila cruda): el id manda si `HojaConteo` lo trae (v7 en adelante),
- * y solo se cae al nombre cuando NINGUNO de los dos ids está presente
- * (`undefined` — el dataset de ejemplo de `_compartido.ts`, o una hoja
- * reconstruida de una fila de antes de v7). Usar `!== undefined` y no
- * `!== null`: un `null` real (el backend SÍ contestó y no hay segundo
- * asignado) tiene que poder decidir "no, no es esta", no disparar el
- * fallback al nombre.
+ * mismo criterio que `esDeLaPersona` (más arriba, que opera sobre la fila
+ * cruda): el id manda si `HojaConteo` lo trae (`!== undefined`, v7 en
+ * adelante — un `null` real, "el backend contestó y no hay segundo
+ * asignado", sí tiene que poder decidir "no, no es esta").
+ *
+ * Sin esos ids (`undefined` en las dos), el criterio depende de `origen`:
+ *   - `'mock'` (`_compartido.ts`, el dataset de ejemplo): NUNCA tuvo ids
+ *     que dar y no es un dato real bajado de ningún backend — el nombre
+ *     sigue siendo, como siempre fue, el único criterio que existe ahí.
+ *   - `'real'` (vino de `hojas_estructura`): es una fila VIEJA, de antes
+ *     de que el backend mandara los ids. NO es de nadie por nombre —
+ *     ver el comentario de `esDeLaPersona` sobre por qué ese fallback fue
+ *     el bug de "hojas cruzadas sin red" (2026-09-06).
  */
-function esAsignadaA(hoja: HojaConteo, identidad: IdentidadSinRed): boolean {
+function esAsignadaA(hoja: HojaConteo, identidad: IdentidadSinRed, origen: 'real' | 'mock'): boolean {
   if (hoja.asignadoAId !== undefined || hoja.asignadoA2Id !== undefined) {
     return hoja.asignadoAId === identidad.colaboradorId || hoja.asignadoA2Id === identidad.colaboradorId;
   }
+  if (origen === 'real') return false;
   return hoja.asignados.includes(identidad.nombre);
 }
 
@@ -895,7 +894,7 @@ export const hojasSqlite: RepositorioHojas = {
     // espera esa respuesta y cuándo se muestra lo local sin esperar.
     await descargarSiHaceFalta(inventarioId, 'mias', ronda);
 
-    const { hojas } = await hojasDeInventarioBase(inventarioId, ronda);
+    const { hojas, origen } = await hojasDeInventarioBase(inventarioId, ronda);
 
     // SIEMPRE filtrar por el colaborador de la sesión — pase lo que pase con
     // el `origen`. `hojas_estructura` es una tabla COMPARTIDA del teléfono: si
@@ -904,12 +903,12 @@ export const hojasSqlite: RepositorioHojas = {
     // filtrado del servidor" era EL BUG (min-5): un Contador veía —y podía
     // CONTAR— hojas ajenas, rompiendo el reparto y la asistencia deducida de
     // "hoja asignada con conteos" (ef44a2d). "Mía" es "estoy en sus asignados"
-    // (por id, ver `esAsignadaA` — el nombre es frágil ante un homónimo entre
-    // sucursales), nunca "está en el cache del teléfono". Sin sesión no se
-    // sabe de quién son las hojas: se devuelve vacío, jamás todas.
+    // (por id, ver `esAsignadaA` — sin id, una fila `real` no es de nadie),
+    // nunca "está en el cache del teléfono". Sin sesión no se sabe de quién
+    // son las hojas: se devuelve vacío, jamás todas.
     const identidad = await identidadSinRed();
     if (!identidad) return [];
-    const propias = hojas.filter((hoja) => esAsignadaA(hoja, identidad));
+    const propias = hojas.filter((hoja) => esAsignadaA(hoja, identidad, origen));
     return hojasConEstadoLocal(propias);
   },
 
@@ -923,7 +922,7 @@ export const hojasSqlite: RepositorioHojas = {
     // `porNumero` lo usa `contar.tsx` para reabrir UNA hoja (siempre después
     // de pasar por `mias()`), así que alcanza con refrescar el mismo alcance.
     await descargarSiHaceFalta(inventarioId, 'mias', ronda);
-    const { hojas } = await hojasDeInventarioBase(inventarioId, ronda);
+    const { hojas, origen } = await hojasDeInventarioBase(inventarioId, ronda);
 
     // Misma regla de propiedad que `mias`: una hoja solo es abrible por el
     // Contador si está entre SUS asignados (por id, ver `esAsignadaA`). Sin
@@ -933,7 +932,7 @@ export const hojasSqlite: RepositorioHojas = {
     // contar.tsx ya muestra el EmptyState de "hoja no encontrada".
     const identidad = await identidadSinRed();
     if (!identidad) return null;
-    const hojaBase = hojas.find((h) => h.numero === numero && esAsignadaA(h, identidad));
+    const hojaBase = hojas.find((h) => h.numero === numero && esAsignadaA(h, identidad, origen));
     if (!hojaBase) return null;
     return hojaConEstadoLocal(hojaBase);
   },

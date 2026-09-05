@@ -280,6 +280,36 @@ export const MIGRACIONES_SQLITE: string[] = [
   ALTER TABLE hojas_estructura ADD COLUMN asignado_a_id INTEGER;
   ALTER TABLE hojas_estructura ADD COLUMN asignado_a2_id INTEGER;
   `,
+  /**
+   * v8 — LIMPIEZA de filas SIN SCOPE (cierre del bug de "hojas cruzadas sin
+   * red", 2026-09-06): v6/v7 dejaban `sucursal_id`/`asignado_a_id` en NULL
+   * para las filas viejas y el código todavía caía al NOMBRE como último
+   * recurso para decidir "es mía" -- y ese fallback fue el bug: un
+   * colaborador de OTRA sucursal que se llama igual que un ROL ("Conteo",
+   * visto en los datos reales del emulador) coincidía con cualquiera que
+   * tuviera ese rol, sin que ninguna de las dos personas hiciera nada mal.
+   *
+   * `hojas-sqlite.ts` ya deja de confiar en esas filas (ver
+   * `esDeLaPersona`/`esAsignadaA`: sin `asignado_a_id` o sin `sucursal_id`,
+   * NO es de nadie, ni siquiera de quien esté logueado). Esta migración
+   * las BORRA en vez de dejarlas ahí como basura invisible -- así, la
+   * próxima vez que la persona dueña de verdad tenga red, `mias()` no
+   * encuentra nada local que lo confunda y vuelve a pedirle al backend su
+   * estructura real, que desde `fd7d0de` YA manda los ids.
+   *
+   * Solo se borra la ESTRUCTURA (`hojas_estructura`/`productos_estructura`)
+   * -- nunca `hoja_estado_local`/`conteos`/`cola_sync`: si alguna de estas
+   * filas tuviera un conteo real pendiente de subir, ese conteo sobrevive
+   * huérfano de estructura, el mismo estado que `buscarHojaBase` ya sabe
+   * resolver (cae al dataset de ejemplo, y si tampoco está ahí, "hoja no
+   * encontrada" -- nunca una excepción sin atrapar).
+   */
+  `
+  DELETE FROM productos_estructura WHERE hoja_id IN (
+    SELECT id FROM hojas_estructura WHERE asignado_a_id IS NULL OR sucursal_id IS NULL
+  );
+  DELETE FROM hojas_estructura WHERE asignado_a_id IS NULL OR sucursal_id IS NULL;
+  `,
 ];
 
 export async function migrarSqlite(db: DbMigrable): Promise<void> {

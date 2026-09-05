@@ -556,6 +556,10 @@ describe('ARREGLADO (2026-09-05): una hoja no se declara finalizada ante el serv
       estado: 'pendiente' as const,
       sync: 'sincronizado' as const,
       asignados: ['María Rojas'],
+      // El id de María (SESION_MARIA, la sesión por defecto) -- desde
+      // 859ea5e el id manda sobre el nombre para decidir "es mía".
+      asignadoAId: 501,
+      asignadoA2Id: null,
       productos: [
         {
           id: productoId,
@@ -736,6 +740,8 @@ describe('la descarga que se corta A MEDIAS no queda marcada como completa', () 
     estado: 'pendiente' as const,
     sync: 'sincronizado' as const,
     asignados: ['María Rojas'],
+    asignadoAId: 501,
+    asignadoA2Id: null,
     productos: [productoDeTest(id * 10 + 1)],
     conteos: [],
   });
@@ -804,6 +810,8 @@ describe('el tamaño bajado es el NOMINAL del lote, no cuánto hay para contar',
         estado: 'pendiente',
         sync: 'sincronizado',
         asignados: ['María Rojas'],
+        asignadoAId: 501,
+        asignadoA2Id: null,
         productos: Array.from({ length: 36 }, (_, i) => productoDeTest(i + 1)),
         conteos: [],
       },
@@ -874,6 +882,8 @@ describe('CONTEO CIEGO ENTRE RONDAS: en la ronda 2 el Contador NO ve lo que cont
     estado: 'pendiente' as const,
     sync: 'sincronizado' as const,
     asignados: ['María Rojas'],
+    asignadoAId: 501,
+    asignadoA2Id: null,
     productos: [prod(PROD_R1), prod(88100012)],
     conteos: [],
   };
@@ -887,6 +897,8 @@ describe('CONTEO CIEGO ENTRE RONDAS: en la ronda 2 el Contador NO ve lo que cont
     estado: 'pendiente' as const,
     sync: 'sincronizado' as const,
     asignados: ['María Rojas'],
+    asignadoAId: 501,
+    asignadoA2Id: null,
     productos: [prod(88200011)],
     conteos: [],
   };
@@ -959,7 +971,12 @@ describe('AISLAMIENTO ENTRE CONTADORES: cada uno ve SOLO sus hojas, aunque el ca
     descripcion: `Producto ${id}`,
     empaques: [{ nombre: 'Caja', factor: 12 }],
   });
-  const hoja = (id: number, numero: string, quien: string) => ({
+  // Ids reales (`asignadoAId`, v7): desde 859ea5e el id manda sobre el
+  // nombre para decidir "es mía" -- el nombre queda solo para lo que se
+  // MUESTRA en pantalla.
+  const ID_LUIS = 7701;
+  const ID_CARLA = 7702;
+  const hoja = (id: number, numero: string, quien: string, asignadoAId: number) => ({
     id,
     inventarioId: INV,
     numero,
@@ -969,14 +986,16 @@ describe('AISLAMIENTO ENTRE CONTADORES: cada uno ve SOLO sus hojas, aunque el ca
     estado: 'pendiente' as const,
     sync: 'sincronizado' as const,
     asignados: [quien],
+    asignadoAId,
+    asignadoA2Id: null,
     productos: [prod(id * 10 + 1)],
     conteos: [],
   });
-  const hojasLuis = [hoja(7710001, '001', LUIS), hoja(7710002, '002', LUIS)];
-  const hojasCarla = [hoja(7710011, '011', CARLA), hoja(7710012, '012', CARLA)];
+  const hojasLuis = [hoja(7710001, '001', LUIS, ID_LUIS), hoja(7710002, '002', LUIS, ID_LUIS)];
+  const hojasCarla = [hoja(7710011, '011', CARLA, ID_CARLA), hoja(7710012, '012', CARLA, ID_CARLA)];
 
-  const sesionDe = (nombre: string) =>
-    ({ ...SESION_MARIA, colaborador: { ...SESION_MARIA.colaborador, nombre } }) as unknown as Sesion;
+  const sesionDe = (nombre: string, colaboradorId: number) =>
+    ({ ...SESION_MARIA, colaborador: { ...SESION_MARIA.colaborador, id: colaboradorId, nombre } }) as unknown as Sesion;
 
   it('el Coordinador bajó TODAS; Luis ve solo las suyas, Carla solo las suyas, y ninguno abre las del otro', async () => {
     // Que la descarga en segundo plano de `mias` no reponga nada raro: lo que
@@ -989,15 +1008,15 @@ describe('AISLAMIENTO ENTRE CONTADORES: cada uno ve SOLO sus hojas, aunque el ca
     await hojasSqlite.todas(INV, 1);
 
     // Luis entra a Mis Hojas: ve SOLO las suyas.
-    vi.mocked(sesionApi.sesionActiva).mockResolvedValue(sesionDe(LUIS));
+    vi.mocked(sesionApi.sesionActiva).mockResolvedValue(sesionDe(LUIS, ID_LUIS));
     const deLuis = await hojasSqlite.mias(INV, 1);
     expect(deLuis.map((h) => h.numero).sort()).toEqual(['001', '002']);
-    expect(deLuis.every((h) => h.asignados.includes(LUIS))).toBe(true);
+    expect(deLuis.every((h) => h.asignadoAId === ID_LUIS)).toBe(true);
     // Y NO puede abrir una de Carla ni sabiendo el número: null, no la hoja.
     expect(await hojasSqlite.porNumero(INV, '011', 1)).toBeNull();
 
     // Carla entra: ve las suyas, nunca las de Luis.
-    vi.mocked(sesionApi.sesionActiva).mockResolvedValue(sesionDe(CARLA));
+    vi.mocked(sesionApi.sesionActiva).mockResolvedValue(sesionDe(CARLA, ID_CARLA));
     const deCarla = await hojasSqlite.mias(INV, 1);
     expect(deCarla.map((h) => h.numero).sort()).toEqual(['011', '012']);
     expect(await hojasSqlite.porNumero(INV, '001', 1)).toBeNull();
@@ -1034,7 +1053,7 @@ describe('migración v4 (numero_conteo): aditiva — nunca le cuesta a nadie un 
     }
   }
 
-  it('las filas viejas quedan en ronda 1 (su ronda REAL, no un relleno) y volver a migrar no rompe', async () => {
+  it('las filas viejas quedan en ronda 1 (su ronda REAL, no un relleno) al pasar por v4', async () => {
     const { db, raw, dir } = await crearDbV3();
     try {
       // Una hoja bajada cuando el front solo pedía la 1ra: sin `numero_conteo`.
@@ -1043,18 +1062,37 @@ describe('migración v4 (numero_conteo): aditiva — nunca le cuesta a nadie un 
         [5001, 400, '001', 'Zona A', 'A1', 50, JSON.stringify(['Conteo'])],
       );
 
-      await migrarSqlite(db);
+      // Solo v4 (índice 3), a mano: lo que este test prueba es el DEFAULT
+      // de `numero_conteo`, antes de que exista v8 -- esa misma fila, sin
+      // `asignado_a_id`/`sucursal_id`, es justo el caso que v8 purga (ver
+      // el describe de v8, más abajo).
+      await db.execAsync(MIGRACIONES_SQLITE[3]);
+      await db.execAsync('PRAGMA user_version = 4');
 
       const fila = await db.getFirstAsync<{ numero_conteo: number }>('SELECT numero_conteo FROM hojas_estructura WHERE id = ?', [5001]);
       expect(fila?.numero_conteo).toBe(1); // su ronda real: se bajó cuando solo existía la 1ra.
+    } finally {
+      limpiar(raw, dir);
+    }
+  });
+
+  it('migrar de punta a punta (v3 -> última) no rompe ni duplica, y volver a migrar es un no-op', async () => {
+    const { db, raw, dir } = await crearDbV3();
+    try {
+      await db.runAsync(
+        'INSERT INTO hojas_estructura (id, inventario_id, numero, zona, gondola, tamano, asignados) VALUES (?,?,?,?,?,?,?)',
+        [5001, 400, '001', 'Zona A', 'A1', 50, JSON.stringify(['Conteo'])],
+      );
+
+      await migrarSqlite(db);
       const ver = await db.getFirstAsync<{ user_version: number }>('PRAGMA user_version');
       expect(ver?.user_version).toBe(MIGRACIONES_SQLITE.length);
 
-      // Idempotente: ya está en la última versión, no vuelve a correr el
-      // ALTER (que fallaría porque la columna ya existe).
+      // Idempotente: ya está en la última versión, no vuelve a correr
+      // ningún ALTER (que fallaría porque las columnas ya existen).
       await expect(migrarSqlite(db)).resolves.toBeUndefined();
-      const fila2 = await db.getFirstAsync<{ numero_conteo: number }>('SELECT numero_conteo FROM hojas_estructura WHERE id = ?', [5001]);
-      expect(fila2?.numero_conteo).toBe(1);
+      const verOtraVez = await db.getFirstAsync<{ user_version: number }>('PRAGMA user_version');
+      expect(verOtraVez?.user_version).toBe(MIGRACIONES_SQLITE.length);
     } finally {
       limpiar(raw, dir);
     }
@@ -1098,6 +1136,104 @@ describe('migración v4 (numero_conteo): aditiva — nunca le cuesta a nadie un 
   });
 });
 
+describe('migración v8 (limpieza de filas sin scope): borra lo que nadie puede reclamar, nunca lo que sí', () => {
+  // Base v7 fresca (v1..v7 ya corridas): así se controla el "antes de v8"
+  // -- filas con y sin `asignado_a_id`/`sucursal_id`, tal como quedó un
+  // teléfono que mezcló descargas de antes y de después de fd7d0de.
+  async function crearDbV7(): Promise<{ db: DbDeTest; raw: DatabaseSync; dir: string }> {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'inventario-mig-v8-'));
+    const raw = new DatabaseSync(path.join(dir, 'inventario.db'));
+    const db = envolverNodeSqlite(raw);
+    // Los 7 primeros elementos de MIGRACIONES_SQLITE = v1..v7.
+    for (let i = 0; i < 7; i++) await db.execAsync(MIGRACIONES_SQLITE[i]);
+    await db.execAsync('PRAGMA user_version = 7');
+    return { db, raw, dir };
+  }
+
+  function limpiar(raw: DatabaseSync, dir: string): void {
+    raw.close();
+    try {
+      fs.rmSync(dir, { recursive: true, force: true });
+    } catch {
+      // Mismo motivo que en la migración v4: Windows tarda en soltar el handle.
+    }
+  }
+
+  const insertarHoja = (
+    db: DbDeTest,
+    id: number,
+    asignadoAId: number | null,
+    sucursalId: number | null,
+  ): Promise<void> =>
+    db.runAsync(
+      `INSERT INTO hojas_estructura
+         (id, inventario_id, numero, zona, gondola, tamano, asignados, numero_conteo, sucursal_id, asignado_a_id, asignado_a2_id)
+       VALUES (?, 400, '001', 'Zona A', 'A1', 50, ?, 1, ?, ?, NULL)`,
+      [id, JSON.stringify(['Conteo']), sucursalId, asignadoAId],
+    );
+
+  it('borra la fila EXACTA del caso real (asignados: ["Conteo"], sin ids ni sucursal) y deja intacta la que sí tiene scope', async () => {
+    const { db, raw, dir } = await crearDbV7();
+    try {
+      await insertarHoja(db, 6001, null, null); // el caso de Bolívar en el emulador -- sin scope.
+      await insertarHoja(db, 6002, 57, 30); // una fila SANA -- Luis Shuan, Luzuriaga.
+      await db.runAsync(
+        'INSERT INTO productos_estructura (hoja_id, id, orden, codigo, codigo_barras, descripcion, empaques) VALUES (?,?,?,?,?,?,?)',
+        [6001, 1, 0, '0001', '7770001', 'Producto de la fila sin scope', '[]'],
+      );
+
+      await migrarSqlite(db);
+
+      const filas = await db.getAllAsync<{ id: number }>('SELECT id FROM hojas_estructura ORDER BY id');
+      expect(filas.map((f) => f.id)).toEqual([6002]); // 6001 borrada, 6002 sobrevive intacta.
+
+      const productos = await db.getAllAsync('SELECT * FROM productos_estructura WHERE hoja_id = ?', [6001]);
+      expect(productos).toHaveLength(0); // sus productos se van CON ella.
+
+      const ver = await db.getFirstAsync<{ user_version: number }>('PRAGMA user_version');
+      expect(ver?.user_version).toBe(MIGRACIONES_SQLITE.length);
+    } finally {
+      limpiar(raw, dir);
+    }
+  });
+
+  it('con `asignado_a_id` puesto pero `sucursal_id` en NULL, TAMBIÉN se borra -- hace falta el scope completo, no la mitad', async () => {
+    const { db, raw, dir } = await crearDbV7();
+    try {
+      await insertarHoja(db, 6003, 57, null); // tiene el id, pero no la sucursal.
+
+      await migrarSqlite(db);
+
+      const fila = await db.getFirstAsync('SELECT id FROM hojas_estructura WHERE id = ?', [6003]);
+      expect(fila).toBeNull();
+    } finally {
+      limpiar(raw, dir);
+    }
+  });
+
+  it('un conteo/cola_sync huérfano de una fila purgada sobrevive la migración -- nunca se pierde un conteo real', async () => {
+    const { db, raw, dir } = await crearDbV7();
+    try {
+      await insertarHoja(db, 6004, null, null);
+      await db.runAsync(
+        'INSERT INTO conteos (hoja_id, producto_id, lineas, sueltas, confirmado_por_escaner, contado_en) VALUES (?,?,?,?,?,?)',
+        [6004, 1, JSON.stringify([{ empaqueNombre: 'Caja', cantidad: 3 }]), 0, 0, 't-huerfano'],
+      );
+
+      await migrarSqlite(db);
+
+      // La ESTRUCTURA se borró (sin scope, no se puede decir de quién es)...
+      expect(await db.getFirstAsync('SELECT id FROM hojas_estructura WHERE id = ?', [6004])).toBeNull();
+      // ...pero el CONTEO real de esa hoja nunca se toca -- v8 solo nombra
+      // `hojas_estructura`/`productos_estructura`, nunca `conteos`/`cola_sync`.
+      const conteo = await db.getFirstAsync<{ sueltas: number }>('SELECT sueltas FROM conteos WHERE hoja_id = ?', [6004]);
+      expect(conteo?.sueltas).toBe(0);
+    } finally {
+      limpiar(raw, dir);
+    }
+  });
+});
+
 describe('AVANCE OFFLINE: la ronda activa NO suma las dos rondas', () => {
   // El caso real (visto en el emulador, ronda 2 de Market Bolívar): con la
   // ronda 1 y la ronda 2 ambas asignadas al Contador y en la estructura local,
@@ -1125,6 +1261,8 @@ describe('AVANCE OFFLINE: la ronda activa NO suma las dos rondas', () => {
     estado: 'pendiente' as const,
     sync: 'sincronizado' as const,
     asignados: ['María Rojas'],
+    asignadoAId: 501,
+    asignadoA2Id: null,
     productos: [prod(id * 10 + 1)],
     conteos: [],
   });
@@ -1179,7 +1317,10 @@ describe('OFFLINE MULTI-TIENDA: sin red, cada colaborador ve SOLO su sucursal y 
     descripcion: `Producto ${id}`,
     empaques: [{ nombre: 'Caja', factor: 12 }],
   });
-  const hoja = (inventarioId: number, id: number, numero: string, asignados: string[]) => ({
+  // El id sigue la MISMA fórmula que `sesionDeTienda` (900 + sucursalId):
+  // desde 859ea5e el id manda sobre el nombre, así que el fixture tiene que
+  // traerlo -- sin él, una fila "real" ya no es de nadie (ver esDeLaPersona).
+  const hoja = (inventarioId: number, id: number, numero: string, asignados: string[], asignadoAId: number) => ({
     id,
     inventarioId,
     numero,
@@ -1189,6 +1330,8 @@ describe('OFFLINE MULTI-TIENDA: sin red, cada colaborador ve SOLO su sucursal y 
     estado: 'pendiente' as const,
     sync: 'sincronizado' as const,
     asignados,
+    asignadoAId,
+    asignadoA2Id: null,
     productos: [prod(id * 10 + 1)],
     conteos: [],
   });
@@ -1202,13 +1345,13 @@ describe('OFFLINE MULTI-TIENDA: sin red, cada colaborador ve SOLO su sucursal y 
     }) as unknown as Sesion;
 
   const hojasLuzuriaga = Array.from({ length: 10 }, (_, i) =>
-    hoja(INV_LUZURIAGA, 9992000 + i, String(i + 1).padStart(3, '0'), ['Luis Paredes']),
+    hoja(INV_LUZURIAGA, 9992000 + i, String(i + 1).padStart(3, '0'), ['Luis Paredes'], 900 + SUC_LUZURIAGA),
   );
   const hojasBolivarR1 = Array.from({ length: 25 }, (_, i) =>
-    hoja(INV_BOLIVAR, 9992100 + i, String(i + 1).padStart(3, '0'), ['Contador 30']),
+    hoja(INV_BOLIVAR, 9992100 + i, String(i + 1).padStart(3, '0'), ['Contador 30'], 900 + SUC_BOLIVAR),
   );
   const hojasBolivarR2 = Array.from({ length: 25 }, (_, i) =>
-    hoja(INV_BOLIVAR, 9992200 + i, String(i + 1).padStart(3, '0'), ['Contador 30']),
+    hoja(INV_BOLIVAR, 9992200 + i, String(i + 1).padStart(3, '0'), ['Contador 30'], 900 + SUC_BOLIVAR),
   );
 
   it('dos tiendas, dos rondas, mismo teléfono, sin red: Luis Paredes ve SOLO sus 10 de Luzuriaga, nunca las 50 de Bolívar, sin duplicados', async () => {
@@ -1257,6 +1400,81 @@ describe('OFFLINE MULTI-TIENDA: sin red, cada colaborador ve SOLO su sucursal y 
     const mias = await hojasSqlite.mias(inventarioId!, ronda!);
     expect(mias).toHaveLength(25);
     expect(mias.every((h) => h.inventarioId === INV_BOLIVAR)).toBe(true);
+  });
+});
+
+describe('CERRADO (2026-09-06): una fila SIN scope no es de nadie, ni por nombre -- ni siquiera de un homónimo de rol', () => {
+  // El caso REAL que reprodujo el bug tres veces en el emulador, con
+  // evidencia sacada del dispositivo: Bolívar tiene un colaborador cuyo
+  // NOMBRE es literalmente "Conteo" (dato de prueba, no un rol) y sus
+  // hojas quedaron en `hojas_estructura` de ANTES de que el backend
+  // mandara `asignado_a_id`/`sucursal_id` (fd7d0de) -- las dos columnas en
+  // NULL. Luis Shuan (Luzuriaga, id 57), CON sesión local válida pero SIN
+  // ninguna fila propia todavía descargada, terminaba viendo esas 50
+  // hojas ajenas porque el filtro viejo caía al nombre como último
+  // recurso y `asignados: ["Conteo"]` no distinguía "el rol" de "una
+  // persona que se llama así".
+  //
+  // El fix (`esDeLaPersona`/`esAsignadaA`, arriba en hojas-sqlite.ts): una
+  // fila `real` sin `asignado_a_id` o sin `sucursal_id` NO es de nadie --
+  // ni siquiera de quien tenga un nombre que combine con `asignados`.
+  const INV_BOLIVAR = 999300;
+  const ID_LUIS = 57;
+  const NOMBRE_LUIS = 'Luis Shuan';
+  const SUC_LUZURIAGA = 30;
+
+  const prod = (id: number) => ({
+    id,
+    codigo: String(id).padStart(4, '0'),
+    codigoBarras: `778000000${id}`,
+    descripcion: `Producto ${id}`,
+    empaques: [{ nombre: 'Caja', factor: 12 }],
+  });
+
+  // EXACTAMENTE como salió del volcado del dispositivo: `asignados`
+  // trae el string "Conteo" (nombre real de un colaborador de Bolívar,
+  // no un rol) y NINGUNA de las columnas de scope (v6/v7) tiene dato --
+  // fila vieja, bajada antes de fd7d0de.
+  const hojaSinScope = (id: number, numero: string) => ({
+    id,
+    inventarioId: INV_BOLIVAR,
+    numero,
+    zona: 'Zona Bolívar',
+    gondola: 'B1',
+    tamano: 50,
+    estado: 'pendiente' as const,
+    sync: 'sincronizado' as const,
+    asignados: ['Conteo'],
+    // Sin asignadoAId/asignadoA2Id -- la fila real nunca los trajo.
+    productos: [prod(id * 10 + 1)],
+    conteos: [],
+  });
+
+  const sesionDeLuis = {
+    colaborador: { id: ID_LUIS, nombre: NOMBRE_LUIS, dni: '9102', rol: 'conteo' },
+    sucursal: { id: SUC_LUZURIAGA, nombre: 'Market Central Luzuriaga', colaboradores: 3 },
+    token: 't',
+    expiraEn: '2099-01-01T00:00:00.000Z',
+  } as unknown as Sesion;
+
+  it('Luis, con sesión válida pero sin ninguna fila propia, NO ve las hojas sin scope aunque su nombre no coincida y su rol se llame igual que "asignados"', async () => {
+    // Un Coordinador (u otro Contador, en otra sesión) bajó `todas` en
+    // este mismo teléfono en algún momento, ANTES de que el backend
+    // mandara los ids -- así quedaron en `hojas_estructura`.
+    vi.mocked(hojasApi.todas).mockResolvedValueOnce([hojaSinScope(9993001, '001'), hojaSinScope(9993002, '002')]);
+    await hojasSqlite.todas(INV_BOLIVAR, 1);
+
+    // Luis entra, sesión completa y válida -- pero nunca tuvo una fila
+    // propia en este inventario.
+    vi.mocked(sesionApi.sesionActiva).mockResolvedValue(sesionDeLuis);
+    vi.mocked(hojasApi.mias).mockRejectedValue(new ErrorApi('sin-red'));
+    vi.mocked(hojasApi.todas).mockRejectedValue(new ErrorApi('sin-red'));
+
+    // Ni `inventarioIdSinRed` ni `mias()` le atribuyen las filas sin
+    // scope -- CERO, no las 2 que hay en la tabla.
+    expect(await inventarioIdSinRed()).toBeNull();
+    expect(await hojasSqlite.mias(INV_BOLIVAR, 1)).toEqual([]);
+    expect(await hojasSqlite.porNumero(INV_BOLIVAR, '001', 1)).toBeNull();
   });
 });
 
