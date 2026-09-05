@@ -1,7 +1,7 @@
-import { useFocusEffect } from 'expo-router';
-import { ChevronLeft, History, Lock, ShieldAlert, ShieldCheck } from 'lucide-react-native';
+import { router, useFocusEffect } from 'expo-router';
+import { ChevronLeft, History, Lock, ShieldAlert, ShieldCheck, TrendingUp } from 'lucide-react-native';
 import { useCallback, useEffect, useState, type JSX } from 'react';
-import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Alert, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import { repositorioHistorial, repositorioSesion } from '../../lib/contenedor';
 import type { Rol, Sucursal } from '../../lib/dominio/tipos';
@@ -9,6 +9,7 @@ import type {
   DetalleInventarioHistorico,
   DiferenciaHistorica,
   EstadoInventario,
+  HistoricoItem,
   InventarioHistorico,
   LiquidacionInventario,
   ResultadoInventario,
@@ -145,6 +146,12 @@ export function HistorialScreen({ rol }: HistorialScreenProps): JSX.Element {
   const [liquidacion, setLiquidacion] = useState<LiquidacionInventario | null>(null);
   const [errorCierre, setErrorCierre] = useState<string | null>(null);
 
+  // Historia de un ítem — tercer nivel dentro del mismo componente (mismo
+  // criterio que `detalle`): se abre desde una fila de Diferencias y vuelve
+  // al detalle, no a la lista.
+  const [historicoItem, setHistoricoItem] = useState<HistoricoItem | null>(null);
+  const [cargandoHistoricoItem, setCargandoHistoricoItem] = useState(false);
+
   // Se pide una sola vez, no en cada refresco del historial: el padrón de
   // sucursales no cambia entre pantallazos (mismo criterio que el modoAdmin
   // del login, que trae administradores() recién al entrar a ese modo).
@@ -229,6 +236,7 @@ export function HistorialScreen({ rol }: HistorialScreenProps): JSX.Element {
     setDiferencias([]);
     setLiquidacion(null);
     setErrorCierre(null);
+    setHistoricoItem(null);
     try {
       const det = await repositorioHistorial.detalle(id);
       setDetalle(det);
@@ -266,6 +274,27 @@ export function HistorialScreen({ rol }: HistorialScreenProps): JSX.Element {
     }
   }
 
+  // `sucursalId` del inventario que se está mirando: recorta la historia a
+  // ESA sucursal para el Administrador (igual que en el resto de la
+  // pantalla, no trae de más), y para el Auditor no cambia nada -- el
+  // backend ya lo recorta a la suya sin importar qué se mande.
+  async function abrirHistoricoItem(codigo: string): Promise<void> {
+    if (!detalle) return;
+    setCargandoHistoricoItem(true);
+    try {
+      setHistoricoItem(await repositorioHistorial.historicoDeItem(codigo, { sucursalId: detalle.sucursalId }));
+    } catch (e) {
+      // No hay un tercer nivel de pantalla que mostrar si esto falla (a
+      // diferencia de `error`/`errorCierre`, que sí tienen su bloque en el
+      // detalle) — es una acción puntual de tocar una fila, mismo criterio
+      // que el resto de la app para una acción que puede fallar (login,
+      // reseteo de PIN): un Alert, no un estado de pantalla nuevo.
+      Alert.alert('No se pudo abrir la historia', e instanceof Error ? e.message : 'Intentá de nuevo.');
+    } finally {
+      setCargandoHistoricoItem(false);
+    }
+  }
+
   if (!sesion) return <View />;
 
   // Sin contador por chip a propósito: con el filtro resuelto en el
@@ -287,6 +316,70 @@ export function HistorialScreen({ rol }: HistorialScreenProps): JSX.Element {
     { id: TODOS, etiqueta: 'Todo el año' },
     ...MESES_CORTOS.map((m, i) => ({ id: String(i + 1), etiqueta: m })),
   ];
+
+  // ------------------------------------------------------- historia de un ítem
+  if (historicoItem) {
+    const h = historicoItem;
+    return (
+      <PantallaConTabs scrollable contentStyle={styles.contenido}>
+        <BarraApp rotulo="Historia del ítem" sede={h.codigo} cifras={h.descripcion ?? undefined} />
+
+        <Pressable style={styles.volver} onPress={() => setHistoricoItem(null)} accessibilityRole="button">
+          <ChevronLeft size={15} color={colors.rojo} />
+          <Text style={styles.volverTexto}>Volver al inventario</Text>
+        </Pressable>
+
+        <View style={styles.tarjeta}>
+          <Dato etiqueta="Apareció con diferencia" valor={`${h.resumen.veces} ${h.resumen.veces === 1 ? 'vez' : 'veces'}`} />
+          <Dato etiqueta="Como faltante" valor={`${h.resumen.vecesFaltante} · ${formatoMiles(h.resumen.unidadesFaltantes)} und`} tono={h.resumen.vecesFaltante > 0 ? 'falta' : undefined} />
+          <Dato etiqueta="Como sobrante" valor={`${h.resumen.vecesSobrante} · ${formatoMiles(h.resumen.unidadesSobrantes)} und`} />
+          <Dato
+            etiqueta="Monto acumulado"
+            valor={`S/ ${formatoMoneda(Math.abs(h.resumen.montoAcumulado))} ${h.resumen.montoAcumulado < 0 ? 'en contra' : h.resumen.montoAcumulado > 0 ? 'a favor' : ''}`}
+            tono={h.resumen.montoAcumulado < 0 ? 'falta' : undefined}
+          />
+          {h.resumen.peorPeriodo ? (
+            <Dato
+              etiqueta="Peor diferencia"
+              valor={`${formatoMiles(Math.abs(h.resumen.peorPeriodo.diferencia))} und en ${MESES_CORTOS[h.resumen.peorPeriodo.mes - 1]} ${h.resumen.peorPeriodo.anio}`}
+              tono="falta"
+            />
+          ) : null}
+        </View>
+
+        <Text style={styles.seccion}>Apariciones por período</Text>
+        <View style={styles.tarjeta}>
+          {h.apariciones.length === 0 ? (
+            <Text style={styles.sinDatos}>Este código no tuvo diferencias en ningún inventario cerrado anterior.</Text>
+          ) : (
+            // Cronológico ascendente (mismo orden que manda el backend) —
+            // se invierte para leer del más reciente hacia atrás.
+            [...h.apariciones].reverse().map((a) => (
+              <View key={a.inventarioId} style={styles.difFila}>
+                <View style={styles.difCabecera}>
+                  <Text style={styles.difCodigo}>
+                    {MESES_CORTOS[a.periodoMes - 1]} {a.periodoAnio} · {a.sucursalNombre}
+                  </Text>
+                  <Badge label={a.diferencia < 0 ? 'Faltante' : 'Sobrante'} variant={a.diferencia < 0 ? 'falta' : 'ok'} />
+                </View>
+                <Text style={styles.difMeta}>
+                  ERP {formatoMiles(a.stockSistema)} · contado {formatoMiles(a.conteoFinal)} · resuelto en el {a.resueltoEnConteo}º conteo
+                </Text>
+                <View style={styles.difValores}>
+                  <Text style={[styles.difCifra, a.diferencia < 0 ? styles.datoFalta : styles.datoOk]}>
+                    {formatoMiles(Math.abs(a.diferencia))} und
+                  </Text>
+                  <Text style={styles.difMonto}>
+                    {a.montoDiferencia === null ? 'Sin precio para valorizar' : `S/ ${formatoMoneda(Math.abs(a.montoDiferencia))}`}
+                  </Text>
+                </View>
+              </View>
+            ))
+          )}
+        </View>
+      </PantallaConTabs>
+    );
+  }
 
   // ---------------------------------------------------------------- detalle
   if (detalle) {
@@ -372,7 +465,14 @@ export function HistorialScreen({ rol }: HistorialScreenProps): JSX.Element {
                 // Ya vienen ordenadas por valor absoluto descendente (ver
                 // historial-api.ts#aDiferencias): lo que más plata mueve arriba.
                 diferencias.map((d) => (
-                  <View key={d.codigo} style={styles.difFila}>
+                  <Pressable
+                    key={d.codigo}
+                    style={styles.difFila}
+                    onPress={() => abrirHistoricoItem(d.codigo)}
+                    disabled={cargandoHistoricoItem}
+                    accessibilityRole="button"
+                    accessibilityLabel={`Ver la historia de ${d.descripcion}`}
+                  >
                     <View style={styles.difCabecera}>
                       <Text style={styles.difCodigo}>
                         {d.codigo} · {d.descripcion}
@@ -390,7 +490,8 @@ export function HistorialScreen({ rol }: HistorialScreenProps): JSX.Element {
                         {d.montoDiferencia === null ? 'Sin precio para valorizar' : `S/ ${formatoMoneda(Math.abs(d.montoDiferencia))}`}
                       </Text>
                     </View>
-                  </View>
+                    <Text style={styles.difVerHistoria}>Ver historia de este ítem →</Text>
+                  </Pressable>
                 ))
               )}
             </View>
@@ -617,6 +718,19 @@ export function HistorialScreen({ rol }: HistorialScreenProps): JSX.Element {
         sede={rol === 'auditor' ? sesion.sucursal!.nombre : undefined}
         cifras={cargando ? undefined : `Mostrando ${inventarios.length} de ${total} inventario${total === 1 ? '' : 's'}`}
       />
+
+      {/* Botón en la cabecera, no una tarjeta más de "Tus accesos": el
+          comparativo mira TODOS los períodos a la vez, es una vista distinta
+          del mismo registro, no un inventario individual más para abrir. */}
+      <Pressable
+        style={styles.comparativoBtn}
+        onPress={() => router.push(`/${rol}/comparativo` as never)}
+        accessibilityRole="button"
+        accessibilityLabel="Ver comparativo mensual"
+      >
+        <TrendingUp size={16} color={colors.rojo} />
+        <Text style={styles.comparativoBtnTexto}>Comparativo mensual</Text>
+      </Pressable>
 
       {cargando || cargandoDetalle ? (
         <ActivityIndicator color={colors.rojo} style={styles.cargando} />
@@ -857,6 +971,19 @@ const styles = StyleSheet.create({
   filtroBloque: { gap: 6 },
   filtroLabel: { fontSize: 11, letterSpacing: 0.5, color: colors.gris, fontFamily: fonts.semibold },
 
+  comparativoBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    alignSelf: 'flex-start',
+    gap: 7,
+    paddingVertical: 8,
+    paddingHorizontal: 13,
+    borderWidth: 1,
+    borderColor: colors.rojo,
+    borderRadius: radius.md,
+  },
+  comparativoBtnTexto: { fontSize: 12.5, color: colors.rojo, fontFamily: fonts.bold },
+
   lista: { gap: 11 },
   inv: { backgroundColor: colors.campo, borderWidth: 1, borderColor: colors.borde, borderRadius: 13, overflow: 'hidden' },
   invAbierto: { borderStyle: 'dashed', borderColor: '#C9C1BB' },
@@ -975,6 +1102,7 @@ const styles = StyleSheet.create({
   difValores: { flexDirection: 'row', alignItems: 'baseline', justifyContent: 'space-between' },
   difCifra: { fontSize: 13, fontFamily: fonts.bold },
   difMonto: { fontSize: 12.5, color: colors.tinta, fontFamily: fonts.bold },
+  difVerHistoria: { marginTop: 2, fontSize: 11, color: colors.rojo, fontFamily: fonts.semibold },
 
   planillaFila: {
     flexDirection: 'row',

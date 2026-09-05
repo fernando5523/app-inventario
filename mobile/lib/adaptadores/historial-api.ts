@@ -21,6 +21,15 @@
  *       verificado contra historial.service.ts#listarDiferencias.
  *   GET /api/historial/inventarios/:id/liquidacion
  *       → LiquidacionDto — verificado contra historial.service.ts#obtenerLiquidacion.
+ *   GET /api/historial/comparativo[?sucursalId=&desdeAnio=&hastaAnio=]
+ *       → { sucursalId, periodos, serie: PuntoComparativoDto[], excluidosPorDatosIncompletos }
+ *       — verificado contra historial.service.ts#comparativo y
+ *       historial.calculos.ts#compararPeriodos. La serie ya viene aplanada
+ *       y en orden cronológico ascendente, con la variación contra el
+ *       punto anterior ya calculada — nada que recalcular acá.
+ *   GET /api/historial/items/:codigo[?sucursalId=&desdeAnio=&hastaAnio=]
+ *       → { codigo, descripcion, resumen: ResumenItemDto, apariciones: AparicionDto[] }
+ *       — verificado contra historial.service.ts#historicoDeItem.
  *
  * Todo el router va detrás de `requiereSesion` + `requiereRol('administrador',
  * 'auditor')`. Un Coordinador o un Contador reciben 403 — y está bien que
@@ -73,23 +82,32 @@
  */
 
 import type {
+  AparicionItemHistorico,
+  ComparativoMensual,
   DetalleInventarioHistorico,
   DiferenciaHistorica,
   EstadoInventario,
+  FiltroComparativo,
   FiltroHistorial,
+  FiltroHistoricoItem,
+  HistoricoItem,
   InventarioHistorico,
   LiquidacionColaboradorHistorica,
   LiquidacionInventario,
   PaginaHistorial,
+  PeriodoExcluidoComparativo,
+  PuntoComparativoMensual,
   RepositorioHistorial,
   ResultadoInventario,
+  ResumenHistoricoItem,
   ResumenLiquidacion,
   SeccionSellada,
   VerificacionSello,
 } from '../puertos/repositorios';
 import { pedir } from './_http';
 
-const BASE = '/api/historial/inventarios';
+const RUTA_HISTORIAL = '/api/historial';
+const BASE = `${RUTA_HISTORIAL}/inventarios`;
 
 interface ResultadoDto {
   itemsTotales: number;
@@ -245,6 +263,87 @@ function consulta(filtro?: FiltroHistorial): string {
   return partes.length ? `?${partes.join('&')}` : '';
 }
 
+/**
+ * `comparativo` e `historicoDeItem` comparten la misma forma de filtro
+ * (sucursalId/desdeAnio/hastaAnio) — un solo armador de query para los dos.
+ */
+function consultaRango(filtro?: { sucursalId?: number; desdeAnio?: number; hastaAnio?: number }): string {
+  if (!filtro) return '';
+  const partes: string[] = [];
+  if (filtro.sucursalId !== undefined) partes.push(`sucursalId=${filtro.sucursalId}`);
+  if (filtro.desdeAnio !== undefined) partes.push(`desdeAnio=${filtro.desdeAnio}`);
+  if (filtro.hastaAnio !== undefined) partes.push(`hastaAnio=${filtro.hastaAnio}`);
+  return partes.length ? `?${partes.join('&')}` : '';
+}
+
+interface PuntoComparativoDto {
+  periodoAnio: number;
+  periodoMes: number;
+  itemsTotales: number;
+  itemsConDiferencia: number;
+  montoFaltanteNeto: number;
+  porcentajeCuadrado: number;
+  variacionFaltantePct: number | null;
+  periodo: string;
+  inventarioId: number;
+  sucursalNombre: string;
+  folio: string | null;
+}
+
+interface ExcluidoComparativoDto {
+  inventarioId: number;
+  periodo: string;
+  motivo: string;
+}
+
+interface ComparativoDto {
+  sucursalId: number | null;
+  periodos: number;
+  serie: PuntoComparativoDto[];
+  excluidosPorDatosIncompletos: ExcluidoComparativoDto[];
+}
+
+interface AparicionItemDto {
+  inventarioId: number;
+  sucursalId: number;
+  sucursalNombre: string;
+  periodo: string;
+  periodoAnio: number;
+  periodoMes: number;
+  estadoInventario: EstadoInventario;
+  descripcion: string;
+  stockSistema: number;
+  conteoFinal: number;
+  diferencia: number;
+  resueltoEnConteo: number;
+  montoDiferencia: number | null;
+}
+
+interface ItemDto {
+  codigo: string;
+  descripcion: string | null;
+  resumen: ResumenHistoricoItem;
+  apariciones: AparicionItemDto[];
+}
+
+/** La descripción por-aparición no viaja al puerto: `HistoricoItem.descripcion` (el nivel superior, ya la más reciente) alcanza. */
+function aAparicion(dto: AparicionItemDto): AparicionItemHistorico {
+  return {
+    inventarioId: dto.inventarioId,
+    sucursalId: dto.sucursalId,
+    sucursalNombre: dto.sucursalNombre,
+    periodo: dto.periodo,
+    periodoAnio: dto.periodoAnio,
+    periodoMes: dto.periodoMes,
+    estadoInventario: dto.estadoInventario,
+    stockSistema: dto.stockSistema,
+    conteoFinal: dto.conteoFinal,
+    diferencia: dto.diferencia,
+    resueltoEnConteo: dto.resueltoEnConteo,
+    montoDiferencia: dto.montoDiferencia,
+  };
+}
+
 export const historialApi: RepositorioHistorial = {
   async listar(filtro) {
     const dto = await pedir<{ total: number; inventarios: InventarioDto[] }>(`${BASE}${consulta(filtro)}`);
@@ -313,6 +412,39 @@ export const historialApi: RepositorioHistorial = {
       asistenciaSinRegistrar: dto.asistenciaSinRegistrar,
       ajustesSinRegistrar: dto.ajustesSinRegistrar,
       planilla: dto.planilla,
+    };
+  },
+
+  async comparativo(filtro): Promise<ComparativoMensual> {
+    const dto = await pedir<ComparativoDto>(`${RUTA_HISTORIAL}/comparativo${consultaRango(filtro)}`);
+    const serie: PuntoComparativoMensual[] = dto.serie.map((p) => ({
+      inventarioId: p.inventarioId,
+      sucursalNombre: p.sucursalNombre,
+      periodo: p.periodo,
+      periodoAnio: p.periodoAnio,
+      periodoMes: p.periodoMes,
+      itemsTotales: p.itemsTotales,
+      itemsConDiferencia: p.itemsConDiferencia,
+      porcentajeCuadrado: p.porcentajeCuadrado,
+      montoFaltanteNeto: p.montoFaltanteNeto,
+      variacionFaltantePct: p.variacionFaltantePct,
+      folio: p.folio,
+    }));
+    const excluidos: PeriodoExcluidoComparativo[] = dto.excluidosPorDatosIncompletos.map((e) => ({
+      inventarioId: e.inventarioId,
+      periodo: e.periodo,
+      motivo: e.motivo,
+    }));
+    return { sucursalId: dto.sucursalId, serie, excluidos };
+  },
+
+  async historicoDeItem(codigo, filtro): Promise<HistoricoItem> {
+    const dto = await pedir<ItemDto>(`${RUTA_HISTORIAL}/items/${encodeURIComponent(codigo)}${consultaRango(filtro)}`);
+    return {
+      codigo: dto.codigo,
+      descripcion: dto.descripcion,
+      resumen: dto.resumen,
+      apariciones: dto.apariciones.map(aAparicion),
     };
   },
 };

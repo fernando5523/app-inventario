@@ -496,3 +496,198 @@ describe('historialApi.liquidacion', () => {
     expect(liq.asistenciaSinRegistrar).toBe(true);
   });
 });
+
+/**
+ * Forma REAL de GET /historial/comparativo -- verificada leyendo
+ * historial.service.ts#comparativo y historial.calculos.ts#compararPeriodos:
+ * la serie ya viene aplanada (periodo/inventarioId/sucursalNombre/folio
+ * mezclados con las cifras), cronológica ascendente, con la variación
+ * contra el punto anterior ya calculada. El adaptador no reordena ni
+ * recalcula nada -- solo tipa.
+ */
+describe('historialApi.comparativo', () => {
+  const COMPARATIVO_DTO = {
+    sucursalId: 1,
+    periodos: 2,
+    serie: [
+      {
+        periodoAnio: 2026,
+        periodoMes: 6,
+        itemsTotales: 8000,
+        itemsConDiferencia: 210,
+        montoFaltanteNeto: 1800,
+        porcentajeCuadrado: 97.4,
+        variacionFaltantePct: null,
+        periodo: '2026-06',
+        inventarioId: 8001,
+        sucursalNombre: 'Market Central Luzuriaga',
+        folio: 'INV-2026-06-LUZ-8000-501',
+      },
+      {
+        periodoAnio: 2026,
+        periodoMes: 7,
+        itemsTotales: 8000,
+        itemsConDiferencia: 168,
+        montoFaltanteNeto: 1550,
+        porcentajeCuadrado: 97.9,
+        variacionFaltantePct: -13.9,
+        periodo: '2026-07',
+        inventarioId: 8002,
+        sucursalNombre: 'Market Central Luzuriaga',
+        folio: 'INV-2026-07-LUZ-8000-844',
+      },
+    ],
+    excluidosPorDatosIncompletos: [{ inventarioId: 8003, periodo: '2026-08', motivo: 'No se registró la asistencia de este mes.' }],
+  };
+
+  it('pega contra /api/historial/comparativo y devuelve la serie en el orden que manda el backend', async () => {
+    const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => json(COMPARATIVO_DTO));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const c = await historialApi.comparativo();
+
+    expect(String(fetchMock.mock.calls[0][0])).toContain('/api/historial/comparativo');
+    expect(c.serie.map((p) => p.periodo)).toEqual(['2026-06', '2026-07']);
+    expect(c.serie[0].variacionFaltantePct).toBeNull();
+    expect(c.serie[1].variacionFaltantePct).toBe(-13.9);
+  });
+
+  it('renombra excluidosPorDatosIncompletos a excluidos, sin perder el motivo', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => json(COMPARATIVO_DTO)));
+
+    const c = await historialApi.comparativo();
+
+    expect(c.excluidos).toHaveLength(1);
+    expect(c.excluidos[0].periodo).toBe('2026-08');
+    expect(c.excluidos[0].motivo).toBe('No se registró la asistencia de este mes.');
+  });
+
+  it('manda sucursalId/desdeAnio/hastaAnio cuando vienen, y ninguno cuando no', async () => {
+    const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => json({ ...COMPARATIVO_DTO, sucursalId: 2 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await historialApi.comparativo({ sucursalId: 2, desdeAnio: 2025, hastaAnio: 2026 });
+
+    const url = String(fetchMock.mock.calls[0][0]);
+    expect(url).toContain('sucursalId=2');
+    expect(url).toContain('desdeAnio=2025');
+    expect(url).toContain('hastaAnio=2026');
+  });
+
+  it('sin filtro no manda query -- el Auditor no necesita pedir su sucursal, el backend la resuelve del token', async () => {
+    const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => json(COMPARATIVO_DTO));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await historialApi.comparativo();
+
+    const url = String(fetchMock.mock.calls[0][0]);
+    expect(url).not.toContain('?');
+  });
+});
+
+/**
+ * Forma REAL de GET /historial/items/:codigo -- verificada leyendo
+ * historial.service.ts#historicoDeItem y historial.calculos.ts#resumirHistoricoItem.
+ */
+describe('historialApi.historicoDeItem', () => {
+  const ITEM_DTO = {
+    codigo: 'A1',
+    descripcion: 'Leche evaporada 400g',
+    resumen: {
+      veces: 2,
+      vecesFaltante: 2,
+      vecesSobrante: 0,
+      unidadesFaltantes: 8,
+      unidadesSobrantes: 0,
+      montoAcumulado: -40,
+      peorPeriodo: { anio: 2026, mes: 7, diferencia: -6 },
+    },
+    apariciones: [
+      {
+        inventarioId: 8001,
+        sucursalId: 1,
+        sucursalNombre: 'Market Central Luzuriaga',
+        periodo: '2026-06',
+        periodoAnio: 2026,
+        periodoMes: 6,
+        estadoInventario: 'lacrado',
+        descripcion: 'Leche evaporada 400g',
+        stockSistema: 40,
+        conteoFinal: 38,
+        diferencia: -2,
+        resueltoEnConteo: 1,
+        montoDiferencia: -10,
+      },
+      {
+        inventarioId: 8002,
+        sucursalId: 1,
+        sucursalNombre: 'Market Central Luzuriaga',
+        periodo: '2026-07',
+        periodoAnio: 2026,
+        periodoMes: 7,
+        estadoInventario: 'lacrado',
+        descripcion: 'Leche evaporada 400g',
+        stockSistema: 40,
+        conteoFinal: 34,
+        diferencia: -6,
+        resueltoEnConteo: 2,
+        montoDiferencia: -30,
+      },
+    ],
+  };
+
+  it('pega contra /api/historial/items/:codigo y devuelve resumen + apariciones tal cual', async () => {
+    const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => json(ITEM_DTO));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const h = await historialApi.historicoDeItem('A1');
+
+    expect(String(fetchMock.mock.calls[0][0])).toContain('/api/historial/items/A1');
+    expect(h.resumen.veces).toBe(2);
+    expect(h.resumen.peorPeriodo).toEqual({ anio: 2026, mes: 7, diferencia: -6 });
+    expect(h.apariciones).toHaveLength(2);
+    expect(h.apariciones[1].montoDiferencia).toBe(-30);
+  });
+
+  it('codifica el código en la URL -- un código con espacio o barra no puede romper la ruta', async () => {
+    const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => json({ ...ITEM_DTO, codigo: 'A 1/B' }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await historialApi.historicoDeItem('A 1/B');
+
+    const url = String(fetchMock.mock.calls[0][0]);
+    expect(url).toContain('/api/historial/items/A%201%2FB');
+  });
+
+  it('manda sucursalId/desdeAnio/hastaAnio cuando se filtra', async () => {
+    const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => json(ITEM_DTO));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await historialApi.historicoDeItem('A1', { sucursalId: 1, desdeAnio: 2026 });
+
+    const url = String(fetchMock.mock.calls[0][0]);
+    expect(url).toContain('sucursalId=1');
+    expect(url).toContain('desdeAnio=2026');
+    expect(url).not.toContain('hastaAnio');
+  });
+
+  it('resumen sin apariciones -- descripcion null y peorPeriodo null, no inventa datos', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () =>
+        json({
+          codigo: 'Z9',
+          descripcion: null,
+          resumen: { veces: 0, vecesFaltante: 0, vecesSobrante: 0, unidadesFaltantes: 0, unidadesSobrantes: 0, montoAcumulado: 0, peorPeriodo: null },
+          apariciones: [],
+        }),
+      ),
+    );
+
+    const h = await historialApi.historicoDeItem('Z9');
+
+    expect(h.descripcion).toBeNull();
+    expect(h.resumen.peorPeriodo).toBeNull();
+    expect(h.apariciones).toEqual([]);
+  });
+});

@@ -1019,6 +1019,133 @@ export interface LiquidacionInventario {
   planilla: LiquidacionColaboradorHistorica[];
 }
 
+// ---------------------------------------------------------------------------
+// Comparativo mensual
+// ---------------------------------------------------------------------------
+
+/**
+ * Un punto de la serie mensual. Ya viene aplanado del backend (sucursal,
+ * folio y las cifras del mes en el mismo objeto — espeja `VariacionComparativo`
+ * + metadata de `historial.service.ts#comparativo`), así que el adaptador
+ * no traduce nada acá, solo tipa.
+ */
+export interface PuntoComparativoMensual {
+  inventarioId: number;
+  sucursalNombre: string;
+  periodo: string;
+  periodoAnio: number;
+  periodoMes: number;
+  itemsTotales: number;
+  itemsConDiferencia: number;
+  /** % de ítems que cuadraron ese mes. */
+  porcentajeCuadrado: number;
+  montoFaltanteNeto: number;
+  /**
+   * Variación del faltante neto contra el mes ANTERIOR de la serie, en %.
+   * `null` en el primer punto: no hay contra qué comparar, y un 0 ahí
+   * mentiría diciendo "no cambió".
+   */
+  variacionFaltantePct: number | null;
+  /** `null` si ese mes todavía no está lacrado. */
+  folio: string | null;
+}
+
+/**
+ * Un mes que existe pero quedó AFUERA de la serie porque su faltante neto
+ * no se pudo calcular (falta asistencia o ajustes) — se lista, no se omite
+ * en silencio: un gráfico que salta un mes sin decirlo se lee como "no
+ * hubo inventario ese mes", que es mentir distinto.
+ */
+export interface PeriodoExcluidoComparativo {
+  inventarioId: number;
+  periodo: string;
+  motivo: string;
+}
+
+export interface FiltroComparativo {
+  sucursalId?: number;
+  desdeAnio?: number;
+  hastaAnio?: number;
+}
+
+/**
+ * Serie mes a mes de faltante neto y % cuadrado, con la variación contra el
+ * mes anterior ya calculada (`historial.calculos.ts#compararPeriodos`).
+ * `sucursalId: null` = vista de TODAS las sucursales (solo posible para el
+ * Administrador sin filtro; el Auditor siempre recibe la suya).
+ */
+export interface ComparativoMensual {
+  sucursalId: number | null;
+  serie: PuntoComparativoMensual[];
+  excluidos: PeriodoExcluidoComparativo[];
+}
+
+// ---------------------------------------------------------------------------
+// Histórico de un ítem
+// ---------------------------------------------------------------------------
+
+/** Una aparición del ítem en un inventario anterior con diferencia. */
+export interface AparicionItemHistorico {
+  inventarioId: number;
+  sucursalId: number;
+  sucursalNombre: string;
+  periodo: string;
+  periodoAnio: number;
+  periodoMes: number;
+  estadoInventario: EstadoInventario;
+  stockSistema: number;
+  conteoFinal: number;
+  /** conteoFinal - stockSistema. Negativo = faltante, positivo = sobrante. */
+  diferencia: number;
+  /** En qué ronda (1, 2 o 3) quedó resuelto este ítem, en ESE inventario. */
+  resueltoEnConteo: number;
+  montoDiferencia: number | null;
+}
+
+export interface PeorPeriodoItem {
+  anio: number;
+  mes: number;
+  diferencia: number;
+}
+
+/**
+ * "Este producto, cuántas veces dio diferencia" — la pregunta textual del
+ * cliente. Un ítem que aparece todos los meses con faltante no es un error
+ * de conteo: es una merma sistemática o algo peor, y solo se ve mirando el
+ * histórico completo, no un mes suelto.
+ */
+export interface ResumenHistoricoItem {
+  /** En cuántos inventarios apareció con diferencia. */
+  veces: number;
+  vecesFaltante: number;
+  vecesSobrante: number;
+  unidadesFaltantes: number;
+  unidadesSobrantes: number;
+  /** Solo suma las apariciones que pudieron valorizarse (con precio). */
+  montoAcumulado: number;
+  peorPeriodo: PeorPeriodoItem | null;
+}
+
+export interface FiltroHistoricoItem {
+  sucursalId?: number;
+  desdeAnio?: number;
+  hastaAnio?: number;
+}
+
+/**
+ * La historia de un artículo a través de los inventarios que ya cerraron
+ * (un inventario en curso todavía puede resolver esa diferencia en el 2do
+ * o 3er conteo, así que no cuenta). `apariciones` viene en orden cronológico
+ * ascendente — mismo orden que la serie del comparativo.
+ */
+export interface HistoricoItem {
+  codigo: string;
+  /** La descripción más reciente entre las apariciones — la que la gente reconoce. `null` si nunca apareció. */
+  descripcion: string | null;
+  resumen: ResumenHistoricoItem;
+  apariciones: AparicionItemHistorico[];
+}
+
 /**
  * El registro de todos los inventarios: en qué estado está cada uno, cómo
  * cerró y quién lo firmó. Responde la pregunta del cliente ("falta el
@@ -1061,4 +1188,18 @@ export interface RepositorioHistorial {
   diferencias(inventarioId: number): Promise<DiferenciaHistorica[]>;
   /** La planilla del cierre: quién, cuánto, por qué. Mismo acceso que `detalle`. */
   liquidacion(inventarioId: number): Promise<LiquidacionInventario>;
+  /**
+   * Serie mensual de faltante neto y % cuadrado. Mismo alcance por rol que
+   * `listar`: el Administrador puede filtrar por sucursal o pedir todas
+   * (`sucursalId` ausente); el Auditor recibe siempre la suya, ignorando
+   * cualquier `sucursalId` que mande — mismo criterio del backend.
+   */
+  comparativo(filtro?: FiltroComparativo): Promise<ComparativoMensual>;
+  /**
+   * La historia de un ítem a través de los inventarios anteriores. Mismo
+   * alcance por rol que `listar`. `codigo` es el ItemNumber de Dynamics
+   * (`DiferenciaItem.codigo` — la identidad ESTABLE entre períodos), no el
+   * código interno de la hoja ("0051") ni el código de barras.
+   */
+  historicoDeItem(codigo: string, filtro?: FiltroHistoricoItem): Promise<HistoricoItem>;
 }
