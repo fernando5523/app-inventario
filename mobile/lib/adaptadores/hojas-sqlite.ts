@@ -887,8 +887,33 @@ function esAsignadaA(hoja: HojaConteo, identidad: IdentidadSinRed, origen: 'real
   return hoja.asignados.includes(identidad.nombre);
 }
 
+/**
+ * UN PARÁMETRO AUSENTE NUNCA AMPLÍA EL RESULTADO.
+ *
+ * `inventarioId`/`ronda` están tipados como `number`, pero llegan de
+ * `activo()` (que devuelve `rondaActiva: null` cuando el inventario está en
+ * `conteo_cerrado`) y de `inventarioIdSinRed()`/`rondaActivaSinRed()`, que
+ * devuelven `null` cuando no hay nada local. El tipo dice `number`; lo que
+ * corre en el teléfono puede ser `null`.
+ *
+ * Hoy las pantallas cortan antes (mis-hojas.tsx:105, InicioScreen.tsx:183),
+ * pero esa defensa vive en QUIEN LLAMA. Sin esta guarda, un `null` que se
+ * cuele por un camino nuevo dispara `hojasApi.mias(inv, null)` -- una
+ * descarga con la ronda inválida, cuyo resultado depende de cómo el servidor
+ * interprete el parámetro roto (el schema tiene `.default(1)`, así que
+ * omitirlo trae la ronda 1 en silencio) y que SE GUARDA en la tabla local,
+ * quedando disponible para todo lo que lea después.
+ *
+ * "No sé qué ronda" no puede convertirse en "traé lo que haya": la única
+ * respuesta honesta es vacío.
+ */
+function sinAlcance(inventarioId: number | null | undefined, ronda: number | null | undefined): boolean {
+  return typeof inventarioId !== 'number' || typeof ronda !== 'number';
+}
+
 export const hojasSqlite: RepositorioHojas = {
   async mias(inventarioId, ronda) {
+    if (sinAlcance(inventarioId, ronda)) return [];
     // La descarga que faltaba (bug real): antes de leer nada, se le
     // pregunta al backend. Ver `descargarSiHaceFalta` para cuándo se
     // espera esa respuesta y cuándo se muestra lo local sin esperar.
@@ -913,12 +938,14 @@ export const hojasSqlite: RepositorioHojas = {
   },
 
   async todas(inventarioId, ronda) {
+    if (sinAlcance(inventarioId, ronda)) return [];
     await descargarSiHaceFalta(inventarioId, 'todas', ronda);
     const { hojas } = await hojasDeInventarioBase(inventarioId, ronda);
     return hojasConEstadoLocal(hojas);
   },
 
   async porNumero(inventarioId, numero, ronda) {
+    if (sinAlcance(inventarioId, ronda)) return null;
     // `porNumero` lo usa `contar.tsx` para reabrir UNA hoja (siempre después
     // de pasar por `mias()`), así que alcanza con refrescar el mismo alcance.
     await descargarSiHaceFalta(inventarioId, 'mias', ronda);

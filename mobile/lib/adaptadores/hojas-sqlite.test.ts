@@ -1401,6 +1401,61 @@ describe('OFFLINE MULTI-TIENDA: sin red, cada colaborador ve SOLO su sucursal y 
     expect(mias).toHaveLength(25);
     expect(mias.every((h) => h.inventarioId === INV_BOLIVAR)).toBe(true);
   });
+
+  /**
+   * UN PARÁMETRO NULL NUNCA QUITA UNA CLÁUSULA.
+   *
+   * El caso real: Luzuriaga quedó en `conteo_cerrado`, así que `rondaActiva`
+   * es `null` y no hay ninguna ronda abierta. Hoy las pantallas cortan antes
+   * de llamar acá (mis-hojas.tsx:105, InicioScreen.tsx:183-187), pero esa
+   * defensa vive en QUIEN LLAMA, no en el adaptador — y el día que un camino
+   * nuevo se olvide, "no sé qué ronda" no puede convertirse en "traé todo".
+   *
+   * `null` significa "no hay conteo abierto", y de eso la única respuesta
+   * honesta es la lista vacía: 75 hojas de tres rondas de otra tienda no son
+   * una respuesta peor, son una respuesta a otra pregunta.
+   */
+  describe('sin ronda ni inventario: [], nunca la tabla entera', () => {
+    it('ronda null (inventario cerrado) devuelve vacío, no las 3 rondas', async () => {
+      vi.mocked(sesionApi.sesionActiva).mockResolvedValue(sesionDeTienda('Contador 30', SUC_BOLIVAR, 'Market Bolívar'));
+      vi.mocked(hojasApi.mias).mockRejectedValue(new ErrorApi('sin-red'));
+
+      const mias = await hojasSqlite.mias(INV_BOLIVAR, null as unknown as number);
+      expect(mias).toEqual([]);
+    });
+
+    it('inventario null también', async () => {
+      vi.mocked(sesionApi.sesionActiva).mockResolvedValue(sesionDeTienda('Contador 30', SUC_BOLIVAR, 'Market Bolívar'));
+      vi.mocked(hojasApi.mias).mockRejectedValue(new ErrorApi('sin-red'));
+
+      const mias = await hojasSqlite.mias(null as unknown as number, 1);
+      expect(mias).toEqual([]);
+    });
+
+    it('`todas` con ronda null tampoco trae el lote entero', async () => {
+      vi.mocked(sesionApi.sesionActiva).mockResolvedValue(sesionDeTienda('Contador 30', SUC_BOLIVAR, 'Market Bolívar'));
+      vi.mocked(hojasApi.todas).mockRejectedValue(new ErrorApi('sin-red'));
+
+      const todas = await hojasSqlite.todas(INV_BOLIVAR, null as unknown as number);
+      expect(todas).toEqual([]);
+    });
+
+    it('`porNumero` con ronda null no encuentra nada, en vez de la hoja de cualquier ronda', async () => {
+      vi.mocked(sesionApi.sesionActiva).mockResolvedValue(sesionDeTienda('Contador 30', SUC_BOLIVAR, 'Market Bolívar'));
+      vi.mocked(hojasApi.mias).mockRejectedValue(new ErrorApi('sin-red'));
+
+      const hoja = await hojasSqlite.porNumero(INV_BOLIVAR, '001', null as unknown as number);
+      expect(hoja).toBeNull();
+    });
+
+    it('no dispara la descarga siquiera: sin ronda no hay nada que pedir', async () => {
+      vi.mocked(sesionApi.sesionActiva).mockResolvedValue(sesionDeTienda('Contador 30', SUC_BOLIVAR, 'Market Bolívar'));
+      vi.mocked(hojasApi.mias).mockClear();
+
+      await hojasSqlite.mias(INV_BOLIVAR, null as unknown as number);
+      expect(hojasApi.mias).not.toHaveBeenCalled();
+    });
+  });
 });
 
 describe('CERRADO (2026-09-06): una fila SIN scope no es de nadie, ni por nombre -- ni siquiera de un homónimo de rol', () => {
