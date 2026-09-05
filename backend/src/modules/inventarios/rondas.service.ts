@@ -40,6 +40,9 @@ import { numeroDeHoja, ordenarParaContar, partirEnHojas, zonaDeHoja } from '../.
 import { registrarAuditoria } from '../../shared/auditoria';
 import { Conflicto, NoEncontrado, Prohibido, SolicitudInvalida } from '../../shared/errores';
 import type { ColaboradorAutenticado } from '../../shared/tipos';
+import { armarMatriz } from '../auditoria/auditoria.service';
+import { embudoDeConteos, resumir as resumirAuditoria } from '../auditoria/auditoria.calculos';
+import { redondear } from '../historial/historial.calculos';
 import { totalUnidades } from '../hojas/hojas.calculos';
 import { INCLUIR_TODO, aHojaDto, type HojaDto } from '../hojas/hojas.service';
 
@@ -289,11 +292,19 @@ export interface CierreDeRondaDto {
 /**
  * Cierra la ronda y abre la siguiente SOLO con lo que no cuadró -- o, si
  * esta era la última del ciclo (o no quedó nada por recontar), cierra EL
- * CONTEO DEL INVENTARIO entero (`Inventario.estado -> 'conteo_cerrado'`).
- * Las dos cosas son la misma operación: el dominio
+ * CONTEO DEL INVENTARIO entero: `Inventario.estado -> 'conteo_cerrado'` Y
+ * se calcula y persiste `ResultadoInventario` (reusando `armarMatriz` de
+ * auditoria.service.ts). Las tres cosas son la misma operación: el dominio
  * (`ciclo-conteos.ts#puedeAbrirRondaSiguiente`) decide en el mismo cálculo
  * si el ciclo sigue o termina, así que no hay un endpoint aparte para
  * "cerrar el conteo" que alguien tenga que acordarse de apretar después.
+ *
+ * `ResultadoInventario` se calcula ACÁ y no al lacrar ni a pedido: es la
+ * verdad que hay que congelar en el instante del cierre, no recalcularla
+ * después con datos que ya cambiaron. `montoNegativos` y
+ * `colaboradoresAsistieron` se persisten en NULL a propósito -- ver el
+ * comentario largo en schema.prisma#ResultadoInventario y en el bloque de
+ * abajo: hoy no existe ningún mecanismo para capturarlos.
  *
  * REQUISITOS PARA CERRAR, EN ORDEN (el orden importa: primero lo que hay
  * que ir a resolver a mano, después lo que se resuelve solo):
@@ -373,19 +384,61 @@ export async function cerrar(
   const siguiente = puedeAbrirRondaSiguiente(ronda, aRecontar.length);
 
   if (!siguiente.puede) {
-    // EL CIERRE DEL CONTEO. Ronda y estado del inventario cambian JUNTOS o
-    // no pasa nada -- por eso van en la misma transacción, aunque hoy sea
-    // una sola escritura: es el mismo punto donde, el día de mañana, entra
-    // el cálculo de ResultadoInventario/LiquidacionColaborador (a
-    // propósito NO en esta tarea -- ver el comentario de
-    // InventarioActivoDto.rondaActiva en inventarios.service.ts).
+    // EL CIERRE DEL CONTEO. Ronda, estado del inventario Y resultado
+    // cambian JUNTOS o no pasa nada. La matriz y el conteo de
+    // colaboradores son solo LECTURAS -- se arman antes de la transacción,
+    // no comparten atomicidad con la escritura.
     //
-    // Este es el ÚNICO lugar donde `Inventario.estado` pasa a
-    // 'conteo_cerrado': no hay un endpoint aparte que alguien tenga que
-    // acordarse de apretar. El dominio (`puedeAbrirRondaSiguiente`) ya
-    // decidió acá mismo que el ciclo terminó -- cerrar la última ronda Y
-    // cerrar el conteo son el mismo hecho de negocio, no dos pasos.
-    await prisma.$transaction([prisma.inventario.update({ where: { id: inventarioId }, data: { estado: 'conteo_cerrado' } })]);
+    // Reusa `armarMatriz` (auditoria.service.ts) en vez de recalcular: es
+    // el mismo cruce catálogo × 3 rondas que ya usa la pantalla del
+    // Auditor, y `embudoDeConteos`/`resumir` (auditoria.calculos.ts) ya
+    // dan casi todos los campos de `ResultadoInventario` -- ver el
+    // comentario de `embudoDeConteos` que deja el gancho anotado.
+    const matrizCompleta = await armarMatriz(inventarioId);
+    const embudo = embudoDeConteos(matrizCompleta);
+    const resumenAuditoria = resumirAuditoria(matrizCompleta);
+    // TODO el personal habilitado de la sucursal, no solo quien contó --
+    // mismo criterio que documenta ResultadoInventario.colaboradoresAlcanzados.
+    const colaboradoresAlcanzados = await prisma.colaborador.count({
+      where: { sucursalId: inventario.sucursalId, activo: true },
+    });
+
+    await prisma.$transaction([
+      prisma.inventario.update({ where: { id: inventarioId }, data: { estado: 'conteo_cerrado' } }),
+      prisma.resultadoInventario.create({
+        data: {
+          inventarioId,
+          itemsTotales: embudo.itemsTotales,
+          itemsConDiferencia: embudo.itemsConDiferencia,
+          itemsSegundoConteo: embudo.itemsSegundoConteo,
+          itemsTercerConteo: embudo.itemsTercerConteo,
+          unidadesFaltantes: resumenAuditoria.unidadesFaltantes,
+          unidadesSobrantes: resumenAuditoria.unidadesSobrantes,
+          montoFaltanteBruto: resumenAuditoria.valorFaltante,
+          // El faltante que SÍ se descuenta a nómina (valorFaltanteDescontable)
+          // resta de acá -- lo que queda es lo que absorbe la empresa.
+          montoFaltanteEmpresa: redondear(resumenAuditoria.valorFaltante - resumenAuditoria.valorFaltanteDescontable),
+          colaboradoresAlcanzados,
+          // NULL, NUNCA 0 -- ver el comentario largo de ambos campos en
+          // schema.prisma#ResultadoInventario. No existe TODAVÍA ningún
+          // mecanismo para cargar los ajustes del mes ni para registrar
+          // quién asistió (decisión pendiente del cliente): un 0 acá
+          // afirmaría "no hubo ajustes"/"vino todo el mundo" sin que nadie
+          // lo haya verificado, y la planilla de liquidación saldría
+          // firmada con multas y bonos inventados. NO SE INVENTA el
+          // mecanismo de captura en esta tarea -- este es el lugar
+          // preparado para cuando el cliente lo defina: liquidacion.service.ts
+          // ya sabe leer estos dos campos en null y avisarlo antes de
+          // firmar (ver AdvertenciaLiquidacion.asistenciaSinRegistrar/
+          // ajustesSinRegistrar).
+          montoNegativos: null,
+          colaboradoresAsistieron: null,
+          // multaInasistencia: se deja el default de la columna (S/20) --
+          // no hay config editable para esto todavía (ver
+          // backend/prisma/configuraciones.ts).
+        },
+      }),
+    ]);
 
     // No se abre ronda nueva, pero el cierre igual se audita: es el hecho de
     // negocio que dice "la ronda N terminó y este fue el resultado".

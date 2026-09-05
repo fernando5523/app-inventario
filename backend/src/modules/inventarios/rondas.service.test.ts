@@ -20,6 +20,8 @@ const prismaMock = vi.hoisted(() => ({
   hojaConteo: { count: vi.fn(), findMany: vi.fn(), create: vi.fn() },
   producto: { findMany: vi.fn() },
   catalogoItem: { findMany: vi.fn() },
+  colaborador: { count: vi.fn() },
+  resultadoInventario: { create: vi.fn() },
   $transaction: vi.fn(),
 }));
 vi.mock('../../config/database', () => ({ prisma: prismaMock }));
@@ -49,22 +51,31 @@ const itemCatalogo = (codigo: string, categoria: string | null, stockErp: number
 });
 
 /**
- * `hojaConteo.findMany` sirve a CUATRO consultas distintas de este archivo
+ * `hojaConteo.findMany` sirve a CINCO consultas distintas en este camino
  * (hojasSinFinalizar, hojasSinSincronizar, contadoHastaLaRonda dentro de
- * universoDeLaRonda, y el listado final de hojas nuevas) -- un solo
+ * universoDeLaRonda, el listado final de hojas nuevas, y -- cuando se
+ * cierra el conteo -- `armarMatriz` de auditoria.service.ts) -- un solo
  * `mockResolvedValue` serviría a la primera y rompería a las demás. Se
  * distingue por la FORMA del `where`/`select`, mismo criterio que
  * `hojasLibres()` en inventarios.service.test.ts.
+ *
+ * OJO: `hojasSinFinalizar` filtra `estado: { not: 'finalizada' }` (OBJETO)
+ * y `armarMatriz` filtra `estado: 'finalizada'` (STRING) -- confundirlas
+ * fue el primer intento de este mock, y hacía que `armarMatriz` recibiera
+ * "sin hojas finalizadas" en vez de los datos reales de la ronda.
  */
 function mockHojaConteoFindMany(args: {
   sinFinalizar?: Array<{ id: number; numero: string; estado: string; asignadoAId: number | null; zona: string }>;
   sinSincronizar?: Array<{ numero: string; asignadoA: { nombre: string } | null; asignadoA2: { nombre: string } | null }>;
   contadoPorRonda?: Array<{ numeroConteo: number; productos: unknown[] }>;
   hojasNuevas?: unknown[];
+  matrizHojasFinalizadas?: unknown[];
 }): void {
   prismaMock.hojaConteo.findMany.mockImplementation(async (query: unknown) => {
     const q = query as { where?: Record<string, unknown>; include?: unknown };
-    if (q.where?.estado !== undefined) return args.sinFinalizar ?? [];
+    const whereEstado = q.where?.estado;
+    if (typeof whereEstado === 'string') return args.matrizHojasFinalizadas ?? [];
+    if (whereEstado !== undefined) return args.sinFinalizar ?? [];
     if (q.where?.sync !== undefined) return args.sinSincronizar ?? [];
     if (q.where?.numeroConteo && typeof q.where.numeroConteo === 'object' && 'lte' in (q.where.numeroConteo as object)) {
       return args.contadoPorRonda ?? [];
@@ -90,6 +101,7 @@ beforeEach(() => {
   mockHojaConteoFindMany({});
   prismaMock.producto.findMany.mockResolvedValue([]);
   prismaMock.catalogoItem.findMany.mockResolvedValue([]);
+  prismaMock.colaborador.count.mockResolvedValue(0);
 });
 
 describe('cerrar', () => {
@@ -189,12 +201,33 @@ describe('cerrar', () => {
    * `conteo_cerrado` EN LA MISMA operación que cierra la ronda.
    */
   describe('cuando no hay ronda siguiente', () => {
+    // Producto y hoja "finalizada" para armarMatriz (auditoria.service.ts):
+    // MISMA forma que consume esa función (select con productos/conteos
+    // anidados), NO la misma que universoDeLaRonda -- ver el comentario de
+    // mockHojaConteoFindMany sobre por qué se confundían.
+    const hojaFinalizadaParaMatriz = {
+      numeroConteo: 1,
+      zona: 'ABARROTES',
+      productos: [
+        {
+          id: 100,
+          codigo: '100',
+          descripcion: 'Producto 100',
+          empaques: [{ nombre: 'U', factor: 1 }],
+          conteos: [{ sueltas: 5, empaques: [] }],
+        },
+      ],
+    };
+
     beforeEach(() => {
       // Un solo producto que CUADRA: itemsARecontar = 0, así que
       // `puedeAbrirRondaSiguiente` corta ahí (todo cuadró), sin necesidad
       // de llegar a la ronda 3 para probar este camino.
       prismaMock.producto.findMany.mockResolvedValue([producto('100', 'ABARROTES')]);
-      prismaMock.catalogoItem.findMany.mockResolvedValue([{ codigo: '100', stockErp: 5 }]);
+      prismaMock.catalogoItem.findMany.mockResolvedValue([
+        { codigo: '100', descripcion: 'Producto 100', stockErp: 5, precioVenta: null, esEmpresa: false },
+      ]);
+      prismaMock.colaborador.count.mockResolvedValue(11);
       mockHojaConteoFindMany({
         contadoPorRonda: [
           {
@@ -208,6 +241,7 @@ describe('cerrar', () => {
             ],
           },
         ],
+        matrizHojasFinalizadas: [hojaFinalizadaParaMatriz],
       });
     });
 
@@ -227,6 +261,52 @@ describe('cerrar', () => {
       // resolver `update` es porque pasó por $transaction (ver beforeEach
       // de este archivo: $transaction es lo único que ejecuta lo que recibe).
       expect(prismaMock.$transaction).toHaveBeenCalled();
+    });
+
+    /**
+     * LA CONDICIÓN QUE HACE LA DIFERENCIA: un 0 que significa "no sabemos"
+     * no puede verse igual que un 0 que significa "nadie faltó" (mismo
+     * criterio que CatalogoItem.stockErp). Hoy no existe ningún mecanismo
+     * para registrar asistencia ni para cargar los ajustes del mes -- el
+     * cierre del conteo tiene que persistir NULL, nunca 0, para no afirmar
+     * algo que nadie verificó.
+     */
+    it('persiste ResultadoInventario con asistencia y ajustes en NULL, no en 0', async () => {
+      await cerrar(COORD, 9, 1);
+
+      expect(prismaMock.resultadoInventario.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({
+          inventarioId: 9,
+          colaboradoresAsistieron: null,
+          montoNegativos: null,
+        }),
+      });
+    });
+
+    it('los campos SÍ calculables salen de la matriz real, no de un placeholder', async () => {
+      await cerrar(COORD, 9, 1);
+
+      const { data } = prismaMock.resultadoInventario.create.mock.calls[0]![0] as {
+        data: {
+          itemsTotales: number;
+          itemsConDiferencia: number;
+          unidadesFaltantes: number;
+          unidadesSobrantes: number;
+          montoFaltanteBruto: number;
+          montoFaltanteEmpresa: number;
+          colaboradoresAlcanzados: number;
+        };
+      };
+      // El producto cuadra (conteo 5 = stockErp 5): nada de diferencia.
+      expect(data.itemsTotales).toBe(1);
+      expect(data.itemsConDiferencia).toBe(0);
+      expect(data.unidadesFaltantes).toBe(0);
+      expect(data.unidadesSobrantes).toBe(0);
+      expect(data.montoFaltanteBruto).toBe(0);
+      expect(data.montoFaltanteEmpresa).toBe(0);
+      // TODO el personal habilitado de la sucursal (mock: 11), no un valor fijo.
+      expect(data.colaboradoresAlcanzados).toBe(11);
+      expect(prismaMock.colaborador.count).toHaveBeenCalledWith({ where: { sucursalId: 1, activo: true } });
     });
 
     it('no crea ninguna hoja nueva y devuelve rondaAbierta: null con el motivo', async () => {

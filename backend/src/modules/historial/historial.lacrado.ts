@@ -80,10 +80,19 @@ export interface DatosLacrado {
     unidadesFaltantes: number;
     unidadesSobrantes: number;
     montoFaltanteBruto: number;
-    montoNegativos: number;
+    /**
+     * NULL, no 0, cuando todavía no se capturó (ver
+     * schema.prisma#ResultadoInventario). El sello es EL documento
+     * inmutable del cierre -- si acá se sellara un 0 en vez de null,
+     * el lacrado afirmaría para siempre "no hubo ajustes"/"vino todo el
+     * mundo" sin que nadie lo haya verificado. Mejor un sello que dice
+     * "no se sabía" que uno que miente con un cero prolijo.
+     */
+    montoNegativos: number | null;
     montoFaltanteEmpresa: number;
     colaboradoresAlcanzados: number;
-    colaboradoresAsistieron: number;
+    /** NULL, no 0 -- misma razón que `montoNegativos`, arriba. */
+    colaboradoresAsistieron: number | null;
     multaInasistencia: number;
   } | null;
 

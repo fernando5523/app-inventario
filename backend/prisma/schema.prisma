@@ -829,7 +829,17 @@ model ResultadoInventario {
   montoFaltanteBruto   Decimal @default(0) @map("monto_faltante_bruto")   @db.Decimal(12, 2)
   /// Ajustes de entradas/salidas del mes que reporta Jocelyn, a favor del
   /// personal (docs/pantallas.md, Pantalla 6).
-  montoNegativos       Decimal @default(0) @map("monto_negativos")        @db.Decimal(12, 2)
+  ///
+  /// NULLABLE, y la razon importa (mismo criterio que
+  /// CatalogoItem.stockErp): NULL = todavia no se cargaron los ajustes de
+  /// este mes, DISTINTO de 0 = "no hubo ajustes". Hoy no existe ningun
+  /// mecanismo para cargarlos (decision pendiente del cliente) -- hasta
+  /// que exista, el cierre del conteo persiste NULL, nunca 0, para no
+  /// afirmar "no hubo ajustes" sin que nadie lo haya verificado. Quien lea
+  /// el resultado calcula igual con 0 como placeholder, pero
+  /// liquidacion.service.ts#armarAdvertencia tiene que avisarlo ANTES de
+  /// que alguien firme, no despues.
+  montoNegativos       Decimal? @map("monto_negativos") @db.Decimal(12, 2)
   /// Faltante que absorbe la empresa y no se descuenta (las cervezas del
   /// ejemplo del cliente).
   montoFaltanteEmpresa Decimal @default(0) @map("monto_faltante_empresa") @db.Decimal(12, 2)
@@ -840,7 +850,18 @@ model ResultadoInventario {
   colaboradoresAlcanzados Int @map("colaboradores_alcanzados")
   /// De esos, cuantos asistieron. La diferencia son las faltas que pagan
   /// multa y alimentan el fondo que se redistribuye.
-  colaboradoresAsistieron Int @map("colaboradores_asistieron")
+  ///
+  /// NULLABLE a proposito, mismo criterio que `montoNegativos` arriba:
+  /// NULL = la asistencia todavia no se registro, DISTINTO de 0 = "no
+  /// vino nadie". Un 0 falso aca es peor que en stockErp -- afirmaria "
+  /// vinieron todos" (0 faltas) sin que nadie lo haya verificado, y la
+  /// planilla saldria firmada con multas y bonos que no reflejan a nadie
+  /// real. Hoy NO existe ningun mecanismo de captura de asistencia (el
+  /// cliente todavia tiene que decidir como se registra) -- hasta que
+  /// exista, el cierre del conteo persiste NULL. NO SE INVENTA el
+  /// mecanismo de captura aca: este campo solo deja el lugar preparado
+  /// para cuando el cliente lo defina.
+  colaboradoresAsistieron Int? @map("colaboradores_asistieron")
   /// Monto de la multa por inasistencia VIGENTE en este inventario (S/20
   /// hoy). Congelado igual que tamanoHoja: si manana la multa sube, el
   /// historico tiene que seguir liquidando agosto con la de agosto.

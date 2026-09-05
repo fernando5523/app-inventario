@@ -37,6 +37,16 @@ export interface DetalleLiquidacionDto {
  * deja el monto SUBESTIMADO. La auditoria ya contaba esos items; lo que
  * faltaba era traerlos hasta aca.
  *
+ * `asistenciaSinRegistrar`/`ajustesSinRegistrar` son la MISMA idea aplicada
+ * a `ResultadoInventario.colaboradoresAsistieron`/`montoNegativos`: esos dos
+ * campos son NULLABLE en el schema, y NULL ahi no significa "cero" -- significa
+ * "todavia no se capturo" (mismo criterio que `CatalogoItem.stockErp`). Sin
+ * mecanismo de captura de asistencia todavia (decision pendiente del
+ * cliente), el cierre del conteo persiste NULL en vez de inventar un 0 que
+ * afirmaria "vino todo el mundo" sin que nadie lo haya verificado. Esta
+ * pantalla calcula igual (con 0 como placeholder, para no dejar la planilla
+ * en blanco) pero tiene que decirlo ANTES de que alguien firme, no despues.
+ *
  * Quien firma un descuento a la nomina de otra persona tiene derecho a saber
  * que el numero esta incompleto. El problema nunca fue el calculo: es que
  * hoy nadie se entera.
@@ -44,8 +54,18 @@ export interface DetalleLiquidacionDto {
 export interface AdvertenciaLiquidacion {
   /** Items con diferencia real que no se pudieron valorizar. */
   itemsSinPrecio: number;
-  /** Texto listo para mostrar. `null` cuando no hay nada que advertir. */
+  /** true = la multa y el bono de esta planilla NO reflejan asistencia real. */
+  asistenciaSinRegistrar: boolean;
+  /** true = el faltante neto de esta planilla no descuenta los ajustes del mes. */
+  ajustesSinRegistrar: boolean;
+  /** Texto listo para mostrar, combinando todas las razones. `null` cuando no hay nada que advertir. */
   mensaje: string | null;
+}
+
+export interface DatosAdvertencia {
+  itemsSinPrecio: number;
+  asistenciaSinRegistrar: boolean;
+  ajustesSinRegistrar: boolean;
 }
 
 /** Espeja mobile/lib/puertos/repositorios.ts#Liquidacion. */
@@ -90,13 +110,38 @@ async function contarItemsSinPrecio(inventarioId: number): Promise<number> {
 }
 
 /** El texto que ve quien firma. `null` si no hay nada que advertir. */
-export function armarAdvertencia(itemsSinPrecio: number): AdvertenciaLiquidacion {
-  if (itemsSinPrecio <= 0) return { itemsSinPrecio: 0, mensaje: null };
-  const plural = itemsSinPrecio === 1 ? 'ítem' : 'ítems';
-  const tienen = itemsSinPrecio === 1 ? 'tiene' : 'tienen';
+export function armarAdvertencia(datos: DatosAdvertencia): AdvertenciaLiquidacion {
+  const itemsSinPrecio = Math.max(0, datos.itemsSinPrecio);
+  const frases: string[] = [];
+
+  if (itemsSinPrecio > 0) {
+    const plural = itemsSinPrecio === 1 ? 'ítem' : 'ítems';
+    const tienen = itemsSinPrecio === 1 ? 'tiene' : 'tienen';
+    frases.push(
+      `${itemsSinPrecio} ${plural} con diferencia no ${tienen} precio de venta en Dynamics: el monto puede estar subestimado.`,
+    );
+  }
+
+  // Mismo criterio que arriba, aplicado a lo que todavía NO se puede
+  // capturar: la frase dice explícitamente que el 0 es un placeholder, no
+  // un dato verificado — es la diferencia que existe en los datos
+  // (ResultadoInventario.colaboradoresAsistieron/montoNegativos NULL) y
+  // que acá se vuelve texto para quien firma.
+  if (datos.asistenciaSinRegistrar) {
+    frases.push(
+      'La asistencia todavía no se registra en el sistema: la multa y el bono de esta planilla se calcularon asumiendo 0 faltas, no porque se haya verificado quién vino.',
+    );
+  }
+
+  if (datos.ajustesSinRegistrar) {
+    frases.push('Los ajustes del mes todavía no se cargaron: el faltante neto de esta planilla no los descuenta.');
+  }
+
   return {
     itemsSinPrecio,
-    mensaje: `${itemsSinPrecio} ${plural} con diferencia no ${tienen} precio de venta en Dynamics: el monto puede estar subestimado.`,
+    asistenciaSinRegistrar: datos.asistenciaSinRegistrar,
+    ajustesSinRegistrar: datos.ajustesSinRegistrar,
+    mensaje: frases.length > 0 ? frases.join(' ') : null,
   };
 }
 
@@ -154,12 +199,20 @@ export async function deSucursal(actor: ColaboradorAutenticado, sucursalId: numb
   if (inventario === null || inventario.resultado === null) return null;
 
   const r = inventario.resultado;
+  // NULL en estos dos campos es "todavía no se capturó", NUNCA "cero" (ver
+  // el comentario largo de AdvertenciaLiquidacion) -- acá es donde el 0
+  // entra como PLACEHOLDER para que el cálculo no se rompa, nunca antes.
+  // La diferencia real vive en `asistenciaSinRegistrar`/`ajustesSinRegistrar`,
+  // que sí llegan a la pantalla.
+  const asistenciaSinRegistrar = r.colaboradoresAsistieron === null;
+  const ajustesSinRegistrar = r.montoNegativos === null;
+
   const resumen = calcularResumenLiquidacion({
     montoFaltanteBruto: r.montoFaltanteBruto.toNumber(),
-    montoNegativos: r.montoNegativos.toNumber(),
+    montoNegativos: r.montoNegativos?.toNumber() ?? 0,
     montoFaltanteEmpresa: r.montoFaltanteEmpresa.toNumber(),
     colaboradoresAlcanzados: r.colaboradoresAlcanzados,
-    colaboradoresAsistieron: r.colaboradoresAsistieron,
+    colaboradoresAsistieron: r.colaboradoresAsistieron ?? 0,
     multaInasistencia: r.multaInasistencia.toNumber(),
   });
 
@@ -168,7 +221,7 @@ export async function deSucursal(actor: ColaboradorAutenticado, sucursalId: numb
   return {
     periodo: nombreDePeriodo(inventario.periodoAnio, inventario.periodoMes),
     faltanteBruto: r.montoFaltanteBruto.toNumber(),
-    negativosDelMes: r.montoNegativos.toNumber(),
+    negativosDelMes: r.montoNegativos?.toNumber() ?? 0,
     faltanteEmpresa: r.montoFaltanteEmpresa.toNumber(),
     faltanteNeto: resumen.montoFaltanteNeto,
     cuotaBase: resumen.cuotaBase,
@@ -190,7 +243,7 @@ export async function deSucursal(actor: ColaboradorAutenticado, sucursalId: numb
         bonoAsistencia: l.bonoAsistencia.toNumber(),
       }),
     })),
-    advertencia: armarAdvertencia(itemsSinPrecio),
+    advertencia: armarAdvertencia({ itemsSinPrecio, asistenciaSinRegistrar, ajustesSinRegistrar }),
   };
 }
 

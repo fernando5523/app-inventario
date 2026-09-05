@@ -64,6 +64,18 @@ function aNumeroObligatorio(valor: Prisma.Decimal): number {
   return valor.toNumber();
 }
 
+/**
+ * Para inputs ARITMÉTICOS que no toleran null (`calcularResumenLiquidacion`).
+ * El 0 acá es un PLACEHOLDER para que la cuenta no se rompa -- no es un
+ * dato: el null real (ResultadoInventario.montoNegativos/
+ * colaboradoresAsistieron sin capturar todavía, ver el comentario del
+ * schema) se preserva aparte con `aNumero` para quien necesite saber si en
+ * verdad se cargó o no.
+ */
+function aNumeroOCero(valor: Prisma.Decimal | null): number {
+  return valor === null ? 0 : valor.toNumber();
+}
+
 function aIso(fecha: Date | null): string | null {
   return fecha === null ? null : fecha.toISOString();
 }
@@ -134,12 +146,16 @@ function resumirResultado(r: InventarioConIncludes['resultado']): ResultadoResum
   if (r === null) return null;
 
   const embudo = calcularEmbudo(r);
+  // 0 como placeholder de aritmética -- ver el comentario de `aNumeroOCero`.
+  // Este resumen (tarjeta del listado) no tiene lugar para una advertencia
+  // de texto como la pantalla de liquidación; se calcula igual para no
+  // dejar la tarjeta en blanco.
   const liq = calcularResumenLiquidacion({
     montoFaltanteBruto: aNumeroObligatorio(r.montoFaltanteBruto),
-    montoNegativos: aNumeroObligatorio(r.montoNegativos),
+    montoNegativos: aNumeroOCero(r.montoNegativos),
     montoFaltanteEmpresa: aNumeroObligatorio(r.montoFaltanteEmpresa),
     colaboradoresAlcanzados: r.colaboradoresAlcanzados,
-    colaboradoresAsistieron: r.colaboradoresAsistieron,
+    colaboradoresAsistieron: r.colaboradoresAsistieron ?? 0,
     multaInasistencia: aNumeroObligatorio(r.multaInasistencia),
   });
 
@@ -280,15 +296,17 @@ export async function obtenerDetalle(actor: ColaboradorAutenticado, id: number):
 
   const resultado = inv.resultado;
   const embudo = resultado === null ? null : calcularEmbudo(resultado);
+  // 0 como placeholder de aritmética -- ver `aNumeroOCero`. El dato CRUDO
+  // (null si no se capturó) se expone aparte más abajo, sin pisarlo con 0.
   const liquidacion =
     resultado === null
       ? null
       : calcularResumenLiquidacion({
           montoFaltanteBruto: aNumeroObligatorio(resultado.montoFaltanteBruto),
-          montoNegativos: aNumeroObligatorio(resultado.montoNegativos),
+          montoNegativos: aNumeroOCero(resultado.montoNegativos),
           montoFaltanteEmpresa: aNumeroObligatorio(resultado.montoFaltanteEmpresa),
           colaboradoresAlcanzados: resultado.colaboradoresAlcanzados,
-          colaboradoresAsistieron: resultado.colaboradoresAsistieron,
+          colaboradoresAsistieron: resultado.colaboradoresAsistieron ?? 0,
           multaInasistencia: aNumeroObligatorio(resultado.multaInasistencia),
         });
 
@@ -318,13 +336,31 @@ export async function obtenerDetalle(actor: ColaboradorAutenticado, id: number):
             unidadesFaltantes: resultado.unidadesFaltantes,
             unidadesSobrantes: resultado.unidadesSobrantes,
             montoFaltanteBruto: aNumeroObligatorio(resultado.montoFaltanteBruto),
-            montoNegativos: aNumeroObligatorio(resultado.montoNegativos),
+            // CRUDO, null incluido -- no se pisa con 0 acá (eso queda solo
+            // adentro de `liquidacion`, como placeholder de aritmética). Un
+            // null real y un 0 real llevan a conclusiones opuestas, mismo
+            // criterio que CatalogoItem.stockErp.
+            montoNegativos: aNumero(resultado.montoNegativos),
             montoFaltanteEmpresa: aNumeroObligatorio(resultado.montoFaltanteEmpresa),
             colaboradoresAlcanzados: resultado.colaboradoresAlcanzados,
             colaboradoresAsistieron: resultado.colaboradoresAsistieron,
+            /**
+             * La diferencia tiene que EXISTIR en los datos, no solo en un
+             * comentario -- por eso estos dos flags, no solo los campos
+             * null de arriba: quien consuma este detalle sin mirar
+             * cuidadosamente si `colaboradoresAsistieron`/`montoNegativos`
+             * son null puede terminar tratando el placeholder como un
+             * dato real. Mismo criterio que
+             * liquidacion.service.ts#AdvertenciaLiquidacion.
+             */
+            asistenciaSinRegistrar: resultado.colaboradoresAsistieron === null,
+            ajustesSinRegistrar: resultado.montoNegativos === null,
             multaInasistencia: aNumeroObligatorio(resultado.multaInasistencia),
             calculadoEn: resultado.calculadoEn.toISOString(),
             // Derivados -- ver historial.calculos.ts (no son columnas).
+            // Se calculan con 0 como placeholder cuando falta el dato (ver
+            // `liquidacion` arriba): NO son reales si los flags de arriba
+            // están en true.
             ...embudo,
             ...liquidacion,
           },
@@ -444,15 +480,19 @@ export async function obtenerLiquidacion(actor: ColaboradorAutenticado, id: numb
   });
 
   const r = inv.resultado;
+  // 0 como placeholder de aritmética (`aNumeroOCero`) -- el dato real
+  // (null si no se capturó) se expone aparte como advertencia, no acá
+  // adentro: mismo criterio que liquidacion.service.ts#deSucursal, esta es
+  // la misma pantalla mirando un mes histórico en vez del último cierre.
   const resumen =
     r === null
       ? null
       : calcularResumenLiquidacion({
           montoFaltanteBruto: aNumeroObligatorio(r.montoFaltanteBruto),
-          montoNegativos: aNumeroObligatorio(r.montoNegativos),
+          montoNegativos: aNumeroOCero(r.montoNegativos),
           montoFaltanteEmpresa: aNumeroObligatorio(r.montoFaltanteEmpresa),
           colaboradoresAlcanzados: r.colaboradoresAlcanzados,
-          colaboradoresAsistieron: r.colaboradoresAsistieron,
+          colaboradoresAsistieron: r.colaboradoresAsistieron ?? 0,
           multaInasistencia: aNumeroObligatorio(r.multaInasistencia),
         });
 
@@ -461,6 +501,10 @@ export async function obtenerLiquidacion(actor: ColaboradorAutenticado, id: numb
     sucursal: { id: inv.sucursal.id, nombre: inv.sucursal.nombre },
     periodo: claveDePeriodo(inv.periodoAnio, inv.periodoMes),
     resumen,
+    // Igual criterio que liquidacion.service.ts#AdvertenciaLiquidacion:
+    // quien firma tiene que ver esto ANTES de firmar, no después.
+    asistenciaSinRegistrar: r?.colaboradoresAsistieron === null,
+    ajustesSinRegistrar: r?.montoNegativos === null,
     planilla: inv.liquidaciones.map((l) => {
       const cuotaBase = aNumeroObligatorio(l.cuotaBase);
       const multaInasistencia = aNumeroObligatorio(l.multaInasistencia);
@@ -533,7 +577,11 @@ function armarDatosLacrado(inv: InventarioParaSello): DatosLacrado {
             unidadesFaltantes: inv.resultado.unidadesFaltantes,
             unidadesSobrantes: inv.resultado.unidadesSobrantes,
             montoFaltanteBruto: aNumeroObligatorio(inv.resultado.montoFaltanteBruto),
-            montoNegativos: aNumeroObligatorio(inv.resultado.montoNegativos),
+            // null real, NUNCA 0 acá -- el sello es el documento inmutable
+            // del cierre (ver el comentario de DatosLacrado.resultado en
+            // historial.lacrado.ts). Si no se capturó, el hash tiene que
+            // decir "no se sabía", no mentir con un cero prolijo.
+            montoNegativos: aNumero(inv.resultado.montoNegativos),
             montoFaltanteEmpresa: aNumeroObligatorio(inv.resultado.montoFaltanteEmpresa),
             colaboradoresAlcanzados: inv.resultado.colaboradoresAlcanzados,
             colaboradoresAsistieron: inv.resultado.colaboradoresAsistieron,
@@ -1031,12 +1079,14 @@ export async function comparativo(
 
   for (const f of filas) {
     if (f.resultado === null) continue;
+    // 0 como placeholder de aritmética (`aNumeroOCero`) -- serie histórica
+    // agregada, sin lugar para una advertencia por punto.
     const liq = calcularResumenLiquidacion({
       montoFaltanteBruto: aNumeroObligatorio(f.resultado.montoFaltanteBruto),
-      montoNegativos: aNumeroObligatorio(f.resultado.montoNegativos),
+      montoNegativos: aNumeroOCero(f.resultado.montoNegativos),
       montoFaltanteEmpresa: aNumeroObligatorio(f.resultado.montoFaltanteEmpresa),
       colaboradoresAlcanzados: f.resultado.colaboradoresAlcanzados,
-      colaboradoresAsistieron: f.resultado.colaboradoresAsistieron,
+      colaboradoresAsistieron: f.resultado.colaboradoresAsistieron ?? 0,
       multaInasistencia: aNumeroObligatorio(f.resultado.multaInasistencia),
     });
     puntos.push({

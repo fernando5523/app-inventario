@@ -90,8 +90,13 @@ async function traerInventarioOFallar(inventarioId: number): Promise<InventarioP
  * porque el resumen del encabezado se calcula sobre TODOS los items -- si
  * se paginara antes de resumir, los totales cambiarian al pasar de pagina.
  * La paginacion se aplica despues, sobre el resultado ya filtrado.
+ *
+ * EXPORTADA (no solo de este modulo): rondas.service.ts#cerrar la reusa
+ * para calcular `ResultadoInventario` al cerrar el conteo -- mismo dato,
+ * mismo cruce catalogo x 3 rondas, cero motivo para recalcularlo aparte
+ * (ver el comentario de `embudoDeConteos` en auditoria.calculos.ts).
  */
-async function armarMatriz(inventarioId: number): Promise<ItemAuditoria[]> {
+export async function armarMatriz(inventarioId: number): Promise<ItemAuditoria[]> {
   const [catalogo, hojas] = await Promise.all([
     prisma.catalogoItem.findMany({
       where: { inventarioId },
