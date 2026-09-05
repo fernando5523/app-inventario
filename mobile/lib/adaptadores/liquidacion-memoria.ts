@@ -12,11 +12,42 @@
 
 import { simularLatencia } from './_compartido';
 import { sesionMemoria } from './sesion-memoria';
-import type { Conciliacion, DetalleLiquidacion, Liquidacion, RepositorioLiquidacion } from '../puertos/repositorios';
+import type {
+  AjustesDelMes,
+  Conciliacion,
+  DatosAjustes,
+  DetalleLiquidacion,
+  Liquidacion,
+  RepositorioLiquidacion,
+} from '../puertos/repositorios';
 
 /** Espeja historial.calculos.ts#redondear (2 decimales) -- no existe una lib compartida entre backend y mobile. */
 function redondear(n: number): number {
   return Math.round(n * 100) / 100;
+}
+
+/**
+ * Ajustes cargados en esta corrida. Arranca VACÍO a propósito: sin backend,
+ * el estado inicial tiene que ser el real —"nadie los cargó"— para poder ver
+ * la pantalla bloqueada y después destrabarla cargándolos.
+ */
+const ajustesCargados = new Map<number, AjustesDelMes>();
+
+function sinRegistrar(inventarioId: number): AjustesDelMes {
+  return {
+    inventarioId,
+    registrado: false,
+    montoNegativos: null,
+    montoFaltanteEmpresa: null,
+    nota: null,
+    registradoPor: null,
+    registradoEn: null,
+  };
+}
+
+/** Solo para tests: deja el adaptador como recién arrancado. */
+export function limpiarAjustesMemoria(): void {
+  ajustesCargados.clear();
 }
 
 const SUCURSAL_LUZURIAGA_ID = 1;
@@ -35,6 +66,9 @@ const ASISTENCIA_LUZURIAGA: Record<number, boolean> = {
   110: false, // Yeni Sotelo
   111: true, // Hugo Vergaray
 };
+
+/** El inventario de esa liquidación — sobre el que se cargan los ajustes. */
+const INVENTARIO_LUZURIAGA_ID = 1;
 
 const DATOS_LUZURIAGA = {
   periodo: 'Agosto 2026',
@@ -69,6 +103,7 @@ export const liquidacionMemoria: RepositorioLiquidacion = {
     });
 
     const liquidacion: Liquidacion = {
+      inventarioId: INVENTARIO_LUZURIAGA_ID,
       periodo,
       faltanteBruto,
       negativosDelMes,
@@ -128,5 +163,36 @@ export const liquidacionMemoria: RepositorioLiquidacion = {
       },
       advertencia: liquidacion.advertencia,
     };
+  },
+
+  /**
+   * Los ajustes viven en un Map del módulo, no en el dataset fijo: son lo
+   * único de este adaptador que CAMBIA en tiempo de ejecución, y ese cambio
+   * es justo lo que hay que poder ver sin backend — cargar un monto y que la
+   * pantalla pase de "sin registrar" a mostrar la planilla.
+   */
+  async ajustes(inventarioId): Promise<AjustesDelMes> {
+    return ajustesCargados.get(inventarioId) ?? sinRegistrar(inventarioId);
+  },
+
+  async registrarAjustes(inventarioId, datos: DatosAjustes): Promise<AjustesDelMes> {
+    await simularLatencia();
+
+    const previo = ajustesCargados.get(inventarioId);
+    const registrado: AjustesDelMes = {
+      inventarioId,
+      registrado: true,
+      montoNegativos: datos.montoNegativos,
+      // Omitirlo CONSERVA lo que había, igual que el backend: sale de las
+      // categorías de empresa del catálogo y pisarlo con 0 por omisión
+      // borraría ese cálculo.
+      montoFaltanteEmpresa: datos.montoEmpresa ?? previo?.montoFaltanteEmpresa ?? 170,
+      nota: datos.nota,
+      registradoPor: { id: 101, nombre: 'Nancy Quispe' },
+      registradoEn: new Date().toISOString(),
+    };
+
+    ajustesCargados.set(inventarioId, registrado);
+    return registrado;
   },
 };

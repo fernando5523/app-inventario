@@ -1,9 +1,10 @@
 import type { Response } from 'express';
 import { asyncHandler } from '../../shared/asyncHandler';
 import type { RequestAutenticado } from '../../shared/tipos';
+import * as ajustes from './liquidacion.ajustes';
 import * as cierre from './liquidacion.cierre';
 import * as service from './liquidacion.service';
-import type { ParametrosInventario, ParametrosSucursal } from './liquidacion.schema';
+import type { ParametrosInventario, ParametrosSucursal, RegistrarAjustesInput } from './liquidacion.schema';
 
 /**
  * Traduce req/res y nada mas (regla de capas, backend/README.md).
@@ -36,4 +37,23 @@ export const conciliacion = asyncHandler(async (req: RequestAutenticado, res: Re
 export const liquidar = asyncHandler(async (req: RequestAutenticado, res: Response) => {
   const { inventarioId } = req.params as unknown as ParametrosInventario;
   res.status(201).json(await cierre.liquidar(req.colaborador!, inventarioId));
+});
+
+/**
+ * Los ajustes del mes. `PUT` y no `POST` porque es idempotente: cargar dos
+ * veces el mismo monto deja el mismo estado, y corregir un monto mal tipeado
+ * antes de liquidar tiene que ser posible.
+ *
+ * 200 y no 201: no crea un recurso nuevo, completa el `ResultadoInventario`
+ * que ya existe.
+ */
+export const registrarAjustes = asyncHandler(async (req: RequestAutenticado, res: Response) => {
+  const { inventarioId } = req.params as unknown as ParametrosInventario;
+  const datos = req.body as RegistrarAjustesInput;
+  res.json(await ajustes.registrarAjustes(req.colaborador!, inventarioId, datos));
+});
+
+export const estadoAjustes = asyncHandler(async (req: RequestAutenticado, res: Response) => {
+  const { inventarioId } = req.params as unknown as ParametrosInventario;
+  res.json(await ajustes.estadoDeAjustes(req.colaborador!, inventarioId));
 });

@@ -202,6 +202,9 @@ model Colaborador {
   aprobacionesDeCierre    AprobacionCierre[]       @relation("AprobadorCierre")
   liquidaciones           LiquidacionColaborador[] @relation("ColaboradorLiquidado")
   configsDynamics         ConfigDynamics[]         @relation("ConfigDynamicsActualizadaPor")
+  /// Ajustes del mes que cargo -- plata que se decide NO descontarle al
+  /// personal, asi que lleva firma (ver ResultadoInventario.ajustesPorId).
+  ajustesRegistrados      ResultadoInventario[]    @relation("AjustesRegistrados")
 
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
@@ -832,13 +835,16 @@ model ResultadoInventario {
   ///
   /// NULLABLE, y la razon importa (mismo criterio que
   /// CatalogoItem.stockErp): NULL = todavia no se cargaron los ajustes de
-  /// este mes, DISTINTO de 0 = "no hubo ajustes". Hoy no existe ningun
-  /// mecanismo para cargarlos (decision pendiente del cliente) -- hasta
-  /// que exista, el cierre del conteo persiste NULL, nunca 0, para no
-  /// afirmar "no hubo ajustes" sin que nadie lo haya verificado. Quien lea
-  /// el resultado calcula igual con 0 como placeholder, pero
+  /// este mes, DISTINTO de 0 = "no hubo ajustes". Quien lea el resultado
+  /// calcula igual con 0 como placeholder, pero
   /// liquidacion.service.ts#armarAdvertencia tiene que avisarlo ANTES de
   /// que alguien firme, no despues.
+  ///
+  /// LO CARGA `PUT /api/liquidacion/inventarios/:id/ajustes`
+  /// (liquidacion.ajustes.ts), solo mientras el inventario esta en
+  /// `conteo_cerrado`. Un 0 EXPLICITO por esa via es un dato verificado
+  /// ("alguien miro y no habia"), y por eso destraba la liquidacion: la
+  /// diferencia entre ese 0 y este NULL es toda la regla.
   montoNegativos       Decimal? @map("monto_negativos") @db.Decimal(12, 2)
   /// Faltante que absorbe la empresa y no se descuenta (las cervezas del
   /// ejemplo del cliente).
@@ -875,6 +881,28 @@ model ResultadoInventario {
   multaInasistencia Decimal @default(20) @map("multa_inasistencia") @db.Decimal(12, 2)
 
   calculadoEn DateTime @default(now()) @map("calculado_en")
+
+  // ---------------------------------------------------------------------------
+  // Quien cargo los ajustes del mes, y cuando
+  // ---------------------------------------------------------------------------
+  //
+  // `montoNegativos` y `montoFaltanteEmpresa` bajan el faltante que se
+  // descuenta a nomina: son plata que alguien decide NO cobrarle al personal.
+  // Un monto asi no puede quedar sin firma -- si en tres meses alguien
+  // pregunta por que agosto tuvo S/380 de ajustes, la respuesta tiene que
+  // estar en la fila, no en la memoria de nadie.
+  //
+  // Los tres son NULL mientras nadie los haya cargado, y se escriben juntos
+  // (ver liquidacion.ajustes.ts): tener fecha sin autor, o monto sin nota,
+  // seria un registro a medias de una decision que mueve plata.
+
+  /// Quien cargo los ajustes. NULL = todavia nadie.
+  ajustesPorId Int?         @map("ajustes_por_id")
+  ajustesPor   Colaborador? @relation("AjustesRegistrados", fields: [ajustesPorId], references: [id])
+  ajustesEn    DateTime?    @map("ajustes_en")
+  /// Por que ese monto. Obligatoria al cargar -- un ajuste sin explicacion es
+  /// un numero que nadie puede auditar despues.
+  ajustesNota  String?      @map("ajustes_nota")
 
   @@map("resultados_inventario")
 }

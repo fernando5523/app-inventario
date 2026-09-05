@@ -121,3 +121,90 @@ describe('liquidacionApi.conciliacion', () => {
     expect(c).toBeNull();
   });
 });
+
+/**
+ * LOS AJUSTES DEL MES. Lo que este adaptador no puede confundir:
+ * `montoEmpresa` omitido CONSERVA el calculado al cerrar el conteo, y
+ * `montoEmpresa: 0` lo pisa con cero. Son dos cosas distintas y las dos
+ * mueven plata.
+ */
+describe('ajustes del mes', () => {
+  const AJUSTES = {
+    inventarioId: 29,
+    registrado: true,
+    montoNegativos: 380,
+    montoFaltanteEmpresa: 170,
+    nota: 'Mermas documentadas de agosto.',
+    registradoPor: { id: 101, nombre: 'Nancy Quispe' },
+    registradoEn: '2026-09-05T12:00:00.000Z',
+  };
+
+  it('`ajustes` pega al inventario, no a la sucursal', async () => {
+    const fn = vi.fn(async () => json(AJUSTES));
+    vi.stubGlobal('fetch', fn);
+
+    await liquidacionApi.ajustes(29);
+
+    expect(fn.mock.calls[0]![0]).toContain('/api/liquidacion/inventarios/29/ajustes');
+  });
+
+  it('sin cargar todavía devuelve registrado:false, NO null', async () => {
+    // A diferencia de deSucursal/conciliacion, acá el null no existe: la
+    // pantalla tiene que poder decir "falta cargarlos", no "no hay nada".
+    vi.stubGlobal('fetch', vi.fn(async () => json({ ...AJUSTES, registrado: false, montoNegativos: null })));
+
+    const a = await liquidacionApi.ajustes(29);
+
+    expect(a.registrado).toBe(false);
+    expect(a.montoNegativos).toBeNull();
+  });
+
+  it('`registrarAjustes` usa PUT: es idempotente y se puede corregir', async () => {
+    const fn = vi.fn(async () => json(AJUSTES));
+    vi.stubGlobal('fetch', fn);
+
+    await liquidacionApi.registrarAjustes(29, { montoNegativos: 380, nota: 'Mermas.' });
+
+    expect(fn.mock.calls[0]![1].method).toBe('PUT');
+  });
+
+  it('un 0 viaja en el cuerpo: no se cae por falsy', async () => {
+    const fn = vi.fn(async () => json({ ...AJUSTES, montoNegativos: 0 }));
+    vi.stubGlobal('fetch', fn);
+
+    await liquidacionApi.registrarAjustes(29, { montoNegativos: 0, nota: 'No hubo.' });
+
+    const cuerpo = JSON.parse(fn.mock.calls[0]![1].body as string);
+    expect(cuerpo.montoNegativos).toBe(0);
+  });
+
+  it('sin montoEmpresa, la clave NO viaja -- así el backend conserva el calculado', async () => {
+    const fn = vi.fn(async () => json(AJUSTES));
+    vi.stubGlobal('fetch', fn);
+
+    await liquidacionApi.registrarAjustes(29, { montoNegativos: 380, nota: 'x' });
+
+    const cuerpo = JSON.parse(fn.mock.calls[0]![1].body as string);
+    expect(cuerpo).not.toHaveProperty('montoEmpresa');
+  });
+
+  it('con montoEmpresa en 0, la clave SÍ viaja -- pisar con cero es distinto de omitir', async () => {
+    const fn = vi.fn(async () => json(AJUSTES));
+    vi.stubGlobal('fetch', fn);
+
+    await liquidacionApi.registrarAjustes(29, { montoNegativos: 380, montoEmpresa: 0, nota: 'x' });
+
+    const cuerpo = JSON.parse(fn.mock.calls[0]![1].body as string);
+    expect(cuerpo.montoEmpresa).toBe(0);
+  });
+
+  it('la nota viaja tal cual', async () => {
+    const fn = vi.fn(async () => json(AJUSTES));
+    vi.stubGlobal('fetch', fn);
+
+    await liquidacionApi.registrarAjustes(29, { montoNegativos: 380, nota: 'Mermas documentadas de agosto.' });
+
+    const cuerpo = JSON.parse(fn.mock.calls[0]![1].body as string);
+    expect(cuerpo.nota).toBe('Mermas documentadas de agosto.');
+  });
+});

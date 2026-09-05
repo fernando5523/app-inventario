@@ -70,6 +70,16 @@ export interface DatosAdvertencia {
 
 /** Espeja mobile/lib/puertos/repositorios.ts#Liquidacion. */
 export interface LiquidacionDto {
+  /**
+   * SOBRE QUE INVENTARIO es esta liquidacion.
+   *
+   * La pantalla pregunta por sucursal ("como quedo el ultimo cierre de aca")
+   * pero para cargar los ajustes o cerrar la planilla necesita el id del
+   * inventario. Sacarlo de `GET /sucursales/:id/inventarios/activo` no
+   * sirve: ese busca `estado: 'en_curso'` y este ya esta `conteo_cerrado`
+   * -- justamente el estado en el que se liquida.
+   */
+  inventarioId: number;
   /** "Agosto 2026" -- legible, como lo muestra la pantalla. */
   periodo: string;
   faltanteBruto: number;
@@ -232,6 +242,7 @@ export async function deSucursal(actor: ColaboradorAutenticado, sucursalId: numb
   const itemsSinPrecio = await contarItemsSinPrecio(inventario.id);
 
   return {
+    inventarioId: inventario.id,
     periodo: nombreDePeriodo(inventario.periodoAnio, inventario.periodoMes),
     faltanteBruto: r.montoFaltanteBruto.toNumber(),
     negativosDelMes: r.montoNegativos?.toNumber() ?? null,

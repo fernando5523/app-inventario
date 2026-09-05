@@ -1,13 +1,20 @@
 import { router, useFocusEffect } from 'expo-router';
-import { AlertTriangle, Layers, Scale, Wallet } from 'lucide-react-native';
+import { AlertTriangle, ClipboardEdit, Layers, Scale, Wallet } from 'lucide-react-native';
 import { useCallback, useMemo, useState, type JSX } from 'react';
-import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Alert, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 
 import { PantallaConTabs } from '../../components/navegacion/PantallaConTabs';
-import { BarraApp, Badge, Button } from '../../components/ui';
+import { BarraApp, Badge, Button, formatoFechaHora } from '../../components/ui';
 import { repositorioLiquidacion } from '../../lib/contenedor';
+import { textoDeAjustes, validarAjustes } from '../../lib/dominio/ajustes-formulario';
 import { asistentesConCentavoExtra } from '../../lib/dominio/reparto-visible';
-import type { Conciliacion, DetalleLiquidacion, Liquidacion } from '../../lib/puertos/repositorios';
+import type {
+  AjustesDelMes,
+  Conciliacion,
+  DatosAjustes,
+  DetalleLiquidacion,
+  Liquidacion,
+} from '../../lib/puertos/repositorios';
 import { useSesion } from '../../lib/sesion-contexto';
 import { colors, fonts, fontSize, radius, spacing } from '../../lib/theme';
 
@@ -58,6 +65,8 @@ export default function LiquidacionScreen(): JSX.Element {
   const [liquidacion, setLiquidacion] = useState<Liquidacion | null>(null);
   const [conciliacion, setConciliacion] = useState<Conciliacion | null>(null);
   const [filtro, setFiltro] = useState<Filtro>('todos');
+  const [ajustes, setAjustes] = useState<AjustesDelMes | null>(null);
+  const [guardandoAjustes, setGuardandoAjustes] = useState(false);
 
   const cargar = useCallback(async () => {
     if (!sesion) return;
@@ -72,6 +81,11 @@ export default function LiquidacionScreen(): JSX.Element {
       ]);
       setLiquidacion(resultadoLiq);
       setConciliacion(resultadoConc);
+
+      // Los ajustes SÍ van encadenados: cuelgan del inventario, y el id sale
+      // de la liquidación que se acaba de traer. Sin ciclo cerrado no hay
+      // inventario del que cargar ajustes.
+      setAjustes(resultadoLiq === null ? null : await repositorioLiquidacion.ajustes(resultadoLiq.inventarioId));
     } catch (e) {
       // Sin esto, un fallo sin red dejaba el spinner girando para siempre
       // (mismo bug que f558689 arregló), y `useEffect` con deps `[sesion]`
@@ -95,6 +109,29 @@ export default function LiquidacionScreen(): JSX.Element {
   async function salir(): Promise<void> {
     await cerrar();
     router.replace('/');
+  }
+
+  /**
+   * Guardar los ajustes RECARGA todo, no solo la tarjeta: al pasar de `null`
+   * a un monto, el backend puede calcular el faltante neto, la cuota y la
+   * planilla entera. Actualizar solo la tarjeta dejaría el resto de la
+   * pantalla diciendo "no se puede calcular" al lado de unos ajustes ya
+   * cargados — el tipo de contradicción que hace desconfiar de todo lo demás.
+   */
+  async function guardarAjustes(datos: DatosAjustes): Promise<void> {
+    if (!liquidacion) return;
+    setGuardandoAjustes(true);
+    try {
+      await repositorioLiquidacion.registrarAjustes(liquidacion.inventarioId, datos);
+      await cargar();
+    } catch (e) {
+      Alert.alert(
+        'No se pudieron guardar los ajustes',
+        e instanceof Error ? e.message : 'Probá de nuevo en un momento.',
+      );
+    } finally {
+      setGuardandoAjustes(false);
+    }
   }
 
   /**
@@ -138,6 +175,20 @@ export default function LiquidacionScreen(): JSX.Element {
         </View>
       ) : (
         <>
+          {/*
+            LOS AJUSTES VAN PRIMERO, antes del resumen, y no es cosmético:
+            mientras no estén cargados, el faltante neto y la cuota por
+            persona son `null` y toda la pantalla de abajo muestra "no se
+            puede calcular". Poner la tarjeta acá arriba es poner primero lo
+            único accionable.
+          */}
+          <TarjetaAjustes
+            inventarioId={liquidacion.inventarioId}
+            estado={ajustes}
+            guardando={guardandoAjustes}
+            onGuardar={guardarAjustes}
+          />
+
           <View style={styles.tarjeta}>
             <View style={styles.tarjetaCabecera}>
               <Wallet size={18} color={colors.rojo} />
@@ -358,9 +409,153 @@ export default function LiquidacionScreen(): JSX.Element {
   );
 }
 
+/**
+ * LOS AJUSTES DEL MES: el paso que faltaba para poder cerrar el mes.
+ *
+ * Mientras no estén cargados, `montoNegativos` es `null` en la base y el
+ * backend rechaza liquidar con 409 — así que toda la pantalla de abajo
+ * muestra "no se puede calcular". Esta tarjeta es lo único accionable en ese
+ * estado, y por eso va primero.
+ *
+ * El formulario aparece solo cuando hace falta (sin registrar, o al tocar
+ * "Corregir"): una vez cargados, lo normal es mirarlos, no editarlos.
+ */
+function TarjetaAjustes({
+  inventarioId,
+  estado,
+  guardando,
+  onGuardar,
+}: {
+  inventarioId: number;
+  estado: AjustesDelMes | null;
+  guardando: boolean;
+  onGuardar: (datos: DatosAjustes) => Promise<void>;
+}): JSX.Element | null {
+  const [editando, setEditando] = useState(false);
+  const [montoNegativos, setMontoNegativos] = useState('');
+  const [montoEmpresa, setMontoEmpresa] = useState('');
+  const [nota, setNota] = useState('');
+  const [errorCampos, setErrorCampos] = useState<string | null>(null);
+
+  // `null` = todavía cargando el estado. No se dibuja nada en vez de
+  // mostrar "sin registrar", que sería afirmar algo que no se sabe.
+  if (estado === null) return null;
+
+  const texto = textoDeAjustes(estado, soles, formatoFechaHora);
+  const mostrandoFormulario = editando || texto.bloqueaLiquidacion;
+
+  async function guardar(): Promise<void> {
+    const validado = validarAjustes({ montoNegativos, montoEmpresa, nota });
+    if (!validado.ok) {
+      setErrorCampos(validado.error);
+      return;
+    }
+    setErrorCampos(null);
+    await onGuardar(validado.datos);
+    setEditando(false);
+  }
+
+  return (
+    <View style={[styles.tarjeta, texto.bloqueaLiquidacion && styles.tarjetaBloqueante]}>
+      <View style={styles.tarjetaCabecera}>
+        <ClipboardEdit size={18} color={texto.bloqueaLiquidacion ? colors.rojo : colors.tinta} />
+        <Text style={styles.tarjetaTitulo}>Ajustes del mes</Text>
+        {texto.bloqueaLiquidacion ? <Badge label="Sin registrar" variant="falta" /> : null}
+      </View>
+
+      <Text style={styles.ajustesEstado}>{texto.titulo}</Text>
+      <Text style={styles.tarjetaTexto}>{texto.detalle}</Text>
+      {estado.nota !== null ? <Text style={styles.ajustesNota}>“{estado.nota}”</Text> : null}
+
+      {mostrandoFormulario ? (
+        <View style={styles.ajustesForm}>
+          <Text style={styles.ajustesEtiqueta}>Ajustes a favor del personal (S/)</Text>
+          <TextInput
+            style={styles.ajustesInput}
+            value={montoNegativos}
+            onChangeText={setMontoNegativos}
+            keyboardType="decimal-pad"
+            placeholder="0"
+            placeholderTextColor={colors.gris}
+          />
+
+          <Text style={styles.ajustesEtiqueta}>Faltante que absorbe la empresa (S/) — opcional</Text>
+          <TextInput
+            style={styles.ajustesInput}
+            value={montoEmpresa}
+            onChangeText={setMontoEmpresa}
+            keyboardType="decimal-pad"
+            // Vacío NO es 0: dejarlo así conserva el monto que calculó el
+            // cierre del conteo desde las categorías de empresa.
+            placeholder="Dejalo vacío para conservar el calculado"
+            placeholderTextColor={colors.gris}
+          />
+
+          <Text style={styles.ajustesEtiqueta}>¿De dónde salen? (obligatorio)</Text>
+          <TextInput
+            style={[styles.ajustesInput, styles.ajustesInputNota]}
+            value={nota}
+            onChangeText={setNota}
+            multiline
+            placeholder="Ej: mermas documentadas y devoluciones de agosto"
+            placeholderTextColor={colors.gris}
+          />
+
+          {errorCampos !== null ? <Text style={styles.ajustesError}>{errorCampos}</Text> : null}
+
+          <Button
+            label={guardando ? 'Guardando…' : 'Guardar ajustes'}
+            onPress={guardar}
+            disabled={guardando}
+          />
+          {editando ? (
+            <Button label="Cancelar" variant="outline" size="sm" onPress={() => setEditando(false)} />
+          ) : null}
+        </View>
+      ) : (
+        <Button
+          label="Corregir"
+          variant="outline"
+          size="sm"
+          onPress={() => {
+            // Se precargan los valores actuales: corregir es ajustar un
+            // número, no volver a escribirlo todo de memoria.
+            setMontoNegativos(estado.montoNegativos === null ? '' : String(estado.montoNegativos));
+            setMontoEmpresa(estado.montoFaltanteEmpresa === null ? '' : String(estado.montoFaltanteEmpresa));
+            setNota(estado.nota ?? '');
+            setEditando(true);
+          }}
+        />
+      )}
+
+      <Text style={styles.ajustesPie}>Inventario #{inventarioId}</Text>
+    </View>
+  );
+}
+
 const styles = StyleSheet.create({
   contenido: { paddingHorizontal: spacing.lg, paddingTop: spacing.sm, gap: spacing.md + 3 },
   cargando: { marginTop: spacing.xxxl },
+
+  // Ajustes del mes. El borde rojo solo cuando BLOQUEAN: una tarjeta que
+  // grita siempre deja de significar nada.
+  tarjetaBloqueante: { borderColor: colors.rojo },
+  ajustesEstado: { fontSize: fontSize.lg, fontFamily: fonts.bold, color: colors.tinta },
+  ajustesNota: { fontSize: fontSize.sm, color: colors.gris, fontStyle: 'italic' },
+  ajustesForm: { gap: spacing.sm },
+  ajustesEtiqueta: { fontSize: fontSize.sm, fontFamily: fonts.bold, color: colors.tinta },
+  ajustesInput: {
+    borderWidth: 1,
+    borderColor: colors.borde,
+    borderRadius: radius.md,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    fontSize: fontSize.base,
+    color: colors.tinta,
+  },
+  ajustesInputNota: { minHeight: 72, textAlignVertical: 'top' },
+  ajustesError: { fontSize: fontSize.sm, color: colors.rojo, fontFamily: fonts.bold },
+  ajustesPie: { fontSize: fontSize.xs, color: colors.gris },
 
   tarjeta: {
     gap: spacing.md,

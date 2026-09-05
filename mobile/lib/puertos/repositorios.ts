@@ -411,6 +411,15 @@ export interface AdvertenciaLiquidacion {
 }
 
 export interface Liquidacion {
+  /**
+   * Sobre QUÉ inventario es esta liquidación.
+   *
+   * La pantalla pregunta por sucursal ("cómo quedó el último cierre de acá"),
+   * pero para cargar los ajustes o cerrar la planilla necesita el id del
+   * inventario — y no puede sacarlo de `RepositorioInventario.activo()`, que
+   * devuelve el `en_curso` y este ya está `conteo_cerrado`.
+   */
+  inventarioId: number;
   periodo: string;
   faltanteBruto: number;
   /** null = todavía no se cargaron los ajustes del mes. Nunca 0 con ese significado — ver AdvertenciaLiquidacion. */
@@ -494,11 +503,63 @@ export type Conciliacion =
     };
 
 /** Solo lo usa el Coordinador (cierre de fin de mes, pantalla 6). */
+/**
+ * Los ajustes del mes: entradas y salidas que bajan el faltante antes de
+ * repartirlo. Lo que faltaba para poder cerrar el mes.
+ *
+ * `montoNegativos` en la base es `null` mientras nadie los cargue, y ese
+ * `null` bloquea la liquidación entera — no se puede firmar una planilla
+ * calculada sobre un dato que nadie miró. Cargar un **0 explícito** por acá
+ * la destraba, y no es una trampa: el 0 vale porque lo escribió una persona
+ * identificada, con fecha y con una nota que explica de dónde sale.
+ *
+ * Es una versión MÍNIMA y reversible: dos montos y una nota. Las reglas
+ * finas —de dónde salen, quién los aprueba, si se cargan por ítem— las define
+ * el cliente, y cuando lo haga esto se reemplaza sin tocar lo de alrededor.
+ */
+export interface AjustesDelMes {
+  inventarioId: number;
+  /**
+   * `false` = nadie los cargó todavía, y la liquidación está bloqueada.
+   * Un `montoNegativos: 0` con `registrado: true` es lo contrario: alguien
+   * miró y no había.
+   */
+  registrado: boolean;
+  montoNegativos: number | null;
+  montoFaltanteEmpresa: number | null;
+  nota: string | null;
+  /** Quién los cargó. `null` mientras nadie lo hizo. */
+  registradoPor: { id: number; nombre: string } | null;
+  /** ISO. `null` mientras nadie los cargó. */
+  registradoEn: string | null;
+}
+
+export interface DatosAjustes {
+  /** `0` es un valor VÁLIDO y significativo: "alguien miró y no había". */
+  montoNegativos: number;
+  /**
+   * Faltante que absorbe la empresa. Omitirlo CONSERVA el calculado al cerrar
+   * el conteo (sale de las categorías marcadas como de empresa en Dynamics);
+   * mandar `0` lo pisa con cero. No es lo mismo.
+   */
+  montoEmpresa?: number;
+  /** Obligatoria: un ajuste sin explicación no se puede auditar después. */
+  nota: string;
+}
+
 export interface RepositorioLiquidacion {
   /** null si todavía no hay un ciclo cerrado para calcular sobre esa sucursal. */
   deSucursal(sucursalId: number): Promise<Liquidacion | null>;
   /** null exactamente en el mismo caso que `deSucursal`: no hay ciclo cerrado que conciliar. */
   conciliacion(sucursalId: number): Promise<Conciliacion | null>;
+  /** Qué ajustes tiene cargados ese inventario. Nunca null: si no hay, `registrado: false`. */
+  ajustes(inventarioId: number): Promise<AjustesDelMes>;
+  /**
+   * Carga o corrige los ajustes. Solo mientras el inventario esté en
+   * `conteo_cerrado`: antes el faltante todavía puede cambiar, y después la
+   * planilla ya se firmó.
+   */
+  registrarAjustes(inventarioId: number, datos: DatosAjustes): Promise<AjustesDelMes>;
 }
 
 // ---------------------------------------------------------------------------

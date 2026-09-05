@@ -3,7 +3,7 @@ import { requiereSesion } from '../../middleware/auth.middleware';
 import { requiereRol } from '../../middleware/autorizacion.middleware';
 import { validar } from '../../middleware/validation.middleware';
 import * as controller from './liquidacion.controller';
-import { parametrosInventarioSchema, parametrosSucursalSchema } from './liquidacion.schema';
+import { parametrosInventarioSchema, parametrosSucursalSchema, registrarAjustesSchema } from './liquidacion.schema';
 
 /**
  * Liquidacion y nomina (pantalla 6).
@@ -48,4 +48,30 @@ liquidacionRouter.post(
   requiereRol('administrador', 'coordinador'),
   validar(parametrosInventarioSchema, 'params'),
   controller.liquidar,
+);
+
+/**
+ * Los ajustes del mes: el paso que faltaba para poder liquidar.
+ *
+ * MISMOS roles que liquidar y por la misma razón -- cargar los ajustes es
+ * decidir cuánta plata NO se le descuenta al personal, y el auditor queda
+ * afuera porque es quien después firma el sello que incluye esos montos.
+ *
+ * El GET también: quien no puede cargarlos tampoco necesita verlos, y el
+ * estado ya viaja dentro de `GET /liquidacion/sucursales/:id` para las
+ * pantallas que solo miran.
+ */
+liquidacionRouter.put(
+  '/inventarios/:inventarioId/ajustes',
+  requiereRol('administrador', 'coordinador'),
+  validar(parametrosInventarioSchema, 'params'),
+  validar(registrarAjustesSchema, 'body'),
+  controller.registrarAjustes,
+);
+
+liquidacionRouter.get(
+  '/inventarios/:inventarioId/ajustes',
+  requiereRol('administrador', 'coordinador'),
+  validar(parametrosInventarioSchema, 'params'),
+  controller.estadoAjustes,
 );

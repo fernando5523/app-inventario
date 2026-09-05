@@ -34,7 +34,13 @@
  * nada que liquidar".
  */
 
-import type { Conciliacion, Liquidacion, RepositorioLiquidacion } from '../puertos/repositorios';
+import type {
+  AjustesDelMes,
+  Conciliacion,
+  DatosAjustes,
+  Liquidacion,
+  RepositorioLiquidacion,
+} from '../puertos/repositorios';
 import { pedir } from './_http';
 
 export const liquidacionApi: RepositorioLiquidacion = {
@@ -44,5 +50,38 @@ export const liquidacionApi: RepositorioLiquidacion = {
 
   async conciliacion(sucursalId) {
     return await pedir<Conciliacion | null>(`/api/liquidacion/sucursales/${sucursalId}/conciliacion`);
+  },
+
+  /**
+   * `GET /api/liquidacion/inventarios/:id/ajustes` → `AjustesDelMes`.
+   *
+   * NUNCA null, al revés que los dos de arriba: un inventario sin ajustes
+   * cargados devuelve `registrado: false` con los montos en null. La
+   * diferencia importa — la pantalla tiene que poder decir "falta cargarlos"
+   * en vez de "no hay nada acá".
+   */
+  async ajustes(inventarioId) {
+    return await pedir<AjustesDelMes>(`/api/liquidacion/inventarios/${inventarioId}/ajustes`);
+  },
+
+  /**
+   * `PUT` y no `POST`: es idempotente. Cargar dos veces el mismo monto deja
+   * el mismo estado, y corregir uno mal tipeado antes de liquidar tiene que
+   * poder hacerse.
+   *
+   * `montoEmpresa` se OMITE del cuerpo si no viene, en vez de mandarlo como
+   * `undefined` o `0`: el backend conserva el calculado cuando la clave no
+   * está, y lo pisa cuando llega en 0. Son dos cosas distintas y el
+   * adaptador no puede confundirlas (ver DatosAjustes en el puerto).
+   */
+  async registrarAjustes(inventarioId, datos: DatosAjustes) {
+    return await pedir<AjustesDelMes>(`/api/liquidacion/inventarios/${inventarioId}/ajustes`, {
+      metodo: 'PUT',
+      cuerpo: {
+        montoNegativos: datos.montoNegativos,
+        ...(datos.montoEmpresa !== undefined ? { montoEmpresa: datos.montoEmpresa } : {}),
+        nota: datos.nota,
+      },
+    });
   },
 };

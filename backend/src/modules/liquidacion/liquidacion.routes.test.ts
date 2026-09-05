@@ -23,7 +23,9 @@ vi.mock('../sesion/sesion.service', () => ({
     }
   },
 }));
-vi.mock('./liquidacion.controller', () => controllerFalso(['deSucursal', 'conciliacion', 'liquidar']));
+vi.mock('./liquidacion.controller', () =>
+  controllerFalso(['deSucursal', 'conciliacion', 'liquidar', 'registrarAjustes', 'estadoAjustes']),
+);
 
 import { liquidacionRouter } from './liquidacion.routes';
 
@@ -104,6 +106,99 @@ describe('POST /api/liquidacion/inventarios/:id/liquidar: quién puede cerrar la
       method: 'POST',
       headers: autorizacion(ADMIN),
     });
+    expect(r.status).toBe(200);
+  });
+});
+
+/**
+ * LOS AJUSTES DEL MES: mismos roles que liquidar, y por la misma razón.
+ * Cargar los ajustes es decidir cuánta plata NO se le descuenta al personal;
+ * el auditor queda afuera porque es quien después firma el sello que incluye
+ * esos montos.
+ */
+describe('PUT /api/liquidacion/inventarios/:id/ajustes: quién carga los ajustes', () => {
+  const cargar = (actor?: ColaboradorAutenticado, cuerpo: unknown = { montoNegativos: 380, nota: 'Mermas.' }) => ({
+    method: 'PUT',
+    headers: {
+      ...(actor ? autorizacion(actor) : {}),
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(cuerpo),
+  });
+
+  it('sin sesión, 401', async () => {
+    await iniciar();
+    expect((await fetch(`${baseUrl}/api/liquidacion/inventarios/1/ajustes`, cargar())).status).toBe(401);
+  });
+
+  it('auditor, 403 -- firma el sello que incluye estos montos', async () => {
+    await iniciar();
+    expect((await fetch(`${baseUrl}/api/liquidacion/inventarios/1/ajustes`, cargar(AUDITOR))).status).toBe(403);
+  });
+
+  it('conteo, 403', async () => {
+    await iniciar();
+    expect((await fetch(`${baseUrl}/api/liquidacion/inventarios/1/ajustes`, cargar(CONTEO))).status).toBe(403);
+  });
+
+  it('coordinador, pasa el middleware', async () => {
+    await iniciar();
+    expect((await fetch(`${baseUrl}/api/liquidacion/inventarios/1/ajustes`, cargar(COORDINADOR))).status).toBe(200);
+  });
+
+  it('administrador, pasa el middleware', async () => {
+    await iniciar();
+    expect((await fetch(`${baseUrl}/api/liquidacion/inventarios/1/ajustes`, cargar(ADMIN))).status).toBe(200);
+  });
+
+  /** EL CASO QUE DESTRABA EL MES: 0 es un monto válido, no un campo vacío. */
+  it('montoNegativos en 0 pasa la validación: "alguien miró y no había"', async () => {
+    await iniciar();
+    const r = await fetch(
+      `${baseUrl}/api/liquidacion/inventarios/1/ajustes`,
+      cargar(COORDINADOR, { montoNegativos: 0, nota: 'Revisado con Jocelyn: no hubo ajustes.' }),
+    );
+    expect(r.status).toBe(200);
+  });
+
+  it('sin nota, 400 -- un ajuste sin explicación no se puede auditar después', async () => {
+    await iniciar();
+    const r = await fetch(
+      `${baseUrl}/api/liquidacion/inventarios/1/ajustes`,
+      cargar(COORDINADOR, { montoNegativos: 380 }),
+    );
+    expect(r.status).toBe(400);
+  });
+
+  it('con nota vacía, 400', async () => {
+    await iniciar();
+    const r = await fetch(
+      `${baseUrl}/api/liquidacion/inventarios/1/ajustes`,
+      cargar(COORDINADOR, { montoNegativos: 380, nota: '   ' }),
+    );
+    expect(r.status).toBe(400);
+  });
+
+  it('monto negativo, 400 -- un ajuste que sube el faltante no es un ajuste', async () => {
+    await iniciar();
+    const r = await fetch(
+      `${baseUrl}/api/liquidacion/inventarios/1/ajustes`,
+      cargar(COORDINADOR, { montoNegativos: -100, nota: 'x' }),
+    );
+    expect(r.status).toBe(400);
+  });
+});
+
+describe('GET /api/liquidacion/inventarios/:id/ajustes: ver qué hay cargado', () => {
+  it('conteo, 403', async () => {
+    await iniciar();
+    const r = await fetch(`${baseUrl}/api/liquidacion/inventarios/1/ajustes`, { headers: autorizacion(CONTEO) });
+    expect(r.status).toBe(403);
+  });
+
+  it('coordinador, pasa el middleware', async () => {
+    await iniciar();
+    const r = await fetch(`${baseUrl}/api/liquidacion/inventarios/1/ajustes`, { headers: autorizacion(COORDINADOR) });
     expect(r.status).toBe(200);
   });
 });
