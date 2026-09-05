@@ -906,10 +906,23 @@ model DiferenciaItem {
   /// arreglaron solos en el 2do conteo" sin recorrer las hojas.
   resueltoEnConteo Int @map("resuelto_en_conteo")
 
-  /// Costo unitario al momento del inventario. 4 decimales porque un costo
-  /// unitario de almacen no es un precio de gondola: se redondea al
-  /// multiplicar, no antes. Nullable: si el snapshot no trajo costo, la
-  /// diferencia en unidades sigue siendo valida aunque no se pueda valorizar.
+  /// El precio unitario con el que se valorizo esta diferencia, congelado al
+  /// momento del cierre.
+  ///
+  /// OJO CON EL NOMBRE: lo que se guarda aca es el precio de VENTA
+  /// (CatalogoItem.precioVenta), NO un costo. El snapshot de Dynamics no
+  /// trae costo -- `CatalogoItem` solo tiene `precioVenta` -- y el cliente
+  /// definio en reunion que las diferencias se valorizan a precio de venta
+  /// (ver auditoria.calculos.ts#diferenciaValor, "nunca precio de compra").
+  /// La columna se llama `costoUnitario` por un modelado anterior a esa
+  /// decision; el rename a `precioUnitario` esta acordado y va en un commit
+  /// propio (toca historial.service.ts, hoy en manos de otro agente).
+  ///
+  /// 4 decimales, igual que el origen: se redondea al multiplicar, no antes.
+  /// Nullable: si el snapshot no trajo precio, la diferencia en unidades
+  /// sigue siendo valida aunque no se pueda valorizar -- y es justo esa la
+  /// que cuenta liquidacion.service.ts#contarItemsSinPrecio para advertirle
+  /// a quien firma que el monto puede estar subestimado.
   costoUnitario   Decimal? @map("costo_unitario")   @db.Decimal(12, 4)
   montoDiferencia Decimal? @map("monto_diferencia") @db.Decimal(12, 2)
 

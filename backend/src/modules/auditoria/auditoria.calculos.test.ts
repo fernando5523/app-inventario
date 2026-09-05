@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   aplicarFiltro,
   conteoFinal,
+  diferenciasParaPersistir,
   esAuditable,
   diferenciaUnidades,
   diferenciaValor,
@@ -293,5 +294,122 @@ describe('embudoDeConteos', () => {
       itemsTercerConteo: 1,
       itemsConDiferencia: 1, // solo C sigue sin cuadrar al final
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// El detalle que se congela al cerrar el conteo
+// ---------------------------------------------------------------------------
+
+/**
+ * `diferenciasParaPersistir` decide QUE se escribe en `DiferenciaItem`, y esa
+ * tabla es la que el sello del lacrado hashea. Lo que no entra acá no existe
+ * para el histórico ni para el ajuste en el ERP; lo que entra de más se
+ * convierte en un descuento al sueldo de alguien.
+ *
+ * El criterio de fondo es el mismo que hace que `diferenciaUnidades` devuelva
+ * `null` y no `0`: no saber no es un valor. La única forma de que un "no sé"
+ * no se confunda con un cero es NO escribir la fila.
+ */
+describe('diferenciasParaPersistir', () => {
+  it('un ítem que cuadró NO genera fila', () => {
+    // Contó exactamente lo que decía el ERP: no hay nada que ajustar ni que
+    // descontarle a nadie. Son ~7.350 de los 8.000 ítems reales.
+    expect(diferenciasParaPersistir([item({ stockErp: 10, conteo1: 10 })])).toEqual([]);
+  });
+
+  it('un ítem SIN stock del ERP no genera fila, ni con stockSistema en 0', () => {
+    // Una fila con `stockSistema: 0` afirmaría "el ERP esperaba cero y
+    // apareció mercadería" -- una acusación, no un dato faltante.
+    expect(diferenciasParaPersistir([item({ stockErp: null, conteo1: 7 })])).toEqual([]);
+  });
+
+  it('un ítem que nadie contó no genera fila, ni con conteoFinal en 0', () => {
+    // Y un `conteoFinal: 0` se leería como "no había nada en la góndola",
+    // que termina descontándose del sueldo de alguien.
+    expect(diferenciasParaPersistir([item({ stockErp: 10, conteo1: null })])).toEqual([]);
+  });
+
+  it('un faltante genera fila con diferencia NEGATIVA', () => {
+    const [fila] = diferenciasParaPersistir([item({ codigo: 'IT-9', stockErp: 10, conteo1: 7, precioVenta: 4 })]);
+    expect(fila).toMatchObject({
+      codigo: 'IT-9',
+      stockSistema: 10,
+      conteoFinal: 7,
+      diferencia: -3,
+      montoDiferencia: -12,
+    });
+  });
+
+  it('un sobrante genera fila con diferencia POSITIVA', () => {
+    const [fila] = diferenciasParaPersistir([item({ stockErp: 10, conteo1: 12, precioVenta: 4 })]);
+    expect(fila?.diferencia).toBe(2);
+    expect(fila?.montoDiferencia).toBe(8);
+  });
+
+  it('guarda en qué ronda quedó resuelto, no siempre 3', () => {
+    // `resueltoEnConteo` es lo que responde "cuántos se arreglaron solos en
+    // el 2do conteo" sin recorrer las hojas.
+    const [fila] = diferenciasParaPersistir([item({ stockErp: 10, conteo1: 4, conteo2: 7 })]);
+    expect(fila?.resueltoEnConteo).toBe(2);
+    expect(fila?.conteoFinal).toBe(7); // el ÚLTIMO que existe, no conteo3
+  });
+
+  it('sin precio de venta la fila SÍ se crea, con montoDiferencia en null', () => {
+    // La diferencia en unidades es un hecho verificado aunque no se pueda
+    // valorizar. Y es justo esta fila la que cuenta
+    // `liquidacion.service.ts#contarItemsSinPrecio` para avisarle a quien
+    // firma que el monto está subestimado: saltearla escondería el problema
+    // que la advertencia existe para mostrar.
+    const [fila] = diferenciasParaPersistir([item({ stockErp: 10, conteo1: 7, precioVenta: null })]);
+    expect(fila?.diferencia).toBe(-3);
+    expect(fila?.montoDiferencia).toBeNull();
+    expect(fila?.costoUnitario).toBeNull();
+  });
+
+  it('congela la descripción del momento del cierre', () => {
+    const [fila] = diferenciasParaPersistir([
+      item({ descripcion: 'Aceite Primor 900ml', stockErp: 10, conteo1: 7 }),
+    ]);
+    expect(fila?.descripcion).toBe('Aceite Primor 900ml');
+  });
+
+  it('un ítem de la empresa igual genera fila: el faltante existe y se reporta', () => {
+    // `esEmpresa` cambia quién lo paga, no si pasó. El histórico y el ajuste
+    // en el ERP lo necesitan igual.
+    const [fila] = diferenciasParaPersistir([item({ stockErp: 10, conteo1: 7, esEmpresa: true })]);
+    expect(fila?.diferencia).toBe(-3);
+  });
+
+  /**
+   * LA INVARIANTE. El detalle y el total salen de la MISMA matriz, así que
+   * no pueden discrepar -- y el sello del lacrado los hashea juntos, donde
+   * una discrepancia no se detecta: se firma.
+   */
+  it('la suma de las filas concuerda con unidadesFaltantes/Sobrantes del resumen', () => {
+    const items = [
+      item({ codigo: 'A', stockErp: 10, conteo1: 10 }), // cuadra
+      item({ codigo: 'B', stockErp: 10, conteo1: 7 }), // -3
+      item({ codigo: 'C', stockErp: 10, conteo1: 4, conteo2: 6 }), // -4
+      item({ codigo: 'D', stockErp: 10, conteo1: 13 }), // +3
+      item({ codigo: 'E', stockErp: null, conteo1: 5 }), // sin_erp
+      item({ codigo: 'F', stockErp: 10, conteo1: null }), // sin_contar
+    ];
+
+    const filas = diferenciasParaPersistir(items);
+    const resumen = resumir(items);
+
+    const faltantes = filas.filter((f) => f.diferencia < 0).reduce((t, f) => t + -f.diferencia, 0);
+    const sobrantes = filas.filter((f) => f.diferencia > 0).reduce((t, f) => t + f.diferencia, 0);
+
+    expect(faltantes).toBe(resumen.unidadesFaltantes);
+    expect(sobrantes).toBe(resumen.unidadesSobrantes);
+    // Y la cantidad de filas es exactamente el `itemsConDiferencia` del embudo
+    // que se guarda en ResultadoInventario.
+    expect(filas.length).toBe(embudoDeConteos(items).itemsConDiferencia);
+  });
+
+  it('sin ítems devuelve lista vacía, no revienta', () => {
+    expect(diferenciasParaPersistir([])).toEqual([]);
   });
 });

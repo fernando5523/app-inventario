@@ -22,6 +22,7 @@ const prismaMock = vi.hoisted(() => ({
   catalogoItem: { findMany: vi.fn() },
   colaborador: { count: vi.fn() },
   resultadoInventario: { create: vi.fn() },
+  diferenciaItem: { createMany: vi.fn() },
   $transaction: vi.fn(),
 }));
 vi.mock('../../config/database', () => ({ prisma: prismaMock }));
@@ -39,6 +40,9 @@ const producto = (codigo: string, categoria: string | null) => ({
   descripcion: `Producto ${codigo}`,
   categoria,
 });
+
+/** Lo mínimo de un `Prisma.Decimal` que consume `armarMatriz`. */
+const decimal = (valor: number) => ({ toNumber: () => valor });
 
 const itemCatalogo = (codigo: string, categoria: string | null, stockErp: number | null) => ({
   id: Number(codigo),
@@ -309,6 +313,15 @@ describe('cerrar', () => {
       expect(prismaMock.colaborador.count).toHaveBeenCalledWith({ where: { sucursalId: 1, activo: true } });
     });
 
+    it('todo cuadró: no escribe NINGUNA fila de diferencias', async () => {
+      await cerrar(COORD, 9, 1);
+
+      // `createMany` con `data: []` es lo correcto -- se pide igual, con la
+      // lista vacía -- pero lo que importa es que no invente filas en cero.
+      const { data } = prismaMock.diferenciaItem.createMany.mock.calls[0]![0] as { data: unknown[] };
+      expect(data).toEqual([]);
+    });
+
     it('no crea ninguna hoja nueva y devuelve rondaAbierta: null con el motivo', async () => {
       const resultado = await cerrar(COORD, 9, 1);
 
@@ -316,6 +329,130 @@ describe('cerrar', () => {
       expect(resultado.motivoSinSiguiente).toContain('cuadraron');
       expect(resultado.hojas).toEqual([]);
       expect(prismaMock.hojaConteo.create).not.toHaveBeenCalled();
+    });
+  });
+
+  /**
+   * EL CASO REAL DEL CIERRE: la ronda 3 termina y todavía hay diferencias.
+   * No se abre ronda 4 -- el ciclo son 3 -- así que el conteo cierra CON
+   * faltantes, que es exactamente lo que se va a ajustar en el ERP y lo que
+   * se le va a descontar a alguien.
+   *
+   * Las reglas de qué fila entra están probadas sin base en
+   * auditoria.calculos.test.ts#diferenciasParaPersistir. Acá se prueba lo
+   * único que solo puede fallar contra Prisma: que esas filas se ESCRIBAN, y
+   * que se escriban en la misma transacción que el resultado.
+   */
+  describe('cuando cierra la ronda 3 con diferencias', () => {
+    const hojaConFaltante = {
+      numeroConteo: 3,
+      zona: 'ABARROTES',
+      productos: [
+        {
+          id: 300,
+          codigo: '300',
+          descripcion: 'Aceite Primor 900ml',
+          empaques: [{ nombre: 'U', factor: 1 }],
+          conteos: [{ sueltas: 7, empaques: [] }],
+        },
+      ],
+    };
+
+    beforeEach(() => {
+      prismaMock.hojaConteo.count.mockImplementation(async (query: unknown) => {
+        const q = query as { where?: { numeroConteo?: number } };
+        // Hay hojas de la ronda 3; la ronda 4 no existe (ni puede existir).
+        return q.where?.numeroConteo === 3 ? 1 : 0;
+      });
+      prismaMock.producto.findMany.mockResolvedValue([producto('300', 'ABARROTES')]);
+      prismaMock.catalogoItem.findMany.mockResolvedValue([
+        // `precioVenta` es Decimal en Prisma y `armarMatriz` le pide
+        // `.toNumber()`: un 4 pelado acá pasaría el test y reventaría contra
+        // la base real.
+        { codigo: '300', descripcion: 'Aceite Primor 900ml', stockErp: 10, precioVenta: decimal(4), esEmpresa: false },
+      ]);
+      prismaMock.colaborador.count.mockResolvedValue(11);
+      mockHojaConteoFindMany({
+        contadoPorRonda: [
+          {
+            numeroConteo: 3,
+            productos: [{ codigo: '300', empaques: [{ nombre: 'U', factor: 1 }], conteos: [{ sueltas: 7, empaques: [] }] }],
+          },
+        ],
+        matrizHojasFinalizadas: [hojaConFaltante],
+      });
+    });
+
+    it('persiste el detalle ítem por ítem, no solo los totales', async () => {
+      await cerrar(COORD, 9, 3);
+
+      expect(prismaMock.diferenciaItem.createMany).toHaveBeenCalledWith({
+        data: [
+          {
+            inventarioId: 9,
+            codigo: '300',
+            descripcion: 'Aceite Primor 900ml',
+            stockSistema: 10,
+            conteoFinal: 7,
+            diferencia: -3,
+            resueltoEnConteo: 3,
+            costoUnitario: 4,
+            montoDiferencia: -12,
+          },
+        ],
+        // El @@unique([inventarioId, codigo]) no tiene que reventar si esto
+        // se reintenta: mejor que no pase nada a un error de constraint.
+        skipDuplicates: true,
+      });
+    });
+
+    /**
+     * LA INVARIANTE, del lado de la base: el detalle y el total salen de la
+     * MISMA matriz y de la MISMA transacción. Si se escribieran en dos
+     * momentos distintos podrían discrepar -- y el sello del lacrado los
+     * hashea juntos, donde una discrepancia no se detecta: se firma.
+     */
+    it('el detalle concuerda con los totales del resultado', async () => {
+      await cerrar(COORD, 9, 3);
+
+      const { data: filas } = prismaMock.diferenciaItem.createMany.mock.calls[0]![0] as {
+        data: Array<{ diferencia: number }>;
+      };
+      const { data: resultado } = prismaMock.resultadoInventario.create.mock.calls[0]![0] as {
+        data: { itemsConDiferencia: number; unidadesFaltantes: number; unidadesSobrantes: number };
+      };
+
+      expect(filas.length).toBe(resultado.itemsConDiferencia);
+      expect(filas.filter((f) => f.diferencia < 0).reduce((t, f) => t + -f.diferencia, 0)).toBe(
+        resultado.unidadesFaltantes,
+      );
+      expect(filas.filter((f) => f.diferencia > 0).reduce((t, f) => t + f.diferencia, 0)).toBe(
+        resultado.unidadesSobrantes,
+      );
+    });
+
+    it('las diferencias van en la MISMA transacción que el estado y el resultado', async () => {
+      // Si el estado quedara cerrado y las diferencias no se escribieran, el
+      // lacrado sellaría un documento vacío sin que nadie se entere. Los tres
+      // hechos son uno solo.
+      await cerrar(COORD, 9, 3);
+
+      const [arg] = prismaMock.$transaction.mock.calls[0] as [unknown];
+      expect(Array.isArray(arg)).toBe(true);
+      expect((arg as unknown[]).length).toBe(3);
+    });
+
+    it('si la transacción falla, no queda ni resultado ni diferencias', async () => {
+      // `mockRejectedValue`, no `...Once`: con `Once`, si algo revienta ANTES
+      // de llegar a $transaction el rechazo queda cargado y se lo come el
+      // test siguiente. Pasó exactamente eso mientras se escribía esto.
+      prismaMock.$transaction.mockRejectedValue(new Error('conexión caída'));
+
+      await expect(cerrar(COORD, 9, 3)).rejects.toThrow('conexión caída');
+      // El cierre no llegó a auditarse: no hay un "la ronda cerró" mintiendo
+      // en el registro sobre algo que no pasó.
+      const { registrarAuditoria } = await import('../../shared/auditoria');
+      expect(registrarAuditoria).not.toHaveBeenCalled();
     });
   });
 

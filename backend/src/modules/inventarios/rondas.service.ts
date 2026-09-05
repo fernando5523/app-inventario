@@ -41,7 +41,7 @@ import { registrarAuditoria } from '../../shared/auditoria';
 import { Conflicto, NoEncontrado, Prohibido, SolicitudInvalida } from '../../shared/errores';
 import type { ColaboradorAutenticado } from '../../shared/tipos';
 import { armarMatriz } from '../auditoria/auditoria.service';
-import { embudoDeConteos, resumir as resumirAuditoria } from '../auditoria/auditoria.calculos';
+import { diferenciasParaPersistir, embudoDeConteos, resumir as resumirAuditoria } from '../auditoria/auditoria.calculos';
 import { redondear } from '../historial/historial.calculos';
 import { totalUnidades } from '../hojas/hojas.calculos';
 import { INCLUIR_TODO, aHojaDto, type HojaDto } from '../hojas/hojas.service';
@@ -407,6 +407,12 @@ export async function cerrar(
     const matrizCompleta = await armarMatriz(inventarioId);
     const embudo = embudoDeConteos(matrizCompleta);
     const resumenAuditoria = resumirAuditoria(matrizCompleta);
+    // El DETALLE ítem por ítem de esos mismos agregados. Sale de la misma
+    // matriz y entra en la misma transacción a propósito: si el total y su
+    // detalle se escribieran en dos momentos distintos podrían discrepar, y
+    // el sello del lacrado los hashea JUNTOS (historial.lacrado.ts) -- una
+    // discrepancia ahí no se detecta, se firma.
+    const diferencias = diferenciasParaPersistir(matrizCompleta);
     // TODO el personal habilitado de la sucursal, no solo quien contó --
     // mismo criterio que documenta ResultadoInventario.colaboradoresAlcanzados.
     const colaboradoresAlcanzados = await prisma.colaborador.count({
@@ -447,6 +453,16 @@ export async function cerrar(
           // no hay config editable para esto todavía (ver
           // backend/prisma/configuraciones.ts).
         },
+      }),
+      // El detalle que se va a ajustar en el ERP y que el sello hashea.
+      // `skipDuplicates` por el @@unique([inventarioId, codigo]): el cierre
+      // corre una sola vez -- el estado pasa a `conteo_cerrado` en esta
+      // misma transacción y `cerrar()` lo valida -- pero si alguna vez se
+      // reintentara, mejor que no pase nada a que reviente con un error de
+      // constraint que no le dice nada a quien lo lee.
+      prisma.diferenciaItem.createMany({
+        data: diferencias.map((d) => ({ inventarioId, ...d })),
+        skipDuplicates: true,
       }),
     ]);
 

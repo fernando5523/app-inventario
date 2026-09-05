@@ -294,3 +294,89 @@ export function embudoDeConteos(items: ItemAuditoria[]): {
     }).length,
   };
 }
+
+// ---------------------------------------------------------------------------
+// El detalle que se congela al cerrar el conteo
+// ---------------------------------------------------------------------------
+
+/**
+ * Una fila de `DiferenciaItem`, ya lista para persistir. Espeja las columnas
+ * del modelo y no incluye `inventarioId`: eso lo pone quien escribe.
+ */
+export interface FilaDiferencia {
+  codigo: string;
+  descripcion: string;
+  stockSistema: number;
+  conteoFinal: number;
+  diferencia: number;
+  resueltoEnConteo: number;
+  /**
+   * El precio de VENTA con el que se valorizo, no un costo -- ver el
+   * comentario de `DiferenciaItem.costoUnitario` en schema.prisma. `null` si
+   * el snapshot no lo trajo.
+   */
+  costoUnitario: number | null;
+  montoDiferencia: number | null;
+}
+
+/**
+ * El detalle item por item que se congela al cerrar el conteo: la contracara
+ * de `resumir`/`embudoDeConteos`, que dan los mismos hechos agregados.
+ *
+ * QUE ENTRA Y QUE NO. Solo los items con una diferencia REAL distinta de
+ * cero. Los otros tres casos se saltean, y cada uno por su razon:
+ *
+ *   - `cuadrado` (diferencia 0): conto exactamente lo que decia el ERP. No
+ *     hay nada que ajustar ni que descontarle a nadie, y son la enorme
+ *     mayoria del inventario (~7.350 de 8.000). Guardarlos serian 7.350
+ *     filas por mes que dicen "no paso nada", y el
+ *     `@@index([inventarioId, diferencia])` existe para encontrar los peores
+ *     faltantes, no para pasear por los que cuadraron.
+ *   - `sin_erp` (el snapshot no trajo stock): no se puede afirmar NADA de
+ *     ese item. Una fila con `stockSistema: 0` diria "el ERP esperaba cero y
+ *     apareció mercaderia", que es una acusacion, no un dato faltante.
+ *   - `sin_contar` (nadie lo conto): mismo problema del otro lado. Un
+ *     `conteoFinal: 0` se lee como "no habia nada en la gondola" y termina
+ *     descontandose del sueldo de alguien.
+ *
+ * Es la misma regla que hace que `diferenciaUnidades` devuelva `null` y no
+ * `0`: no saber no es un valor, y la unica forma de que no se confunda con
+ * uno es no escribir la fila.
+ *
+ * Un item sin precio SI genera fila, con `montoDiferencia: null`: la
+ * diferencia en unidades es un hecho verificado aunque no se pueda
+ * valorizar, y es justo la fila que
+ * `liquidacion.service.ts#contarItemsSinPrecio` busca para advertirle a
+ * quien firma que el monto esta subestimado. Saltearla seria esconder el
+ * problema que la advertencia existe para mostrar.
+ */
+export function diferenciasParaPersistir(items: ItemAuditoria[]): FilaDiferencia[] {
+  const filas: FilaDiferencia[] = [];
+
+  for (const item of items) {
+    const diferencia = diferenciaUnidades(item);
+    // `null` = falta un lado (sin_erp o sin_contar); `0` = cuadro.
+    if (diferencia === null || diferencia === 0) continue;
+
+    // Los dos non-null estan garantizados por `diferencia !== null`, pero se
+    // chequean igual: el compilador no puede seguir esa implicacion, y un
+    // `!` seria una promesa que nadie vuelve a verificar.
+    const final = conteoFinal(item);
+    if (item.stockErp === null || final === null) continue;
+
+    filas.push({
+      codigo: item.codigo,
+      // Congelada, como el modelo pide: la descripcion de HOY puede cambiar
+      // en Dynamics y el historico tiene que decir que se conto entonces.
+      descripcion: item.descripcion,
+      stockSistema: item.stockErp,
+      conteoFinal: final,
+      diferencia,
+      resueltoEnConteo: rondasNecesarias(item),
+      costoUnitario: item.precioVenta,
+      montoDiferencia: diferenciaValor(item),
+    });
+  }
+
+  return filas;
+}
