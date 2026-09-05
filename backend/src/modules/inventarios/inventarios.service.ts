@@ -149,7 +149,23 @@ export async function crearHojas(actor: ColaboradorAutenticado, inventarioId: nu
           // fisicamente cada producto. Se deja el numero de hoja como
           // referencia en vez de inventar una ubicacion que seria mentira.
           gondola: numeroDeHoja(indice),
-          tamano,
+          /**
+           * `cantidad` y NO `tamano`: cuantos items tiene ESTA hoja, no
+           * cuantos se pidieron al armar el lote.
+           *
+           * Guardaba `tamano` (el 20/30/50 elegido) en todas, incluida la
+           * ultima, que casi siempre queda parcial. La ultima de 1.236 items
+           * en hojas de 50 tiene 36, y decia 50. El movil confiaba en este
+           * campo y le mostraba a la persona parada en la gondola "36 / 50
+           * Productos" con TODO contado, y al cerrar "quedan 14 items sin
+           * contar" cuando no quedaba ninguno -- o sale a buscar productos
+           * que no existen, o duda de su trabajo y recuenta la hoja entera.
+           *
+           * El tamaño PEDIDO no se pierde: vive en `Inventario.tamanoHoja`,
+           * que es donde tiene sentido para el historico. Cada dato en el
+           * lugar donde es verdad.
+           */
+          tamano: cantidad,
           productos: {
             create: bloque.map((item) => ({
               codigo: item.codigo,

@@ -68,7 +68,10 @@ describe('crearHojas', () => {
       data: { numero: string; zona: string; tamano: number; productos: { create: Array<{ codigo: string }> } };
     };
     expect(data.numero).toBe('001');
-    expect(data.tamano).toBe(20);
+    // `tamano` es CUANTOS ITEMS TIENE la hoja (3), no el 20 que se pidio.
+    // Ver el test de la hoja parcial, mas abajo: ahi esta el caso que
+    // importa, y este `expect` documenta la misma regla en el caso simple.
+    expect(data.tamano).toBe(3);
     // 2 de ABARROTES contra 1 de GALLETAS: la dominante rotula la hoja.
     expect(data.zona).toBe('ABARROTES');
     // Y el ORDEN dentro de la hoja es por categoria, no por codigo.
@@ -95,6 +98,35 @@ describe('crearHojas', () => {
     expect(producto).not.toHaveProperty('stockErp');
     expect(producto).not.toHaveProperty('precioVenta');
     expect(producto).not.toHaveProperty('esEmpresa');
+  });
+
+  /**
+   * EL CASO QUE CAUSABA EL BUG EN LA GONDOLA.
+   *
+   * `tamano` guardaba el 20/30/50 pedido en TODAS las hojas, incluida la
+   * ultima, que casi siempre queda parcial. El movil confiaba en ese campo
+   * y le mostraba a la persona "36 / 50 Productos" con todo contado, y al
+   * cerrar "quedan 14 items sin contar" cuando no quedaba ninguno.
+   *
+   * Con 5 items en hojas de 2: la ultima tiene 1, y tiene que decir 1.
+   */
+  it('la ultima hoja guarda SU tamaño real, no el pedido', async () => {
+    prismaMock.catalogoItem.findMany.mockResolvedValue([
+      item('100', 'A'),
+      item('200', 'A'),
+      item('300', 'B'),
+      item('400', 'B'),
+      item('500', 'C'),
+    ]);
+
+    await crearHojas(COORD, 9, 2);
+
+    const tamanos = prismaMock.hojaConteo.create.mock.calls.map(
+      ([a]) => (a as { data: { tamano: number; productos: { create: unknown[] } } }).data,
+    );
+    expect(tamanos.map((d) => d.tamano)).toEqual([2, 2, 1]);
+    // Y coincide con los productos que de verdad se crearon en cada una.
+    for (const d of tamanos) expect(d.tamano).toBe(d.productos.create.length);
   });
 
   it('borra las hojas anteriores antes de rehacer', async () => {

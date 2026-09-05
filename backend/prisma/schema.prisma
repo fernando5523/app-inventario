@@ -512,7 +512,13 @@ model HojaConteo {
   numero       String
   zona         String
   gondola      String
-  /// 20 | 30 | 50 (tipos.ts: TAMANOS_HOJA).
+  /// CUANTOS ITEMS TIENE ESTA HOJA -- no el 20/30/50 que se eligio al armar
+  /// el lote. La ultima hoja casi siempre queda parcial (1.236 items en
+  /// hojas de 50 dan 24 de 50 y una de 36), y guardar 50 ahi hacia que la
+  /// pantalla de conteo dijera "36 / 50 Productos" con todo contado.
+  ///
+  /// El tamaño PEDIDO vive en Inventario.tamanoHoja, que es donde sirve
+  /// para el historico.
   tamano       Int
   estado       EstadoHoja @default(pendiente)
   sync         EstadoSync @default(local)
