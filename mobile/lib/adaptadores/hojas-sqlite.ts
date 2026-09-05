@@ -34,9 +34,12 @@
 import { buscarHojaPorId, finalizarDominio, obtenerInventario, puedeEditar } from './_compartido';
 import { obtenerDb } from './_sqlite';
 import { aplicarResultadoEnvio, ordenarCola, estadoSyncDeHoja, type ItemCola, type ResultadoEnvio } from './sqlite-cola';
+import { catalogoApi } from './catalogo-api';
+import { esFallaDeRed } from './_http';
+import { hojasApi } from './hojas-api';
 import { sesionApi } from './sesion-api';
 import { sesionMemoria } from './sesion-memoria';
-import type { Conteo, EstadoHoja, EstadoSync, HojaConteo, LineaEmpaque, Producto } from '../dominio/tipos';
+import type { Conteo, Empaque, EstadoHoja, EstadoSync, HojaConteo, LineaEmpaque, Producto } from '../dominio/tipos';
 import type { RepositorioHojas } from '../puertos/repositorios';
 
 /**
@@ -75,6 +78,32 @@ interface FilaCola {
   creado_en: string;
   intentos: number;
   estado: string;
+}
+
+/** `hojas_estructura` (migración v3) — ver sqlite-esquema.ts para el porqué. */
+interface FilaHojaEstructura {
+  id: number;
+  inventario_id: number;
+  numero: string;
+  zona: string;
+  gondola: string;
+  tamano: number;
+  /** JSON de string[]. */
+  asignados: string;
+}
+
+/** `productos_estructura` (migración v3). */
+interface FilaProductoEstructura {
+  hoja_id: number;
+  id: number;
+  orden: number;
+  codigo: string;
+  codigo_barras: string;
+  descripcion: string;
+  /** JSON de Empaque[]. */
+  empaques: string;
+  ubicacion: string | null;
+  categoria: string | null;
 }
 
 function filaAConteo(f: FilaConteo): Conteo {
@@ -119,6 +148,294 @@ function filaAItemCola(f: FilaCola): ItemCola {
     intentos: f.intentos,
     estado: f.estado as ItemCola['estado'],
   };
+}
+
+function filaAProducto(f: FilaProductoEstructura): Producto {
+  return {
+    id: f.id,
+    codigo: f.codigo,
+    codigoBarras: f.codigo_barras,
+    descripcion: f.descripcion,
+    empaques: JSON.parse(f.empaques) as Empaque[],
+    // `exactOptionalPropertyTypes`: un `ubicacion: undefined` explícito no
+    // es lo mismo que omitir la clave — se arma condicional en vez de
+    // pasar `f.ubicacion ?? undefined`.
+    ...(f.ubicacion !== null ? { ubicacion: f.ubicacion } : {}),
+    ...(f.categoria !== null ? { categoria: f.categoria } : {}),
+  };
+}
+
+/**
+ * Arma un `HojaConteo` desde `hojas_estructura` + `productos_estructura`
+ * SOLO con lo que esas dos tablas saben — nunca estado/sync/conteos
+ * reales, que siguen viviendo únicamente en `hoja_estado_local`/`conteos`
+ * (ver el comentario de la migración v3). Los tres placeholders de acá
+ * abajo ('pendiente'/'local'/[]) los pisa siempre `hojaConEstadoLocal`
+ * más abajo — el único momento en que el estado/sync/conteos REAL importa
+ * es la primera siembra, y ésa usa la hoja fresca que vino de la red
+ * (`guardarEstructuraDeHoja`), no ésta.
+ */
+function filaAHojaBase(fila: FilaHojaEstructura, productos: Producto[]): HojaConteo {
+  return {
+    id: fila.id,
+    inventarioId: fila.inventario_id,
+    numero: fila.numero,
+    zona: fila.zona,
+    gondola: fila.gondola,
+    tamano: fila.tamano,
+    estado: 'pendiente',
+    sync: 'local',
+    asignados: JSON.parse(fila.asignados) as string[],
+    productos,
+    conteos: [],
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Estructura descargada — lectura (hojas_estructura + productos_estructura)
+// ---------------------------------------------------------------------------
+
+type DbSqlite = Awaited<ReturnType<typeof obtenerDb>>;
+
+async function productosDeHojaDb(db: DbSqlite, hojaId: number): Promise<Producto[]> {
+  const filas = await db.getAllAsync<FilaProductoEstructura>(
+    'SELECT * FROM productos_estructura WHERE hoja_id = ? ORDER BY orden ASC',
+    [hojaId],
+  );
+  return filas.map(filaAProducto);
+}
+
+async function hojaEstructuraDb(db: DbSqlite, hojaId: number): Promise<HojaConteo | null> {
+  const fila = await db.getFirstAsync<FilaHojaEstructura>('SELECT * FROM hojas_estructura WHERE id = ?', [hojaId]);
+  if (!fila) return null;
+  return filaAHojaBase(fila, await productosDeHojaDb(db, fila.id));
+}
+
+async function hojasEstructuraDeInventarioDb(db: DbSqlite, inventarioId: number): Promise<HojaConteo[]> {
+  const filas = await db.getAllAsync<FilaHojaEstructura>(
+    'SELECT * FROM hojas_estructura WHERE inventario_id = ? ORDER BY numero ASC',
+    [inventarioId],
+  );
+  const resultado: HojaConteo[] = [];
+  for (const fila of filas) resultado.push(filaAHojaBase(fila, await productosDeHojaDb(db, fila.id)));
+  return resultado;
+}
+
+/**
+ * La hoja BASE, real primero: si ya se descargó su estructura (tabla
+ * `hojas_estructura`), es esa. Si no — el inventario nunca se descargó, o
+ * es el dataset de ejemplo — cae al mock de `_compartido.ts`, exactamente
+ * el comportamiento de siempre. Ningún llamador de este archivo necesita
+ * saber cuál de los dos casos es.
+ */
+async function buscarHojaBase(hojaId: number): Promise<HojaConteo | undefined> {
+  const db = await obtenerDb();
+  const real = await hojaEstructuraDb(db, hojaId);
+  if (real) return real;
+  return buscarHojaPorId(hojaId);
+}
+
+interface HojasDeInventarioBase {
+  hojas: HojaConteo[];
+  /**
+   * 'real': salieron de `hojas_estructura` — el backend YA filtró
+   * `alcance` (mías vs. todas) del lado del servidor, así que acá no hay
+   * que volver a filtrar por nombre de colaborador.
+   * 'mock': cayó a `_compartido.ts` — mismo dataset de ejemplo de
+   * siempre, que SÍ necesita el filtro manual (ver `mias()` abajo).
+   */
+  origen: 'real' | 'mock';
+}
+
+async function hojasDeInventarioBase(inventarioId: number): Promise<HojasDeInventarioBase> {
+  const db = await obtenerDb();
+  const reales = await hojasEstructuraDeInventarioDb(db, inventarioId);
+  if (reales.length > 0) return { hojas: reales, origen: 'real' };
+
+  const inventario = await obtenerInventario(inventarioId);
+  return { hojas: inventario?.hojas ?? [], origen: 'mock' };
+}
+
+// ---------------------------------------------------------------------------
+// Descarga inicial — lo que faltaba (bug real, reportado por el cliente)
+// ---------------------------------------------------------------------------
+
+/**
+ * Cuántos productos entran en un solo INSERT: 25 hojas × 50 productos son
+ * 1.250 filas — hacerlo un `runAsync` por producto es 1.250 idas y vueltas
+ * al motor nativo por cada descarga. Un INSERT con N tuplas de `VALUES` es
+ * una sola llamada; 100 productos × 9 columnas = 900 parámetros
+ * posicionales, bien debajo del límite de SQLite (999 por sentencia en la
+ * configuración por defecto) con margen para no pisarlo si un producto
+ * suma una columna más el día de mañana.
+ */
+const TAMANO_LOTE_INSERT_PRODUCTOS = 100;
+
+async function insertarProductosEnLote(db: DbSqlite, hojaId: number, productos: Producto[]): Promise<void> {
+  for (let inicio = 0; inicio < productos.length; inicio += TAMANO_LOTE_INSERT_PRODUCTOS) {
+    const lote = productos.slice(inicio, inicio + TAMANO_LOTE_INSERT_PRODUCTOS);
+    const placeholders = lote.map(() => '(?,?,?,?,?,?,?,?,?)').join(',');
+    const valores: (string | number | null)[] = [];
+    lote.forEach((p, i) => {
+      valores.push(
+        hojaId,
+        p.id,
+        inicio + i,
+        p.codigo,
+        p.codigoBarras,
+        p.descripcion,
+        JSON.stringify(p.empaques),
+        p.ubicacion ?? null,
+        p.categoria ?? null,
+      );
+    });
+    await db.runAsync(
+      `INSERT INTO productos_estructura (hoja_id, id, orden, codigo, codigo_barras, descripcion, empaques, ubicacion, categoria) VALUES ${placeholders}`,
+      valores,
+    );
+  }
+}
+
+/**
+ * Guarda la ESTRUCTURA de una hoja recién bajada del backend. Dos reglas
+ * duras, las dos a propósito:
+ *
+ *  1. Los productos se insertan UNA sola vez por hoja — si ya hay filas en
+ *     `productos_estructura` para esa hoja, no se vuelven a tocar. Una
+ *     hoja ya asignada no cambia de catálogo (el backend se niega con 409
+ *     a rehacer hojas que ya tienen conteos, ver backend/README.md), así
+ *     que reinsertar 1.250 productos en CADA visita a "Mis hojas" sería
+ *     trabajo repetido sin ningún beneficio.
+ *  2. `asegurarSembrada(hoja)` recibe la hoja FRESCA de la red (con su
+ *     estado/sync/conteos reales), nunca la reconstruida de
+ *     `hojas_estructura` (que no los tiene, ver `filaAHojaBase`) — es lo
+ *     que le permite a `asegurarSembrada` sembrar bien la PRIMERA vez y,
+ *     a la vez, es inofensivo las veces siguientes: si `hoja_estado_local`
+ *     ya existe, `asegurarSembrada` no toca nada — ni el estado, ni el
+ *     sync, ni la tabla `conteos`. Es la garantía que pide el bug: si el
+ *     operario ya contó 32 de 50 sin señal, esta función NUNCA se lo pisa.
+ */
+async function guardarEstructuraDeHoja(db: DbSqlite, hoja: HojaConteo): Promise<void> {
+  await db.runAsync(
+    `INSERT INTO hojas_estructura (id, inventario_id, numero, zona, gondola, tamano, asignados)
+     VALUES (?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(id) DO UPDATE SET
+       inventario_id = excluded.inventario_id,
+       numero = excluded.numero,
+       zona = excluded.zona,
+       gondola = excluded.gondola,
+       tamano = excluded.tamano,
+       asignados = excluded.asignados`,
+    [hoja.id, hoja.inventarioId, hoja.numero, hoja.zona, hoja.gondola, hoja.tamano, JSON.stringify(hoja.asignados)],
+  );
+
+  if (hoja.productos.length > 0) {
+    const conteo = await db.getFirstAsync<{ n: number }>('SELECT COUNT(*) as n FROM productos_estructura WHERE hoja_id = ?', [
+      hoja.id,
+    ]);
+    if (!conteo || conteo.n === 0) {
+      await insertarProductosEnLote(db, hoja.id, hoja.productos);
+    }
+  }
+
+  await asegurarSembrada(hoja);
+}
+
+/** Lo que le hace falta a la pantalla para el mensaje "sin red" del punto 4 — ver mis-hojas.tsx. */
+export type ResultadoDescarga = { ok: true; hojas: number } | { ok: false; motivo: 'sin-red' | 'error' };
+
+const ultimosResultados = new Map<string, ResultadoDescarga>();
+
+function claveResultado(inventarioId: number, alcance: 'mias' | 'todas'): string {
+  return `${inventarioId}:${alcance}`;
+}
+
+/**
+ * Qué pasó la ÚLTIMA vez que se intentó bajar `alcance` para este
+ * inventario. La pantalla lo usa para distinguir "0 hojas porque no hay
+ * ninguna asignada todavía" de "0 hojas porque no hay señal y nunca se
+ * pudo bajar nada" — son dos mensajes distintos, y confundirlos es
+ * exactamente la pantalla vacía sin explicación que reportó el cliente.
+ */
+export function ultimaDescarga(inventarioId: number, alcance: 'mias' | 'todas'): ResultadoDescarga | null {
+  return ultimosResultados.get(claveResultado(inventarioId, alcance)) ?? null;
+}
+
+/**
+ * La descarga inicial que faltaba. `GET /api/hojas?...` (backend/README.md)
+ * manda `productos: []` en el LISTADO a propósito — completar el catálogo
+ * de cada hoja es un pedido aparte (`GET /api/hojas/:id/productos`, el
+ * mismo que ya usa `catalogo-api.ts`), así que una hoja sin productos en
+ * la respuesta se completa acá antes de guardar nada.
+ *
+ * Nunca lanza: sin red, sin servidor, cualquier falla — vuelve
+ * `{ ok: false, ... }` y el que llama sigue con lo que ya tenía local.
+ * Bajar hojas es un refresco, no un requisito para poder seguir contando.
+ */
+async function descargarHojas(inventarioId: number, alcance: 'mias' | 'todas'): Promise<ResultadoDescarga> {
+  let remotas: HojaConteo[];
+  try {
+    const respuesta = alcance === 'mias' ? await hojasApi.mias(inventarioId) : await hojasApi.todas(inventarioId);
+    // Defensivo a propósito: un `200` que no trae un array (un backend de
+    // prueba que no conoce esta ruta y devuelve `{}` genérico, o un proxy
+    // que reescribe la respuesta) no es una falla de red que capturar acá
+    // arriba, pero tampoco son hojas — se trata como "nada que guardar",
+    // nunca como un array a medio armar que rompa el resto de la función.
+    remotas = Array.isArray(respuesta) ? respuesta : [];
+  } catch (error) {
+    const resultado: ResultadoDescarga = { ok: false, motivo: esFallaDeRed(error) ? 'sin-red' : 'error' };
+    ultimosResultados.set(claveResultado(inventarioId, alcance), resultado);
+    return resultado;
+  }
+
+  const completas: HojaConteo[] = [];
+  for (const hoja of remotas) {
+    if (hoja.productos.length > 0) {
+      completas.push(hoja);
+      continue;
+    }
+    try {
+      const productos = await catalogoApi.deHoja(hoja.id);
+      completas.push({ ...hoja, productos });
+    } catch {
+      // Sin catálogo por esta vez — se guarda igual (estructura/asignación
+      // ya sirven para que la hoja aparezca en la lista) y se reintenta
+      // completar el catálogo en la próxima descarga.
+      completas.push(hoja);
+    }
+  }
+
+  // Sin transacción envolvente acá: guardarEstructuraDeHoja ya abre su
+  // propia transacción por hoja, y adentro llama a asegurarSembrada, que
+  // abre OTRA — SQLite (node:sqlite y expo-sqlite por igual) no admite
+  // transacciones anidadas sin SAVEPOINT. Atomicidad por hoja alcanza:
+  // no hace falta que las 25 se guarden todas o ninguna.
+  const db = await obtenerDb();
+  for (const hoja of completas) await guardarEstructuraDeHoja(db, hoja);
+
+  const resultado: ResultadoDescarga = { ok: true, hojas: completas.length };
+  ultimosResultados.set(claveResultado(inventarioId, alcance), resultado);
+  return resultado;
+}
+
+/**
+ * Dispara la descarga y decide si HAY que esperarla:
+ *  - ya hay estructura local para este inventario → se muestra YA (no hace
+ *    esperar un timeout de red para terminar mostrando lo mismo que ya
+ *    había); la descarga corre en segundo plano para refrescar.
+ *  - no hay nada local todavía → no hay nada más que mostrar, así que sí
+ *    vale la pena esperar el intento (es el caso "primera vez, con WiFi,
+ *    en la tienda" del punto 1).
+ */
+async function descargarSiHaceFalta(inventarioId: number, alcance: 'mias' | 'todas'): Promise<void> {
+  const db = await obtenerDb();
+  const yaHayLocal = (await hojasEstructuraDeInventarioDb(db, inventarioId)).length > 0;
+
+  if (yaHayLocal) {
+    void descargarHojas(inventarioId, alcance);
+    return;
+  }
+  await descargarHojas(inventarioId, alcance);
 }
 
 // ---------------------------------------------------------------------------
@@ -184,9 +501,22 @@ async function hojasConEstadoLocal(hojasBase: HojaConteo[]): Promise<HojaConteo[
 
 export const hojasSqlite: RepositorioHojas = {
   async mias(inventarioId) {
-    const inventario = await obtenerInventario(inventarioId);
-    if (!inventario) return [];
+    // La descarga que faltaba (bug real): antes de leer nada, se le
+    // pregunta al backend. Ver `descargarSiHaceFalta` para cuándo se
+    // espera esa respuesta y cuándo se muestra lo local sin esperar.
+    await descargarSiHaceFalta(inventarioId, 'mias');
 
+    const { hojas, origen } = await hojasDeInventarioBase(inventarioId);
+    if (origen === 'real') {
+      // El backend ya resolvió "mías" del lado del servidor
+      // (alcance=mias, ver backend/README.md) — lo que hay en
+      // `hojas_estructura` para este inventario NO es nada más que eso.
+      return hojasConEstadoLocal(hojas);
+    }
+
+    // Cayó al dataset de ejemplo (`_compartido.ts`): ese SÍ mezcla las
+    // hojas de todos los contadores en un solo inventario, así que acá
+    // sigue haciendo falta el filtro por nombre, como siempre.
     // El login por defecto pasa por sesionApi (HTTP), que guarda la sesión
     // activa en su propia tabla SQLite — no en el estado en memoria de
     // sesionMemoria. Probar ahí primero y caer a sesionMemoria cubre el
@@ -195,25 +525,30 @@ export const hojasSqlite: RepositorioHojas = {
     const sesion = (await sesionApi.sesionActiva()) ?? (await sesionMemoria.sesionActiva());
     if (!sesion) return [];
 
-    const propias = inventario.hojas.filter((hoja) => hoja.asignados.includes(sesion.colaborador.nombre));
+    const propias = hojas.filter((hoja) => hoja.asignados.includes(sesion.colaborador.nombre));
     return hojasConEstadoLocal(propias);
   },
 
   async todas(inventarioId) {
-    const inventario = await obtenerInventario(inventarioId);
-    if (!inventario) return [];
-    return hojasConEstadoLocal(inventario.hojas);
+    await descargarSiHaceFalta(inventarioId, 'todas');
+    const { hojas } = await hojasDeInventarioBase(inventarioId);
+    return hojasConEstadoLocal(hojas);
   },
 
   async porNumero(inventarioId, numero) {
-    const inventario = await obtenerInventario(inventarioId);
-    const hojaBase = inventario?.hojas.find((h) => h.numero === numero);
+    // `porNumero` lo usa `contar.tsx` para reabrir UNA hoja propia
+    // (siempre después de haber pasado por `mias()`), así que alcanza con
+    // refrescar el mismo alcance — no hace falta esperar acá si `mias()`
+    // ya disparó la descarga hace un instante.
+    await descargarSiHaceFalta(inventarioId, 'mias');
+    const { hojas } = await hojasDeInventarioBase(inventarioId);
+    const hojaBase = hojas.find((h) => h.numero === numero);
     if (!hojaBase) return null;
     return hojaConEstadoLocal(hojaBase);
   },
 
   async guardarConteo(hojaId, conteo) {
-    const hojaBase = await buscarHojaPorId(hojaId);
+    const hojaBase = await buscarHojaBase(hojaId);
     if (!hojaBase) throw new Error(`Hoja ${hojaId} no encontrada.`);
 
     const actual = await hojaConEstadoLocal(hojaBase);
@@ -251,7 +586,7 @@ export const hojasSqlite: RepositorioHojas = {
   },
 
   async finalizar(hojaId) {
-    const hojaBase = await buscarHojaPorId(hojaId);
+    const hojaBase = await buscarHojaBase(hojaId);
     if (!hojaBase) throw new Error(`Hoja ${hojaId} no encontrada.`);
 
     const actual = await hojaConEstadoLocal(hojaBase);
@@ -321,7 +656,7 @@ export async function procesarColaDeSincronizacion(enviar: EnviarItemCola): Prom
   for (const item of items) {
     await db.runAsync('UPDATE cola_sync SET estado = ? WHERE id = ?', ['enviando', item.id]);
 
-    const hojaBase = await buscarHojaPorId(item.hojaId);
+    const hojaBase = await buscarHojaBase(item.hojaId);
     let resultado: ResultadoEnvio;
     if (!hojaBase) {
       // La hoja ya no existe en el origen — no debería pasar, pero no

@@ -1,9 +1,11 @@
 import { router, useFocusEffect } from 'expo-router';
+import { ClipboardList, WifiOff } from 'lucide-react-native';
 import { useCallback, useEffect, useState, type JSX } from 'react';
 import { ActivityIndicator, Alert, StyleSheet, Text, View } from 'react-native';
 
-import { AvanceFila, BandaSync, BarraApp, TarjetaHoja, sincronizacionDeHojas } from '../../components/ui';
+import { AvanceFila, BandaSync, BarraApp, EmptyState, TarjetaHoja, sincronizacionDeHojas } from '../../components/ui';
 import { PantallaConTabs } from '../../components/navegacion/PantallaConTabs';
+import { ultimaDescarga } from '../../lib/adaptadores/hojas-sqlite';
 import { repositorioHojas, repositorioInventario, sincronizador } from '../../lib/contenedor';
 import type { HojaConteo } from '../../lib/dominio/tipos';
 import type { EstadoCola } from '../../lib/puertos/repositorios';
@@ -24,6 +26,12 @@ export default function MisHojasScreen(): JSX.Element {
   const { sesion, cerrar } = useSesion();
   const [cargando, setCargando] = useState(true);
   const [hojas, setHojas] = useState<HojaConteo[]>([]);
+  // Distingue las DOS razones muy distintas por las que esta pantalla
+  // puede terminar en "0 hojas" — confundirlas es exactamente la pantalla
+  // vacía sin explicación que reportó el cliente:
+  //   - sin red Y sin nada bajado todavía → avisar que hace falta señal.
+  //   - con red, pero de verdad no tiene ninguna asignada → mensaje neutro.
+  const [sinRedSinDatos, setSinRedSinDatos] = useState(false);
   const [estadoCola, setEstadoCola] = useState<EstadoCola>(sincronizador.estado());
   useEffect(() => sincronizador.suscribir(setEstadoCola), []);
 
@@ -36,9 +44,12 @@ export default function MisHojasScreen(): JSX.Element {
       return;
     }
     // mias(), NUNCA todas(): un Contador no puede ver el lote entero, ni
-    // por accidente.
+    // por accidente. `mias()` ya intenta la descarga inicial sola
+    // (hojas-sqlite.ts#descargarSiHaceFalta) — acá solo se lee el
+    // resultado, nunca dos veces la misma lógica.
     const mias = await repositorioHojas.mias(activo.inventarioId);
     setHojas(mias);
+    setSinRedSinDatos(mias.length === 0 && ultimaDescarga(activo.inventarioId, 'mias')?.ok === false);
     setCargando(false);
   }, [sesion]);
 
@@ -93,6 +104,20 @@ export default function MisHojasScreen(): JSX.Element {
 
       {cargando ? (
         <ActivityIndicator color={colors.rojo} style={styles.cargando} />
+      ) : hojas.length === 0 ? (
+        sinRedSinDatos ? (
+          <EmptyState
+            icon={WifiOff}
+            title="Sin conexión"
+            subtitle="Todavía no se pudieron bajar tus hojas. Conectate a la WiFi de la tienda y volvé a entrar a esta pantalla."
+          />
+        ) : (
+          <EmptyState
+            icon={ClipboardList}
+            title="Todavía no tenés hojas asignadas"
+            subtitle="Cuando el coordinador te asigne hojas de este inventario, van a aparecer acá."
+          />
+        )
       ) : (
         <>
           <View style={styles.lista}>

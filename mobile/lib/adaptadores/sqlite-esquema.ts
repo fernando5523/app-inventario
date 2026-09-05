@@ -110,6 +110,63 @@ export const MIGRACIONES_SQLITE: string[] = [
 
   DROP TABLE conteos_v1_legado;
   `,
+  /**
+   * v3 — la DESCARGA inicial (bug real, reportado por el cliente con
+   * captura: "Mis hojas: 0 hojas, 0 items" después de que el Coordinador
+   * ya había creado y asignado las 25 hojas del inventario real).
+   *
+   * Hasta acá, la ESTRUCTURA de una hoja (zona, góndola, productos,
+   * asignados) salía de `_compartido.ts` — un dataset de ejemplo en RAM
+   * que ya venía sembrado. `hoja_estado_local`/`conteos` v1/v2 solo
+   * guardan el OVERLAY local (lo que el operario mutó offline); nunca
+   * hubo una tabla para persistir la estructura real bajada del backend.
+   * Con el dataset de ejemplo eso no se notaba (la "base" ya nacía
+   * llena); contra un inventario real, el Contador entraba a "Mis hojas"
+   * y no había NADA que mostrar — nunca se le preguntaba al servidor.
+   *
+   * `hojas_estructura` / `productos_estructura` son esa persistencia que
+   * faltaba: lo que `hojas-sqlite.ts#descargarHojas` trae de
+   * `GET /api/hojas` (+ `GET /api/hojas/:id/productos` cuando el listado
+   * los manda vacíos, ver backend/README.md) y guarda ACÁ, para que
+   * "Mis hojas" tenga algo que leer incluso sin señal la próxima vez.
+   *
+   * Es estructura, no overlay: nunca se lee `estado`/`sync`/`conteos` de
+   * acá directamente (por eso esas columnas ni existen en
+   * `hojas_estructura`) — sigue siendo `hoja_estado_local`/`conteos` la
+   * única fuente de verdad para eso, exactamente como antes. Volver a
+   * descargar la estructura (upsert de `hojas_estructura`, y
+   * `productos_estructura` solo si todavía no tiene filas para esa hoja)
+   * NUNCA toca esas dos tablas si ya existen — es la misma protección que
+   * `asegurarSembrada` ya le daba al dataset de ejemplo, ahora sobre datos
+   * reales: si el operario ya contó 32 de 50 sin señal, la descarga no
+   * se lo puede pisar.
+   */
+  `
+  CREATE TABLE IF NOT EXISTS hojas_estructura (
+    id INTEGER PRIMARY KEY NOT NULL,
+    inventario_id INTEGER NOT NULL,
+    numero TEXT NOT NULL,
+    zona TEXT NOT NULL,
+    gondola TEXT NOT NULL,
+    tamano INTEGER NOT NULL,
+    asignados TEXT NOT NULL
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_hojas_estructura_inventario ON hojas_estructura(inventario_id);
+
+  CREATE TABLE IF NOT EXISTS productos_estructura (
+    hoja_id INTEGER NOT NULL,
+    id INTEGER NOT NULL,
+    orden INTEGER NOT NULL,
+    codigo TEXT NOT NULL,
+    codigo_barras TEXT NOT NULL,
+    descripcion TEXT NOT NULL,
+    empaques TEXT NOT NULL,
+    ubicacion TEXT,
+    categoria TEXT,
+    PRIMARY KEY (hoja_id, id)
+  );
+  `,
 ];
 
 export async function migrarSqlite(db: DbMigrable): Promise<void> {

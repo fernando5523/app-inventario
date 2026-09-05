@@ -23,6 +23,15 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterAll, describe, expect, it, vi } from 'vitest';
+
+// Desde la descarga inicial, hojas-sqlite.ts importa `esFallaDeRed` de
+// `./_http` DIRECTO (no solo a través de hojas-api.ts/catalogo-api.ts,
+// mockeados más abajo) — `_http.ts` importa `react-native`/`expo-constants`
+// de verdad, que Node no puede ni parsear (sintaxis Flow). Mismo patrón que
+// hojas-sincronizacion.test.ts: se mockean ANTES de cualquier import real.
+vi.mock('react-native', () => ({ Platform: { OS: 'android' } }));
+vi.mock('expo-constants', () => ({ default: { expoConfig: { extra: {} } } }));
+
 import { avance } from '../dominio/hoja';
 import { migrarSqlite } from './sqlite-esquema';
 
@@ -103,6 +112,36 @@ vi.mock('./_sqlite', () => ({
 // que importa acá es no arrastrar el módulo real al grafo de imports.
 vi.mock('./sesion-api', () => ({
   sesionApi: { sesionActiva: async () => null },
+}));
+
+// Mismo motivo: hojas-api.ts/catalogo-api.ts importan react-native vía
+// _http.ts. Desde la descarga inicial (hojas-sqlite.ts#descargarHojas),
+// hojasSqlite llama a los dos en CADA mias()/todas()/porNumero() — acá se
+// simula "sin red" siempre: descargarHojas lo captura y cae al dataset de
+// ejemplo (_compartido.ts), que es exactamente lo que estos tests de
+// persistencia local esperan seguir viendo, sin cambiar una aserción.
+vi.mock('./hojas-api', () => ({
+  hojasApi: {
+    mias: async () => {
+      throw new Error('sin red (stub de test)');
+    },
+    todas: async () => {
+      throw new Error('sin red (stub de test)');
+    },
+    porNumero: async () => null,
+    guardarConteo: async () => {},
+    finalizar: async () => {
+      throw new Error('no usado en este test');
+    },
+  },
+}));
+vi.mock('./catalogo-api', () => ({
+  catalogoApi: {
+    deHoja: async () => {
+      throw new Error('sin red (stub de test)');
+    },
+    porCodigoBarras: async () => null,
+  },
 }));
 
 // Import DESPUÉS del vi.mock (vitest lo hoistea igual, pero así queda
