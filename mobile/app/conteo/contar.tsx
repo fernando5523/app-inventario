@@ -16,9 +16,10 @@ import {
 } from '../../components/ui';
 import { PantallaConTabs } from '../../components/navegacion/PantallaConTabs';
 import { inventarioIdSinRed, rondaActivaSinRed } from '../../lib/adaptadores/hojas-sqlite';
-import { repositorioCatalogo, repositorioHojas, repositorioInventario, sincronizador } from '../../lib/contenedor';
+import { repositorioHojas, repositorioInventario, sincronizador } from '../../lib/contenedor';
+import { resolverCodigoEnHoja, type CoincidenciaEscaneo } from '../../lib/dominio/escaneo';
 import { avance, puedeEditar, puedeFinalizar } from '../../lib/dominio/hoja';
-import type { Conteo, Empaque, HojaConteo, Producto } from '../../lib/dominio/tipos';
+import type { Conteo, HojaConteo, Producto } from '../../lib/dominio/tipos';
 import type { EstadoCola } from '../../lib/puertos/repositorios';
 import { useSesion } from '../../lib/sesion-contexto';
 import { colors, fonts, fontSize, radius } from '../../lib/theme';
@@ -73,9 +74,7 @@ export default function ContarScreen(): JSX.Element {
    * empaque vía `empaquePreseleccionado`). Lo que NO puede pasar es que la
    * pantalla hable como si hoy lo supiera — ver la banda de abajo.
    */
-  const [ultimoEscaneo, setUltimoEscaneo] = useState<{ producto: Producto; presentacion: 'unidad' | 'empaque'; empaque: Empaque | null } | null>(
-    null,
-  );
+  const [ultimoEscaneo, setUltimoEscaneo] = useState<CoincidenciaEscaneo | null>(null);
   const [modalScanVisible, setModalScanVisible] = useState(false);
   // Rechazo con contador: dos códigos ajenos seguidos dan el MISMO mensaje,
   // y sin el contador el modal no se rehabilitaría la segunda vez (ver
@@ -243,57 +242,54 @@ export default function ContarScreen(): JSX.Element {
   // confirma y abre el registro del producto — no cuenta por sí solo. Si
   // no pertenece, lo avisa claro y no registra nada.
   //
-  // Un código puede ser el de la UNIDAD suelta (`Producto.codigoBarras`) o
-  // el de alguno de los EMPAQUES (`Empaque.codigoBarras`, opcional — y,
-  // con el catálogo real de Dynamics, casi siempre ausente: ver el
-  // comentario de `ultimoEscaneo`). Se busca en TODOS los empaques del
-  // producto, no en uno fijo: puede tener más de uno (Caja Y Pack).
-  //
-  // El puerto `porCodigoBarras` resuelve la unidad; el empaque se busca acá
-  // sobre `hoja.productos`, que ya está cargada en memoria. No es lógica de
-  // catálogo duplicada: es desambiguar QUÉ presentación se escaneó, y la
-  // pantalla ya tiene el dato sin pedir nada.
-  async function manejarEscaneo(codigo: string): Promise<void> {
-    let porUnidad: Producto | null;
-    try {
-      porUnidad = await repositorioCatalogo.porCodigoBarras(hoja!.id, codigo);
-    } catch (error) {
-      // La consulta sale a la red (catalogo-api.ts) y el WiFi de tienda se
-      // cae: sin este catch la promesa quedaba colgada, el modal nunca se
-      // rehabilitaba y el escáner moría en silencio, sin decir por qué.
-      rechazarEscaneo(
-        error instanceof Error && error.message ? `No se pudo verificar el código: ${error.message}` : 'No se pudo verificar el código. Revisá la conexión y probá de nuevo.',
-      );
-      return;
-    }
+  // TODO en LOCAL, contra `hoja.productos` — nunca contra la red. El
+  // escáner se usa parado frente a la góndola, en el fondo del almacén sin
+  // señal: mandar el código a HTTP ahí fallaría igual que cualquier otro
+  // pedido de red (ver el hallazgo del cableado de repositorioCatalogo,
+  // 2026-09-05). La hoja YA tiene sus productos completos en SQLite,
+  // codigoBarras de la unidad y de cada empaque incluidos (ver
+  // hojas-sqlite.ts#filaAProducto) — resolver acá no es una degradación,
+  // es la misma información que ya viajó con la hoja.
+  function confirmarCoincidencia(coincidencia: CoincidenciaEscaneo): void {
+    setScanError(null);
+    setModalScanVisible(false);
+    setConfirmadosPendientes((prev) => new Set(prev).add(coincidencia.producto.id));
+    setUltimoEscaneo(coincidencia);
+    setModalProducto(coincidencia.producto);
+  }
 
-    let productoPorEmpaque: Producto | null = null;
-    let empaqueEscaneado: Empaque | null = null;
-    if (!porUnidad) {
-      for (const p of hoja!.productos) {
-        const empaque = p.empaques.find((e) => e.codigoBarras === codigo);
-        if (empaque) {
-          productoPorEmpaque = p;
-          empaqueEscaneado = empaque;
-          break;
-        }
-      }
-    }
-    const producto = porUnidad ?? productoPorEmpaque;
+  function manejarEscaneo(codigo: string): void {
+    const resultado = resolverCodigoEnHoja(hoja!.productos, codigo);
 
-    if (!producto) {
+    if (resultado.estado === 'no-encontrado') {
       // Con el código a la vista: el operario puede comparar contra la
       // etiqueta y darse cuenta de que apuntó al vecino de góndola, que es
-      // justo el error que este aviso existe para atajar.
+      // justo el error que este aviso existe para atajar. Conteo ciego:
+      // no importa si el código existe en OTRA hoja o en el catálogo
+      // general — acá solo cuenta lo asignado a ESTA hoja.
       rechazarEscaneo(`El código ${codigo} no pertenece a la hoja #${hoja!.numero}. No se registró nada.`);
       return;
     }
 
-    setScanError(null);
-    setModalScanVisible(false);
-    setConfirmadosPendientes((prev) => new Set(prev).add(producto.id));
-    setUltimoEscaneo({ producto, presentacion: empaqueEscaneado ? 'empaque' : 'unidad', empaque: empaqueEscaneado });
-    setModalProducto(producto);
+    if (resultado.estado === 'ambiguo') {
+      // Caso raro (el mismo código en dos productos de la MISMA hoja), pero
+      // el modelo no lo impide — confirmar el primero a ciegas registraría
+      // el producto equivocado. Se pregunta, no se adivina.
+      Alert.alert(
+        `El código ${codigo} coincide con más de un producto`,
+        'Elegí cuál es el que tenés en la mano.',
+        [
+          ...resultado.opciones.map((opcion) => ({
+            text: opcion.empaque ? `${opcion.producto.descripcion} (${opcion.empaque.nombre})` : opcion.producto.descripcion,
+            onPress: () => confirmarCoincidencia(opcion),
+          })),
+          { text: 'Cancelar', style: 'cancel' as const },
+        ],
+      );
+      return;
+    }
+
+    confirmarCoincidencia(resultado.coincidencia);
   }
 
   function abrirModalFinalizar(): void {
