@@ -1338,3 +1338,90 @@ describe('ENDURECIMIENTO: el id de colaborador resuelve lo que el nombre solo no
     expect(hojaPropia!.asignadoAId).toBe(COLAB_A);
   });
 });
+
+describe('ENDURECIMIENTO: una sesión local incompleta o corrupta no muestra hojas de nadie', () => {
+  // Hallazgo min-1 (2026-09-06): sin red, "Mis hojas" de Luis mostró las
+  // hojas de OTRO colaborador -- ya con el filtro por id aplicado
+  // (859ea5e). Al revisar `sesion_activa` (SQLite del dispositivo) en el
+  // momento de investigar, la tabla estaba VACÍA -- no se pudo confirmar
+  // la fila exacta de aquel instante, pero deja claro que esa tabla
+  // puede terminar sin una sesión completa (expiró, quedó a medio
+  // escribir, un payload viejo). Esto prueba que, pase lo que pase con
+  // esa fila, un `colaborador.id` o `nombre` faltante en la sesión NO
+  // puede terminar mostrando hojas de otra persona -- tiene que mostrar
+  // NADA, ni siquiera cayendo al nombre (que también podría faltar, o
+  // coincidir por casualidad).
+  const INV = 999600;
+  const COLABORADOR_ID_REAL = 57; // el id real de Luis Shuan, capturado del emulador.
+
+  const prod = (id: number) => ({
+    id,
+    codigo: String(id).padStart(4, '0'),
+    codigoBarras: `777000000${id}`,
+    descripcion: `Producto ${id}`,
+    empaques: [{ nombre: 'Caja', factor: 12 }],
+  });
+  const hojaDeLuis = {
+    id: 9996001,
+    inventarioId: INV,
+    numero: '001',
+    zona: 'Zona S',
+    gondola: 'S1',
+    tamano: 50,
+    estado: 'pendiente' as const,
+    sync: 'sincronizado' as const,
+    asignados: ['Luis Shuan'],
+    asignadoAId: COLABORADOR_ID_REAL,
+    asignadoA2Id: null,
+    productos: [prod(70001)],
+    conteos: [],
+  };
+
+  it('sin colaborador.id en la sesión (payload parcial): ni por id ni cayendo al nombre -- no muestra nada', async () => {
+    // Primero, CON una sesión válida, se descarga la hoja real de Luis
+    // (queda en hojas_estructura para el resto del test). `mockResolvedValue`
+    // (no `Once`): `mias()` consulta la sesión más de una vez (al guardar
+    // la estructura Y al filtrar), y las dos tienen que ver la misma sesión.
+    vi.mocked(sesionApi.sesionActiva).mockResolvedValue({
+      colaborador: { id: COLABORADOR_ID_REAL, nombre: 'Luis Shuan', dni: '9102', rol: 'conteo' },
+      sucursal: { id: 30, nombre: 'Market Central Luzuriaga', colaboradores: 6 },
+      token: 't',
+      expiraEn: '2099-01-01T00:00:00.000Z',
+    } as unknown as Sesion);
+    vi.mocked(hojasApi.mias).mockResolvedValueOnce([hojaDeLuis]);
+    const conSesionValida = await hojasSqlite.mias(INV, 1);
+    expect(conSesionValida).toHaveLength(1); // control: con sesión válida, SÍ la ve.
+
+    // Ahora la sesión queda con el NOMBRE (coincide con la hoja) pero SIN
+    // colaborador.id -- el "solo token" que planteó la hipótesis. Con el
+    // viejo filtro por nombre esto la habría mostrado igual.
+    vi.mocked(sesionApi.sesionActiva).mockResolvedValue({
+      colaborador: { nombre: 'Luis Shuan', dni: '9102', rol: 'conteo' },
+      sucursal: { id: 30, nombre: 'Market Central Luzuriaga', colaboradores: 6 },
+      token: 't',
+      expiraEn: '2099-01-01T00:00:00.000Z',
+    } as unknown as Sesion);
+
+    expect(await inventarioIdSinRed()).toBeNull();
+    expect(await rondaActivaSinRed(INV)).toBeNull();
+    expect(await hojasSqlite.mias(INV, 1)).toEqual([]);
+    expect(await hojasSqlite.porNumero(INV, '001', 1)).toBeNull();
+  });
+
+  it('con sucursal a medias (el objeto está, pero sin id): tampoco muestra nada', async () => {
+    vi.mocked(sesionApi.sesionActiva).mockResolvedValue({
+      colaborador: { id: COLABORADOR_ID_REAL, nombre: 'Luis Shuan', dni: '9102', rol: 'conteo' },
+      sucursal: { nombre: 'Market Central Luzuriaga', colaboradores: 6 }, // sin id
+      token: 't',
+      expiraEn: '2099-01-01T00:00:00.000Z',
+    } as unknown as Sesion);
+
+    expect(await inventarioIdSinRed()).toBeNull();
+  });
+
+  it('sesión null-ish (ni objeto): igual que no tener sesión -- null, no una excepción', async () => {
+    vi.mocked(sesionApi.sesionActiva).mockResolvedValue({} as unknown as Sesion);
+    expect(await inventarioIdSinRed()).toBeNull();
+    expect(await hojasSqlite.mias(INV, 1)).toEqual([]);
+  });
+});

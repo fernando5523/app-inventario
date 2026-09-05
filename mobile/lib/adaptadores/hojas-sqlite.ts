@@ -293,17 +293,32 @@ async function hojasDeInventarioBase(inventarioId: number, ronda: number): Promi
 }
 
 /**
- * Quién es la sesión activa, para el camino SIN RED — nombre (para filtrar
- * `asignados`) y sucursal (para no cruzar hojas de otra tienda). Misma
- * fuente que `nombreDeColaboradorEnSesion` (más abajo, la usan `mias`/
- * `porNumero`) — se separa en su propia función porque las de acá arriba
- * (`inventarioIdSinRed`/`rondaActivaSinRed`) corren ANTES de saber siquiera
- * qué inventario existe, y necesitan los dos datos, no solo el nombre.
+ * Quién es la sesión activa, para TODO el camino sin red — colaboradorId
+ * (identidad dura, ver `esAsignadaA`/`asignadaPorIdONombre`), nombre (el
+ * fallback para hojas de antes de v7) y sucursal (para no cruzar hojas de
+ * otra tienda). La usan `mias`/`porNumero` Y `inventarioIdSinRed`/
+ * `rondaActivaSinRed` — una sola función, para que las cuatro decidan
+ * "quién soy" exactamente de la misma forma.
  *
  * `sucursalId: null` es un caso real, no un error: el Administrador no
  * pertenece a ninguna sucursal (ver dominio/tipos.ts#Sesion). Para él,
  * el filtro de sucursal simplemente no descarta nada por esa vía — igual
  * que una fila vieja con `sucursal_id` NULL (ver migración v6).
+ *
+ * HALLAZGO (2026-09-06, min-1): sin red, "Mis hojas" de Luis mostró las
+ * hojas de OTRO colaborador (Bolívar) — con el filtro por id ya aplicado
+ * (`859ea5e`). La sesión que quedó en `sesion_activa` (SQLite,
+ * sesion-api.ts) al momento de revisar el dispositivo estaba VACÍA — no
+ * se pudo confirmar la fila exacta de aquel momento, pero confirma que
+ * esa tabla puede terminar con una sesión ausente o parcial (expiró,
+ * quedó a medio escribir, un payload de una corrida vieja). El TIPO
+ * `Sesion` dice que `colaborador.id`/`.nombre` siempre están, pero eso es
+ * lo que promete el compilador sobre datos que en el teléfono vienen de
+ * `JSON.parse` de lo que sea que haya en disco — no una garantía real.
+ * Por eso esta función VALIDA en tiempo de ejecución, no solo confía en
+ * el tipo: sin `colaboradorId` (número) o sin `nombre` (string no vacío),
+ * es EXACTAMENTE lo mismo que no tener sesión — no hay de quién decir
+ * que son las hojas, y mostrar cualquier cosa sería inventar un dueño.
  */
 interface IdentidadSinRed {
   colaboradorId: number;
@@ -314,7 +329,18 @@ interface IdentidadSinRed {
 async function identidadSinRed(): Promise<IdentidadSinRed | null> {
   const sesion = (await sesionApi.sesionActiva()) ?? (await sesionMemoria.sesionActiva());
   if (!sesion) return null;
-  return { colaboradorId: sesion.colaborador.id, nombre: sesion.colaborador.nombre, sucursalId: sesion.sucursal?.id ?? null };
+
+  const colaboradorId = sesion.colaborador?.id;
+  const nombre = sesion.colaborador?.nombre;
+  if (typeof colaboradorId !== 'number' || typeof nombre !== 'string' || nombre.trim() === '') return null;
+
+  // `sesion.sucursal === null` es el Administrador, un caso VÁLIDO (no se
+  // rechaza). Pero si el campo SÍ trae un objeto, tiene que tener un id
+  // usable -- un objeto `sucursal` a medias es la misma sospecha que un
+  // `colaborador` a medias.
+  if (sesion.sucursal !== null && typeof sesion.sucursal?.id !== 'number') return null;
+
+  return { colaboradorId, nombre, sucursalId: sesion.sucursal?.id ?? null };
 }
 
 /**
