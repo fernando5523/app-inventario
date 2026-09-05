@@ -5,19 +5,30 @@ import { colors, fonts } from '../../lib/theme';
 
 export interface AvanceFilaProps {
   texto: string;
-  /** 0-100. Se recorta al rango — un valor fuera de rango no debe romper la barra. */
-  porcentaje: number;
+  /**
+   * 0-100. Se recorta al rango — un valor fuera de rango no debe romper la barra.
+   *
+   * OMITIRLO dibuja solo el texto, SIN barra: es para cuando todavía no se
+   * sabe sobre cuánto se avanza. Una barra necesita un denominador; sin él,
+   * cualquier ancho que se elija es inventado — un 0 parece trabado y un
+   * valor "mínimo visible" afirma un avance que nadie midió. El texto solo
+   * ("Trayendo… 1.200 ítems") ya comunica que algo pasa, porque el número
+   * sube.
+   */
+  porcentaje?: number;
 }
 
 /** Cifra + barra de progreso (`.avance-fila` en las maquetas) — se agrupa con BarraApp (prop `sinBorde`) en un solo bloque de cabecera. */
 export function AvanceFila({ texto, porcentaje }: AvanceFilaProps): JSX.Element {
-  const ancho = Math.max(0, Math.min(100, porcentaje));
+  const ancho = porcentaje === undefined ? null : Math.max(0, Math.min(100, porcentaje));
   return (
     <View style={styles.raiz}>
       <Text style={styles.cifra}>{texto}</Text>
-      <View style={styles.barra}>
-        <View style={[styles.relleno, { width: `${ancho}%` }]} />
-      </View>
+      {ancho === null ? null : (
+        <View style={styles.barra}>
+          <View style={[styles.relleno, { width: `${ancho}%` }]} />
+        </View>
+      )}
     </View>
   );
 }

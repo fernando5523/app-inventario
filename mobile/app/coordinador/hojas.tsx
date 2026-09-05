@@ -7,6 +7,7 @@ import { PantallaConTabs } from '../../components/navegacion/PantallaConTabs';
 import { AvanceFila, BarraApp, Badge, Button, formatoFechaHora, formatoMiles, type BadgeVariant } from '../../components/ui';
 import { inventarioIdSinRed } from '../../lib/adaptadores/hojas-sqlite';
 import { repositorioHojas, repositorioInventario, repositorioSesion } from '../../lib/contenedor';
+import { avanceParaMostrar } from '../../lib/dominio/avance-snapshot';
 import { partirEnHojas } from '../../lib/dominio/lote';
 import { TAMANOS_HOJA, type Colaborador, type HojaConteo, type TamanoHoja } from '../../lib/dominio/tipos';
 import { ErrorSnapshot, type AvanceSnapshot, type DesgloseSnapshot, type TipoInventario } from '../../lib/puertos/repositorios';
@@ -552,18 +553,17 @@ export default function HojasScreen(): JSX.Element {
 
             {trayendoSnapshot ? (
               <>
-                <AvanceFila
-                  texto={
-                    !avanceSnapshot
-                      ? 'Conectando con Dynamics…'
-                      : avanceSnapshot.total !== null
-                        ? `${formatoMiles(avanceSnapshot.traidos)} de ${formatoMiles(avanceSnapshot.total)} ítems`
-                        : `${formatoMiles(avanceSnapshot.traidos)} ítems traídos…`
-                  }
-                  // Sin total todavía (Dynamics no lo contestó aún): barra al
-                  // mínimo visible en vez de en 0, para que no parezca trabada.
-                  porcentaje={avanceSnapshot?.total ? (avanceSnapshot.traidos / avanceSnapshot.total) * 100 : avanceSnapshot ? 4 : 0}
-                />
+                {/*
+                  EL AVANCE ES REAL y avanza por página de OData: el backend
+                  lo publica en `GET /api/d365/snapshot/progreso` y el
+                  adaptador lo sondea en paralelo al POST
+                  (inventario-api.ts#sondearProgreso).
+
+                  Qué decir en cada estado vive en
+                  `dominio/avance-snapshot.ts`, con test — incluido por qué ya
+                  no hay un 4% fijo acá.
+                */}
+                <AvanceFila {...avanceParaMostrar(avanceSnapshot, formatoMiles)} />
                 <Button label="Cancelar" variant="outline" size="sm" onPress={cancelarSnapshot} />
               </>
             ) : null}
