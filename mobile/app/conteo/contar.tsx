@@ -321,9 +321,16 @@ export default function ContarScreen(): JSX.Element {
   // de un inventario real queda parcial, y decirle a quien cuenta que
   // "quedan 14 sin contar" cuando esos 14 no existen la hace dudar de su
   // propio trabajo y recontar una hoja que ya estaba completa.
+  //
+  // DECISIÓN DEL CLIENTE (2026-09-05): finalizar con renglones vacíos ya NO
+  // los deja en "faltan N / quedan vacíos" — cada uno se registra en 0 ("si
+  // no hay el producto, es 0"). Por eso el aviso pasó a ser una CONFIRMACIÓN
+  // de que esos N se van a registrar en 0. El relleno lo hace
+  // `repositorioHojas.finalizar` (encola un 0 por cada uno y después
+  // finaliza, ver hojas-sqlite.ts#finalizar), así funciona igual sin red.
   const textoFinalizar =
     faltantes > 0
-      ? `Quedan ${faltantes} de ${total} ítems sin contar. Si finalizás ahora, esos ítems quedan vacíos.`
+      ? `${faltantes} ${faltantes === 1 ? 'producto se va' : 'productos se van'} a registrar en 0. ¿Finalizar?`
       : `Los ${total} ítems de esta hoja están contados.`;
 
   const sync = sincronizacionDeHojas([hoja], estadoCola);

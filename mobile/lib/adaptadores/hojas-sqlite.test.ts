@@ -683,6 +683,111 @@ describe('ARREGLADO (2026-09-05): una hoja no se declara finalizada ante el serv
   });
 });
 
+describe('finalizar registra un 0 por cada producto sin contar y lo encola (decisión del cliente 2026-09-05)', () => {
+  // "Si no hay el producto, es 0": al finalizar, cada renglón sin Conteo se
+  // guarda en 0 explícito y se encola como un conteo más — así, sin red, el
+  // estado local queda completo (N/N) y la cola manda primero los 0 y recién
+  // después el finalizar. Espeja hojas.service.ts#finalizar del backend.
+  // Inventario propio por test, por lo mismo que `hojaDeRiesgo` (ver arriba).
+  function hojaConProductos(inventarioId: number, id: number, numero: string, productoIds: number[]) {
+    return {
+      id,
+      inventarioId,
+      numero,
+      zona: 'Zona T',
+      gondola: 'T1',
+      tamano: 50,
+      estado: 'pendiente' as const,
+      sync: 'sincronizado' as const,
+      asignados: ['María Rojas'],
+      asignadoAId: 501, // María (SESION_MARIA): el id manda sobre el nombre.
+      asignadoA2Id: null,
+      productos: productoIds.map((pid) => ({
+        id: pid,
+        codigo: String(pid).padStart(4, '0'),
+        codigoBarras: `774000000${pid}`,
+        descripcion: `Producto ${pid}`,
+        empaques: [{ nombre: 'Caja', factor: 12 }],
+      })),
+      conteos: [],
+    };
+  }
+
+  it('3 productos, 1 contado: quedan 3 conteos (dos en 0) y los 0 se encolan junto al finalizar', async () => {
+    const INV = 556301;
+    const [p1, p2, p3] = [8801, 8802, 8803];
+    vi.mocked(hojasApi.mias).mockResolvedValueOnce([hojaConProductos(INV, 5563001, '001', [p1, p2, p3])]);
+    const [hoja] = await hojasSqlite.mias(INV, 1);
+    const hojaId = hoja!.id;
+
+    // Solo se cuenta el primero: 8802 y 8803 quedan sin contar.
+    await hojasSqlite.guardarConteo(hojaId, {
+      productoId: p1,
+      empaques: [{ empaqueNombre: 'Caja', cantidad: 1 }],
+      sueltas: 0,
+      confirmadoPorEscaner: false,
+      contadoEn: 't-tres-conteo',
+    });
+
+    const finalizada = await hojasSqlite.finalizar(hojaId);
+    // La hoja que devuelve finalizar ya trae los 3 conteos: la pantalla
+    // muestra el avance completo sin volver a leer.
+    expect(finalizada.conteos).toHaveLength(3);
+
+    const db = await obtenerDbDeTest();
+    const conteos = await db.getAllAsync<{ producto_id: number; sueltas: number; lineas: string }>(
+      'SELECT producto_id, sueltas, lineas FROM conteos WHERE hoja_id = ? ORDER BY producto_id ASC',
+      [hojaId],
+    );
+    expect(conteos).toHaveLength(3);
+    // Los dos que faltaban quedaron en 0: sueltas 0 y SIN líneas de empaque.
+    expect(conteos.find((c) => c.producto_id === p2)).toMatchObject({ sueltas: 0, lineas: '[]' });
+    expect(conteos.find((c) => c.producto_id === p3)).toMatchObject({ sueltas: 0, lineas: '[]' });
+    // El contado real (8801) NO se pisó: conserva su caja, no es un 0.
+    expect(conteos.find((c) => c.producto_id === p1)?.lineas).not.toBe('[]');
+
+    // Los 0 están en la cola como 'conteo' (para sincronizarse), más el
+    // 'finalizar'. Que la cola frene el finalizar hasta que salgan los
+    // conteos ya se prueba en el describe ARREGLADO (2026-09-05).
+    const cola = await db.getAllAsync<{ tipo: string; producto_id: number }>(
+      'SELECT tipo, producto_id FROM cola_sync WHERE hoja_id = ?',
+      [hojaId],
+    );
+    const conteosEnCola = cola
+      .filter((c) => c.tipo === 'conteo')
+      .map((c) => c.producto_id)
+      .sort((a, b) => a - b);
+    expect(conteosEnCola).toEqual([p1, p2, p3]);
+    expect(cola.some((c) => c.tipo === 'finalizar')).toBe(true);
+  });
+
+  it('con todo contado no inventa ceros: solo se encola el finalizar (más los conteos reales)', async () => {
+    const INV = 556302;
+    const [p1, p2] = [8811, 8812];
+    vi.mocked(hojasApi.mias).mockResolvedValueOnce([hojaConProductos(INV, 5563002, '002', [p1, p2])]);
+    const [hoja] = await hojasSqlite.mias(INV, 1);
+    const hojaId = hoja!.id;
+
+    for (const pid of [p1, p2]) {
+      await hojasSqlite.guardarConteo(hojaId, {
+        productoId: pid,
+        empaques: [{ empaqueNombre: 'Caja', cantidad: 1 }],
+        sueltas: 0,
+        confirmadoPorEscaner: false,
+        contadoEn: `t-todo-${pid}`,
+      });
+    }
+
+    await hojasSqlite.finalizar(hojaId);
+
+    const db = await obtenerDbDeTest();
+    // Ningún conteo en 0 inventado: siguen siendo 2, los reales.
+    const conteos = await db.getAllAsync('SELECT producto_id, lineas FROM conteos WHERE hoja_id = ?', [hojaId]);
+    expect(conteos).toHaveLength(2);
+    for (const c of conteos as Array<{ lineas: string }>) expect(c.lineas).not.toBe('[]');
+  });
+});
+
 describe('la descarga inicial distingue POR QUÉ no trajo hojas', () => {
   // Inventarios que no existen en el dataset de ejemplo (_compartido.ts):
   // así `hojasDeInventarioBase` cae a `{ hojas: [], origen: 'mock' }` sin

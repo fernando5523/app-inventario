@@ -121,6 +121,39 @@ describe('destinoTrasRonda', () => {
   });
 });
 
+// ===========================================================================
+// EL CONTRATO CON `finalizar` (decisión del cliente 2026-09-05)
+// ===========================================================================
+//
+// Al finalizar una hoja, cada producto sin contar se registra con un Conteo
+// en 0 explícito ("si no hay el producto, es 0"; ver
+// hojas.service.ts#finalizar y el adaptador móvil hojas-sqlite.ts#finalizar).
+// Estos casos fijan qué hace el cierre con ESE 0 -- y son distintos del
+// `[null]` de "nadie lo miró", que se prueba arriba.
+describe('el 0 que deja finalizar se trata como un conteo real, NO como "sin contar"', () => {
+  it('0 contra un stock > 0 es una DIFERENCIA: va a recontar', () => {
+    // El caso central: el operario finalizó afirmando "no hay ninguno", pero
+    // el ERP esperaba 5. Es un faltante que hay que volver a mirar, no un
+    // renglón en blanco que se ignora.
+    expect(destinoTrasRonda(item({ stockErp: 5, conteos: [0] }))).toBe('recontar');
+    expect(itemsParaLaRondaSiguiente([item({ codigo: 'Z', stockErp: 5, conteos: [0] })])).toHaveLength(1);
+  });
+
+  it('0 contra un stock 0 CUADRA: el ERP también dice que no hay', () => {
+    expect(destinoTrasRonda(item({ stockErp: 0, conteos: [0] }))).toBe('cuadrado');
+  });
+
+  it('cuenta como CONTADO en el resumen, no como sinContar (a diferencia de [null])', () => {
+    const conCero = resumirRonda([{ codigo: 'Z', stockErp: 5, conteos: [0] }]);
+    expect(conCero.contados).toBe(1);
+    expect(conCero.sinContar).toBe(0);
+    // Contraste con lo que NADIE miró: ese sí es sinContar.
+    const sinMirar = resumirRonda([{ codigo: 'Z', stockErp: 5, conteos: [null] }]);
+    expect(sinMirar.contados).toBe(0);
+    expect(sinMirar.sinContar).toBe(1);
+  });
+});
+
 describe('itemsParaLaRondaSiguiente', () => {
   const universo: ItemDeRonda[] = [
     { codigo: 'A', stockErp: 100, conteos: [100] }, // cuadra

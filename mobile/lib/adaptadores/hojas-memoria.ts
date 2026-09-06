@@ -74,6 +74,17 @@ export const hojasMemoria: RepositorioHojas = {
     // finalizarDominio es puro (no muta `hoja`) y lanza si ya estaba
     // finalizada: ese es el punto de no retorno, no se relaja acá.
     const finalizada = finalizarDominio(hoja);
+    // DECISIÓN DEL CLIENTE (2026-09-05): al finalizar, cada producto SIN
+    // CONTAR se registra en 0 explícito ("si no hay el producto, es 0").
+    // Espeja hojas-sqlite.ts#finalizar y hojas.service.ts#finalizar — este
+    // adaptador es el mock de dev, así que solo mantiene el estado en memoria
+    // coherente (no hay cola: el "servidor" siempre está).
+    const ahora = new Date().toISOString();
+    const contados = new Set(hoja.conteos.map((c) => c.productoId));
+    const ceros = hoja.productos
+      .filter((p) => !contados.has(p.id))
+      .map((p) => ({ productoId: p.id, empaques: [], sueltas: 0, confirmadoPorEscaner: false, contadoEn: ahora }));
+    finalizada.conteos = [...hoja.conteos, ...ceros];
     finalizada.sync = 'sincronizado';
     await reemplazarHoja(finalizada);
     return finalizada;

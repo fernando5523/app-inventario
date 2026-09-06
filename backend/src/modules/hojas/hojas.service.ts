@@ -508,10 +508,49 @@ export async function finalizar(actor: ColaboradorAutenticado, hojaId: number): 
   });
 
   if (hoja.estado !== 'finalizada') {
-    await prisma.hojaConteo.update({
-      where: { id: hojaId },
-      data: { estado: 'finalizada', sync: 'sincronizado' },
+    /**
+     * DECISIÓN DEL CLIENTE (2026-09-05): al finalizar, un renglón SIN CONTAR
+     * no queda como "faltan N" -- se registra un Conteo en 0 explícito ("si
+     * no hay el producto, es 0"). Es una AFIRMACIÓN de quien finaliza la hoja
+     * ("miré la góndola, no hay"), no el cero automático que
+     * `dominio/ciclo-conteos.ts` (115-127) prohíbe para lo que NADIE miró:
+     * ahí sigue vigente que un ítem jamás mirado NO se asume cero -- lo que
+     * cambia es que finalizar ES ese acto humano de mirar y cerrar.
+     *
+     * Ojo, deja desactualizada una premisa escrita en otro lado: el
+     * comentario de `rondas.service.ts#cerrar` ("Este cierre NO los da por
+     * cero") describe el estado ANTERIOR a este cambio. El cierre sigue sin
+     * tocar nada -- es `finalizar` el que ahora deja esos 0, y el cierre los
+     * trata como cualquier conteo real: 0 vs stock > 0 = diferencia y va a
+     * recontar; 0 vs stock 0 = cuadra (ver ciclo-conteos.ts#destinoTrasRonda).
+     *
+     * Se registran los 0 con el actor que finaliza (la hoja ya es suya:
+     * `validarEscrituraDeHoja` lo exige arriba) -- el Conteo no lleva
+     * colaborador propio, la autoría vive en el asignado de la hoja.
+     *
+     * En la MISMA transacción que el cambio de estado: escribir los 0 y que
+     * fallara el `finalizada` dejaría ceros inventados en una hoja sin cerrar.
+     * `createMany` + `skipDuplicates` sobre @@unique([hojaId, productoId]) es
+     * lo que lo hace seguro contra la carrera con un conteo REAL que llegue
+     * entre la lectura de `sinContar` y esta escritura: si ya existe un
+     * Conteo para ese producto, se saltea y NUNCA lo pisa con 0.
+     */
+    const sinContar = await prisma.producto.findMany({
+      where: { hojaId, conteos: { none: {} } },
+      select: { id: true },
     });
+    const contadoEn = new Date();
+
+    await prisma.$transaction([
+      prisma.conteo.createMany({
+        data: sinContar.map((p) => ({ hojaId, productoId: p.id, sueltas: 0, contadoEn })),
+        skipDuplicates: true,
+      }),
+      prisma.hojaConteo.update({
+        where: { id: hojaId },
+        data: { estado: 'finalizada', sync: 'sincronizado' },
+      }),
+    ]);
   }
 
   return detalle(actor, hojaId);
