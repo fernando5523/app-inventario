@@ -120,11 +120,23 @@ export type DestinoItem = 'cuadrado' | 'recontar' | 'sin_dato_erp';
  * la ronda 1 (`conteoQueManda`) y ese número se compara contra el ERP. NO es
  * "sin contar" -- hay un conteo, es viejo pero existe.
  *
- * "Sin contar" es solo cuando NINGUNA ronda tiene dato. Y ahí no se asume
- * cero: que nadie haya mirado el renglón no significa que en la góndola no
- * haya nada. Darlo por cero reportaría un faltante total inventado, y con el
- * precio de venta encima eso termina en el descuento de sueldo de alguien.
- * En la duda, se recuenta: cuesta un ítem más en la ronda siguiente.
+ * "Sin contar" (todas las rondas en null) es cuando NINGUNA ronda tiene dato,
+ * y ahí este dominio NO asume cero: que nadie haya mirado el renglón no
+ * significa que en la góndola no haya nada. Darlo por cero reportaría un
+ * faltante total inventado, y con el precio de venta encima eso termina en el
+ * descuento de sueldo de alguien. En la duda, se recuenta: cuesta un ítem más
+ * en la ronda siguiente.
+ *
+ * DECISIÓN DEL CLIENTE (2026-09-05): ese `null` casi no aparece más, y no por
+ * este dominio sino por `finalizar`. Al finalizar una hoja, cada producto sin
+ * contar se registra con un Conteo en 0 EXPLÍCITO ("si no hay el producto, es
+ * 0"; ver hojas.service.ts#finalizar y el adaptador móvil). Eso llega acá
+ * como `[0]`, no como `[null]`: un conteo real que se trata como cualquier
+ * otro (0 vs stock > 0 = diferencia → recontar; 0 vs stock 0 = cuadra). El
+ * `null` que queda es solo lo que de verdad nadie miró -- un ítem que jamás
+ * entró a una hoja finalizada. El 0 afirmado por quien cerró la hoja y el
+ * cero automático prohibido son dos cosas distintas, y mantener esa
+ * distinción es lo que hace esta función.
  */
 export function destinoTrasRonda(item: ItemDeRonda): DestinoItem {
   if (item.stockErp === null) return 'sin_dato_erp';

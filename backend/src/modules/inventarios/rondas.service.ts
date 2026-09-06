@@ -329,13 +329,15 @@ export interface CierreDeRondaDto {
  *      `historial.permisos.ts#validarPuedeLacrar` con `todoSincronizado`,
  *      y por la misma razón.
  *
- * Ojo con lo que ESTO NO exige, porque es una decisión pendiente del cliente:
- * `hojas.service.ts#finalizar` permite finalizar una hoja con renglones sin
- * contar. Este cierre NO los da por cero: los manda a recontar (ver
- * `dominio/ciclo-conteos.ts#destinoTrasRonda`). Es lo conservador -- en la
- * duda se recuenta, que cuesta un ítem más en la ronda siguiente -- pero si
- * el cliente prefiere bloquear el cierre hasta que estén todos contados, el
- * cambio es una validación más acá.
+ * Sobre los renglones sin contar de una hoja finalizada (DECISIÓN DEL
+ * CLIENTE, 2026-09-05): `hojas.service.ts#finalizar` ya NO los deja "sin
+ * contar" -- registra un Conteo en 0 EXPLÍCITO por cada uno ("si no hay el
+ * producto, es 0"). Este cierre no hace nada especial con ellos: los trata
+ * como cualquier conteo real (0 vs stock > 0 = diferencia → recontar; 0 vs
+ * stock 0 = cuadra; ver `dominio/ciclo-conteos.ts#destinoTrasRonda`). Antes
+ * de esa decisión llegaban como `null` y el cierre los mandaba a recontar por
+ * ausencia de dato; ahora llegan como el 0 que afirmó quien finalizó la hoja,
+ * y el destino lo decide el número contra el ERP, no la falta de conteo.
  *
  * Todo va en transacción: si la creación de las hojas nuevas fallara a
  * mitad, quedaría una ronda 2 incompleta que nadie sabría interpretar; si
