@@ -92,6 +92,11 @@ LOG="$(pwd)/logs/build-release-$(date +%Y%m%d-%H%M%S).log"
 echo "Compilando (esto puede tardar varios minutos)... salida completa en ${LOG}"
 
 cd android
+# Marca de tiempo tomada ANTES de gradlew: contra esto se compara la fecha
+# del APK mas abajo. Va aca y no despues a proposito -- todo lo que se
+# escriba desde este instante es de ESTA corrida, y lo que sea anterior no.
+INICIO_BUILD=$(date +%s)
+
 # El `if` es a proposito: con `set -e` prendido, un comando que falla DENTRO
 # de un `if` no mata el script -- es lo que permite capturar el exit code
 # real de gradlew en vez de que bash aborte antes de leerlo.
@@ -118,6 +123,28 @@ if [ ! -f "$APK" ]; then
   exit 1
 fi
 
+# Que el archivo exista NO alcanza, y este script lo aprendio a los golpes
+# (5 sep 2026, release 2.12.0): gradle contesto "BUILD SUCCESSFUL, 515 tareas
+# up-to-date" sin tocar el APK, el script imprimio "APK generado" y salio en
+# 0 -- sobre el binario de una corrida ANTERIOR. Un APK viejo y uno recien
+# hecho se ven identicos desde afuera: mismo exit code, mismo archivo en su
+# lugar. La fecha es lo unico que los distingue, asi que se compara, no se
+# imprime y se confia.
+APK_MTIME=$(date -r "$APK" +%s)
+if [ "$APK_MTIME" -lt "$INICIO_BUILD" ]; then
+  echo "ABORTADO: gradlew termino en 0 pero el APK es ANTERIOR a este build." >&2
+  echo "  APK:            $(date -d "@${APK_MTIME}" '+%Y-%m-%d %H:%M:%S')" >&2
+  echo "  Build arranco:  $(date -d "@${INICIO_BUILD}" '+%Y-%m-%d %H:%M:%S')" >&2
+  echo "" >&2
+  echo "  Ese binario quedo de una corrida anterior: gradle lo dio por up-to-date" >&2
+  echo "  y no lo regenero. NO se puede afirmar que corresponda al codigo actual." >&2
+  echo "  Para forzar una compilacion real, borra la carpeta de salida y volve a" >&2
+  echo "  correr este script:" >&2
+  echo "    rm -rf android/app/build/outputs/apk/release/" >&2
+  echo "  Log de esta corrida: ${LOG}" >&2
+  exit 1
+fi
+
 echo "APK generado: $(cd "$(dirname "$APK")" && pwd)/$(basename "$APK")"
-echo "Timestamp del APK: $(date -r "$APK" '+%Y-%m-%d %H:%M:%S')"
+echo "Timestamp del APK: $(date -r "$APK" '+%Y-%m-%d %H:%M:%S') (verificado: posterior al inicio de este build)"
 exit 0
