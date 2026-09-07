@@ -199,10 +199,23 @@ export default function MisHojasScreen(): JSX.Element {
           )}
           <View style={styles.lista}>
             {hojas.map((hoja) => (
+              // SIN `titulo`: la tarjeta queda en "Hoja #002" y su avance.
+              //
+              // Decía "acondicionadores (Góndola 001)", y las dos mitades
+              // confunden por el mismo motivo: son SINTÉTICAS. `gondola` no
+              // viene del ERP -- Dynamics no sabe dónde está físicamente cada
+              // producto, así que crearHojas le copia el número de hoja
+              // (inventarios.service.ts). "Góndola 001" no es una góndola: es
+              // el número de hoja escrito dos veces. Y `zona` es la categoría
+              // dominante del bloque, que en una hoja que cruza dos sectores
+              // nombra solo uno.
+              //
+              // Mismo criterio que el Historial (1045d46, min-2): el número de
+              // hoja identifica, lo demás sobra. Los dos campos SIGUEN en el
+              // backend y en el modelo -- esto es solo lo que se muestra.
               <TarjetaHoja
                 key={hoja.id}
                 numero={hoja.numero}
-                titulo={`${hoja.zona} (Góndola ${hoja.gondola})`}
                 estado={hoja.estado}
                 contados={hoja.conteos.length}
                 total={hoja.productos.length}
