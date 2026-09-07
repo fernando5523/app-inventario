@@ -39,6 +39,15 @@ describe('mensajeDeErrorIngreso: "demasiados intentos" dice el minuto exacto', (
     expect(mensajeDeErrorIngreso(new ErrorApi('credenciales-invalidas', { mensaje: 'PIN incorrecto.' }))).toBe('PIN incorrecto.');
   });
 
+  it('404 (colaborador ya no existe): mensaje propio, NUNCA "PIN incorrecto" -- el problema no es la clave', () => {
+    // El backend manda "Colaborador no encontrado." (sesion.service.ts) pero
+    // ese texto no le dice a la persona qué hacer: hay que elegir la
+    // persona de nuevo, no reintentar el mismo PIN.
+    const error = new ErrorApi('no-encontrado', { mensaje: 'Colaborador no encontrado.' });
+    expect(mensajeDeErrorIngreso(error)).toBe('Esta cuenta ya no está disponible. Elige la persona de nuevo.');
+    expect(mensajeDeErrorIngreso(error)).not.toContain('PIN');
+  });
+
   it('un error que no es de API: mensaje del Error, o genérico si ni Error es', () => {
     expect(mensajeDeErrorIngreso(new Error('algo raro'))).toBe('algo raro');
     expect(mensajeDeErrorIngreso('caída suelta')).toBe('Intenta de nuevo.');

@@ -29,6 +29,14 @@ function segundosDeEspera(detalles: unknown): number | null {
  * inventa un tiempo que no dijo el servidor.
  */
 export function mensajeDeErrorIngreso(error: unknown): string {
+  // 404: el colaboradorId no existe en el backend (cuenta borrada, o
+  // selección local vieja tras una limpieza de datos — ver el caso real que
+  // motivó esto, 2026-09-07). "PIN incorrecto" manda a dudar de la clave
+  // cuando el problema es otro: hay que elegir la persona de nuevo, no
+  // reintentar el mismo PIN.
+  if (esErrorApi(error) && error.clase === 'no-encontrado') {
+    return 'Esta cuenta ya no está disponible. Elige la persona de nuevo.';
+  }
   if (esErrorApi(error) && error.clase === 'demasiados-intentos') {
     const segundos = segundosDeEspera(error.detalles);
     if (segundos !== null) {

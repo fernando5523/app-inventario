@@ -14,6 +14,7 @@ import {
   TecladoPin,
   type SelectOpcion,
 } from '../components/ui';
+import { esErrorApi } from '../lib/adaptadores/_http';
 import { repositorioSesion } from '../lib/contenedor';
 import { ejecutarIngreso } from '../lib/ejecutar-ingreso';
 import { mensajeDeErrorIngreso } from '../lib/mensaje-error-ingreso';
@@ -161,10 +162,24 @@ export default function LoginScreen(): JSX.Element {
       // foco listo para reintentar, sin tener que volver a tocar "Clave". El
       // mensaje lo arma `mensajeDeErrorIngreso`: para un 429 con tiempo del
       // servidor, dice el minuto exacto en vez del "unos minutos" vago.
-      alRechazar: (error) =>
+      alRechazar: (error) => {
+        // 404: el colaboradorId ya no existe (cuenta borrada, o la persona
+        // elegida quedó vieja tras una limpieza de datos). Reabrir el
+        // teclado acá invitaría a reintentar el MISMO PIN sobre la MISMA
+        // cuenta fantasma — hay que elegir la persona de nuevo, así que se
+        // limpia la selección y se refresca la lista para que la opción
+        // vieja no vuelva a aparecer.
+        if (esErrorApi(error) && error.clase === 'no-encontrado') {
+          setPersona(null);
+          if (modoAdmin) cargarAdministradores();
+          else if (sucursal) cargarColaboradores(sucursal.id);
+          Alert.alert('No se pudo ingresar', mensajeDeErrorIngreso(error));
+          return;
+        }
         Alert.alert('No se pudo ingresar', mensajeDeErrorIngreso(error), [
           { text: 'Reintentar', onPress: () => setModalPinVisible(true) },
-        ]),
+        ]);
+      },
       marcarIngresando: setIngresando,
     });
   }
