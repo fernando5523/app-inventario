@@ -16,10 +16,10 @@ import {
   type EstadoPaso,
 } from '../../lib/dominio/texto-cierre-ronda';
 import { partirEnHojas } from '../../lib/dominio/lote';
-import { TAMANOS_HOJA, type HojaConteo, type Rol, type TamanoHoja } from '../../lib/dominio/tipos';
+import { type HojaConteo, type Rol, type TamanoHoja } from '../../lib/dominio/tipos';
 import type { ResumenRonda } from '../../lib/puertos/repositorios';
 import { useSesion } from '../../lib/sesion-contexto';
-import { colors, fonts, fontSize, radius, spacing } from '../../lib/theme';
+import { colors, fonts, radius, spacing } from '../../lib/theme';
 import { PantallaConTabs } from '../navegacion/PantallaConTabs';
 import { BandaSync, Badge, BarraApp, Button, formatoMiles, formatoPct, type BadgeVariant } from '../ui';
 
@@ -188,7 +188,6 @@ export function CicloScreen({ rol }: CicloScreenProps): JSX.Element {
   const [tamanoHoja, setTamanoHoja] = useState<TamanoHoja | null>(null);
   const [inventarioId, setInventarioId] = useState<number | null>(null);
   const [hojasT1, setHojasT1] = useState<HojaConteo[] | null>(null);
-  const [tamanoReconteo, setTamanoReconteo] = useState<TamanoHoja>(50);
 
   // Cierre de ronda (solo Coordinador). El resumen es un PREVIEW que no muta:
   // se ve ANTES de decidir. Ver RepositorioInventario.resumenRonda.
@@ -392,39 +391,6 @@ export function CicloScreen({ rol }: CicloScreenProps): JSX.Element {
             notaSinDato={!hojasT1 || hojasT1.length === 0 ? 'Todavía no hay hojas del 1er conteo creadas para esta sucursal.' : undefined}
           />
 
-          <View style={styles.tarjeta}>
-            <Text style={styles.tarjetaTitulo}>Tamaño de hoja para los reconteos</Text>
-            <Text style={styles.tarjetaTexto}>
-              {rol === 'coordinador'
-                ? 'Elige cuántos ítems entran por hoja en el 2do y 3er conteo. La cantidad de hojas se recalcula siempre — nunca es un número fijo, y la última hoja puede quedar parcial.'
-                : 'El Coordinador elige cuántos ítems entran por hoja en el 2do y 3er conteo. La cantidad de hojas se recalcula siempre — nunca es un número fijo.'}
-            </Text>
-            {rol === 'coordinador' ? (
-              <View style={styles.segmentado}>
-                {TAMANOS_HOJA.map((tamano, i) => {
-                  const activo = tamano === tamanoReconteo;
-                  return (
-                    <Pressable
-                      key={tamano}
-                      onPress={() => setTamanoReconteo(tamano)}
-                      accessibilityRole="button"
-                      accessibilityState={{ selected: activo }}
-                      style={[
-                        styles.segmento,
-                        i < TAMANOS_HOJA.length - 1 && styles.segmentoConBorde,
-                        activo && styles.segmentoActivo,
-                      ]}
-                    >
-                      <Text style={[styles.segmentoTexto, activo && styles.segmentoTextoActivo]}>{tamano} ítems</Text>
-                    </Pressable>
-                  );
-                })}
-              </View>
-            ) : (
-              <Badge label={`${tamanoReconteo} ítems por hoja, a elección del Coordinador`} variant="outline" />
-            )}
-          </View>
-
           <PasoCiclo
             titulo="Paso 2 · 2do Reconteo"
             descripcion="Solo los ítems que no coincidieron con el stock de Dynamics en el 1er conteo."
@@ -561,20 +527,6 @@ const styles = StyleSheet.create({
   embudoFila: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   embudoTexto: { fontSize: 12.5, fontFamily: fonts.semibold },
   notaSinDato: { fontSize: 12, lineHeight: 17, color: colors.grisClaro, fontFamily: fonts.regular, fontStyle: 'italic' },
-
-  segmentado: {
-    flexDirection: 'row',
-    borderWidth: 1.5,
-    borderColor: colors.rojo,
-    borderRadius: radius.md,
-    backgroundColor: colors.campo,
-    overflow: 'hidden',
-  },
-  segmento: { flex: 1, paddingVertical: 11, alignItems: 'center' },
-  segmentoConBorde: { borderRightWidth: 1.5, borderRightColor: colors.rojo },
-  segmentoActivo: { backgroundColor: colors.rojo },
-  segmentoTexto: { fontSize: fontSize.sm - 0.5, color: colors.tinta, fontFamily: fonts.bold },
-  segmentoTextoActivo: { color: colors.blanco },
 
   resumen: {
     gap: spacing.sm,
