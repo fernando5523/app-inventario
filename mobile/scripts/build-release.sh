@@ -64,6 +64,50 @@ if [ -z "$VERSION_NAME" ] || [ -z "$VERSION_CODE" ]; then
   exit 1
 fi
 
+# ---------------------------------------------------------------------------
+# La version de build.gradle tiene que coincidir con la de app.config.ts.
+# ---------------------------------------------------------------------------
+# android/ es GENERADA y esta en .gitignore: un commit que sube la version
+# toca app.config.ts y NO PUEDE tocar build.gradle. Si nadie corre
+# `expo prebuild` en el medio, gradle empaqueta la version vieja y el APK
+# sale mintiendo.
+#
+# Paso de verdad con el 2.12.1 (7 sep 2026): el commit decia 2.12.1 y
+# build.gradle seguia en 2.12.0 con versionCode 12 -- el MISMO codigo que el
+# release anterior. Un APK asi no solo muestra la version equivocada: Android
+# usa versionCode para decidir si algo es una actualizacion, y con el codigo
+# repetido la instalacion sobre el APK anterior falla
+# (INSTALL_FAILED_VERSION_DOWNGRADE) o deja la version vieja andando. El
+# cliente probaria el fix y lo veria roto igual.
+#
+# Se compara y se ABORTA, no se avisa: un aviso en medio de la salida de un
+# build urgente no lo lee nadie.
+APP_CONFIG='app.config.ts'
+if [ -f "$APP_CONFIG" ]; then
+  # Anclado al inicio de linea para no cazar `runtimeVersion:` ni parecidos.
+  CFG_VERSION=$(sed -n "s/^[[:space:]]*version:[[:space:]]*['\"]\([^'\"]*\)['\"].*/\1/p" "$APP_CONFIG" | head -n1)
+  CFG_VERSION_CODE=$(sed -n 's/^[[:space:]]*versionCode:[[:space:]]*\([0-9][0-9]*\).*/\1/p' "$APP_CONFIG" | head -n1)
+
+  if [ -z "$CFG_VERSION" ] || [ -z "$CFG_VERSION_CODE" ]; then
+    # No poder leer la referencia no es motivo para frenar un build que por
+    # lo demas esta bien: se avisa que quedo SIN verificar y se sigue.
+    echo "AVISO: no pude leer version/android.versionCode de ${APP_CONFIG}." >&2
+    echo "  El build sigue, pero la version del APK queda SIN verificar contra app.config.ts." >&2
+  elif [ "$CFG_VERSION" != "$VERSION_NAME" ] || [ "$CFG_VERSION_CODE" != "$VERSION_CODE" ]; then
+    echo "ABORTADO: la version de gradle no coincide con la de app.config.ts." >&2
+    echo "  android/app/build.gradle dice ${VERSION_NAME} (versionCode ${VERSION_CODE})" >&2
+    echo "  app.config.ts dice         ${CFG_VERSION} (versionCode ${CFG_VERSION_CODE})" >&2
+    echo "" >&2
+    echo "  El APK saldria con la version de build.gradle, que es la vieja: android/ es" >&2
+    echo "  generada y esta en .gitignore, asi que el commit que subio la version no la" >&2
+    echo "  toco. Con el versionCode repetido, ademas, no instala como actualizacion." >&2
+    echo "" >&2
+    echo "  Corre 'npx expo prebuild -p android --no-install' o alinea build.gradle a mano" >&2
+    echo "  (versionName \"${CFG_VERSION}\" y versionCode ${CFG_VERSION_CODE}), y volve a correr este script." >&2
+    exit 1
+  fi
+fi
+
 echo "Version a compilar: ${VERSION_NAME} (versionCode ${VERSION_CODE})"
 echo "Backend: ${EXPO_PUBLIC_API_URL}"
 
