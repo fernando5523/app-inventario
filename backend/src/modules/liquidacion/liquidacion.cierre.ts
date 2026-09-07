@@ -317,7 +317,7 @@ export async function liquidar(
   if (asistentes.length === 0) {
     throw new Conflicto(
       'Ningún colaborador registró conteos en este inventario: no hay asistencia deducible ni a quién repartir el faltante. ' +
-        'Revisá que las hojas tengan conteos cargados antes de liquidar.',
+        'Revisa que las hojas tengan conteos cargados antes de liquidar.',
     );
   }
 

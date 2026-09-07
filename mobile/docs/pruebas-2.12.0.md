@@ -2,7 +2,7 @@
 
 No hay `CHANGELOG.md` en el repo (se buscó con `**/CHANGELOG*.md`; solo aparecen los de `node_modules`, de librerías de terceros). Este documento reemplaza esa función para esta versión: qué cambió y qué tocar en el teléfono para confirmarlo, sin tener que leer el código.
 
-PIN de prueba extra por si querés repetir cualquier paso en la otra tienda: **Bolívar → Contador 30 → PIN 000030**.
+PIN de prueba extra por si quieres repetir cualquier paso en la otra tienda: **Bolívar → Contador 30 → PIN 000030**.
 
 ---
 
@@ -13,7 +13,7 @@ PIN de prueba extra por si querés repetir cualquier paso en la otra tienda: **B
 - Un Contador ve y puede abrir solo las hojas asignadas a él, aunque el teléfono tenga descargadas las de otro colaborador (por ejemplo, porque el Coordinador usó el mismo equipo).
 - Una descarga de hojas cortada a la mitad ya no se muestra como si estuviera completa: la pantalla avisa "descarga incompleta" y ofrece reintentar.
 - Sin señal, Inicio ya no muestra "0 hojas" ni "0 asignadas" cuando en realidad no se pudo consultar el servidor — ahora dice "—" y aclara "sin red".
-- Una hoja ya no se declara finalizada ante el servidor si le queda un conteo rechazado o pendiente de subir; y el aviso de error dice la razón real, no "revisá la conexión" para algo que no es de red.
+- Una hoja ya no se declara finalizada ante el servidor si le queda un conteo rechazado o pendiente de subir; y el aviso de error dice la razón real, no "revisa la conexión" para algo que no es de red.
 - La barra de progreso al bajar el catálogo de Dynamics avanza con el dato real de paginación, no un porcentaje fijo.
 - Historial: paginación real con "Cargar más", filtro por período (año/mes), chip de sucursal para el Administrador, y folio / fecha / quién lacró visibles en cada fila de la lista (antes solo en el detalle).
 - Pantalla nueva de Comparativo mensual y la historia de un ítem, accesibles desde Historial.
@@ -30,11 +30,11 @@ PIN de prueba extra por si querés repetir cualquier paso en la otra tienda: **B
 ## B) Qué probar en el teléfono
 
 ### 1. Login — PIN vacío tras un rechazo
-**Rol:** Contador (Luis) · **PIN:** 220022, pero escribí primero uno incorrecto (por ejemplo `999999`).
+**Rol:** Contador (Luis) · **PIN:** 220022, pero escribe primero uno incorrecto (por ejemplo `999999`).
 **Pantalla:** Ingreso, tras elegir Luzuriaga → Luis.
 **Tocar:** Ingresar con el PIN incorrecto.
 **Debe leerse:** un cartel titulado **"No se pudo ingresar"** con el texto **"PIN incorrecto."**, y los 6 puntos del PIN vacíos apenas se cierra el cartel (no hay que borrarlos a mano).
-Después, escribí el PIN correcto (220022) e ingresá.
+Después, escribe el PIN correcto (220022) e ingresa.
 
 ### 2. Mis hojas — solo las propias
 **Rol:** Contador (Luis, 220022) y después Contador (Carla, 330033).
@@ -46,7 +46,7 @@ Después, escribí el PIN correcto (220022) e ingresá.
 **Rol:** Contador (Luis, 220022).
 **Pantalla:** Contar (una hoja abierta con productos).
 **Tocar:** ícono de escáner, apuntar al código de barras de un producto que SÍ está en esa hoja.
-**Debe leerse:** el modal de escaneo se cierra solo y aparece **"Confirmado con la cámara: {nombre del producto}. El código no dice cuántas hay — la cantidad y el empaque los cargás vos."** (o, si el código es de un empaque, "Confirmado con la cámara: {producto} · {empaque} ×{factor}.").
+**Debe leerse:** el modal de escaneo se cierra solo y aparece **"Confirmado con la cámara: {nombre del producto}. El código no dice cuántas hay — la cantidad y el empaque los cargas tú."** (o, si el código es de un empaque, "Confirmado con la cámara: {producto} · {empaque} ×{factor}.").
 
 ### 4. Escáner — código que NO es de la hoja
 **Rol:** Contador (Luis, 220022), misma hoja.
@@ -58,13 +58,13 @@ Después, escribí el PIN correcto (220022) e ingresá.
 **Rol:** Contador (Luis, 220022).
 **Pantalla:** Contar.
 **Tocar:** activar el Modo Avión, contar un producto, anotar el número que queda arriba ("X / Y Productos"), cerrar la app por completo (no solo minimizarla) y volver a abrirla con el avión todavía activado.
-**Debe leerse:** el mismo **"X / Y Productos"** que quedó antes de cerrar (no se perdió el conteo), y la banda de arriba dice **"Sin conexión — seguí contando, se guarda en el equipo y sube solo."** (o, si ya había algo pendiente de antes, "Sin conexión — N conteos guardados en el equipo, se van a subir solos."). Desactivá el avión antes de seguir con el resto de las pruebas.
+**Debe leerse:** el mismo **"X / Y Productos"** que quedó antes de cerrar (no se perdió el conteo), y la banda de arriba dice **"Sin conexión — sigue contando, se guarda en el equipo y sube solo."** (o, si ya había algo pendiente de antes, "Sin conexión — N conteos guardados en el equipo, se van a subir solos."). Desactiva el avión antes de seguir con el resto de las pruebas.
 
 ### 6. Cerrar la ronda 1
 **Rol:** Coordinador (Nancy, 110011).
 **Pantalla:** Ciclo de conteos.
 **Tocar:** el botón que dice **"Cerrar el 1er conteo y abrir el 2do conteo · N ítems"**.
-**Debe leerse:** un cartel titulado **"2do conteo abierto"** con el texto **"Se abrió la ronda 2 con N hojas nuevas, sin asignar. Repartilas desde Gestión de hojas."**.
+**Debe leerse:** un cartel titulado **"2do conteo abierto"** con el texto **"Se abrió la ronda 2 con N hojas nuevas, sin asignar. Repártelas desde Gestión de hojas."**.
 
 ### 7. La ronda 2 llega en cero
 **Rol:** Coordinador (Nancy, 110011), después Contador (Luis, 220022).
@@ -76,7 +76,7 @@ Después, escribí el PIN correcto (220022) e ingresá.
 **Rol:** Administrador (Admin Sistema, 001000) — **no Coordinador**: `historial.routes.ts` exige `requiereRol('administrador', 'auditor')`; un Coordinador recibe 403. Nancy no sirve acá.
 **Pantalla:** Historial.
 **Tocar:** el chip de **Sucursal** (solo lo ve el Administrador — un Auditor no lo tiene, porque su alcance ya está fijo en la suya), después **Período** (elegir un año) y el filtro de **Estado**.
-**Debe leerse:** el chip de Sucursal ofrece **"Todas"** más un chip por cada tienda (con su nombre real, incluida Luzuriaga). La cabecera cambia a **"Mostrando N de M inventarios"** con M igual o menor al total sin filtrar. Con una combinación sin resultados, aparece **"Ningún inventario con estos filtros"** / **"Probá con otra combinación."**.
+**Debe leerse:** el chip de Sucursal ofrece **"Todas"** más un chip por cada tienda (con su nombre real, incluida Luzuriaga). La cabecera cambia a **"Mostrando N de M inventarios"** con M igual o menor al total sin filtrar. Con una combinación sin resultados, aparece **"Ningún inventario con estos filtros"** / **"Prueba con otra combinación."**.
 
 ### 9. Historial — Cargar más
 **Rol:** Administrador (Admin Sistema, 001000).
@@ -103,7 +103,7 @@ Después, escribí el PIN correcto (220022) e ingresá.
 
 **12.1 — Antes de cargar nada.**
 **Tocar:** abrir la pantalla, sin tocar nada más.
-**Debe leerse:** arriba de todo (antes del resumen de faltante), una tarjeta **"Ajustes del mes"** con el badge **"Sin registrar"**, el título **"Sin registrar"** y el texto **"Hasta que alguien cargue los ajustes del mes no se puede calcular el faltante neto ni cerrar la planilla. Si no hubo ajustes, cargá 0 — eso también es un dato."**.
+**Debe leerse:** arriba de todo (antes del resumen de faltante), una tarjeta **"Ajustes del mes"** con el badge **"Sin registrar"**, el título **"Sin registrar"** y el texto **"Hasta que alguien cargue los ajustes del mes no se puede calcular el faltante neto ni cerrar la planilla. Si no hubo ajustes, carga 0 — eso también es un dato."**.
 
 **12.2 — Cargar los ajustes.**
 **Tocar:** completar **"Ajustes a favor del personal (S/)"** (0 es válido) y **"¿De dónde salen? (obligatorio)"** con una nota (por ejemplo "mermas documentadas de agosto"); dejar **"Faltante que absorbe la empresa (S/) — opcional"** vacío para conservar el calculado. Tocar **"Guardar ajustes"**.

@@ -79,7 +79,7 @@ async function verificarAlmacen(codigo: string): Promise<AlmacenResuelto> {
   } catch (err) {
     throw new SolicitudInvalida(
       'No se pudo consultar la lista de almacenes de Dynamics para verificar el codigo. ' +
-        'Revisá la conexion con el ERP e intentá de nuevo: no se guarda un almacen sin confirmar que existe. ' +
+        'Revisa la conexion con el ERP e intenta de nuevo: no se guarda un almacen sin confirmar que existe. ' +
         `(${err instanceof Error ? err.message : String(err)})`,
     );
   }

@@ -66,12 +66,12 @@ export function esPinTrivial(pin: string): boolean {
 export function validarPinElegible(pin: string, colaboradorId?: number): void {
   if (colaboradorId !== undefined && esPinPredecible(colaboradorId, pin)) {
     throw new SolicitudInvalida(
-      'El PIN no puede ser el numero de colaborador con ceros (000022 para el colaborador 22): es el que genera el sistema y cualquiera que vea la lista de login lo deduce. Elegi otro.',
+      'El PIN no puede ser el numero de colaborador con ceros (000022 para el colaborador 22): es el que genera el sistema y cualquiera que vea la lista de login lo deduce. Elige otro.',
     );
   }
   if (esPinTrivial(pin)) {
     throw new SolicitudInvalida(
-      'El PIN no puede ser una secuencia como 123456 ni todos los digitos iguales como 111111: son los primeros que alguien prueba. Elegi otro.',
+      'El PIN no puede ser una secuencia como 123456 ni todos los digitos iguales como 111111: son los primeros que alguien prueba. Elige otro.',
     );
   }
 }
@@ -93,7 +93,7 @@ export function validarCambioDePin(datos: CambioDePin): void {
   }
   if (esPinPredecible(datos.colaboradorId, datos.pinNuevo)) {
     throw new SolicitudInvalida(
-      'Ese PIN es el que genera el sistema a partir de tu numero de colaborador: cualquiera que vea la lista de login lo deduce. Elegi otro.',
+      'Ese PIN es el que genera el sistema a partir de tu numero de colaborador: cualquiera que vea la lista de login lo deduce. Elige otro.',
     );
   }
   if (esPinTrivial(datos.pinNuevo)) {

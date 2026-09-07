@@ -211,7 +211,7 @@ export async function eliminar(actor: ColaboradorAutenticado, id: number): Promi
   const objetivo = await obtenerConAlcance(actor, id);
 
   if (actor.colaboradorId === id) {
-    throw new Conflicto('No podés eliminar tu propia cuenta.');
+    throw new Conflicto('No puedes eliminar tu propia cuenta.');
   }
 
   // Elimina sesiones asociadas

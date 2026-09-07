@@ -26,7 +26,7 @@ function reintentarEnSegundos(req: Request): number {
 
 function manejarLimiteExcedido(req: Request, res: Response): void {
   res.status(429).json({
-    error: 'Demasiados intentos de ingreso. Volve a intentar en unos minutos.',
+    error: 'Demasiados intentos de ingreso. Vuelve a intentar en unos minutos.',
     detalles: { reintentarEnSegundos: reintentarEnSegundos(req) },
   });
 }

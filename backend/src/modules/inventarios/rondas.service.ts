@@ -225,7 +225,7 @@ function mensajeHojasSinSincronizar(hojas: HojaSinSincronizar[]): string {
     `No se puede cerrar el conteo: ${cuantas} ${plural ? 'hoja está' : 'hojas están'} finalizada${plural ? '' : 's'} pero ` +
     `${plural ? 'su conteo no llegó' : 'sus conteos no llegaron'} al servidor todavía. Alguien contó sin señal y ese ` +
     `trabajo sigue en la cola del teléfono, esperando la WiFi — cerrar ahora congelaría un número al que le faltan ` +
-    `ítems reales, y ese faltante se liquida igual. Conectá a la red y esperá a que sincronice: ${detalle}${resto}.`
+    `ítems reales, y ese faltante se liquida igual. Conecta a la red y espera a que sincronice: ${detalle}${resto}.`
   );
 }
 
@@ -260,7 +260,7 @@ export async function resumen(
   if (hojas === 0) {
     throw new NoEncontrado(
       `El inventario todavía no tiene hojas de la ronda ${ronda}. ` +
-        'Creá las hojas y repartilas (paso 2 del wizard) antes de cerrar la ronda.',
+        'Crea las hojas y repártelas (paso 2 del wizard) antes de cerrar la ronda.',
     );
   }
 
@@ -356,7 +356,7 @@ export async function cerrar(
   if (hojasDeLaRonda === 0) {
     throw new NoEncontrado(
       `El inventario todavía no tiene hojas de la ronda ${ronda}. ` +
-        'Creá las hojas y repartilas (paso 2 del wizard) antes de cerrar la ronda.',
+        'Crea las hojas y repártelas (paso 2 del wizard) antes de cerrar la ronda.',
     );
   }
 

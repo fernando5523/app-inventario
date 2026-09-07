@@ -36,7 +36,7 @@ export function puedeVerTodasLasHojas(rol: Rol): boolean {
 
 export function validarAlcance(actor: ColaboradorAutenticado, alcance: 'mias' | 'todas'): void {
   if (alcance === 'todas' && !puedeVerTodasLasHojas(actor.rol)) {
-    throw new Prohibido('Tu rol solo puede ver las hojas que tenes asignadas.');
+    throw new Prohibido('Tu rol solo puede ver las hojas que tienes asignadas.');
   }
 }
 
@@ -68,7 +68,7 @@ export function validarSucursal(actor: ColaboradorAutenticado, sucursalIdDeLaHoj
 export function validarLecturaDeHoja(actor: ColaboradorAutenticado, hoja: HojaParaPermisos): void {
   validarSucursal(actor, hoja.sucursalId);
   if (actor.rol === 'conteo' && !estaAsignadaA(hoja, actor.colaboradorId)) {
-    throw new Prohibido('Esa hoja no esta asignada a vos.');
+    throw new Prohibido('Esa hoja no esta asignada a ti.');
   }
 }
 

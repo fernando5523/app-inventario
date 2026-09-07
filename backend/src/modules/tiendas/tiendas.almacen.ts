@@ -58,7 +58,7 @@ export function resolverAlmacen(codigoPedido: string, disponibles: AlmacenDispon
     const sugerencia =
       parecidos.length > 0
         ? ` ¿Quisiste decir alguno de estos? ${parecidos.join(', ')}.`
-        : ' Consultá la lista en GET /api/d365/almacenes.';
+        : ' Consulta la lista en GET /api/d365/almacenes.';
 
     throw new SolicitudInvalida(
       `El almacen "${codigoPedido}" no existe en Dynamics.${sugerencia} Un almacen mal escrito trae el stock de otra tienda y el error recien se nota cuando el inventario no cuadra.`,

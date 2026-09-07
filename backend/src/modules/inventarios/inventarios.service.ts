@@ -256,7 +256,7 @@ export async function asignarHojas(
   const inventario = await inventarioDelActor(actor, inventarioId);
 
   if (colaboradorIds.length === 0) {
-    throw new SolicitudInvalida('Elegí al menos una persona para repartir las hojas.');
+    throw new SolicitudInvalida('Elige al menos una persona para repartir las hojas.');
   }
 
   /**
@@ -287,7 +287,7 @@ export async function asignarHojas(
     throw new SolicitudInvalida(
       `No se puede repartir: ${faltan.length} de las personas elegidas no ${faltan.length === 1 ? 'esta disponible' : 'estan disponibles'} ` +
         `(${faltan.length === 1 ? 'id' : 'ids'} ${faltan.join(', ')}). ` +
-        'Puede ser que esten deshabilitadas o que sean de otra tienda. Revisalas en Usuarios y volve a elegir.',
+        'Puede ser que esten deshabilitadas o que sean de otra tienda. Revísalas en Usuarios y vuelve a elegir.',
     );
   }
 

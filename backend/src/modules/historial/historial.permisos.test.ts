@@ -408,7 +408,7 @@ describe('validarPuedeLacrar', () => {
 
   it('el mensaje de sincronizacion dice que se puede reintentar, no que fallo algo', () => {
     expect(() => validarPuedeLacrar(gilmer, { ...listo, todoSincronizado: false }, dosFirmas)).toThrow(
-      /volvé a intentar/i,
+      /vuelve a intentar/i,
     );
   });
 

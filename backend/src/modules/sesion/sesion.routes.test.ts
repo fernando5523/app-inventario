@@ -93,7 +93,7 @@ describe('limitadorIngreso: el 429', () => {
 
     expect(respuesta.status).toBe(429);
     const cuerpo = (await respuesta.json()) as { error: string; detalles?: { reintentarEnSegundos?: number } };
-    expect(cuerpo.error).toBe('Demasiados intentos de ingreso. Volve a intentar en unos minutos.');
+    expect(cuerpo.error).toBe('Demasiados intentos de ingreso. Vuelve a intentar en unos minutos.');
     expect(cuerpo.detalles?.reintentarEnSegundos).toBeGreaterThan(0);
     expect(cuerpo.detalles?.reintentarEnSegundos).toBeLessThanOrEqual(15 * 60);
   });

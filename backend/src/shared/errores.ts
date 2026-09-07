@@ -33,7 +33,7 @@ export class NoAutorizado extends ErrorHttp {
 
 /** Token valido pero sin permiso para la accion (rol insuficiente/fuera de alcance). */
 export class Prohibido extends ErrorHttp {
-  constructor(message = 'No tenes permiso para esta accion.') {
+  constructor(message = 'No tienes permiso para esta accion.') {
     super(403, message);
   }
 }
@@ -45,7 +45,7 @@ export class Conflicto extends ErrorHttp {
 }
 
 export class DemasiadosIntentos extends ErrorHttp {
-  constructor(message = 'Demasiados intentos. Volve a intentar mas tarde.') {
+  constructor(message = 'Demasiados intentos. Vuelve a intentar mas tarde.') {
     super(429, message);
   }
 }

@@ -74,7 +74,7 @@ export function resolverSucursalConsultable(
     // quien pedirselo.
     throw new Prohibido(
       'Tu cuenta no tiene una tienda asignada, asi que no se puede saber que historico mostrarte. ' +
-        'Pedile a un administrador que te asigne una en Usuarios.',
+        'Pídele a un administrador que te asigne una en Usuarios.',
     );
   }
   return actor.sucursalId;
@@ -94,11 +94,11 @@ export function validarAccesoAInventario(actor: ColaboradorAutenticado, inventar
   if (actor.rol !== 'auditor') {
     throw new Prohibido(
       'El historico de inventarios lo consultan el auditor y el administrador. ' +
-        'Si necesitas un dato de un cierre anterior, pediselo a ellos.',
+        'Si necesitas un dato de un cierre anterior, pídeselo a ellos.',
     );
   }
   if (actor.sucursalId !== inventario.sucursalId) {
-    throw new Prohibido('Ese inventario es de otra tienda: solo podes consultar el historico de la tuya.');
+    throw new Prohibido('Ese inventario es de otra tienda: solo puedes consultar el historico de la tuya.');
   }
 }
 
@@ -352,7 +352,7 @@ export function validarPuedeLacrar(
   // dice a la persona lo que SI tiene que arreglar.
   if (!inventario.todoSincronizado) {
     throw new Conflicto(
-      'Quedan hojas sin sincronizar: no se puede lacrar con conteos que todavia no llegaron al servidor. Esperá a que termine la sincronizacion y volvé a intentar.',
+      'Quedan hojas sin sincronizar: no se puede lacrar con conteos que todavia no llegaron al servidor. Espera a que termine la sincronizacion y vuelve a intentar.',
     );
   }
 }
