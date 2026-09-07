@@ -1,18 +1,18 @@
-import { router, useFocusEffect } from 'expo-router';
-import { useCallback, useEffect, useState, type JSX } from 'react';
-import { ActivityIndicator, AppState, StyleSheet, Text, View, type AppStateStatus } from 'react-native';
+import { router } from 'expo-router';
+import { useCallback, useState, type JSX } from 'react';
+import { ActivityIndicator, StyleSheet, Text, View } from 'react-native';
 
 import { inventarioIdSinRed, rondaActivaSinRed } from '../../lib/adaptadores/hojas-sqlite';
 import { repositorioHojas, repositorioInventario, repositorioTiendas, repositorioUsuarios, sincronizador } from '../../lib/contenedor';
 import { cifraOSinRed, filaPct } from '../../lib/dominio/cifra-sin-red';
 import { avance, avanceConjunto, estadoConjunto } from '../../lib/dominio/hoja';
 import type { HojaConteo, Rol } from '../../lib/dominio/tipos';
-import type { EstadoCola } from '../../lib/puertos/repositorios';
 import { useSesion } from '../../lib/sesion-contexto';
 import { colors, fonts, fontSize, spacing } from '../../lib/theme';
+import { useRefrescoAlEnfocar } from '../hooks/useRefrescoAlEnfocar';
 import { ACCESOS_POR_ROL } from '../navegacion/accesos';
 import { PantallaConTabs } from '../navegacion/PantallaConTabs';
-import { AccesoTarjeta, BandaSync, BarraApp, Button, GrupoRol, formatoMiles, formatoPct, sincronizacionDeHojas, type EstadoSincronizacion } from '../ui';
+import { AccesoTarjeta, BandaSync, BarraApp, Button, formatoMiles, formatoPct, resumenParaTablero, type EstadoSincronizacion } from '../ui';
 
 const NOMBRE_ROL: Record<Rol, string> = {
   administrador: 'Administrador',
@@ -66,10 +66,6 @@ export function InicioScreen(): JSX.Element {
   // equivalente al avance de conteo, así que sin red no hay nada que
   // mostrar salvo decirlo.
   const [errorSistema, setErrorSistema] = useState<string | null>(null);
-  // Incrementarlo desde el botón "Reintentar" fuerza al useFocusEffect de
-  // abajo a correr de nuevo sin reestructurar la función (que ya maneja su
-  // propio `vigente` para las 3 ramas) — recarga sin salir de la pantalla.
-  const [intentoManual, setIntentoManual] = useState(0);
   const [inventario, setInventario] = useState<InventarioActivo | null>(null);
   // `todas()` del inventario -- Coordinador y Auditor ven el MISMO dato
   // (los dos pueden pedir alcance=todas, ver backend/README.md), nunca
@@ -88,131 +84,104 @@ export function InicioScreen(): JSX.Element {
   const [sinDatosDeRonda, setSinDatosDeRonda] = useState(false);
   const [misHojas, setMisHojas] = useState<HojaConteo[] | null>(null);
   const [estadoSistema, setEstadoSistema] = useState<EstadoSistema | null>(null);
-  const [estadoCola, setEstadoCola] = useState<EstadoCola>(sincronizador.estado());
-  useEffect(() => sincronizador.suscribir(setEstadoCola), []);
 
-  // useFocusEffect, no useEffect: los tabs quedan montados una vez
-  // visitados (React Navigation) — sin esto, volver a Inicio después de
-  // finalizar una hoja en Contar sigue mostrando el avance viejo.
-  useFocusEffect(
-    useCallback(() => {
-      if (!sesion) return;
-      let vigente = true;
+  // Toda la carga de las 4 ramas (administrador/coordinador/conteo/
+  // auditor) en un solo callback -- `useRefrescoAlEnfocar` decide CUÁNDO
+  // llamarlo (al enfocar la pantalla Y al volver la app a primer plano,
+  // con un candado contra solapamiento), acá solo importa QUÉ hace.
+  const cargar = useCallback(async () => {
+    if (!sesion) return;
 
-      async function cargar(): Promise<void> {
-        // El Administrador no pertenece a una sola sucursal — no tiene
-        // sentido pedir repositorioInventario.activo(sesion.sucursal.id)
-        // para él, su vista es del sistema entero.
-        if (sesion!.colaborador.rol === 'administrador') {
-          setErrorSistema(null);
-          try {
-            const [tiendas, usuarios] = await Promise.all([repositorioTiendas.listar(), repositorioUsuarios.listar()]);
-            if (!vigente) return;
-            const inventariosPorTienda = await Promise.all(tiendas.map((t) => repositorioInventario.activo(t.id)));
-            if (!vigente) return;
-            setEstadoSistema({
-              tiendasActivas: tiendas.filter((t) => t.activa !== false).length,
-              totalTiendas: tiendas.length,
-              usuariosActivos: usuarios.filter((u) => u.activo).length,
-              totalUsuarios: usuarios.length,
-              inventariosEnCurso: inventariosPorTienda.filter((i) => i !== null).length,
-            });
-          } catch (e) {
-            // A diferencia de las otras 3 ramas (ver más abajo), acá no hay
-            // ningún dato local al que caer -- "tiendas activas" y
-            // "usuarios habilitados" son cifras del sistema entero, no del
-            // avance de conteo de esta persona. Sin este catch, el spinner
-            // quedaba girando para siempre (mismo bug que f558689 arregló
-            // en las otras ramas, sin llegar a tocar esta).
-            if (vigente) setErrorSistema(e instanceof Error ? e.message : 'No se pudo cargar el estado del sistema.');
-          } finally {
-            if (vigente) setCargando(false);
-          }
-          return;
-        }
-
-        // Ya se descartó 'administrador' arriba (return temprano): acá el
-        // rol siempre tiene sucursal real.
-        let inventarioId: number | null;
-        let ronda: number | null = null;
-        let items: number | null = null;
-        let totalHojas: number | null = null;
-        let sinDatos = false;
-        try {
-          const activo = await repositorioInventario.activo(sesion!.sucursal!.id);
-          inventarioId = activo?.inventarioId ?? null;
-          ronda = activo?.rondaActiva ?? null;
-          items = activo?.items ?? null;
-          totalHojas = activo?.totalHojas ?? null;
-        } catch {
-          // Sin red (u otra falla): el avance de HOY puede estar completo
-          // en SQLite — se sigue con eso en vez de dejar "Tu avance"
-          // colgado esperando una respuesta que no va a llegar (ver
-          // inventarioIdSinRed en hojas-sqlite.ts). `items`/`totalHojas`
-          // quedan en null (nunca 0): esos números solo los tiene el
-          // snapshot del servidor, y null es "no se sabe" — mostrarlos en
-          // 0 diría "no hay ninguno", que es una afirmación distinta y
-          // falsa (ver lib/dominio/cifra-sin-red.ts). Lo que importa acá
-          // es el avance de la persona, que sale de `repositorioHojas`
-          // abajo y no depende de este try.
-          inventarioId = await inventarioIdSinRed();
-          // La ronda activa, sin red: sale de MAX(numero_conteo) en la
-          // estructura local (ver rondaActivaSinRed). Sin esto, el Contador
-          // offline en la ronda 2 leería la 1 y confirmaría en vez de contar.
-          ronda = inventarioId ? await rondaActivaSinRed(inventarioId) : null;
-          // `ronda === null` acá significa "nunca se descargó ninguna hoja
-          // de este inventario" (ver el comentario de rondaActivaSinRed) —
-          // no "no hay ronda activa todavía", que es lo que significaría
-          // con red. Sin esta marca, Coordinador/Auditor verían "0
-          // asignadas · 0 finalizadas · 0 contando" indistinguible de un
-          // cero real.
-          sinDatos = ronda === null;
-        }
-        if (!vigente) return;
-        setSinDatosDeRonda(sinDatos);
-
-        if (!inventarioId) {
-          setInventario(null);
-          setCargando(false);
-          return;
-        }
-        setInventario({ inventarioId, items, totalHojas });
-
-        if (sesion!.colaborador.rol === 'coordinador' || sesion!.colaborador.rol === 'auditor') {
-          // Sin ronda activa (null = ninguna abierta) no hay hojas que traer.
-          const todas = ronda !== null ? await repositorioHojas.todas(inventarioId, ronda) : [];
-          if (vigente) setHojasRonda1(todas);
-        } else if (sesion!.colaborador.rol === 'conteo') {
-          // mias(), NUNCA todas(): un Contador no puede ver el lote entero.
-          const mias = ronda !== null ? await repositorioHojas.mias(inventarioId, ronda) : [];
-          if (vigente) setMisHojas(mias);
-        }
-        if (vigente) setCargando(false);
+    // El Administrador no pertenece a una sola sucursal — no tiene
+    // sentido pedir repositorioInventario.activo(sesion.sucursal.id) para
+    // él, su vista es del sistema entero.
+    if (sesion.colaborador.rol === 'administrador') {
+      setErrorSistema(null);
+      try {
+        const [tiendas, usuarios] = await Promise.all([repositorioTiendas.listar(), repositorioUsuarios.listar()]);
+        const inventariosPorTienda = await Promise.all(tiendas.map((t) => repositorioInventario.activo(t.id)));
+        setEstadoSistema({
+          tiendasActivas: tiendas.filter((t) => t.activa !== false).length,
+          totalTiendas: tiendas.length,
+          usuariosActivos: usuarios.filter((u) => u.activo).length,
+          totalUsuarios: usuarios.length,
+          inventariosEnCurso: inventariosPorTienda.filter((i) => i !== null).length,
+        });
+      } catch (e) {
+        // A diferencia de las otras 3 ramas (ver más abajo), acá no hay
+        // ningún dato local al que caer -- "tiendas activas" y "usuarios
+        // habilitados" son cifras del sistema entero, no del avance de
+        // conteo de esta persona. Sin este catch, el spinner quedaba
+        // girando para siempre (mismo bug que f558689 arregló en las
+        // otras ramas, sin llegar a tocar esta).
+        setErrorSistema(e instanceof Error ? e.message : 'No se pudo cargar el estado del sistema.');
+      } finally {
+        setCargando(false);
       }
-
-      cargar();
-      return () => {
-        vigente = false;
-      };
-    }, [sesion, intentoManual]),
-  );
-
-  // HALLAZGO (2026-09-08, cliente en el ciclo real): el Coordinador cierra
-  // una ronda y abre la siguiente con el Contador (o el Coordinador/Auditor
-  // mirando "Tu avance") todavía con la app abierta EN ESTA pantalla, sin
-  // cambiar de tab -- ahí nunca se dispara un focus nuevo. Volver a primer
-  // plano es la otra señal de que puede haber cambiado algo del servidor.
-  // Reusa el mismo truco que el botón "Reintentar": incrementar
-  // `intentoManual` fuerza al `useFocusEffect` de arriba a correr de
-  // nuevo sin duplicar su lógica de las 4 ramas (administrador/
-  // coordinador/conteo/auditor) acá.
-  useEffect(() => {
-    function alCambiarAppState(siguiente: AppStateStatus): void {
-      if (siguiente === 'active') setIntentoManual((n) => n + 1);
+      return;
     }
-    const suscripcion = AppState.addEventListener('change', alCambiarAppState);
-    return () => suscripcion.remove();
-  }, []);
+
+    // Ya se descartó 'administrador' arriba (return temprano): acá el rol
+    // siempre tiene sucursal real.
+    let inventarioId: number | null;
+    let ronda: number | null = null;
+    let items: number | null = null;
+    let totalHojas: number | null = null;
+    let sinDatos = false;
+    try {
+      const activo = await repositorioInventario.activo(sesion.sucursal!.id);
+      inventarioId = activo?.inventarioId ?? null;
+      ronda = activo?.rondaActiva ?? null;
+      items = activo?.items ?? null;
+      totalHojas = activo?.totalHojas ?? null;
+    } catch {
+      // Sin red (u otra falla): el avance de HOY puede estar completo en
+      // SQLite — se sigue con eso en vez de dejar "Tu avance" colgado
+      // esperando una respuesta que no va a llegar (ver inventarioIdSinRed
+      // en hojas-sqlite.ts). `items`/`totalHojas` quedan en null (nunca
+      // 0): esos números solo los tiene el snapshot del servidor, y null
+      // es "no se sabe" — mostrarlos en 0 diría "no hay ninguno", que es
+      // una afirmación distinta y falsa (ver lib/dominio/cifra-sin-red.ts).
+      // Lo que importa acá es el avance de la persona, que sale de
+      // `repositorioHojas` abajo y no depende de este try.
+      inventarioId = await inventarioIdSinRed();
+      // La ronda activa, sin red: sale de MAX(numero_conteo) en la
+      // estructura local (ver rondaActivaSinRed). Sin esto, el Contador
+      // offline en la ronda 2 leería la 1 y confirmaría en vez de contar.
+      ronda = inventarioId ? await rondaActivaSinRed(inventarioId) : null;
+      // `ronda === null` acá significa "nunca se descargó ninguna hoja de
+      // este inventario" (ver el comentario de rondaActivaSinRed) — no
+      // "no hay ronda activa todavía", que es lo que significaría con
+      // red. Sin esta marca, Coordinador/Auditor verían "0 asignadas · 0
+      // finalizadas · 0 contando" indistinguible de un cero real.
+      sinDatos = ronda === null;
+    }
+    setSinDatosDeRonda(sinDatos);
+
+    if (!inventarioId) {
+      setInventario(null);
+      setCargando(false);
+      return;
+    }
+    setInventario({ inventarioId, items, totalHojas });
+
+    if (sesion.colaborador.rol === 'coordinador' || sesion.colaborador.rol === 'auditor') {
+      // Sin ronda activa (null = ninguna abierta) no hay hojas que traer.
+      const todas = ronda !== null ? await repositorioHojas.todas(inventarioId, ronda) : [];
+      setHojasRonda1(todas);
+    } else if (sesion.colaborador.rol === 'conteo') {
+      // mias(), NUNCA todas(): un Contador no puede ver el lote entero.
+      const mias = ronda !== null ? await repositorioHojas.mias(inventarioId, ronda) : [];
+      setMisHojas(mias);
+    }
+    setCargando(false);
+  }, [sesion]);
+
+  // Al enfocar la pantalla Y al volver la app a primer plano (el caso que
+  // reportó el cliente: el Coordinador cierra una ronda y abre la
+  // siguiente con esta pantalla todavía abierta, sin cambiar de tab) --
+  // los dos disparadores con un solo candado contra solapamiento.
+  const { refrescar } = useRefrescoAlEnfocar(cargar);
 
   // El layout del grupo (RolTabsLayout) ya garantiza que no se llega acá
   // sin sesión — este guard es solo para que TypeScript no se queje.
@@ -269,7 +238,7 @@ export function InicioScreen(): JSX.Element {
         },
         { etiqueta: 'Contando ahora', valor: cifraOSinRed(contando), pct: contando === null ? 'sin red' : 'colaboradores' },
       ];
-      sync = sincronizacionDeHojas(hojasRonda1, estadoCola);
+      sync = resumenParaTablero(hojasRonda1);
     }
   } else if (rol === 'conteo') {
     tituloEstado = 'Tu avance';
@@ -295,7 +264,7 @@ export function InicioScreen(): JSX.Element {
             { etiqueta: 'Tus hojas sin empezar', valor: String(pendientes), pct: `de ${misHojas.length}` },
           ]
         : [{ etiqueta: 'Hojas asignadas', valor: String(misHojas.length), pct: pendientes === misHojas.length ? 'todas pendientes' : '' }];
-      sync = sincronizacionDeHojas(misHojas, estadoCola);
+      sync = resumenParaTablero(misHojas);
     }
   } else if (rol === 'auditor') {
     tituloEstado = 'Estado de la auditoría';
@@ -379,11 +348,6 @@ export function InicioScreen(): JSX.Element {
         </Text>
       </View>
 
-      {/* Rol con el que se ingresó: dato derivado, se muestra, no se
-          elige — si alguien entró con el rol equivocado, tiene que
-          notarlo acá. */}
-      <GrupoRol activo={rol} />
-
       <View style={styles.tarjetaEstado}>
         <Text style={styles.estadoTitulo}>{tituloEstado}</Text>
         {cargando ? (
@@ -391,7 +355,7 @@ export function InicioScreen(): JSX.Element {
         ) : errorSistema ? (
           <View style={styles.errorSistema}>
             <Text style={styles.estadoPendiente}>{errorSistema}</Text>
-            <Button label="Reintentar" size="sm" onPress={() => setIntentoManual((n) => n + 1)} />
+            <Button label="Reintentar" size="sm" onPress={refrescar} />
           </View>
         ) : filasEstado.length > 0 ? (
           filasEstado.map((f) => (

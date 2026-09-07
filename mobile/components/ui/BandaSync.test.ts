@@ -20,11 +20,16 @@ vi.mock('lucide-react-native', () => ({
   WifiOff: 'WifiOff',
 }));
 
-import { sincronizacionDeHojas } from './BandaSync';
+import { resumenParaTablero, sincronizacionDeHojas } from './BandaSync';
 import type { EstadoCola } from '../../lib/puertos/repositorios';
+import type { EstadoSync, HojaConteo } from '../../lib/dominio/tipos';
 
 function cola(parcial: Partial<EstadoCola>): EstadoCola {
   return { pendientes: 0, ultimaSync: null, error: null, sinRed: false, ...parcial };
+}
+
+function hojaConSync(sync: EstadoSync): HojaConteo {
+  return { sync } as HojaConteo;
 }
 
 describe('sincronizacionDeHojas — sin conexión', () => {
@@ -60,5 +65,38 @@ describe('sincronizacionDeHojas — sin conexión', () => {
   it('con red y sin error: se comporta como antes (pendiente / ok)', () => {
     expect(sincronizacionDeHojas([], cola({ pendientes: 0 })).estado).toBe('ok');
     expect(sincronizacionDeHojas([], cola({ pendientes: 3 })).estado).toBe('pendiente');
+  });
+});
+
+describe('resumenParaTablero — la banda de un dashboard (Inicio)', () => {
+  it('todas las hojas sincronizadas: "ok", sin mencionar la cola global', () => {
+    const resultado = resumenParaTablero([hojaConSync('sincronizado'), hojaConSync('sincronizado')]);
+    expect(resultado.estado).toBe('ok');
+    expect(resultado.mensaje).toBe('Sincronizado');
+  });
+
+  it('hojas sin sincronizar: cuenta cuántas, nunca el motivo puntual de una', () => {
+    const resultado = resumenParaTablero([hojaConSync('sincronizado'), hojaConSync('error'), hojaConSync('local')]);
+    expect(resultado.estado).toBe('pendiente');
+    expect(resultado.mensaje).toContain('2');
+    expect(resultado.mensaje).toContain('hojas sin sincronizar');
+  });
+
+  it('singular cuando es una sola hoja sin sincronizar', () => {
+    const resultado = resumenParaTablero([hojaConSync('error')]);
+    expect(resultado.mensaje).toContain('1 hoja sin sincronizar');
+  });
+
+  it('nunca devuelve el estado "error": una hoja rechazada de OTRA persona no debe verse en un tablero donde nadie puede actuar sobre ella', () => {
+    // Es el caso que reportó el cliente: el Coordinador veía en su Inicio
+    // "La hoja ya está finalizada: no se puede corregir el conteo." de un
+    // conteo ajeno que quedó en la cola global. resumenParaTablero ni
+    // siquiera recibe la cola -- solo puede devolver 'ok' o 'pendiente'.
+    const resultado = resumenParaTablero([hojaConSync('error')]);
+    expect(resultado.estado).not.toBe('error');
+  });
+
+  it('lista vacía (todavía no bajó ninguna hoja): "ok", no "pendiente"', () => {
+    expect(resumenParaTablero([]).estado).toBe('ok');
   });
 });

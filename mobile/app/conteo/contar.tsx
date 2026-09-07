@@ -1,8 +1,10 @@
-import { router, useFocusEffect, useLocalSearchParams } from 'expo-router';
+import { router, useLocalSearchParams } from 'expo-router';
 import { ClipboardList, Filter, ScanLine, Search } from 'lucide-react-native';
 import { useCallback, useEffect, useRef, useState, type JSX } from 'react';
-import { ActivityIndicator, Alert, AppState, Pressable, StyleSheet, Text, View, type AppStateStatus } from 'react-native';
+import { ActivityIndicator, Alert, Pressable, StyleSheet, Text, View } from 'react-native';
 
+import { useRefrescoAlEnfocar } from '../../components/hooks/useRefrescoAlEnfocar';
+import { PantallaConTabs } from '../../components/navegacion/PantallaConTabs';
 import {
   AvanceFila,
   BandaSync,
@@ -15,7 +17,6 @@ import {
   sincronizacionDeHojas,
   type RechazoEscaneo,
 } from '../../components/ui';
-import { PantallaConTabs } from '../../components/navegacion/PantallaConTabs';
 import { inventarioIdSinRed, razonRechazoDeHoja, rondaActivaSinRed } from '../../lib/adaptadores/hojas-sqlite';
 import { repositorioHojas, repositorioInventario, sincronizador } from '../../lib/contenedor';
 import { resolverCodigoEnHoja, type CoincidenciaEscaneo } from '../../lib/dominio/escaneo';
@@ -121,15 +122,8 @@ export default function ContarScreen(): JSX.Element {
   // cambió en el servidor desde la última vez, descarta el número de hoja
   // viejo y elige el que corresponde a la ronda nueva, en vez de
   // arrastrar a ciegas el de una ronda que el Coordinador ya cerró.
-  //
-  // `idCargaRef` evita que una carga vieja (disparada por un focus o un
-  // vuelta-a-primer-plano anterior) pise el resultado de una más nueva si
-  // las dos terminan fuera de orden -- solo se aplica el resultado de la
-  // ÚLTIMA carga que arrancó.
-  const idCargaRef = useRef(0);
   const cargar = useCallback(async () => {
     if (!sesion) return;
-    const miId = ++idCargaRef.current;
     const resultado = await cargarHojaActiva(
       { ronda, numeroActivo },
       {
@@ -140,46 +134,25 @@ export default function ContarScreen(): JSX.Element {
         porNumero: repositorioHojas.porNumero,
       },
     );
-    if (idCargaRef.current !== miId) return;
     setRonda(resultado.ronda);
     setNumeroActivo(resultado.numeroActivo);
     setHoja(resultado.hoja);
     setCargando(false);
   }, [sesion, ronda, numeroActivo]);
 
-  // useFocusEffect, no useEffect: cubre tanto la carga inicial (se
-  // dispara solo al montar si la pantalla ya está enfocada) como volver a
-  // este tab después de estar en otro -- la hoja o la ronda pueden haber
-  // cambiado mientras tanto.
-  useFocusEffect(
-    useCallback(() => {
-      cargar();
-    }, [cargar]),
-  );
-
-  // EL CASO QUE REPORTÓ EL CLIENTE: el Coordinador cierra una ronda y abre
-  // la siguiente con el Contador todavía con la app abierta, SIN cambiar
-  // de pantalla -- ahí nunca se dispara un focus nuevo. Volver a primer
-  // plano es la otra señal de "puede haber cambiado algo del lado del
-  // servidor, valdría la pena volver a mirar".
-  //
-  // PAUSADO con cualquier modal de conteo abierto (mismo criterio que
-  // `components/hooks/useRefrescoAlEnfocar.ts`): si la app vuelve a
-  // primer plano justo cuando alguien tiene `ModalConteo` abierto a medio
-  // tipear una cantidad, un refresco de fondo cambia la referencia de
-  // `hoja` y el `useEffect` del modal (que resiembra su estado cuando
-  // cambia `conteoInicial`) le pisaría el número que la persona todavía
-  // no guardó. `cargar()` nunca borra el conteo YA guardado -- esto es
-  // solo para no interrumpir uno que se está por guardar.
-  useEffect(() => {
-    function alCambiarAppState(siguiente: AppStateStatus): void {
-      if (siguiente !== 'active') return;
-      if (modalProducto || modalScanVisible || modalFinalizarVisible) return;
-      cargar();
-    }
-    const suscripcion = AppState.addEventListener('change', alCambiarAppState);
-    return () => suscripcion.remove();
-  }, [cargar, modalProducto, modalScanVisible, modalFinalizarVisible]);
+  // `useRefrescoAlEnfocar` cubre los dos disparadores (enfocar la pantalla
+  // Y volver la app a primer plano) con un solo candado -- ver ese hook
+  // para el porqué. PAUSADO con cualquier modal de conteo abierto: si la
+  // app vuelve a primer plano justo cuando alguien tiene `ModalConteo`
+  // abierto a medio tipear una cantidad, un refresco de fondo cambia la
+  // referencia de `hoja` y el `useEffect` del modal (que resiembra su
+  // estado cuando cambia `conteoInicial`) le pisaría el número que la
+  // persona todavía no guardó. `cargar()` nunca borra el conteo YA
+  // guardado -- esto es solo para no interrumpir uno que se está por
+  // guardar.
+  useRefrescoAlEnfocar(cargar, {
+    pausado: modalProducto !== null || modalScanVisible || modalFinalizarVisible,
+  });
 
   if (!sesion) return <View />;
 

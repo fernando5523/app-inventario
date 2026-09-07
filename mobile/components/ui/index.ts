@@ -20,7 +20,7 @@ export { EstrellaMarca } from './EstrellaMarca';
 export type { EstrellaMarcaProps } from './EstrellaMarca';
 export { BarraApp } from './BarraApp';
 export type { BarraAppProps } from './BarraApp';
-export { BandaSync, sincronizacionDeHojas } from './BandaSync';
+export { BandaSync, resumenParaTablero, sincronizacionDeHojas } from './BandaSync';
 export type { BandaSyncProps, EstadoBandaSync, EstadoSincronizacion } from './BandaSync';
 export { AccesoTarjeta } from './AccesoTarjeta';
 export type { AccesoTarjetaProps } from './AccesoTarjeta';

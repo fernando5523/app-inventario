@@ -78,6 +78,34 @@ export function sincronizacionDeHojas(hojas: HojaConteo[], cola?: EstadoCola): E
   };
 }
 
+/**
+ * La versión de `sincronizacionDeHojas` para un TABLERO (Inicio) — nunca
+ * la razón puntual de un rechazo, solo si hay algo sin subir.
+ *
+ * HALLAZGO (2026-09-08): en el Inicio del Coordinador apareció "La hoja
+ * ya está finalizada: no se puede corregir el conteo." de un conteo
+ * rechazado que estaba en la cola de OTRA persona, en OTRA hoja — el
+ * Coordinador no cuenta nada, no puede hacer nada con esa razón ahí. Ya
+ * se había acotado esto en Contar (5e15736, `hoja_id` puntual) porque ahí
+ * SÍ hay una hoja concreta abierta y algo que hacer con el rechazo; el
+ * Inicio no tiene eso — es un tablero, nadie abre ninguna hoja desde acá.
+ *
+ * Por eso esta función IGNORA `cola` (el estado global) por completo y
+ * solo mira `hoja.sync` de las hojas que la pantalla ya te muestra
+ * (`mias()` para el Contador, `todas()` para Coordinador/Auditor — cada
+ * una ya viene scopeada a su rol): "sincronizado" o "no", nunca "por
+ * qué". Para saber el motivo real de una hoja puntual hay que abrirla en
+ * Contar o Mis hojas, que es donde de verdad se puede actuar.
+ */
+export function resumenParaTablero(hojas: HojaConteo[]): EstadoSincronizacion {
+  const pendientes = hojas.filter((h) => h.sync !== 'sincronizado').length;
+  if (pendientes === 0) return { estado: 'ok', mensaje: 'Sincronizado' };
+  return {
+    estado: 'pendiente',
+    mensaje: `Guardado en el equipo · ${pendientes} ${pendientes === 1 ? 'hoja sin sincronizar' : 'hojas sin sincronizar'}`,
+  };
+}
+
 const PALETA: Record<EstadoBandaSync, { fondo: string; color: string }> = {
   ok: { fondo: colors.okSuave, color: colors.ok },
   pendiente: { fondo: colors.procesoSuave, color: colors.proceso },
