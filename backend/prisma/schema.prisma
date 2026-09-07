@@ -275,6 +275,17 @@ model SesionToken {
   expiraEn      DateTime    @map("expira_en")
   createdAt     DateTime    @default(now()) @map("created_at")
 
+  /// `token` ya tiene su @unique (es por donde entra auth.middleware.ts en
+  /// cada request). Este es para el otro acceso, que no tenia ninguno:
+  /// `deleteMany({ where: { colaboradorId } })` -- revocar las sesiones de una
+  /// persona al cambiarle el PIN (sesion.service.ts#cambiarPin) o al
+  /// deshabilitarla (usuarios.service.ts#eliminar).
+  ///
+  /// Hoy la tabla es chica, pero CRECE SIN PURGA: no hay nada que borre los
+  /// tokens vencidos, asi que acumula una fila por login de todo el personal
+  /// de las 11 tiendas. Ver backend/docs/rendimiento-db.md (H10) -- la purga
+  /// queda anotada ahi, es un tema aparte.
+  @@index([colaboradorId])
   @@map("sesiones_token")
 }
 
@@ -539,6 +550,21 @@ model HojaConteo {
   updatedAt DateTime @updatedAt @map("updated_at")
 
   @@unique([inventarioId, numeroConteo, numero])
+  /// "MIS hojas" (hojas.service.ts#listar, alcance='mias') filtra por estas
+  /// dos columnas con un OR, y ninguna estaba en ningun indice: era un
+  /// recorrido completo de la tabla cada vez que un Contador abre su pantalla.
+  /// Con ~24.800 hojas al año (11 tiendas x 12 meses x ~188 hojas) eso deja de
+  /// ser gratis.
+  ///
+  /// DOS indices y no uno compuesto: es un OR entre columnas distintas, no un
+  /// AND. Un indice (asignadoAId, asignadoA2Id) solo serviria para la primera;
+  /// separados, Postgres puede usar los dos y combinarlos (bitmap OR).
+  ///
+  /// Tambien los usa usuarios.service.ts#eliminar, que hace updateMany por
+  /// cada una al dar de baja una cuenta.
+  /// Ver backend/docs/rendimiento-db.md (H5).
+  @@index([asignadoAId])
+  @@index([asignadoA2Id])
   @@map("hojas_conteo")
 }
 
@@ -629,6 +655,21 @@ model Conteo {
   contadoEn            DateTime @map("contado_en")
 
   @@unique([hojaId, productoId])
+  /// NO es redundante con el @@unique de arriba, y la razon es la regla del
+  /// PREFIJO IZQUIERDO: un indice compuesto (hojaId, productoId) sirve para
+  /// filtrar por `hojaId`, o por los dos juntos -- pero NO para filtrar solo
+  /// por `productoId`, que es la segunda columna. Postgres no puede saltarse
+  /// la primera.
+  ///
+  /// Y por productoId solo se filtra en todos lados: cada `include: {
+  /// conteos: ... }` colgado de Producto lo hace (auditoria.service.ts#armarMatriz,
+  /// rondas.service.ts#contadoHastaLaRonda), y son las consultas que a escala
+  /// real cruzan ~9.400 productos por inventario.
+  ///
+  /// Postgres NO indexa las claves foraneas solo -- a diferencia de MySQL, y
+  /// Prisma tampoco lo hace. Sin esta linea, esa columna no tiene indice.
+  /// Ver backend/docs/rendimiento-db.md (H3, H6, H8).
+  @@index([productoId])
   @@map("conteos")
 }
 
@@ -1015,6 +1056,13 @@ model LiquidacionColaborador {
   createdAt DateTime @default(now()) @map("created_at")
 
   @@unique([inventarioId, colaboradorId])
+  /// Misma regla del prefijo izquierdo que en Conteo: el @@unique de arriba
+  /// sirve para "las liquidaciones de ESTE inventario", no para "todas las
+  /// liquidaciones de ESTA persona" -- y esa segunda es la pregunta que el
+  /// historico va a recibir ("cuanto se le descontó a X en el año").
+  /// Preventivo y barato: ~1.450 filas al año.
+  /// Ver backend/docs/rendimiento-db.md (H9).
+  @@index([colaboradorId])
   @@map("liquidaciones_colaborador")
 }
 

@@ -2,7 +2,12 @@
 
 Fecha: 2026-09-07 · Rama `main` · Prisma 5.20 · PostgreSQL 17/18
 
-**Esto es ANÁLISIS. No se aplicó ningún cambio de schema ni migración.**
+**Estado: los índices de §4 fueron APROBADOS y APLICADOS** (migración
+`20260907151454_indices_rendimiento`, 2026-09-07). El resto del informe —
+H1 a H4, H6 a H8 — sigue siendo análisis sin cambios aplicados.
+
+Verificación posterior: `node scripts/verificar-indices.mjs` (solo lectura,
+consulta `pg_indexes`). Los cinco índices existen en la base de desarrollo.
 
 ---
 
@@ -348,8 +353,27 @@ CREATE INDEX CONCURRENTLY IF NOT EXISTS "sesiones_token_colaborador_id_idx"
   ON "sesiones_token" ("colaborador_id");
 ```
 
-Con las tablas casi vacías de hoy, `CONCURRENTLY` es indistinto y se puede
-aplicar de la forma normal. Importa el día que haya un millón de `conteos`.
+### Lo que se hizo, y por qué (2026-09-07)
+
+**Se eligió la migración NORMAL, sin `CONCURRENTLY`.** Dos razones: Prisma
+envuelve cada migración en una transacción y `CREATE INDEX CONCURRENTLY` no
+puede correr dentro de una —forzarlo obliga a migraciones a mano, fuera del
+historial versionado—, y con las tablas casi vacías de hoy el `ACCESS
+EXCLUSIVE` dura un instante. Se paga barato ahora para no tener un índice que
+exista en la base pero no en `prisma/migrations`.
+
+**El día que eso deje de ser cierto** (un millón de filas en `conteos`), un
+índice nuevo NO se agrega por migración: se crea a mano en una ventana, con
+`CONCURRENTLY`, y después se marca la migración como aplicada
+(`prisma migrate resolve --applied`). El SQL de arriba sirve tal cual para eso.
+
+Nota sobre el archivo generado: Prisma agregó solo un
+`ALTER TABLE "inventarios" ALTER COLUMN periodo_anio/periodo_mes SET DEFAULT`.
+Lo hace siempre con los defaults `dbgenerated()` porque no puede compararlos
+contra la base. Se verificó que la base ya tiene exactamente
+`(EXTRACT(year FROM now()))::integer` —o sea, un no-op— y se quitó del archivo:
+una migración llamada `indices_rendimiento` no debería tocar `inventarios`, y
+el `ALTER` tomaba un lock sobre esa tabla para nada.
 
 **Costo de escritura**: cinco índices más significa cinco árboles más que
 mantener en cada `INSERT`. En `conteos`, que es la tabla de escritura caliente
