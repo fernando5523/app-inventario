@@ -1004,6 +1004,12 @@ export const hojasSqlite: RepositorioHojas = {
     // Devuelve cuando SQLite ya confirmó, no antes: el operario está
     // parado frente a la góndola, pero lo que ve como "guardado" tiene
     // que estarlo de verdad, no solo en una promesa de memoria.
+    //
+    // Y recién ahora se intenta subirlo: guardar un conteo dispara una
+    // pasada de sincronización (ver `alEncolar`). Con la WiFi de la tienda
+    // puesta, el conteo sale del teléfono en segundos en vez de esperar a
+    // que se dé alguno de los otros disparadores.
+    avisarQueHayAlgoParaSubir();
   },
 
   async finalizar(hojaId) {
@@ -1075,11 +1081,61 @@ export const hojasSqlite: RepositorioHojas = {
 /** Lo que hace falta para mandar UN item — nunca el conteo entero: `hoja` es de solo lectura, no se decide nada de negocio acá. */
 export type EnviarItemCola = (item: ItemCola, hoja: HojaConteo) => Promise<ResultadoEnvio>;
 
+/**
+ * A quién avisar cuando entra algo nuevo a la cola.
+ *
+ * Existe para romper el ciclo de imports: `sincronizador.ts` ya importa este
+ * archivo, así que este archivo NO puede importarlo de vuelta. En vez de eso,
+ * el sincronizador se registra acá al arrancar y este módulo le avisa.
+ *
+ * POR QUÉ HACE FALTA (cliente, 2026-09-07): guardar un conteo no disparaba
+ * ninguna pasada. Los cinco disparadores existentes (red, primer plano,
+ * finalizar, manual, arranque) pueden tardar mucho o no darse nunca -- alguien
+ * que cuenta con la app abierta y la WiFi puesta podía quedarse horas con
+ * conteos sin subir, viendo "1 ítem sin sincronizar" y creyendo, con razón,
+ * que la sincronización no era automática.
+ */
+type AvisoDeEncolado = () => void;
+let avisarEncolado: AvisoDeEncolado | null = null;
+
+export function alEncolar(aviso: AvisoDeEncolado | null): void {
+  avisarEncolado = aviso;
+}
+
+/**
+ * Se llama DESPUÉS de que SQLite confirmó la escritura, nunca antes: primero
+ * el conteo está guardado de verdad en el equipo, después se intenta subirlo.
+ * Si el aviso falla, no puede tirar abajo el guardado -- lo que la persona
+ * contó ya está a salvo, y la próxima pasada lo levanta igual.
+ */
+function avisarQueHayAlgoParaSubir(): void {
+  try {
+    avisarEncolado?.();
+  } catch {
+    // Un disparo de sincronización que falla no es asunto de quien guarda.
+  }
+}
+
 export interface EstadoColaCruda {
-  /** Todo lo que sigue en `cola_sync`, sea cual sea su sub-estado (pendiente/enviando/error). */
+  /**
+   * Lo que sigue esperando y TODAVÍA PUEDE SUBIR (pendiente/enviando/error).
+   *
+   * Los `rechazado` quedan AFUERA de esta cuenta a propósito: contarlos acá
+   * era el bug que reportó el cliente -- la banda decía "1 ítem sin
+   * sincronizar", que se lee como "ya va a subir", sobre un conteo que el
+   * servidor ya había rechazado definitivamente. Van en `rechazados`.
+   */
   pendientes: number;
   /** Cuántos de esos quedaron en `error` -- no se van a resolver solos reintentando. */
   enError: number;
+  /**
+   * Rechazos DEFINITIVOS (403 de asignación): no se reintentan y no se
+   * resuelven esperando. Necesitan que alguien haga algo, y por eso se
+   * cuentan aparte de `pendientes`: son dos mensajes distintos en la banda.
+   */
+  rechazados: number;
+  /** El motivo del rechazo definitivo más reciente, para poder decirlo con todas las letras. */
+  razonRechazoDefinitivo: string | null;
   /**
    * La razón del rechazo MÁS RECIENTE entre los items en error -- `null`
    * si ninguno está en error, o si los que están en error son todos
@@ -1098,10 +1154,17 @@ export async function estadoDeLaCola(): Promise<EstadoColaCruda> {
   const masReciente = await db.getFirstAsync<{ razon: string | null }>(
     "SELECT razon FROM cola_sync WHERE estado = 'error' AND razon IS NOT NULL ORDER BY id DESC LIMIT 1",
   );
+  const rechazoDefinitivo = await db.getFirstAsync<{ razon: string | null }>(
+    "SELECT razon FROM cola_sync WHERE estado = 'rechazado' AND razon IS NOT NULL ORDER BY id DESC LIMIT 1",
+  );
+  const rechazados = filas.filter((f) => f.estado === 'rechazado').length;
   return {
-    pendientes: filas.length,
+    // Sin los rechazados: ver el comentario de `pendientes` arriba.
+    pendientes: filas.length - rechazados,
     enError: filas.filter((f) => f.estado === 'error').length,
+    rechazados,
     razonRechazo: masReciente?.razon ?? null,
+    razonRechazoDefinitivo: rechazoDefinitivo?.razon ?? null,
   };
 }
 
@@ -1170,7 +1233,13 @@ export async function razonRechazoDeHoja(hojaId: number): Promise<string | null>
  */
 export async function procesarColaDeSincronizacion(enviar: EnviarItemCola): Promise<void> {
   const db = await obtenerDb();
-  const filas = await db.getAllAsync<FilaCola>("SELECT * FROM cola_sync WHERE estado != 'enviando'");
+  // `rechazado` queda AFUERA de la pasada: es un rechazo definitivo (403 de
+  // asignación, ver sqlite-cola.ts#esRechazoDefinitivo) y reintentarlo no
+  // puede cambiar el resultado. Antes se reintentaba en cada pasada, para
+  // siempre -- batería y red gastadas en pedir algo que el servidor ya
+  // contestó que no. Se destraba cuando alguien resuelve el permiso, no
+  // insistiendo.
+  const filas = await db.getAllAsync<FilaCola>("SELECT * FROM cola_sync WHERE estado NOT IN ('enviando', 'rechazado')");
   const items = ordenarCola(filas.map(filaAItemCola));
 
   for (const item of items) {

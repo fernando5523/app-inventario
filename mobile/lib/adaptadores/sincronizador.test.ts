@@ -31,11 +31,24 @@ vi.mock('expo-network', () => ({
 
 const hojasSqliteMock = vi.hoisted(() => ({
   procesarColaDeSincronizacion: vi.fn(async (): Promise<void> => undefined),
-  estadoDeLaCola: vi.fn(async (): Promise<{ pendientes: number; enError: number; razonRechazo: string | null }> => ({
-    pendientes: 0,
-    enError: 0,
-    razonRechazo: null,
-  })),
+  estadoDeLaCola: vi.fn(
+    async (): Promise<{
+      pendientes: number;
+      enError: number;
+      rechazados: number;
+      razonRechazo: string | null;
+      razonRechazoDefinitivo: string | null;
+    }> => ({
+      pendientes: 0,
+      enError: 0,
+      rechazados: 0,
+      razonRechazo: null,
+      razonRechazoDefinitivo: null,
+    }),
+  ),
+  // El 6º disparador: `iniciarSincronizador` registra acá el aviso de "se
+  // encoló algo nuevo" (ver hojas-sqlite.ts#alEncolar).
+  alEncolar: vi.fn(),
 }));
 vi.mock('./hojas-sqlite', () => hojasSqliteMock);
 
@@ -55,7 +68,7 @@ import type { EstadoCola } from '../puertos/repositorios';
 beforeEach(() => {
   vi.clearAllMocks();
   hojasSqliteMock.procesarColaDeSincronizacion.mockResolvedValue(undefined);
-  hojasSqliteMock.estadoDeLaCola.mockResolvedValue({ pendientes: 0, enError: 0, razonRechazo: null });
+  hojasSqliteMock.estadoDeLaCola.mockResolvedValue({ pendientes: 0, enError: 0, rechazados: 0, razonRechazo: null, razonRechazoDefinitivo: null });
   escuchaDeRed = null;
 });
 
@@ -87,7 +100,7 @@ describe('sincronizar(): nunca se solapan dos pasadas', () => {
 
 describe('estado()/suscribir(): la banda tiene que decir la verdad', () => {
   it('tras una pasada sin nada en error: ultimaSync se llena, error queda null', async () => {
-    hojasSqliteMock.estadoDeLaCola.mockResolvedValue({ pendientes: 2, enError: 0, razonRechazo: null });
+    hojasSqliteMock.estadoDeLaCola.mockResolvedValue({ pendientes: 2, enError: 0, rechazados: 0, razonRechazo: null, razonRechazoDefinitivo: null });
 
     await sincronizadorReal.sincronizar();
 
@@ -98,7 +111,7 @@ describe('estado()/suscribir(): la banda tiene que decir la verdad', () => {
   });
 
   it('si quedan items en error sin razón de servidor (todos sin-red), el mensaje lo dice explícito -- NUNCA "sincronizado" con la cola llena', async () => {
-    hojasSqliteMock.estadoDeLaCola.mockResolvedValue({ pendientes: 3, enError: 3, razonRechazo: null });
+    hojasSqliteMock.estadoDeLaCola.mockResolvedValue({ pendientes: 3, enError: 3, rechazados: 0, razonRechazo: null, razonRechazoDefinitivo: null });
 
     await sincronizadorReal.sincronizar();
 
@@ -114,7 +127,9 @@ describe('estado()/suscribir(): la banda tiene que decir la verdad', () => {
     hojasSqliteMock.estadoDeLaCola.mockResolvedValue({
       pendientes: 1,
       enError: 1,
+      rechazados: 0,
       razonRechazo: 'La hoja ya está finalizada: no se puede corregir el conteo.',
+      razonRechazoDefinitivo: null,
     });
 
     await sincronizadorReal.sincronizar();
@@ -122,6 +137,47 @@ describe('estado()/suscribir(): la banda tiene que decir la verdad', () => {
     const estado = sincronizadorReal.estado();
     expect(estado.error).toBe('La hoja ya está finalizada: no se puede corregir el conteo.');
     expect(estado.error).not.toContain('revisá la conexión');
+  });
+
+  it('un rechazo DEFINITIVO (403) viaja aparte de `error` y no se cuenta como pendiente', async () => {
+    // El bug del cliente (2026-09-07): el 403 se contaba en `pendientes`, así
+    // que la banda decía "1 ítem sin sincronizar" -- que se lee como "ya va a
+    // subir" -- sobre algo que el servidor ya había rechazado para siempre.
+    hojasSqliteMock.estadoDeLaCola.mockResolvedValue({
+      pendientes: 0,
+      enError: 0,
+      rechazados: 1,
+      razonRechazo: null,
+      razonRechazoDefinitivo:
+        'Este conteo no se puede guardar: la hoja #001 no está asignada a vos. Pedile al coordinador que te la asigne.',
+    });
+
+    await sincronizadorReal.sincronizar();
+
+    const estado = sincronizadorReal.estado();
+    expect(estado.pendientes).toBe(0); // NO se cuenta como "va a subir".
+    expect(estado.rechazados).toBe(1);
+    expect(estado.rechazo).toContain('no está asignada a vos');
+    expect(estado.rechazo).toContain('Pedile al coordinador');
+  });
+
+  it('enviarPorRed traduce un 403 al mensaje accionable, con el NÚMERO de la hoja', async () => {
+    hojasApiMock.hojasApi.guardarConteo.mockRejectedValueOnce(
+      new ErrorApi('sin-permiso', { mensaje: 'Solo quien tiene la hoja asignada puede contar en ella.' }),
+    );
+    const conteo: Conteo = { productoId: 1, empaques: [], sueltas: 3, confirmadoPorEscaner: false, contadoEn: 't' };
+    const hoja = { numero: '001', conteos: [conteo] } as HojaConteo;
+    const item: ItemCola = { id: 1, hojaId: 7, tipo: 'conteo', productoId: 1, creadoEn: 't', intentos: 0, estado: 'pendiente' };
+
+    const resultado = await enviarPorRed(item, hoja);
+
+    // El mensaje del servidor explica la REGLA; este explica QUÉ HACER.
+    expect(resultado).toEqual({
+      ok: false,
+      motivo: 'rechazado',
+      clase: 'sin-permiso',
+      mensaje: 'Este conteo no se puede guardar: la hoja #001 no está asignada a vos. Pedile al coordinador que te la asigne.',
+    });
   });
 
   it('notifica a quien se suscribió, y deja de hacerlo tras desuscribirse', async () => {

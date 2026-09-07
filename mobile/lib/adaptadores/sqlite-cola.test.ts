@@ -1,5 +1,15 @@
 import { describe, expect, it } from 'vitest';
-import { aplicarResultadoEnvio, claveDedup, estadoSyncDeHoja, ordenarCola, type ItemCola } from './sqlite-cola';
+import type { ClaseErrorApi } from './_http';
+import {
+  aplicarResultadoEnvio,
+  claveDedup,
+  esRechazoDefinitivo,
+  estadoSyncDeHoja,
+  mensajeRechazoPorPermiso,
+  ordenarCola,
+  RECHAZO_SIN_MOTIVO,
+  type ItemCola,
+} from './sqlite-cola';
 
 function item(parciales: Partial<ItemCola> = {}): ItemCola {
   return {
@@ -129,6 +139,84 @@ describe('aplicarResultadoEnvio', () => {
   it('sin-red: razon queda null -- no hay "razón del servidor" que guardar', () => {
     const resultado = aplicarResultadoEnvio(item(), { ok: false, motivo: 'sin-red' });
     expect(resultado?.razon).toBeNull();
+  });
+
+  describe('clase "sin-permiso" (403: la hoja no está asignada a quien contó)', () => {
+    // El caso del cliente (2026-09-07): reasignó las hojas al pasar a la
+    // ronda 3 con el teléfono del contador todavía abierto en una hoja de la
+    // ronda anterior. Cada conteo se encolaba y el servidor lo rechazaba,
+    // pero la banda decía "1 ítem sin sincronizar · última sync 12:37" --
+    // que se lee como "ya va a subir". Nunca iba a subir.
+    it('queda RECHAZADO, no "error": es definitivo y no se reintenta', () => {
+      const resultado = aplicarResultadoEnvio(item(), {
+        ok: false,
+        motivo: 'rechazado',
+        mensaje: mensajeRechazoPorPermiso('001'),
+        clase: 'sin-permiso',
+      });
+      expect(resultado?.estado).toBe('rechazado');
+    });
+
+    it('NO se descarta como el 404: hay una persona que tiene que enterarse', () => {
+      // La diferencia con `no-encontrado` es la que manda: un 404 no tiene
+      // destinatario (la hoja no existe), un 403 sí -- alguien contó en una
+      // hoja que no le tocaba y ese trabajo se pierde si nadie lo sabe.
+      const resultado = aplicarResultadoEnvio(item(), {
+        ok: false,
+        motivo: 'rechazado',
+        mensaje: mensajeRechazoPorPermiso('001'),
+        clase: 'sin-permiso',
+      });
+      expect(resultado).not.toBeNull();
+    });
+
+    it('guarda el motivo REAL, con la hoja y qué hacer', () => {
+      const resultado = aplicarResultadoEnvio(item(), {
+        ok: false,
+        motivo: 'rechazado',
+        mensaje: mensajeRechazoPorPermiso('001'),
+        clase: 'sin-permiso',
+      });
+      expect(resultado?.razon).toBe(
+        'Este conteo no se puede guardar: la hoja #001 no está asignada a vos. Pedile al coordinador que te la asigne.',
+      );
+    });
+
+    it('cuenta el intento igual, para no perder el rastro de cuántas veces se probó', () => {
+      const resultado = aplicarResultadoEnvio({ ...item(), intentos: 2 }, {
+        ok: false,
+        motivo: 'rechazado',
+        mensaje: mensajeRechazoPorPermiso('001'),
+        clase: 'sin-permiso',
+      });
+      expect(resultado?.intentos).toBe(3);
+    });
+
+    it('sin mensaje del servidor cae al fallback fijo, nunca inventa un motivo', () => {
+      const resultado = aplicarResultadoEnvio(item(), { ok: false, motivo: 'rechazado', clase: 'sin-permiso' });
+      expect(resultado?.estado).toBe('rechazado');
+      expect(resultado?.razon).toBe(RECHAZO_SIN_MOTIVO);
+    });
+  });
+
+  describe('esRechazoDefinitivo', () => {
+    it('solo "sin-permiso" es definitivo', () => {
+      expect(esRechazoDefinitivo('sin-permiso')).toBe(true);
+    });
+
+    it.each<ClaseErrorApi>(['conflicto', 'servidor', 'validacion', 'sesion-vencida', 'demasiados-intentos'])(
+      '"%s" NO es definitivo: se puede destrabar sin que el teléfono haga nada raro',
+      (clase) => {
+        // Un 409 se destraba si el Coordinador reabre la ronda, un 500 solo,
+        // un 401 volviendo a entrar. El 403 de asignación NO se destraba
+        // desde el teléfono: lo tiene que resolver otra persona.
+        expect(esRechazoDefinitivo(clase)).toBe(false);
+      },
+    );
+
+    it('sin clase tampoco es definitivo', () => {
+      expect(esRechazoDefinitivo(undefined)).toBe(false);
+    });
   });
 
   describe('clase "no-encontrado" (la hoja o el producto ya no existen en el servidor)', () => {

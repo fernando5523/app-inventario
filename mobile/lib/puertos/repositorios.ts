@@ -668,9 +668,24 @@ export interface RepositorioLacrado {
 // ---------------------------------------------------------------------------
 
 export interface EstadoCola {
+  /** Lo que todavía puede subir. NO incluye los rechazados definitivos: ver `rechazo`. */
   pendientes: number;
   ultimaSync: string | null;
   error: string | null;
+  /**
+   * El motivo de un rechazo DEFINITIVO (hoy: 403, la hoja no está asignada a
+   * quien contó), o `null` si no hay ninguno.
+   *
+   * Va aparte de `error` porque son dos situaciones que la persona resuelve
+   * distinto, y confundirlas fue el bug del 2026-09-07: `error` puede
+   * destrabarse solo (un 500, una hoja que se reabre) y la cola lo sigue
+   * reintentando; esto NO -- necesita que alguien vaya y lo arregle, y hasta
+   * entonces el conteo no existe para el servidor. La banda tiene que
+   * decirlo con todas las letras, no contarlo como "1 ítem sin sincronizar".
+   */
+  rechazo: string | null;
+  /** Cuántos items están en ese estado. */
+  rechazados: number;
   /**
    * Conectividad ACTUAL del teléfono, no derivada de la cola. Sin esto, la
    * banda de sincronización solo puede decir "guardado, pendiente" DESPUÉS

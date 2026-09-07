@@ -25,7 +25,7 @@ import type { EstadoCola } from '../../lib/puertos/repositorios';
 import type { EstadoSync, HojaConteo } from '../../lib/dominio/tipos';
 
 function cola(parcial: Partial<EstadoCola>): EstadoCola {
-  return { pendientes: 0, ultimaSync: null, error: null, sinRed: false, ...parcial };
+  return { pendientes: 0, ultimaSync: null, error: null, rechazo: null, rechazados: 0, sinRed: false, ...parcial };
 }
 
 function hojaConSync(sync: EstadoSync): HojaConteo {

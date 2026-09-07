@@ -45,6 +45,11 @@ export interface EstadoSincronizacion {
  */
 export function sincronizacionDeHojas(hojas: HojaConteo[], cola?: EstadoCola): EstadoSincronizacion {
   if (cola) {
+    // (c) RECHAZADO -- primero de todo, incluso antes que `sinRed`: es lo
+    // único que no se arregla ni esperando ni recuperando la señal, así que
+    // no puede quedar tapado por un mensaje que invite a esperar. Trae el
+    // motivo real y qué hacer (sqlite-cola.ts#mensajeRechazoPorPermiso).
+    if (cola.rechazo) return { estado: 'error', mensaje: cola.rechazo };
     if (cola.error) return { estado: 'error', mensaje: cola.error };
     // `sinRed` gana sobre el conteo de pendientes: es la respuesta a la
     // pregunta que de verdad se hace quien está sin señal contando ("¿esto
@@ -59,11 +64,17 @@ export function sincronizacionDeHojas(hojas: HojaConteo[], cola?: EstadoCola): E
           }
         : { estado: 'offline', mensaje: 'Sin conexión — sigue contando, se guarda en el equipo y sube solo.' };
     }
+    // (a) TODO SINCRONIZADO -- la banda no se dibuja (ver `BandaSync`).
     if (cola.pendientes === 0) return { estado: 'ok', mensaje: 'Sincronizado' };
-    const sufijo = cola.ultimaSync ? ` · última sync ${formatoFechaHora(cola.ultimaSync)}` : ' · todavía no sincronizó';
+    // (b) PENDIENTE -- transitorio. El texto dice que el reintento es
+    // automático, que era justo lo que el cliente no podía saber: veía "1
+    // ítem sin sincronizar" con un botón de recargar al lado y entendía que
+    // tenía que apretarlo él ("la sincronización es automática supongo, no
+    // debe ser manual"). Ahora lo dice.
+    const sufijo = cola.ultimaSync ? ` · última sync ${formatoFechaHora(cola.ultimaSync)}` : '';
     return {
       estado: 'pendiente',
-      mensaje: `Guardado en el equipo · ${cola.pendientes} ${cola.pendientes === 1 ? 'ítem sin sincronizar' : 'ítems sin sincronizar'}${sufijo}`,
+      mensaje: `Subiendo ${cola.pendientes} ${cola.pendientes === 1 ? 'conteo' : 'conteos'} — se sube solo${sufijo}`,
     };
   }
 

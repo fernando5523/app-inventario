@@ -32,7 +32,8 @@ import * as Network from 'expo-network';
 import type { EstadoCola, Sincronizador } from '../puertos/repositorios';
 import { esErrorApi, esFallaDeRed } from './_http';
 import { hojasApi } from './hojas-api';
-import { estadoDeLaCola, procesarColaDeSincronizacion, type EnviarItemCola } from './hojas-sqlite';
+import { alEncolar, estadoDeLaCola, procesarColaDeSincronizacion, type EnviarItemCola } from './hojas-sqlite';
+import { mensajeRechazoPorPermiso } from './sqlite-cola';
 
 // ---------------------------------------------------------------------------
 // El envío: traduce lo que devuelve `hojasApi` (resuelve o tira `ErrorApi`)
@@ -69,11 +70,20 @@ export const enviarPorRed: EnviarItemCola = async (item, hoja) => {
     // no existen en el servidor -- IRRECUPERABLE, se descarta) de un
     // rechazo real que sí conviene mostrar (ej. hoja finalizada).
     if (esFallaDeRed(error)) return { ok: false, motivo: 'sin-red' };
+    const clase = esErrorApi(error) ? error.clase : undefined;
+    // 403: el mensaje del servidor ("Solo quien tiene la hoja asignada puede
+    // contar en ella.") explica la REGLA, no el paso siguiente. Acá es donde
+    // se puede mejorar: es el único punto que tiene a mano el NÚMERO de la
+    // hoja, que es como la persona la conoce -- `ItemCola` solo guarda el id
+    // interno. Ver sqlite-cola.ts#mensajeRechazoPorPermiso.
+    if (clase === 'sin-permiso') {
+      return { ok: false, motivo: 'rechazado', mensaje: mensajeRechazoPorPermiso(hoja.numero), clase };
+    }
     return {
       ok: false,
       motivo: 'rechazado',
       mensaje: esErrorApi(error) ? error.message : null,
-      clase: esErrorApi(error) ? error.clase : undefined,
+      clase,
     };
   }
 };
@@ -82,7 +92,7 @@ export const enviarPorRed: EnviarItemCola = async (item, hoja) => {
 // Estado observable + el lock contra solapamiento.
 // ---------------------------------------------------------------------------
 
-let estadoActual: EstadoCola = { pendientes: 0, ultimaSync: null, error: null, sinRed: false };
+let estadoActual: EstadoCola = { pendientes: 0, ultimaSync: null, error: null, rechazo: null, rechazados: 0, sinRed: false };
 const escuchas = new Set<(estado: EstadoCola) => void>();
 
 function notificar(): void {
@@ -105,10 +115,15 @@ function actualizarConectividad(sinRed: boolean): void {
 }
 
 async function actualizarEstadoDesdeLaCola(huboExito: boolean): Promise<void> {
-  const { pendientes, enError, razonRechazo } = await estadoDeLaCola();
+  const { pendientes, enError, rechazados, razonRechazo, razonRechazoDefinitivo } = await estadoDeLaCola();
   estadoActual = {
     ...estadoActual,
     pendientes,
+    rechazados,
+    // El rechazo definitivo viaja SIEMPRE, aunque además haya pendientes: es
+    // lo único de la banda que no se arregla esperando, así que no puede
+    // quedar tapado por un "2 ítems sin sincronizar" que sí se va a resolver.
+    rechazo: razonRechazoDefinitivo,
     // `ultimaSync` es CUÁNDO CORRIÓ una pasada sin tirar, no "cuándo se
     // vació la cola entera" -- si hay items en error, igual hubo una
     // pasada real recién. Mentir acá ("nunca sincronizó") sería tan malo
@@ -185,6 +200,16 @@ export function estaConectado(estado: Pick<Network.NetworkState, 'isConnected' |
 export function iniciarSincronizador(): () => void {
   let ultimoConectado = true;
 
+  // 6º disparador: apenas se guarda un conteo. Es el que faltaba, y el que
+  // hacía que la sincronización no PARECIERA automática (cliente,
+  // 2026-09-07): con la app abierta y WiFi, alguien podía contar toda una
+  // hoja sin que se disparara ninguna pasada, porque ninguno de los otros
+  // cinco eventos ocurría. El lock de `sincronizar()` se encarga de que
+  // contar rápido no lance una pasada por producto.
+  alEncolar(() => {
+    void sincronizar();
+  });
+
   Network.getNetworkStateAsync()
     .then((estado) => {
       const conectado = estaConectado(estado);
@@ -216,5 +241,6 @@ export function iniciarSincronizador(): () => void {
   return () => {
     suscripcionRed.remove();
     suscripcionAppState.remove();
+    alEncolar(null);
   };
 }
