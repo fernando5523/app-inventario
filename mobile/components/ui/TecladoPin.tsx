@@ -3,7 +3,7 @@ import { useState, type JSX } from 'react';
 import { Modal, Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { colors, fonts, fontSize, radius, shadow, spacing } from '../../lib/theme';
-import { teclear } from '../../lib/dominio/teclado-pin';
+import { accionAlTeclear } from '../../lib/dominio/teclado-pin';
 import { PinPuntos } from './PinPuntos';
 
 export interface TecladoPinProps {
@@ -33,26 +33,37 @@ const FILAS = [TECLAS.slice(0, 3), TECLAS.slice(3, 6), TECLAS.slice(6, 9), TECLA
 
 /**
  * Teclado numérico propio en modal centrado — no el del sistema. Se cierra
- * por el fondo, por la X, con el botón atrás de Android (onRequestClose) y
- * solo al completar los dígitos (mismo comportamiento que login.html).
+ * por el fondo, por la X y con el botón atrás de Android (onRequestClose).
+ *
+ * REGLA DEL OJO (cliente, 2026-09-07): al completar los dígitos, con el ojo
+ * APAGADO se confirma solo (cero toques extra); con el ojo PRENDIDO el teclado
+ * NO se cierra — muestra el PIN revelado y pide un toque en "Confirmar", para
+ * poder revisarlo antes de mandarlo. Qué hacer lo decide
+ * teclado-pin.ts#accionAlTeclear (pura, testeada).
  */
 export function TecladoPin({ visible, titulo, valor, longitud, onCambiar, onCompletar, onCerrar }: TecladoPinProps): JSX.Element {
   const [revelado, setRevelado] = useState(false);
 
   function tecleaDigito(d: string): void {
-    // `teclear` es puro y devuelve el valor FINAL: se lo pasamos a los
-    // callbacks como argumento, nunca dependemos del estado del padre (que en
-    // este mismo tick todavía tiene el dígito anterior). Ver teclado-pin.ts.
-    const { valor: nuevo, completo } = teclear(valor, d, longitud);
-    if (nuevo === null) return;
-    onCambiar(nuevo);
-    if (completo) {
-      // Con onCompletar, quien consume recibe los `longitud` dígitos y decide
-      // qué hacer (y cierra por su cuenta). Sin él, completar cierra el
-      // teclado, como siempre.
-      if (onCompletar) onCompletar(nuevo);
-      else onCerrar();
-    }
+    // `accionAlTeclear` es puro y devuelve el valor FINAL como dato: se lo
+    // pasamos a los callbacks como argumento, nunca leemos el estado del padre
+    // (que en este mismo tick todavía tiene el dígito anterior). Ver
+    // teclado-pin.ts.
+    const accion = accionAlTeclear(valor, d, longitud, revelado);
+    if (accion.tipo === 'ignora') return;
+    onCambiar(accion.valor);
+    // 'confirma' = ojo apagado y completo: se confirma solo, como siempre.
+    // 'espera' = ojo prendido y completo: NO se cierra; el botón "Confirmar"
+    // de abajo aparece (valor ya tiene `longitud` dígitos). 'sigue' = dígito
+    // intermedio: solo se actualiza el valor.
+    if (accion.tipo === 'confirma') confirmar(accion.valor);
+  }
+
+  // Cierra la captura con el PIN COMPLETO: onCompletar si el consumidor hace
+  // algo con él (resetear, enviar); si no, onCerrar (login / alta / cambiar).
+  function confirmar(pin: string): void {
+    if (onCompletar) onCompletar(pin);
+    else onCerrar();
   }
 
   function borrarDigito(): void {
@@ -106,6 +117,12 @@ export function TecladoPin({ visible, titulo, valor, longitud, onCambiar, onComp
               </View>
             ))}
           </View>
+
+          {valor.length === longitud ? (
+            <Pressable style={styles.confirmar} onPress={() => confirmar(valor)} accessibilityLabel="Confirmar el PIN">
+              <Text style={styles.confirmarTexto}>Confirmar</Text>
+            </Pressable>
+          ) : null}
         </View>
       </View>
     </Modal>
@@ -158,4 +175,14 @@ const styles = StyleSheet.create({
     fontFamily: fonts.semibold,
     fontVariant: ['tabular-nums'],
   },
+  // Grande y al pie del teclado — donde ya está el pulgar tras el último
+  // dígito. Rojo = la acción (design system Trujillo).
+  confirmar: {
+    minHeight: 52,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: colors.rojo,
+    borderRadius: radius.md,
+  },
+  confirmarTexto: { fontSize: fontSize.base, color: colors.blanco, fontFamily: fonts.bold },
 });

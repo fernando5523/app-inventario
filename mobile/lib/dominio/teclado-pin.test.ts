@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { teclear } from './teclado-pin';
+import { accionAlTeclear, teclear } from './teclado-pin';
 
 describe('teclear: el valor final viaja como dato, no por el estado del padre', () => {
   // La carrera del bug de "Resetear PIN" (release 2.12.0): al teclear el 6º
@@ -49,5 +49,33 @@ describe('contrato con onCompletar: quien resetea recibe el PIN COMPLETO', () =>
     expect(resetearPin).toHaveBeenCalledWith(7, '123456');
     // Si se leyera el estado del padre (el bug), serían 5 dígitos: eso NO pasa.
     expect(resetearPin).not.toHaveBeenCalledWith(7, estadoDelPadre);
+  });
+});
+
+describe('accionAlTeclear: la regla del ojo (revisar el PIN antes de mandarlo)', () => {
+  it('ojo APAGADO + último dígito: se confirma solo, con los 6 (cero toques extra)', () => {
+    expect(accionAlTeclear('12345', '6', 6, false)).toEqual({ tipo: 'confirma', valor: '123456' });
+  });
+
+  it('ojo PRENDIDO + último dígito: NO confirma, espera el toque de confirmación', () => {
+    expect(accionAlTeclear('12345', '6', 6, true)).toEqual({ tipo: 'espera', valor: '123456' });
+  });
+
+  it('dígito intermedio: sigue igual — el ojo no cambia nada hasta completar', () => {
+    expect(accionAlTeclear('1234', '5', 6, false)).toEqual({ tipo: 'sigue', valor: '12345' });
+    expect(accionAlTeclear('1234', '5', 6, true)).toEqual({ tipo: 'sigue', valor: '12345' });
+  });
+
+  it('con el teclado lleno: ignora, esté el ojo prendido o apagado', () => {
+    expect(accionAlTeclear('123456', '7', 6, false)).toEqual({ tipo: 'ignora' });
+    expect(accionAlTeclear('123456', '7', 6, true)).toEqual({ tipo: 'ignora' });
+  });
+
+  it('el valor que se confirma son los 6 dígitos, NO el estado previo de 5', () => {
+    // Mismo contrato para las DOS rutas de login (administrador y sucursal):
+    // comparten un solo TecladoPin, así que la regla del ojo es idéntica para
+    // ambas — no hay dos comportamientos posibles.
+    const r = accionAlTeclear('12345', '6', 6, false);
+    expect(r.tipo === 'confirma' && r.valor).toBe('123456');
   });
 });
