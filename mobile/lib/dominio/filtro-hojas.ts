@@ -52,27 +52,6 @@ export function cumpleFiltro(hoja: HojaConteo, filtro: FiltroHojas): boolean {
   }
 }
 
-export function filtrarHojas(hojas: readonly HojaConteo[], filtro: FiltroHojas): HojaConteo[] {
-  return hojas.filter((h) => cumpleFiltro(h, filtro));
-}
-
-/**
- * Cuántas hojas caen en cada chip, para poder mostrar el número al lado de la
- * etiqueta.
- *
- * Se calcula sobre TODAS las hojas siempre, nunca sobre las ya filtradas: si
- * los contadores cambiaran al elegir un chip, dejarían de servir para decidir
- * a cuál ir.
- */
-export function conteoPorFiltro(hojas: readonly HojaConteo[]): Record<FiltroHojas, number> {
-  return {
-    todas: hojas.length,
-    'sin-finalizar': hojas.filter((h) => cumpleFiltro(h, 'sin-finalizar')).length,
-    'sin-conteo': hojas.filter((h) => cumpleFiltro(h, 'sin-conteo')).length,
-    finalizadas: hojas.filter((h) => cumpleFiltro(h, 'finalizadas')).length,
-  };
-}
-
 /**
  * "Mostrando 7 de 25 hojas" — y con el filtro en `todas`, "Mostrando 25
  * hojas" a secas: "25 de 25" invita a buscar qué se está ocultando.
@@ -81,4 +60,68 @@ export function textoMostrando(visibles: number, total: number, formatoMiles: (n
   const plural = total === 1 ? 'hoja' : 'hojas';
   if (visibles === total) return `Mostrando ${formatoMiles(total)} ${plural}`;
   return `Mostrando ${formatoMiles(visibles)} de ${formatoMiles(total)} ${plural}`;
+}
+
+/**
+ * El filtro MODAL de "Hojas de esta ronda" (Coordinador) -- reemplazó a los
+ * chips de un solo criterio (`cumpleFiltro` de arriba sigue siendo la
+ * regla de estado, no se duplica). Mismo patrón que `filtro-productos.ts`:
+ * un modal, un borrador, "Aplicar" -- ver `ModalFiltrosHojas.tsx`.
+ *
+ * Persona y número exigen coincidencia EXACTA (se eligen de una lista, no es
+ * texto libre); `estado` en `'todas'` es "no filtra por estado".
+ */
+export interface FiltroHojasModal {
+  persona: string | null;
+  estado: FiltroHojas;
+  numero: string | null;
+}
+
+export const FILTRO_HOJAS_MODAL_VACIO: FiltroHojasModal = { persona: null, estado: 'todas', numero: null };
+
+/** Personas distintas entre los asignados de todas las hojas, en el orden en que aparecen. */
+export function personasDeHojas(hojas: readonly HojaConteo[]): string[] {
+  const vistos = new Set<string>();
+  const orden: string[] = [];
+  for (const h of hojas) {
+    for (const nombre of h.asignados) {
+      if (!vistos.has(nombre)) {
+        vistos.add(nombre);
+        orden.push(nombre);
+      }
+    }
+  }
+  return orden;
+}
+
+/** Números de hoja tal cual vienen ("002"), en el orden de la lista. */
+export function numerosDeHojas(hojas: readonly HojaConteo[]): string[] {
+  return hojas.map((h) => h.numero);
+}
+
+/** Los tres criterios combinados con Y -- misma regla de estado que `cumpleFiltro`. */
+export function cumpleFiltroModal(hoja: HojaConteo, filtro: FiltroHojasModal): boolean {
+  return (
+    cumpleFiltro(hoja, filtro.estado) &&
+    (filtro.persona === null || hoja.asignados.includes(filtro.persona)) &&
+    (filtro.numero === null || hoja.numero === filtro.numero)
+  );
+}
+
+export function filtrarHojasModal(hojas: readonly HojaConteo[], filtro: FiltroHojasModal): HojaConteo[] {
+  return hojas.filter((h) => cumpleFiltroModal(h, filtro));
+}
+
+/** Cuántos de los tres campos están puestos -- el número que muestra el botón "Filtros". */
+export function contarFiltrosActivosModal(filtro: FiltroHojasModal): number {
+  return (filtro.persona !== null ? 1 : 0) + (filtro.estado !== 'todas' ? 1 : 0) + (filtro.numero !== null ? 1 : 0);
+}
+
+/** Qué mostrar como "filtro activo" en el pie de la lista -- `null` cuando no hay ninguno. */
+export function textoFiltroModalActivo(filtro: FiltroHojasModal): string | null {
+  const partes: string[] = [];
+  if (filtro.persona !== null) partes.push(filtro.persona);
+  if (filtro.estado !== 'todas') partes.push(ETIQUETA_FILTRO[filtro.estado]);
+  if (filtro.numero !== null) partes.push(`Hoja #${filtro.numero}`);
+  return partes.length > 0 ? partes.join(' · ') : null;
 }

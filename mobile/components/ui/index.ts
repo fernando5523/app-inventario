@@ -45,3 +45,5 @@ export { SelectBuscable } from './SelectBuscable';
 export type { SelectBuscableProps } from './SelectBuscable';
 export { ModalFiltrosProductos } from './ModalFiltrosProductos';
 export type { ModalFiltrosProductosProps } from './ModalFiltrosProductos';
+export { ModalFiltrosHojas } from './ModalFiltrosHojas';
+export type { ModalFiltrosHojasProps } from './ModalFiltrosHojas';

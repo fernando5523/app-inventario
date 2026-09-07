@@ -10,7 +10,7 @@
  */
 
 import type { LucideIcon } from 'lucide-react-native';
-import { BarChart3, ClipboardList, Home, Layers, Settings, ShieldCheck, Store, Users } from 'lucide-react-native';
+import { BarChart3, ClipboardList, Home, Layers, LayoutGrid, Settings, ShieldCheck, Store, Users } from 'lucide-react-native';
 
 import type { Rol } from '../../lib/dominio/tipos';
 
@@ -34,6 +34,13 @@ export const TABS_POR_ROL: Record<Rol, DefinicionTab[]> = {
   coordinador: [
     { name: 'index', etiqueta: 'Inicio', icono: Home },
     { name: 'hojas', etiqueta: 'Hojas', icono: ClipboardList },
+    // Pedido del cliente (2026-09-07): el armado (catálogo/crear/asignar)
+    // se va a su propia entrada, separado de "Hojas de esta ronda" -- ya no
+    // conviven en la misma pantalla. "Armar hojas" y no "Configurar": dice
+    // la ACCIÓN de dominio (mismo verbo que ya usa el resto de la app,
+    // "armar el inventario"), en vez de un genérico que en Administrador ya
+    // significa otra cosa (credenciales de Dynamics, ver tab "Config").
+    { name: 'armar', etiqueta: 'Armar hojas', icono: LayoutGrid },
     { name: 'ciclo', etiqueta: 'Ciclo', icono: Layers },
   ],
   conteo: [

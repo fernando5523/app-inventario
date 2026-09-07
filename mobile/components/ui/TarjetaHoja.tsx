@@ -9,12 +9,19 @@ export interface TarjetaHojaProps {
   numero: string;
   titulo?: string;
   codigos?: string;
+  /**
+   * Quién la tiene asignada -- SOLO la pasa el Coordinador (ve el lote
+   * entero); el Contador nunca la pasa, porque ya sabe que es la suya.
+   * `undefined` = no mostrar la línea; `[]` = mostrarla como "Sin asignar".
+   */
+  asignados?: string[];
   estado: EstadoHoja;
   contados: number;
   total: number;
   /** false cuando la hoja todavía no tiene catálogo cargado — no se puede abrir. */
   habilitada: boolean;
-  onPress: () => void;
+  /** Sin esto la tarjeta es de solo lectura (el Coordinador no cuenta, solo mira el avance). */
+  onPress?: () => void;
 }
 
 const BADGE_TEXTO: Record<EstadoHoja, string> = {
@@ -39,7 +46,7 @@ const COLOR_VALOR: Record<EstadoHoja, string> = {
 };
 
 /** Tarjeta de hoja (`.hoja-card` en las maquetas) — mismo diseño que la tarjeta de producto de conteo.html: badge + número arriba, título, código, detalle + valor destacado abajo. */
-export function TarjetaHoja({ numero, titulo, codigos, estado, contados, total, habilitada, onPress }: TarjetaHojaProps): JSX.Element {
+export function TarjetaHoja({ numero, titulo, codigos, asignados, estado, contados, total, habilitada, onPress }: TarjetaHojaProps): JSX.Element {
   const detalle = habilitada
     ? contados === total
       ? 'Hoja contada por completo'
@@ -47,17 +54,18 @@ export function TarjetaHoja({ numero, titulo, codigos, estado, contados, total, 
         ? 'Finalizada'
         : 'Contando ahora'
     : 'Sin catálogo cargado todavía';
+  const puedeAbrir = habilitada && onPress !== undefined;
 
   return (
     <Pressable
-      onPress={habilitada ? onPress : undefined}
-      disabled={!habilitada}
-      accessibilityRole={habilitada ? 'button' : undefined}
+      onPress={puedeAbrir ? onPress : undefined}
+      disabled={!puedeAbrir}
+      accessibilityRole={puedeAbrir ? 'button' : undefined}
       style={({ pressed }) => [
         styles.raiz,
         { borderColor: BORDE_ESTADO[estado] },
         !habilitada && styles.bloqueada,
-        habilitada && pressed && styles.presionada,
+        puedeAbrir && pressed && styles.presionada,
       ]}
     >
       <View style={styles.cabecera}>
@@ -66,6 +74,9 @@ export function TarjetaHoja({ numero, titulo, codigos, estado, contados, total, 
       </View>
       <Text style={styles.titulo}>{titulo ? `Hoja #${numero} · ${titulo}` : `Hoja #${numero}`}</Text>
       {codigos ? <Text style={styles.codigos}>{codigos}</Text> : null}
+      {asignados !== undefined ? (
+        <Text style={styles.asignados}>{asignados.length > 0 ? asignados.join(' y ') : 'Sin asignar'}</Text>
+      ) : null}
       <View style={styles.pie}>
         <Text style={styles.detalle}>{detalle}</Text>
         <View style={styles.valorFila}>
@@ -92,6 +103,7 @@ const styles = StyleSheet.create({
   numero: { fontSize: 11, color: colors.grisClaro, fontFamily: fonts.semibold },
   titulo: { fontSize: 13.5, color: colors.tinta, fontFamily: fonts.bold, lineHeight: 18 },
   codigos: { fontSize: 11, color: colors.gris, fontFamily: fonts.regular },
+  asignados: { fontSize: 11.5, color: colors.gris, fontFamily: fonts.medium },
   pie: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10, marginTop: 2 },
   detalle: { flex: 1, minWidth: 0, fontSize: 11.5, color: colors.gris, fontFamily: fonts.regular },
   valorFila: { flex: 0, flexDirection: 'row', alignItems: 'baseline', gap: 3 },

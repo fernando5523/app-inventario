@@ -1,5 +1,15 @@
 import { describe, expect, it } from 'vitest';
-import { conteoPorFiltro, cumpleFiltro, filtrarHojas, textoMostrando, type FiltroHojas } from './filtro-hojas';
+import {
+  contarFiltrosActivosModal,
+  cumpleFiltro,
+  cumpleFiltroModal,
+  filtrarHojasModal,
+  FILTRO_HOJAS_MODAL_VACIO,
+  numerosDeHojas,
+  personasDeHojas,
+  textoFiltroModalActivo,
+  textoMostrando,
+} from './filtro-hojas';
 import type { Conteo, EstadoHoja, HojaConteo, Producto } from './tipos';
 
 function producto(id: number): Producto {
@@ -23,7 +33,7 @@ function conteoDe(productoId: number): Conteo {
 }
 
 /** `productos` cuántos tiene, `contados` cuántos de esos tienen conteo. */
-function hoja(estado: EstadoHoja, productos: number, contados: number, id = 1): HojaConteo {
+function hoja(estado: EstadoHoja, productos: number, contados: number, id = 1, asignados: string[] = []): HojaConteo {
   return {
     id,
     inventarioId: 1,
@@ -33,7 +43,7 @@ function hoja(estado: EstadoHoja, productos: number, contados: number, id = 1): 
     tamano: 50,
     estado,
     sync: 'local',
-    asignados: [],
+    asignados,
     productos: Array.from({ length: productos }, (_, i) => producto(i + 1)),
     conteos: Array.from({ length: contados }, (_, i) => conteoDe(i + 1)),
   };
@@ -98,62 +108,6 @@ describe('cumpleFiltro: sin-conteo (el que usa el Coordinador para ir a buscar l
   });
 });
 
-describe('filtrarHojas', () => {
-  const hojas = [
-    hoja('pendiente', 5, 0, 1), // sin finalizar, le faltan 5
-    hoja('en-proceso', 5, 5, 2), // sin finalizar, no le falta ninguno
-    hoja('finalizada', 5, 3, 3), // cerrada, con 2 en cero
-    hoja('finalizada', 5, 5, 4), // cerrada y completa
-  ];
-
-  it.each<[FiltroHojas, number[]]>([
-    ['todas', [1, 2, 3, 4]],
-    ['sin-finalizar', [1, 2]],
-    ['sin-conteo', [1]],
-    ['finalizadas', [3, 4]],
-  ])('filtro %s -> hojas %j', (filtro, esperadas) => {
-    expect(filtrarHojas(hojas, filtro).map((h) => h.id)).toEqual(esperadas);
-  });
-
-  it('conserva el orden original de la lista', () => {
-    const desordenadas = [hoja('pendiente', 3, 0, 9), hoja('pendiente', 3, 0, 4), hoja('pendiente', 3, 0, 7)];
-    expect(filtrarHojas(desordenadas, 'sin-finalizar').map((h) => h.id)).toEqual([9, 4, 7]);
-  });
-
-  it('sin hojas devuelve lista vacía, no rompe', () => {
-    expect(filtrarHojas([], 'sin-conteo')).toEqual([]);
-  });
-});
-
-describe('conteoPorFiltro', () => {
-  it('cuenta cada chip sobre TODAS las hojas', () => {
-    const hojas = [
-      hoja('pendiente', 5, 0, 1),
-      hoja('en-proceso', 5, 5, 2),
-      hoja('finalizada', 5, 3, 3),
-      hoja('finalizada', 5, 5, 4),
-    ];
-    expect(conteoPorFiltro(hojas)).toEqual({
-      todas: 4,
-      'sin-finalizar': 2,
-      'sin-conteo': 1,
-      finalizadas: 2,
-    });
-  });
-
-  it('`todas` es siempre el total: los otros chips son subconjuntos suyos', () => {
-    const hojas = [hoja('en-proceso', 4, 1, 1), hoja('finalizada', 4, 4, 2), hoja('pendiente', 4, 0, 3)];
-    const c = conteoPorFiltro(hojas);
-    expect(c.todas).toBe(hojas.length);
-    expect(c['sin-finalizar'] + c.finalizadas).toBe(c.todas);
-    expect(c['sin-conteo']).toBeLessThanOrEqual(c['sin-finalizar']);
-  });
-
-  it('sin hojas: todo en cero', () => {
-    expect(conteoPorFiltro([])).toEqual({ todas: 0, 'sin-finalizar': 0, 'sin-conteo': 0, finalizadas: 0 });
-  });
-});
-
 describe('textoMostrando', () => {
   it('con un subconjunto dice "X de Y"', () => {
     expect(textoMostrando(7, 25, miles)).toBe('Mostrando 7 de 25 hojas');
@@ -179,5 +133,89 @@ describe('textoMostrando', () => {
     expect(textoMostrando(1200, 3703, (n) => n.toString().replace(/\B(?=(\d{3})+(?!\d))/g, '.'))).toBe(
       'Mostrando 1.200 de 3.703 hojas',
     );
+  });
+});
+
+describe('personasDeHojas', () => {
+  it('distintas, en el orden en que aparecen, sin repetir', () => {
+    const hojas = [
+      hoja('pendiente', 5, 0, 1, ['Elena Príncipe']),
+      hoja('pendiente', 5, 0, 2, ['Marcos Ruiz', 'Elena Príncipe']),
+      hoja('pendiente', 5, 0, 3, []),
+    ];
+    expect(personasDeHojas(hojas)).toEqual(['Elena Príncipe', 'Marcos Ruiz']);
+  });
+
+  it('sin hojas: lista vacía', () => {
+    expect(personasDeHojas([])).toEqual([]);
+  });
+});
+
+describe('numerosDeHojas', () => {
+  it('tal cual vienen, en el orden de la lista', () => {
+    const hojas = [hoja('pendiente', 5, 0, 3), hoja('pendiente', 5, 0, 1)];
+    expect(numerosDeHojas(hojas)).toEqual(['003', '001']);
+  });
+});
+
+describe('cumpleFiltroModal / filtrarHojasModal: los tres criterios del modal, combinados con Y', () => {
+  const hojas = [
+    hoja('pendiente', 5, 0, 1, ['Elena Príncipe']), // sin finalizar, le faltan 5
+    hoja('en-proceso', 5, 5, 2, ['Marcos Ruiz']), // sin finalizar, no le falta ninguno
+    hoja('finalizada', 5, 3, 3, ['Elena Príncipe', 'Marcos Ruiz']), // cerrada, con 2 en cero
+    hoja('finalizada', 5, 5, 4, []), // cerrada y completa, sin asignar
+  ];
+
+  it('vacío (FILTRO_HOJAS_MODAL_VACIO): pasan todas', () => {
+    expect(filtrarHojasModal(hojas, FILTRO_HOJAS_MODAL_VACIO).map((h) => h.id)).toEqual([1, 2, 3, 4]);
+  });
+
+  it('solo persona: cualquier hoja donde esa persona sea uno de los dos asignados', () => {
+    expect(filtrarHojasModal(hojas, { ...FILTRO_HOJAS_MODAL_VACIO, persona: 'Elena Príncipe' }).map((h) => h.id)).toEqual([1, 3]);
+  });
+
+  it('solo estado: misma regla que cumpleFiltro', () => {
+    expect(filtrarHojasModal(hojas, { ...FILTRO_HOJAS_MODAL_VACIO, estado: 'sin-conteo' }).map((h) => h.id)).toEqual([1]);
+  });
+
+  it('solo número: coincidencia exacta', () => {
+    expect(filtrarHojasModal(hojas, { ...FILTRO_HOJAS_MODAL_VACIO, numero: '002' }).map((h) => h.id)).toEqual([2]);
+  });
+
+  it('combinados con Y: persona Y estado a la vez', () => {
+    expect(
+      filtrarHojasModal(hojas, { persona: 'Elena Príncipe', estado: 'finalizadas', numero: null }).map((h) => h.id),
+    ).toEqual([3]);
+  });
+
+  it('sin coincidencias: lista vacía, no rompe', () => {
+    expect(filtrarHojasModal(hojas, { ...FILTRO_HOJAS_MODAL_VACIO, persona: 'Nadie' }).map((h) => h.id)).toEqual([]);
+  });
+});
+
+describe('contarFiltrosActivosModal', () => {
+  it('vacío: 0', () => {
+    expect(contarFiltrosActivosModal(FILTRO_HOJAS_MODAL_VACIO)).toBe(0);
+  });
+
+  it('cuenta cada campo puesto, `estado` distinto de "todas" incluido', () => {
+    expect(contarFiltrosActivosModal({ persona: 'Elena Príncipe', estado: 'finalizadas', numero: '003' })).toBe(3);
+    expect(contarFiltrosActivosModal({ persona: null, estado: 'sin-conteo', numero: null })).toBe(1);
+  });
+});
+
+describe('textoFiltroModalActivo', () => {
+  it('sin nada activo: null', () => {
+    expect(textoFiltroModalActivo(FILTRO_HOJAS_MODAL_VACIO)).toBeNull();
+  });
+
+  it('combina las partes activas en el orden persona · estado · número', () => {
+    expect(textoFiltroModalActivo({ persona: 'Elena Príncipe', estado: 'finalizadas', numero: '003' })).toBe(
+      'Elena Príncipe · Finalizadas · Hoja #003',
+    );
+  });
+
+  it('solo el número puesto', () => {
+    expect(textoFiltroModalActivo({ persona: null, estado: 'todas', numero: '007' })).toBe('Hoja #007');
   });
 });
