@@ -18,7 +18,7 @@ export interface SelectProps {
   opciones: SelectOpcion[];
   onSeleccionar: (opcion: SelectOpcion) => void;
   disabled?: boolean;
-  /** Motivo por el que está deshabilitado, ej. "Elegí primero la sucursal". */
+  /** Motivo por el que está deshabilitado, ej. "Elige primero la sucursal". */
   disabledHint?: string;
   accessibilityLabel: string;
   /**

@@ -530,7 +530,7 @@ export default function HojasScreen(): JSX.Element {
                     : 'Trae de Dynamics los productos con stock en el almacén de esta sucursal: es la foto contra la que se compara todo el inventario. Es una lectura — no escribe ni ajusta nada en Dynamics.'
             }
           >
-            {/* El motivo escrito y la salida, como en "Elegí primero la
+            {/* El motivo escrito y la salida, como en "Elige primero la
                 sucursal" del login: un botón deshabilitado sin explicación
                 obliga a adivinar. */}
             {sinAlmacen ? (
