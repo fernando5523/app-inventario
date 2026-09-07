@@ -1,8 +1,8 @@
-import { useFocusEffect } from 'expo-router';
 import { TrendingDown, TrendingUp } from 'lucide-react-native';
 import { useCallback, useEffect, useState, type JSX } from 'react';
-import { ActivityIndicator, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, RefreshControl, ScrollView, StyleSheet, Text, View } from 'react-native';
 
+import { useRefrescoAlEnfocar } from '../hooks/useRefrescoAlEnfocar';
 import { repositorioHistorial, repositorioSesion } from '../../lib/contenedor';
 import type { Rol, Sucursal } from '../../lib/dominio/tipos';
 import type { ComparativoMensual, PuntoComparativoMensual } from '../../lib/puertos/repositorios';
@@ -50,7 +50,12 @@ export function ComparativoScreen({ rol }: ComparativoScreenProps): JSX.Element 
   const cargar = useCallback(async () => {
     if (!sesion) return;
     setError(null);
-    setCargando(true);
+    // El spinner de pantalla completa SOLO en la primera carga (el
+    // `useState(true)` de arriba lo deja prendido hasta que termine). En un
+    // refresco posterior se mantiene la tabla que ya se ve mientras llega el
+    // dato nuevo -- taparla con un spinner cada vez que se vuelve a esta
+    // pestaña se siente peor que el dato viejo que el refresco viene a
+    // arreglar. Ver useRefrescoAlEnfocar.
     try {
       // El Auditor no manda sucursalId: el backend la resuelve del token y
       // punto -- mandarla igual no cambiaría nada, solo agregaría una
@@ -64,11 +69,10 @@ export function ComparativoScreen({ rol }: ComparativoScreenProps): JSX.Element 
     }
   }, [sesion, rol, filtroSucursalId]);
 
-  useFocusEffect(
-    useCallback(() => {
-      cargar();
-    }, [cargar]),
-  );
+  // Al enfocar Y al volver la app a primer plano — "cualquier dato
+  // actualizado no debe depender de cerrar sesión y volver" (pedido del
+  // cliente). Ver components/hooks/useRefrescoAlEnfocar.ts.
+  const { refrescando, refrescar } = useRefrescoAlEnfocar(cargar);
 
   if (!sesion) return <View />;
 
@@ -78,7 +82,11 @@ export function ComparativoScreen({ rol }: ComparativoScreenProps): JSX.Element 
   ];
 
   return (
-    <PantallaConTabs scrollable contentStyle={styles.contenido}>
+    <PantallaConTabs
+      scrollable
+      contentStyle={styles.contenido}
+      refreshControl={<RefreshControl refreshing={refrescando} onRefresh={refrescar} tintColor={colors.rojo} colors={[colors.rojo]} />}
+    >
       <BarraApp
         rotulo="Comparativo mensual"
         sede={rol === 'auditor' ? sesion.sucursal!.nombre : undefined}

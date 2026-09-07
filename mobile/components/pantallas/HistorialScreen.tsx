@@ -1,8 +1,9 @@
-import { router, useFocusEffect } from 'expo-router';
+import { router } from 'expo-router';
 import { ChevronLeft, History, Lock, ShieldAlert, ShieldCheck, TrendingUp } from 'lucide-react-native';
 import { useCallback, useEffect, useState, type JSX } from 'react';
-import { ActivityIndicator, Alert, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Alert, Pressable, RefreshControl, ScrollView, StyleSheet, Text, View } from 'react-native';
 
+import { useRefrescoAlEnfocar } from '../hooks/useRefrescoAlEnfocar';
 import { repositorioHistorial, repositorioSesion } from '../../lib/contenedor';
 import type { Rol, Sucursal } from '../../lib/dominio/tipos';
 import type {
@@ -184,7 +185,12 @@ export function HistorialScreen({ rol }: HistorialScreenProps): JSX.Element {
   const cargar = useCallback(async () => {
     if (!sesion) return;
     setError(null);
-    setCargando(true);
+    // El spinner de pantalla completa queda SOLO para la primera carga (lo
+    // deja prendido el `useState(true)` de arriba). En un refresco -- al
+    // volver de otra pestaña, al volver la app del bolsillo, al tirar de la
+    // lista -- se mantiene lo que ya está en pantalla hasta que llegue el
+    // dato nuevo, en vez de tapar la lista con una rueda. Ver
+    // useRefrescoAlEnfocar.
     try {
       const pagina = await repositorioHistorial.listar(filtroActual(0));
       setInventarios(pagina.inventarios);
@@ -222,11 +228,19 @@ export function HistorialScreen({ rol }: HistorialScreenProps): JSX.Element {
   // deps vía `filtroActual`) — React Navigation vuelve a correr este efecto
   // cuando eso pasa, aunque la pantalla siga enfocada. Es lo que hace que
   // tocar un chip dispare una consulta nueva sin tener que salir y volver.
-  useFocusEffect(
-    useCallback(() => {
-      cargar();
-    }, [cargar]),
-  );
+  //
+  // Ahora también refresca al volver la app a primer plano (pedido del
+  // cliente: "cualquier dato actualizado no debe depender de cerrar sesión y
+  // volver"). Ver components/hooks/useRefrescoAlEnfocar.ts.
+  //
+  // PAUSADO mientras hay una sub-vista abierta (detalle o historia de un
+  // ítem): `cargar` recarga LA LISTA, y esas dos vistas se muestran en lugar
+  // de la lista, no encima. Refrescar detrás no rompe nada visible, pero es
+  // una consulta que nadie pidió mientras la persona lee otra cosa -- y la
+  // regla es no tocar nada mientras está en el medio de algo.
+  const { refrescando, refrescar } = useRefrescoAlEnfocar(cargar, {
+    pausado: detalle !== null || historicoItem !== null,
+  });
 
   async function abrirDetalle(id: number): Promise<void> {
     setCargandoDetalle(true);
@@ -708,7 +722,11 @@ export function HistorialScreen({ rol }: HistorialScreenProps): JSX.Element {
 
   // ------------------------------------------------------------------ lista
   return (
-    <PantallaConTabs scrollable contentStyle={styles.contenido}>
+    <PantallaConTabs
+      scrollable
+      contentStyle={styles.contenido}
+      refreshControl={<RefreshControl refreshing={refrescando} onRefresh={refrescar} tintColor={colors.rojo} colors={[colors.rojo]} />}
+    >
       <BarraApp
         rotulo="Historial"
         sede={rol === 'auditor' ? sesion.sucursal!.nombre : undefined}

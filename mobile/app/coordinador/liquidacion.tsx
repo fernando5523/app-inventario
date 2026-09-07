@@ -1,7 +1,9 @@
-import { router, useFocusEffect } from 'expo-router';
+import { router } from 'expo-router';
 import { AlertTriangle, Check, ClipboardEdit, Layers, Scale, Wallet } from 'lucide-react-native';
 import { useCallback, useMemo, useState, type JSX } from 'react';
-import { ActivityIndicator, Alert, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import { ActivityIndicator, Alert, Pressable, RefreshControl, StyleSheet, Text, TextInput, View } from 'react-native';
+
+import { useRefrescoAlEnfocar } from '../../components/hooks/useRefrescoAlEnfocar';
 
 import { PantallaConTabs } from '../../components/navegacion/PantallaConTabs';
 import { BarraApp, Badge, Button, formatoFechaHora } from '../../components/ui';
@@ -113,11 +115,18 @@ export default function LiquidacionScreen(): JSX.Element {
     }
   }, [sesion]);
 
-  useFocusEffect(
-    useCallback(() => {
-      cargar();
-    }, [cargar]),
-  );
+  // Al enfocar Y al volver la app a primer plano -- pedido del cliente. Ver
+  // components/hooks/useRefrescoAlEnfocar.ts.
+  //
+  // PAUSADO solo mientras una escritura está en vuelo. Los campos del
+  // formulario de ajustes (monto, nota) NO necesitan pausa: son estado local
+  // de `TarjetaAjustes` y no hay ningún `useEffect` que los resincronice
+  // desde la prop -- se precargan una vez, al tocar "Editar". Verificado
+  // antes de dejarlo así: un refresco cambia el texto de la tarjeta, nunca lo
+  // que la persona tipeó.
+  const { refrescando, refrescar } = useRefrescoAlEnfocar(cargar, {
+    pausado: guardandoAjustes || liquidando,
+  });
 
   const visibles = useMemo(() => (liquidacion ? filtrar(liquidacion.planilla, filtro) : []), [liquidacion, filtro]);
 
@@ -225,7 +234,11 @@ export default function LiquidacionScreen(): JSX.Element {
   const hayCentavoDeReparto = conCentavoExtra > 0;
 
   return (
-    <PantallaConTabs scrollable contentStyle={styles.contenido}>
+    <PantallaConTabs
+      scrollable
+      contentStyle={styles.contenido}
+      refreshControl={<RefreshControl refreshing={refrescando} onRefresh={refrescar} tintColor={colors.rojo} colors={[colors.rojo]} />}
+    >
       <BarraApp
         rotulo="Gestión masiva"
         sede={`Liquidación · ${sesion.sucursal!.nombre}`}

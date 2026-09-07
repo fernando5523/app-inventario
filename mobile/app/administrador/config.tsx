@@ -1,8 +1,8 @@
-import { useFocusEffect } from 'expo-router';
 import { Minus, Plus, Settings, ShieldCheck } from 'lucide-react-native';
 import { useCallback, useState, type JSX } from 'react';
-import { ActivityIndicator, Alert, Pressable, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Alert, Pressable, RefreshControl, StyleSheet, Text, View } from 'react-native';
 
+import { useRefrescoAlEnfocar } from '../../components/hooks/useRefrescoAlEnfocar';
 import { PantallaConTabs } from '../../components/navegacion/PantallaConTabs';
 import { Badge, BarraApp, Button, Card, formatoPct } from '../../components/ui';
 // Del contenedor: los parámetros del ciclo salen de Postgres y se editan
@@ -36,11 +36,23 @@ export default function ConfiguracionScreen(): JSX.Element {
   const [dynamics, setDynamics] = useState<EstadoConfigDynamics | null>(null);
   const [probando, setProbando] = useState(false);
 
+  /**
+   * La última config que confirmó el SERVIDOR. `config` es lo que se ve y se
+   * edita; esta es la referencia contra la que se compara para saber si hay
+   * cambios sin guardar (ver `hayCambiosSinGuardar` más abajo).
+   *
+   * Sin esto no habría forma de distinguir "la persona no tocó nada" de "la
+   * persona subió el umbral y todavía no apretó Guardar", y un refresco
+   * automático le pisaría el cambio sin avisar.
+   */
+  const [configDelServidor, setConfigDelServidor] = useState<ConfigSistema | null>(null);
+
   const cargar = useCallback(async () => {
     setError(null);
     try {
       const [actual, dynamicsActual] = await Promise.all([repositorioConfig.obtener(), repositorioConfigDynamics.obtener()]);
       setConfig(actual);
+      setConfigDelServidor(actual);
       setDynamics(dynamicsActual);
     } catch (e) {
       // Sin esto, un fallo acá (sin red, servidor caído) dejaba el spinner
@@ -53,11 +65,30 @@ export default function ConfiguracionScreen(): JSX.Element {
     }
   }, []);
 
-  useFocusEffect(
-    useCallback(() => {
-      cargar();
-    }, [cargar]),
-  );
+  /**
+   * ¿La persona cambió algo y todavía no lo guardó?
+   *
+   * ES LA CONDICIÓN QUE FRENA EL REFRESCO. Esta pantalla no es una lista: es
+   * un formulario, y `cargar()` hace `setConfig(...)`. Si eso corre mientras
+   * alguien subió el umbral de media unidad y no apretó Guardar, el valor
+   * vuelve solo al anterior -- sin aviso, sin error, y probablemente sin que
+   * lo note hasta que el cálculo salga con el número viejo.
+   *
+   * Comparación por contenido y no por identidad: `config` es un objeto nuevo
+   * en cada `setConfig`, así que `!==` diría "sucio" siempre.
+   */
+  const hayCambiosSinGuardar =
+    config !== null &&
+    configDelServidor !== null &&
+    (config.tamanoHojaDefecto !== configDelServidor.tamanoHojaDefecto ||
+      config.conteosDelCiclo !== configDelServidor.conteosDelCiclo ||
+      config.umbralMediaUnidad !== configDelServidor.umbralMediaUnidad);
+
+  // Al enfocar Y al volver la app a primer plano -- pedido del cliente. Ver
+  // components/hooks/useRefrescoAlEnfocar.ts.
+  const { refrescando, refrescar } = useRefrescoAlEnfocar(cargar, {
+    pausado: hayCambiosSinGuardar || guardando || probando,
+  });
 
   async function guardar(): Promise<void> {
     if (!config) return;
@@ -65,6 +96,10 @@ export default function ConfiguracionScreen(): JSX.Element {
     try {
       const actualizado = await repositorioConfig.actualizar(config);
       setConfig(actualizado);
+      // Lo que acaba de confirmar el servidor pasa a ser la referencia: sin
+      // esto la pantalla quedaría marcada como "con cambios sin guardar"
+      // para siempre y no volvería a refrescarse nunca.
+      setConfigDelServidor(actualizado);
       Alert.alert('Configuración guardada', 'Los nuevos valores rigen desde ahora.');
     } catch (error) {
       Alert.alert('No se pudo guardar', error instanceof Error ? error.message : 'Intenta de nuevo.');
@@ -86,7 +121,11 @@ export default function ConfiguracionScreen(): JSX.Element {
   }
 
   return (
-    <PantallaConTabs scrollable contentStyle={styles.contenido}>
+    <PantallaConTabs
+      scrollable
+      contentStyle={styles.contenido}
+      refreshControl={<RefreshControl refreshing={refrescando} onRefresh={refrescar} tintColor={colors.rojo} colors={[colors.rojo]} />}
+    >
       <BarraApp rotulo="Configuración" cifras="Parámetros del sistema" />
 
       {cargando ? (

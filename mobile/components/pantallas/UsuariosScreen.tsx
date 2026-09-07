@@ -1,8 +1,9 @@
 import { KeyRound, Lock, MapPin, SquarePen, Trash2, User, UserCheck, UserCog, UserPlus, Users, UserX, X } from 'lucide-react-native';
 import { useCallback, useMemo, useRef, useState, type JSX } from 'react';
-import { ActivityIndicator, Alert, Animated, Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
-import { useFocusEffect } from 'expo-router';
+import { ActivityIndicator, Alert, Animated, Modal, Pressable, RefreshControl, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+
+import { useRefrescoAlEnfocar } from '../hooks/useRefrescoAlEnfocar';
 
 // Del contenedor, no de un adaptador concreto: con el backend vivo
 // (2026-09-04) esto es lo que hace que la pantalla liste las cuentas
@@ -116,13 +117,26 @@ export function UsuariosScreen({ rol }: UsuariosScreenProps): JSX.Element {
     }
   }, [sesion, rol]);
 
-  // useFocusEffect: habilitar/deshabilitar o crear una cuenta y volver a
-  // esta pantalla (o a Inicio y de vuelta) tiene que reflejar el cambio.
-  useFocusEffect(
-    useCallback(() => {
-      cargar();
-    }, [cargar]),
-  );
+  // Al enfocar (habilitar/deshabilitar o crear una cuenta y volver acá tiene
+  // que reflejar el cambio) Y al volver la app a primer plano -- pedido del
+  // cliente. Ver components/hooks/useRefrescoAlEnfocar.ts.
+  //
+  // PAUSADO con cualquier cosa abierta, y esta pantalla es EL caso que
+  // justifica la bandera: tiene un formulario de alta y otro de edición con
+  // nombre, DNI, rol y sucursal a medio escribir, dos modales de PIN y el
+  // menú de acciones. Un refresco que llegue en el medio le cierra el modal
+  // a quien está tecleando un PIN, o le pisa el DNI que venía cargando. Eso
+  // no es un parpadeo: es perderle el trabajo a la persona.
+  const { refrescando, refrescar } = useRefrescoAlEnfocar(cargar, {
+    pausado:
+      formularioAbierto ||
+      modalEditarVisible ||
+      modalPinVisible ||
+      menuAbierto ||
+      usuarioResetPin !== null ||
+      creando ||
+      guardandoEdicion,
+  });
 
   const nombreTienda = useMemo(() => new Map(tiendas.map((t) => [t.id, t.nombre] as const)), [tiendas]);
   const seleccionadoActual = usuarios.find((u) => u.id === usuarioSeleccionado?.id) ?? null;
@@ -285,6 +299,7 @@ export function UsuariosScreen({ rol }: UsuariosScreenProps): JSX.Element {
         style={styles.flex}
         contentContainerStyle={[styles.contenido, { paddingBottom: ALTO_TAB_BAR + insets.bottom + 120 }]}
         showsVerticalScrollIndicator={false}
+        refreshControl={<RefreshControl refreshing={refrescando} onRefresh={refrescar} tintColor={colors.rojo} colors={[colors.rojo]} />}
       >
         <BarraApp
           rotulo="Usuarios"

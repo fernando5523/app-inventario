@@ -1,9 +1,9 @@
-import { useFocusEffect } from 'expo-router';
 import { MapPin, Power, SquarePen, Store, TriangleAlert, Warehouse, X } from 'lucide-react-native';
 import { useCallback, useRef, useState, type JSX } from 'react';
-import { ActivityIndicator, Alert, Animated, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import { ActivityIndicator, Alert, Animated, Pressable, RefreshControl, StyleSheet, Text, TextInput, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import { useRefrescoAlEnfocar } from '../../components/hooks/useRefrescoAlEnfocar';
 import { PantallaConTabs } from '../../components/navegacion/PantallaConTabs';
 import { ALTO_TAB_BAR } from '../../components/navegacion/tabs';
 import { Badge, BarraApp, Button, Card, EmptyState, Select, type SelectOpcion } from '../../components/ui';
@@ -119,11 +119,16 @@ export default function TiendasScreen(): JSX.Element {
     }
   }, []);
 
-  useFocusEffect(
-    useCallback(() => {
-      cargar();
-    }, [cargar]),
-  );
+  // Al enfocar Y al volver la app a primer plano -- pedido del cliente. Ver
+  // components/hooks/useRefrescoAlEnfocar.ts.
+  //
+  // PAUSADO con el formulario de alta/edición abierto, el select de almacén
+  // desplegado o el menú de acciones arriba: `cargar()` reemplaza la lista de
+  // tiendas y de almacenes, y hacerlo mientras alguien tipea el nombre de una
+  // sucursal nueva le borra lo escrito. Tampoco mientras se está guardando.
+  const { refrescando, refrescar } = useRefrescoAlEnfocar(cargar, {
+    pausado: formularioAbierto || editando !== null || menuAbierto || selectAlmacenAbierto || guardando || trayendoTodos,
+  });
 
   function abrirFormularioNuevo(): void {
     setEditando(null);
@@ -245,7 +250,11 @@ export default function TiendasScreen(): JSX.Element {
     // del ScrollView su `position: absolute` queda recortado por el contenido
     // y se desplaza con el scroll en vez de quedarse fijo.
     <>
-      <PantallaConTabs scrollable contentStyle={[styles.contenido, { paddingBottom: ALTO_TAB_BAR + insets.bottom + 120 }]}>
+      <PantallaConTabs
+        scrollable
+        contentStyle={[styles.contenido, { paddingBottom: ALTO_TAB_BAR + insets.bottom + 120 }]}
+        refreshControl={<RefreshControl refreshing={refrescando} onRefresh={refrescar} tintColor={colors.rojo} colors={[colors.rojo]} />}
+      >
       <BarraApp rotulo="Tiendas" cifras={`${activas} de ${tiendas.length} activas`} />
 
       <Button

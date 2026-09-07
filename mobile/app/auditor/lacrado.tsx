@@ -1,8 +1,9 @@
-import { router, useFocusEffect } from 'expo-router';
+import { router } from 'expo-router';
 import { Check, Cloud, Lock, ShieldCheck } from 'lucide-react-native';
 import { useCallback, useState, type JSX } from 'react';
-import { ActivityIndicator, Alert, Modal, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Alert, Modal, RefreshControl, StyleSheet, Text, View } from 'react-native';
 
+import { useRefrescoAlEnfocar } from '../../components/hooks/useRefrescoAlEnfocar';
 import { PantallaConTabs } from '../../components/navegacion/PantallaConTabs';
 import { BandaSync, Badge, BarraApp, Button, formatoFechaHora, formatoMiles } from '../../components/ui';
 import { repositorioHistorial, repositorioLacrado, repositorioSesion } from '../../lib/contenedor';
@@ -84,14 +85,20 @@ export default function LacradoScreen(): JSX.Element {
     }
   }, [sesion]);
 
-  // useFocusEffect, no useEffect: volver a esta pantalla (por ejemplo,
-  // después de que la otra persona firme desde su sesión) tiene que
-  // reflejar el estado real, no el que había al entrar la primera vez.
-  useFocusEffect(
-    useCallback(() => {
-      cargar();
-    }, [cargar]),
-  );
+  // Volver a esta pantalla (por ejemplo, después de que la otra persona firme
+  // desde su sesión) tiene que reflejar el estado real, no el que había al
+  // entrar la primera vez. Y ahora también al volver la app del segundo
+  // plano: ESTA es la pantalla donde más importa -- las dos aprobaciones que
+  // habilitan el lacrado las dan dos personas distintas, en dos teléfonos, y
+  // quien espera la firma del otro tiene la app abierta mirando. Ver
+  // components/hooks/useRefrescoAlEnfocar.ts.
+  //
+  // PAUSADO con el modal abierto o una acción en vuelo: aprobar y lacrar son
+  // irreversibles, y un refresco que redibuje la pantalla debajo de un modal
+  // de confirmación es la peor forma de que alguien apriete lo que no era.
+  const { refrescando, refrescar } = useRefrescoAlEnfocar(cargar, {
+    pausado: modalVisible || aprobando || lacrando || registrando,
+  });
 
   if (!sesion) return <View />;
 
@@ -188,7 +195,11 @@ export default function LacradoScreen(): JSX.Element {
           : 'Todo listo: las dos firmas están registradas y hay sincronización con Dynamics.';
 
   return (
-    <PantallaConTabs scrollable contentStyle={styles.contenido}>
+    <PantallaConTabs
+      scrollable
+      contentStyle={styles.contenido}
+      refreshControl={<RefreshControl refreshing={refrescando} onRefresh={refrescar} tintColor={colors.rojo} colors={[colors.rojo]} />}
+    >
       <BarraApp
         rotulo="Auditoría · Lacrado digital"
         sede={sesion.sucursal!.nombre}

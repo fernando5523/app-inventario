@@ -1,8 +1,9 @@
-import { router, useFocusEffect } from 'expo-router';
+import { router } from 'expo-router';
 import { BarChart3 } from 'lucide-react-native';
 import { useCallback, useMemo, useState, type JSX } from 'react';
-import { ActivityIndicator, FlatList, Pressable, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, FlatList, Pressable, RefreshControl, StyleSheet, Text, View } from 'react-native';
 
+import { useRefrescoAlEnfocar } from '../../components/hooks/useRefrescoAlEnfocar';
 import { PantallaConTabs } from '../../components/navegacion/PantallaConTabs';
 import {
   BandaSync,
@@ -68,14 +69,16 @@ export default function AuditoriaScreen(): JSX.Element {
     }
   }, [sesion]);
 
-  // useFocusEffect, no useEffect: los tabs quedan montados una vez
-  // visitados — sin esto, la matriz sigue mostrando datos viejos si el
-  // ciclo de conteos avanzó mientras el Auditor estaba en otra pestaña.
-  useFocusEffect(
-    useCallback(() => {
-      cargar();
-    }, [cargar]),
-  );
+  // Los tabs quedan montados una vez visitados — sin esto, la matriz sigue
+  // mostrando datos viejos si el ciclo de conteos avanzó mientras el Auditor
+  // estaba en otra pestaña. Ahora también refresca al volver la app del
+  // segundo plano, que es el caso que faltaba: el Auditor deja el teléfono
+  // sobre el mostrador con la matriz abierta mientras se cierra la ronda.
+  // Ver components/hooks/useRefrescoAlEnfocar.ts.
+  //
+  // Sin `pausado`: esta pantalla no edita nada, solo filtra (y el filtro es
+  // estado local que `cargar` no toca).
+  const { refrescando, refrescar } = useRefrescoAlEnfocar(cargar);
 
   if (!sesion) return <View />;
 
@@ -211,6 +214,7 @@ export default function AuditoriaScreen(): JSX.Element {
           windowSize={7}
           removeClippedSubviews
           showsVerticalScrollIndicator={false}
+          refreshControl={<RefreshControl refreshing={refrescando} onRefresh={refrescar} tintColor={colors.rojo} colors={[colors.rojo]} />}
           ListHeaderComponent={
             <View style={styles.headerLista}>
               <View style={styles.tarjetaResumen}>
