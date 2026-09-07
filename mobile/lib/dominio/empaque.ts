@@ -15,24 +15,71 @@ export interface AdvertenciaConteo {
   mensaje: string;
 }
 
+/** Una línea del desglose: el empaque, cuántos, su factor y el subtotal en unidades. */
+export interface LineaDesglose {
+  /** El nombre TAL CUAL viene del sistema (Empaque.nombre) — no se pluraliza ni reformatea. */
+  nombre: string;
+  cantidad: number;
+  factor: number;
+  /** cantidad × factor. */
+  subtotal: number;
+}
+
+export interface DesgloseConteo {
+  /** Una por cada línea del conteo (incluye las de cantidad 0; filtrarlas es cosa de la UI). */
+  lineas: LineaDesglose[];
+  sueltas: number;
+  /** Sum(subtotales) + sueltas — EXACTAMENTE el número que se guarda. */
+  total: number;
+}
+
 /**
- * Suma cada linea (cantidad * factor del empaque que le corresponde) mas
- * las sueltas. Pura: no valida, no corrige, no redondea — PERO revienta
- * si una linea referencia un empaque que no esta en `empaquesDisponibles`:
- * es el corazon del inventario, y subcontar en silencio por una linea
- * huerfana es peor que un error ruidoso. `validarConteo` es la funcion
- * que detecta ese caso ANTES de llegar aca sin cortar la ejecucion.
+ * La conversión completa de un conteo: cada empaque × su factor = subtotal, más
+ * las sueltas, y el total. Es la ÚNICA cuenta -- `totalUnidades` sale de acá
+ * (`.total`), así que lo que la pantalla MUESTRA (el desglose) y lo que se
+ * GUARDA no pueden diferir: son el mismo cálculo. Revienta si una línea
+ * referencia un empaque que el producto no tiene (subcontar en silencio por
+ * una línea huérfana es peor que un error ruidoso; `validarConteo` lo detecta
+ * antes, sin cortar la ejecución).
  */
-export function totalUnidades(conteo: Conteo, empaquesDisponibles: Empaque[]): number {
+export function desgloseConteo(conteo: Conteo, empaquesDisponibles: Empaque[]): DesgloseConteo {
   const factorPorNombre = new Map(empaquesDisponibles.map((e) => [e.nombre, e.factor] as const));
-  const totalEmpaques = conteo.empaques.reduce((acumulado, linea) => {
+  const lineas: LineaDesglose[] = conteo.empaques.map((linea) => {
     const factor = factorPorNombre.get(linea.empaqueNombre);
     if (factor === undefined) {
       throw new Error(`El producto no tiene un empaque llamado "${linea.empaqueNombre}".`);
     }
-    return acumulado + linea.cantidad * factor;
-  }, 0);
-  return totalEmpaques + conteo.sueltas;
+    return { nombre: linea.empaqueNombre, cantidad: linea.cantidad, factor, subtotal: linea.cantidad * factor };
+  });
+  const totalEmpaques = lineas.reduce((acumulado, l) => acumulado + l.subtotal, 0);
+  return { lineas, sueltas: conteo.sueltas, total: totalEmpaques + conteo.sueltas };
+}
+
+/**
+ * Suma cada línea (cantidad × factor) más las sueltas. DELEGA en
+ * `desgloseConteo` -- no repite la cuenta -- para que el total que se guarda
+ * sea idéntico al que la pantalla muestra. Revienta ante una línea huérfana,
+ * igual que `desgloseConteo`.
+ */
+export function totalUnidades(conteo: Conteo, empaquesDisponibles: Empaque[]): number {
+  return desgloseConteo(conteo, empaquesDisponibles).total;
+}
+
+/**
+ * Las líneas del total, listas para mostrar en el modal: una por empaque con
+ * CANTIDAD > 0 ("2 Emp.45 × 45 = 90 und") y, si hay, las sueltas. El nombre del
+ * empaque va TAL CUAL vino del sistema -- no se pluraliza ("Emp.45", nunca
+ * "Emp.45s"). "suelta/sueltas" sí flexiona: es una palabra nuestra, no un valor
+ * del ERP. El TOTAL se muestra aparte (es `desglose.total`).
+ */
+export function lineasDeTotal(desglose: DesgloseConteo): string[] {
+  const lineas = desglose.lineas
+    .filter((l) => l.cantidad > 0)
+    .map((l) => `${l.cantidad} ${l.nombre} × ${l.factor} = ${l.subtotal} und`);
+  if (desglose.sueltas > 0) {
+    lineas.push(`${desglose.sueltas} ${desglose.sueltas === 1 ? 'suelta' : 'sueltas'}`);
+  }
+  return lineas;
 }
 
 /**

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { totalUnidades, validarConteo } from './empaque';
+import { desgloseConteo, lineasDeTotal, totalUnidades, validarConteo } from './empaque';
 import type { Conteo, Empaque, LineaEmpaque } from './tipos';
 
 function conteo(parciales: Partial<Conteo> = {}): Conteo {
@@ -133,5 +133,67 @@ describe('validarConteo', () => {
   it('una línea que referencia un empaque inexistente en el producto también advierte, no revienta', () => {
     const advertencias = validarConteo(conteo({ empaques: [linea('Fardo', 1)] }), [CAJA]);
     expect(advertencias.some((a) => a.tipo === 'valor-invalido')).toBe(true);
+  });
+});
+
+describe('desgloseConteo: la conversión que se MUESTRA es la que se GUARDA', () => {
+  it('un empaque: subtotal = cantidad × factor, total = subtotal + sueltas', () => {
+    const d = desgloseConteo(conteo({ empaques: [linea('Caja', 2)], sueltas: 3 }), [CAJA]);
+    expect(d.lineas).toEqual([{ nombre: 'Caja', cantidad: 2, factor: 12, subtotal: 24 }]);
+    expect(d.sueltas).toBe(3);
+    expect(d.total).toBe(27);
+  });
+
+  it('varios empaques: un subtotal por cada uno y el total suma todo + sueltas', () => {
+    const d = desgloseConteo(conteo({ empaques: [linea('Caja', 2), linea('Pack', 3)], sueltas: 5 }), [CAJA, PACK]);
+    expect(d.lineas.map((l) => l.subtotal)).toEqual([24, 18]);
+    expect(d.total).toBe(47);
+  });
+
+  it('el total del desglose es EXACTAMENTE totalUnidades — no se recalcula por otro lado', () => {
+    const casos: [Conteo, Empaque[]][] = [
+      [conteo({ empaques: [linea('Caja', 2)], sueltas: 0 }), [CAJA]],
+      [conteo({ empaques: [linea('Pack', 5)], sueltas: 2 }), [PACK]],
+      [conteo({ empaques: [linea('Caja', 2), linea('Pack', 3)], sueltas: 5 }), [CAJA, PACK]],
+      [conteo({ empaques: [], sueltas: 7 }), [CAJA]],
+    ];
+    for (const [c, emps] of casos) {
+      expect(desgloseConteo(c, emps).total).toBe(totalUnidades(c, emps));
+    }
+  });
+
+  it('revienta ante una línea huérfana, igual que totalUnidades', () => {
+    expect(() => desgloseConteo(conteo({ empaques: [linea('Fardo', 1)] }), [CAJA])).toThrow();
+  });
+});
+
+describe('lineasDeTotal: el texto de la conversión, con los nombres TAL CUAL del sistema', () => {
+  it('una línea por empaque ("2 Caja × 12 = 24 und") y las sueltas al final', () => {
+    const d = desgloseConteo(conteo({ empaques: [linea('Caja', 2)], sueltas: 3 }), [CAJA]);
+    expect(lineasDeTotal(d)).toEqual(['2 Caja × 12 = 24 und', '3 sueltas']);
+  });
+
+  it('NO pluraliza el nombre del empaque: "Emp.45" queda "Emp.45", nunca "Emp.45s"', () => {
+    const EMP: Empaque = { nombre: 'Emp.45', factor: 45 };
+    const d = desgloseConteo(conteo({ empaques: [linea('Emp.45', 2)], sueltas: 0 }), [EMP]);
+    expect(lineasDeTotal(d)).toEqual(['2 Emp.45 × 45 = 90 und']);
+  });
+
+  it('varios empaques: una línea por cada uno, en su orden', () => {
+    const d = desgloseConteo(conteo({ empaques: [linea('Caja', 2), linea('Pack', 3)], sueltas: 5 }), [CAJA, PACK]);
+    expect(lineasDeTotal(d)).toEqual(['2 Caja × 12 = 24 und', '3 Pack × 6 = 18 und', '5 sueltas']);
+  });
+
+  it('salta las líneas en 0 y omite las sueltas cuando son 0', () => {
+    const d = desgloseConteo(conteo({ empaques: [linea('Caja', 0), linea('Pack', 3)], sueltas: 0 }), [CAJA, PACK]);
+    expect(lineasDeTotal(d)).toEqual(['3 Pack × 6 = 18 und']);
+  });
+
+  it('nada cargado: sin líneas (el "TOTAL 0" lo pone la pantalla aparte)', () => {
+    expect(lineasDeTotal(desgloseConteo(conteo(), [CAJA]))).toEqual([]);
+  });
+
+  it('una sola suelta: "1 suelta" en singular (es palabra nuestra, no un valor del ERP)', () => {
+    expect(lineasDeTotal(desgloseConteo(conteo({ sueltas: 1 }), [CAJA]))).toEqual(['1 suelta']);
   });
 });

@@ -2,7 +2,7 @@ import { ScanLine, X } from 'lucide-react-native';
 import { useEffect, useState, type JSX } from 'react';
 import { Keyboard, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 
-import { totalUnidades, validarConteo } from '../../lib/dominio/empaque';
+import { desgloseConteo, lineasDeTotal, validarConteo } from '../../lib/dominio/empaque';
 import type { Conteo, LineaEmpaque, Producto } from '../../lib/dominio/tipos';
 import { colors, fonts, fontSize, radius, shadow, spacing } from '../../lib/theme';
 import { interpretarCantidad } from './cantidad-numerica';
@@ -25,11 +25,6 @@ export interface ModalConteoProps {
   onCerrar: () => void;
 }
 
-/** Pluraliza un nombre de empaque agregando "s" — alcanza para los cuatro que hoy existen (Caja/Pack/Plancha/Fardo, todos terminan en vocal). */
-function plural(nombre: string, cantidad: number): string {
-  return cantidad === 1 ? nombre : `${nombre}s`;
-}
-
 /**
  * Modal de registro de conteo — un campo numérico por cada empaque
  * cerrado que el producto puede traer (decisión del cliente: puede
@@ -48,10 +43,11 @@ function plural(nombre: string, cantidad: number): string {
  * única que decide si lo tipeado es un entero válido.
  *
  * Con UN solo empaque (el caso común) el campo del primero recibe foco
- * automático al abrir. Los chips de "+1"/"+5" siguen existiendo como
- * atajo opcional sobre el mismo estado — solo para el empaque más común
- * (`empaques[0]`), sin recalibrar sus valores (no hay datos reales de
- * un conteo aún para justificar otro número).
+ * automático al abrir. El total se muestra como conversión EXPLÍCITA (una
+ * línea por empaque: "2 Caja × 12 = 24 und", más las sueltas) con
+ * `lineasDeTotal`, y sale del MISMO `desgloseConteo` que produce el número
+ * que se guarda — no pueden diferir. Los nombres de empaque van tal cual los
+ * da el sistema, sin pluralizar.
  */
 export function ModalConteo({
   visible,
@@ -91,18 +87,6 @@ export function ModalConteo({
 
   if (!visible || !producto) return null;
 
-  const empaqueDefault = producto.empaques[0];
-
-  // Usada por los chips "+1"/"+5" y por "Borrar": pisan `textos` con el
-  // mismo valor que dejan en `cantidades` para que el campo no muestre un
-  // número viejo mientras el atajo ya cambió el total.
-  function cambiarCantidad(empaqueNombre: string, delta: number): void {
-    const nuevo = Math.max(0, (cantidades[empaqueNombre] ?? 0) + delta);
-    setCantidades((actual) => ({ ...actual, [empaqueNombre]: nuevo }));
-    setTextos((actual) => ({ ...actual, [empaqueNombre]: String(nuevo) }));
-    setErroresCantidad((actual) => ({ ...actual, [empaqueNombre]: null }));
-  }
-
   function cambiarTexto(empaqueNombre: string, texto: string): void {
     setTextos((actual) => ({ ...actual, [empaqueNombre]: texto }));
     const resultado = interpretarCantidad(texto);
@@ -114,13 +98,6 @@ export function ModalConteo({
       // valor válido mientras se muestra el aviso, nunca en NaN.
       setErroresCantidad((actual) => ({ ...actual, [empaqueNombre]: resultado.mensaje }));
     }
-  }
-
-  function cambiarSueltas(delta: number): void {
-    const nuevo = Math.max(0, sueltas + delta);
-    setSueltas(nuevo);
-    setTextoSueltas(String(nuevo));
-    setErrorSueltas(null);
   }
 
   function cambiarTextoSueltas(texto: string): void {
@@ -147,25 +124,15 @@ export function ModalConteo({
     confirmadoPorEscaner,
     contadoEn: conteoInicial?.contadoEn ?? '',
   };
-  const total = totalUnidades(conteoBorrador, producto.empaques);
+  // El total y su conversión salen del MISMO desgloseConteo: lo que se
+  // muestra ("2 Caja × 12 = 24 und" + total) es exactamente lo que se guarda.
+  const desglose = desgloseConteo(conteoBorrador, producto.empaques);
+  const total = desglose.total;
+  const lineasTotal = lineasDeTotal(desglose);
   const advertencias = validarConteo(conteoBorrador, producto.empaques);
-
-  const desglose = [
-    ...lineas.map((l) => `${l.cantidad} ${plural(l.empaqueNombre, l.cantidad)}`),
-    ...(sueltas > 0 || lineas.length === 0 ? [`${sueltas} Sueltas`] : []),
-  ].join(' + ');
 
   function guardar(): void {
     onGuardar({ ...conteoBorrador, contadoEn: new Date().toISOString() });
-  }
-
-  function borrarTodo(): void {
-    setCantidades({});
-    setTextos({});
-    setErroresCantidad({});
-    setSueltas(0);
-    setTextoSueltas('0');
-    setErrorSueltas(null);
   }
 
   return (
@@ -190,17 +157,6 @@ export function ModalConteo({
             </View>
 
             <View style={styles.productoBloque}>
-              {producto.empaques.length > 0 ? (
-                <View style={styles.empaqueBadges}>
-                  {producto.empaques.map((e) => (
-                    <View key={e.nombre} style={styles.empaqueBadge}>
-                      <Text style={styles.empaqueBadgeTexto}>
-                        {e.nombre.toUpperCase()} ×{e.factor}
-                      </Text>
-                    </View>
-                  ))}
-                </View>
-              ) : null}
               <Text style={styles.nombreProducto}>{producto.descripcion}</Text>
               <Text style={styles.meta}>
                 Código {producto.codigoBarras}
@@ -229,12 +185,7 @@ export function ModalConteo({
 
             {producto.empaques.map((empaque, indice) => (
               <View key={empaque.nombre} style={styles.campo}>
-                <View style={styles.campoEtiquetaFila}>
-                  <Text style={styles.campoEtiqueta}>{empaque.nombre}</Text>
-                  <Text style={styles.factor}>
-                    Factor: {empaque.factor} und/{empaque.nombre.toLowerCase()}
-                  </Text>
-                </View>
+                <Text style={styles.campoEtiqueta}>{empaque.nombre}</Text>
                 <TextInput
                   style={[styles.input, erroresCantidad[empaque.nombre] ? styles.inputError : null]}
                   keyboardType="number-pad"
@@ -268,25 +219,6 @@ export function ModalConteo({
               {errorSueltas ? <Text style={styles.inputErrorTexto}>{errorSueltas}</Text> : null}
             </View>
 
-            <View style={styles.atajos}>
-              {empaqueDefault ? (
-                <>
-                  <Pressable style={styles.atajoChip} onPress={() => cambiarCantidad(empaqueDefault.nombre, 1)}>
-                    <Text style={styles.atajoChipTexto}>+1 {empaqueDefault.nombre}</Text>
-                  </Pressable>
-                  <Pressable style={styles.atajoChip} onPress={() => cambiarCantidad(empaqueDefault.nombre, 5)}>
-                    <Text style={styles.atajoChipTexto}>+5 {plural(empaqueDefault.nombre, 5)}</Text>
-                  </Pressable>
-                </>
-              ) : null}
-              <Pressable style={styles.atajoChip} onPress={() => cambiarSueltas(5)}>
-                <Text style={styles.atajoChipTexto}>+5 Und</Text>
-              </Pressable>
-              <Pressable style={[styles.atajoChip, styles.atajoChipBorrar]} onPress={borrarTodo}>
-                <Text style={styles.atajoChipBorrarTexto}>Borrar</Text>
-              </Pressable>
-            </View>
-
             {advertencias.length > 0 ? (
               <View style={styles.advertencias}>
                 {advertencias.map((a, i) => (
@@ -297,10 +229,16 @@ export function ModalConteo({
               </View>
             ) : null}
 
+            {/* La conversión a la vista y en vivo: una línea por empaque
+                ("2 Caja × 12 = 24 und") + las sueltas, y el TOTAL abajo. Todo
+                sale de `desgloseConteo`, la MISMA cuenta que se guarda. */}
             <View style={styles.totalVivo}>
-              <Text style={styles.totalEtiqueta}>Total contado</Text>
-              <Text style={styles.totalValor}>{total} und</Text>
-              <Text style={styles.totalDesglose}>{desglose}</Text>
+              {lineasTotal.map((linea, i) => (
+                <Text key={`total-${i}`} style={styles.totalLinea}>
+                  {linea}
+                </Text>
+              ))}
+              <Text style={styles.totalValor}>TOTAL {total} und</Text>
             </View>
 
             <Pressable style={styles.guardar} onPress={guardar}>
@@ -329,15 +267,6 @@ const styles = StyleSheet.create({
   titulo: { fontSize: 15, color: colors.tinta, fontFamily: fonts.bold },
   cerrar: { width: 30, height: 30, alignItems: 'center', justifyContent: 'center', borderRadius: radius.sm },
   productoBloque: { gap: 2, marginBottom: 14 },
-  empaqueBadges: { flexDirection: 'row', flexWrap: 'wrap', gap: 5 },
-  empaqueBadge: {
-    alignSelf: 'flex-start',
-    paddingHorizontal: 9,
-    paddingVertical: 4,
-    borderRadius: 99,
-    backgroundColor: colors.esperaSuave,
-  },
-  empaqueBadgeTexto: { fontSize: 10.5, letterSpacing: 0.5, color: colors.gris, fontFamily: fonts.bold },
   nombreProducto: { marginTop: 4, fontSize: 14, color: colors.tinta, fontFamily: fonts.bold },
   meta: { marginTop: 2, fontSize: fontSize.xs, color: colors.gris, fontFamily: fonts.regular },
   confirmadoBanda: {
@@ -351,9 +280,7 @@ const styles = StyleSheet.create({
   },
   confirmadoTexto: { flex: 1, fontSize: 12, lineHeight: 16.5, color: colors.ok, fontFamily: fonts.medium },
   campo: { marginBottom: 12, gap: 6 },
-  campoEtiquetaFila: { flexDirection: 'row', alignItems: 'baseline', justifyContent: 'space-between', gap: 8 },
   campoEtiqueta: { fontSize: 13, color: colors.tinta, fontFamily: fonts.semibold },
-  factor: { fontSize: fontSize.xs, color: colors.gris, fontFamily: fonts.regular },
   input: {
     height: 44,
     paddingHorizontal: 12,
@@ -368,11 +295,6 @@ const styles = StyleSheet.create({
   },
   inputError: { borderColor: colors.falta },
   inputErrorTexto: { marginTop: 4, fontSize: 11.5, color: colors.falta, fontFamily: fonts.medium },
-  atajos: { flexDirection: 'row', flexWrap: 'wrap', gap: 7, marginBottom: 12 },
-  atajoChip: { paddingVertical: 7, paddingHorizontal: 11, borderRadius: 99, backgroundColor: colors.rojoSuave },
-  atajoChipTexto: { fontSize: 12, color: colors.rojo, fontFamily: fonts.bold },
-  atajoChipBorrar: { backgroundColor: colors.esperaSuave },
-  atajoChipBorrarTexto: { fontSize: 12, color: colors.espera, fontFamily: fonts.bold },
   advertencias: { marginBottom: 12, gap: 4 },
   advertenciaTexto: { fontSize: 11.5, color: colors.proceso, fontFamily: fonts.medium },
   totalVivo: {
@@ -383,9 +305,8 @@ const styles = StyleSheet.create({
     borderRadius: radius.md,
     backgroundColor: colors.okSuave,
   },
-  totalEtiqueta: { fontSize: 10.5, letterSpacing: 0.5, textTransform: 'uppercase', color: colors.ok, fontFamily: fonts.semibold },
-  totalValor: { fontSize: 22, color: colors.ok, fontFamily: fonts.bold },
-  totalDesglose: { fontSize: 11.5, color: colors.ok, fontFamily: fonts.regular },
+  totalLinea: { fontSize: 12.5, color: colors.ok, fontFamily: fonts.regular },
+  totalValor: { fontSize: 22, color: colors.ok, fontFamily: fonts.bold, marginTop: 2 },
   guardar: {
     minHeight: 48,
     alignItems: 'center',
