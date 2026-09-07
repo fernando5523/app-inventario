@@ -26,10 +26,6 @@ export interface TarjetaProductoProps {
 export function TarjetaProducto({ producto, conteo, confirmado, bloqueado, onPress }: TarjetaProductoProps): JSX.Element {
   const contado = conteo !== null;
   const total = conteo ? totalUnidades(conteo, producto.empaques) : 0;
-  // Badge del empaque por defecto (el [0], el más común) — la tarjeta es
-  // compacta a propósito, el detalle de TODOS los empaques cargados va
-  // en la línea de abajo, no acá arriba.
-  const empaqueDefault = producto.empaques[0];
   const detalleEmpaques = conteo?.empaques.map((l) => `${l.cantidad} ${l.empaqueNombre}`).join(' + ') ?? '';
 
   return (
@@ -41,12 +37,9 @@ export function TarjetaProducto({ producto, conteo, confirmado, bloqueado, onPre
       style={({ pressed }) => [styles.raiz, contado && styles.contado, bloqueado && styles.bloqueado, pressed && !bloqueado && styles.presionada]}
     >
       <View style={styles.cabecera}>
-        {empaqueDefault ? (
-          <View style={styles.empaqueBadge}>
-            <Text style={styles.empaqueBadgeTexto}>
-              {empaqueDefault.nombre.toUpperCase()} ×{empaqueDefault.factor}
-              {producto.empaques.length > 1 ? ` +${producto.empaques.length - 1}` : ''}
-            </Text>
+        {producto.categoria ? (
+          <View style={styles.categoriaBadge}>
+            <Text style={styles.categoriaBadgeTexto}>{producto.categoria}</Text>
           </View>
         ) : null}
         <Text style={styles.numero}>#{producto.codigo}</Text>
@@ -95,8 +88,8 @@ const styles = StyleSheet.create({
   bloqueado: { opacity: 0.72 },
   presionada: { backgroundColor: colors.rojoSuave },
   cabecera: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 },
-  empaqueBadge: { paddingHorizontal: 8, paddingVertical: 4, borderRadius: 99, backgroundColor: colors.esperaSuave },
-  empaqueBadgeTexto: { fontSize: 10, letterSpacing: 0.4, color: colors.gris, fontFamily: fonts.bold },
+  categoriaBadge: { paddingHorizontal: 8, paddingVertical: 4, borderRadius: 99, backgroundColor: colors.esperaSuave },
+  categoriaBadgeTexto: { fontSize: 10, letterSpacing: 0.4, color: colors.gris, fontFamily: fonts.bold },
   numero: { fontSize: 11, color: colors.grisClaro, fontFamily: fonts.semibold },
   nombre: { fontSize: 13.5, color: colors.tinta, fontFamily: fonts.bold },
   codigoFila: { flexDirection: 'row', alignItems: 'center', gap: 8 },

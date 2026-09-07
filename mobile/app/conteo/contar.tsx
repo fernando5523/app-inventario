@@ -7,33 +7,26 @@ import {
   AvanceFila,
   BandaSync,
   BarraApp,
+  ChipsFiltro,
   EmptyState,
   ModalConteo,
   ModalEscaner,
   TarjetaProducto,
   sincronizacionDeHojas,
+  type OpcionChip,
   type RechazoEscaneo,
 } from '../../components/ui';
 import { PantallaConTabs } from '../../components/navegacion/PantallaConTabs';
 import { inventarioIdSinRed, rondaActivaSinRed } from '../../lib/adaptadores/hojas-sqlite';
 import { repositorioHojas, repositorioInventario, sincronizador } from '../../lib/contenedor';
 import { resolverCodigoEnHoja, type CoincidenciaEscaneo } from '../../lib/dominio/escaneo';
+import { categoriasDeHoja, ID_TODAS, productosVisibles, textoFiltroActivo } from '../../lib/dominio/filtro-productos';
 import { avance, puedeEditar, puedeFinalizar } from '../../lib/dominio/hoja';
 import { ORDINAL } from '../../lib/dominio/texto-cierre-ronda';
 import type { Conteo, HojaConteo, Producto } from '../../lib/dominio/tipos';
 import type { EstadoCola } from '../../lib/puertos/repositorios';
 import { useSesion } from '../../lib/sesion-contexto';
 import { colors, fonts, fontSize, radius } from '../../lib/theme';
-
-function coincide(p: Producto, q: string): boolean {
-  if (!q) return true;
-  const query = q.toLowerCase();
-  return (
-    p.descripcion.toLowerCase().includes(query) ||
-    p.codigoBarras.toLowerCase().includes(query) ||
-    p.codigo.toLowerCase().includes(query)
-  );
-}
 
 /**
  * Conteo ciego — la pantalla más importante del producto. Regla número
@@ -54,6 +47,7 @@ export default function ContarScreen(): JSX.Element {
   const [numeroActivo, setNumeroActivo] = useState<string | null>(params.numero ?? null);
   const [hoja, setHoja] = useState<HojaConteo | null>(null);
   const [busqueda, setBusqueda] = useState('');
+  const [categoriaActiva, setCategoriaActiva] = useState(ID_TODAS);
 
   // Confirmado por escáner ANTES de guardar el conteo — el escaneo puede
   // pasar antes de que exista un Conteo para ese producto (regla c).
@@ -202,7 +196,13 @@ export default function ContarScreen(): JSX.Element {
 
   const bloqueado = !puedeEditar(hoja);
   const { contados, total, porcentaje } = avance(hoja);
-  const visibles = hoja.productos.filter((p) => coincide(p, busqueda));
+  const visibles = productosVisibles(hoja.productos, busqueda, categoriaActiva);
+  const categorias = categoriasDeHoja(hoja.productos);
+  const filtroTexto = textoFiltroActivo(busqueda, categoriaActiva);
+  const opcionesCategoria: OpcionChip[] = [
+    { id: ID_TODAS, etiqueta: 'Todas' },
+    ...categorias.map((c) => ({ id: c, etiqueta: c })),
+  ];
 
   function conteoDe(producto: Producto): Conteo | null {
     return hoja!.conteos.find((c) => c.productoId === producto.id) ?? null;
@@ -371,6 +371,10 @@ export default function ContarScreen(): JSX.Element {
         </Pressable>
       </View>
 
+      {categorias.length > 1 ? (
+        <ChipsFiltro opciones={opcionesCategoria} activo={categoriaActiva} onCambiar={setCategoriaActiva} />
+      ) : null}
+
       {ultimoEscaneo ? (
         <View style={styles.notaEscaneo}>
           <Text style={styles.notaEscaneoTexto}>
@@ -385,23 +389,31 @@ export default function ContarScreen(): JSX.Element {
         </View>
       ) : null}
 
-      <View style={styles.lista}>
-        {visibles.map((producto) => (
-          <TarjetaProducto
-            key={producto.id}
-            producto={producto}
-            conteo={conteoDe(producto)}
-            confirmado={confirmadoDe(producto)}
-            bloqueado={bloqueado}
-            onPress={() => abrirModalProducto(producto)}
-          />
-        ))}
-      </View>
+      {visibles.length > 0 ? (
+        <View style={styles.lista}>
+          {visibles.map((producto) => (
+            <TarjetaProducto
+              key={producto.id}
+              producto={producto}
+              conteo={conteoDe(producto)}
+              confirmado={confirmadoDe(producto)}
+              bloqueado={bloqueado}
+              onPress={() => abrirModalProducto(producto)}
+            />
+          ))}
+        </View>
+      ) : (
+        <EmptyState
+          icon={Search}
+          title="Ningún producto coincide"
+          subtitle="Prueba con otro nombre, código o categoría distinta."
+        />
+      )}
 
       <View style={styles.pieLista}>
         <Text style={styles.pieTexto}>
-          {busqueda
-            ? `Mostrando ${visibles.length} de ${hoja.productos.length} ítems · filtro: "${busqueda}"`
+          {filtroTexto
+            ? `Mostrando ${visibles.length} de ${hoja.productos.length} ítems · filtro: ${filtroTexto}`
             : `Mostrando los ${hoja.productos.length} ítems de esta hoja · desplázate para ver más`}
         </Text>
       </View>
