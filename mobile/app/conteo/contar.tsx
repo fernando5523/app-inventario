@@ -162,13 +162,24 @@ export default function ContarScreen(): JSX.Element {
   // de pantalla -- ahí nunca se dispara un focus nuevo. Volver a primer
   // plano es la otra señal de "puede haber cambiado algo del lado del
   // servidor, valdría la pena volver a mirar".
+  //
+  // PAUSADO con cualquier modal de conteo abierto (mismo criterio que
+  // `components/hooks/useRefrescoAlEnfocar.ts`): si la app vuelve a
+  // primer plano justo cuando alguien tiene `ModalConteo` abierto a medio
+  // tipear una cantidad, un refresco de fondo cambia la referencia de
+  // `hoja` y el `useEffect` del modal (que resiembra su estado cuando
+  // cambia `conteoInicial`) le pisaría el número que la persona todavía
+  // no guardó. `cargar()` nunca borra el conteo YA guardado -- esto es
+  // solo para no interrumpir uno que se está por guardar.
   useEffect(() => {
     function alCambiarAppState(siguiente: AppStateStatus): void {
-      if (siguiente === 'active') cargar();
+      if (siguiente !== 'active') return;
+      if (modalProducto || modalScanVisible || modalFinalizarVisible) return;
+      cargar();
     }
     const suscripcion = AppState.addEventListener('change', alCambiarAppState);
     return () => suscripcion.remove();
-  }, [cargar]);
+  }, [cargar, modalProducto, modalScanVisible, modalFinalizarVisible]);
 
   if (!sesion) return <View />;
 
