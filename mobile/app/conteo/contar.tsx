@@ -16,7 +16,7 @@ import {
   type RechazoEscaneo,
 } from '../../components/ui';
 import { PantallaConTabs } from '../../components/navegacion/PantallaConTabs';
-import { inventarioIdSinRed, rondaActivaSinRed } from '../../lib/adaptadores/hojas-sqlite';
+import { inventarioIdSinRed, razonRechazoDeHoja, rondaActivaSinRed } from '../../lib/adaptadores/hojas-sqlite';
 import { repositorioHojas, repositorioInventario, sincronizador } from '../../lib/contenedor';
 import { resolverCodigoEnHoja, type CoincidenciaEscaneo } from '../../lib/dominio/escaneo';
 import { aplicarFiltro, contarFiltrosActivos, FILTRO_VACIO, textoFiltroActivo, type FiltroProductos } from '../../lib/dominio/filtro-productos';
@@ -89,6 +89,30 @@ export default function ContarScreen(): JSX.Element {
   // termina una pasada, sin que esta pantalla tenga que pedirlo.
   const [estadoCola, setEstadoCola] = useState<EstadoCola>(sincronizador.estado());
   useEffect(() => sincronizador.suscribir(setEstadoCola), []);
+
+  /**
+   * La razón del rechazo, ACOTADA a esta hoja — `estadoCola.error` es
+   * GLOBAL (cuenta toda la cola, ver hojas-sqlite.ts#estadoDeLaCola) y no
+   * sirve para esta pantalla: un item podrido de OTRA hoja (ej. una que
+   * ya no existe, borrada del servidor) pintaría de rojo la banda de
+   * ESTA hoja aunque esté sana y sincronizada. Se vuelve a pedir cuando
+   * cambia `estadoCola` (una pasada de sincronización recién terminó) o
+   * cuando cambia la hoja misma.
+   */
+  const [razonRechazoHoja, setRazonRechazoHoja] = useState<string | null>(null);
+  useEffect(() => {
+    if (!hoja || hoja.sync !== 'error') {
+      setRazonRechazoHoja(null);
+      return;
+    }
+    let vigente = true;
+    razonRechazoDeHoja(hoja.id).then((razon) => {
+      if (vigente) setRazonRechazoHoja(razon);
+    });
+    return () => {
+      vigente = false;
+    };
+  }, [hoja, estadoCola]);
 
   // Carga inicial: si no vino un número de hoja por parámetro (se entró
   // por el tab "Contar", no desde Mis hojas), se busca la hoja en proceso
@@ -328,7 +352,15 @@ export default function ContarScreen(): JSX.Element {
       ? `${faltantes} ${faltantes === 1 ? 'producto se va' : 'productos se van'} a registrar en 0. ¿Finalizar?`
       : `Los ${total} ítems de esta hoja están contados.`;
 
-  const sync = sincronizacionDeHojas([hoja], estadoCola);
+  // `error` se arma con la razón ACOTADA a esta hoja (`razonRechazoHoja`),
+  // nunca con `estadoCola.error` (global) directo — el resto de `estadoCola`
+  // (pendientes/sinRed/últimaSync) sí es correcto compartirlo: "sin señal"
+  // es un hecho del equipo entero, no de una hoja en particular.
+  const colaDeEstaHoja: EstadoCola = {
+    ...estadoCola,
+    error: hoja.sync === 'error' ? (razonRechazoHoja ?? 'No se pudo sincronizar — revisa la conexión o pide ayuda.') : null,
+  };
+  const sync = sincronizacionDeHojas([hoja], colaDeEstaHoja);
 
   return (
     // Los tres overlays (ModalConteo, ModalEscaner, confirmación de

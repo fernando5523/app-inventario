@@ -63,8 +63,18 @@ export const enviarPorRed: EnviarItemCola = async (item, hoja) => {
     // banda de sincronización diga POR QUÉ ("La hoja ya está finalizada:
     // no se puede corregir el conteo.") en vez de "revisá la conexión",
     // que para un 409 es activamente engañoso -- el problema no es de red.
+    //
+    // `clase` viaja para que `aplicarResultadoEnvio` (sqlite-cola.ts)
+    // pueda distinguir un 404 "no-encontrado" (la hoja o el producto ya
+    // no existen en el servidor -- IRRECUPERABLE, se descarta) de un
+    // rechazo real que sí conviene mostrar (ej. hoja finalizada).
     if (esFallaDeRed(error)) return { ok: false, motivo: 'sin-red' };
-    return { ok: false, motivo: 'rechazado', mensaje: esErrorApi(error) ? error.message : null };
+    return {
+      ok: false,
+      motivo: 'rechazado',
+      mensaje: esErrorApi(error) ? error.message : null,
+      clase: esErrorApi(error) ? error.clase : undefined,
+    };
   }
 };
 

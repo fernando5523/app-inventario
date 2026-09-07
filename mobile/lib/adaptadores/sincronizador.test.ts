@@ -157,21 +157,38 @@ describe('enviarPorRed: traduce hojasApi (resuelve o tira ErrorApi) a ResultadoE
     await expect(enviarPorRed(itemConteo, HOJA)).resolves.toEqual({ ok: false, motivo: 'sin-red' });
   });
 
-  it('ErrorApi "conflicto" (409 real: la hoja ya la finalizó otro) -> motivo "rechazado", NO "sin-red", con el mensaje del servidor', async () => {
+  it('ErrorApi "conflicto" (409 real: la hoja ya la finalizó otro) -> motivo "rechazado", NO "sin-red", con el mensaje del servidor y la clase', async () => {
     hojasApiMock.hojasApi.guardarConteo.mockRejectedValueOnce(new ErrorApi('conflicto', { estado: 409, mensaje: 'La hoja ya está finalizada: no se puede corregir el conteo.' }));
     await expect(enviarPorRed(itemConteo, HOJA)).resolves.toEqual({
       ok: false,
       motivo: 'rechazado',
       mensaje: 'La hoja ya está finalizada: no se puede corregir el conteo.',
+      // `clase` viaja siempre en un rechazo real: es lo que le permite a
+      // aplicarResultadoEnvio (sqlite-cola.ts) descartar un 404
+      // "no-encontrado" en vez de dejarlo en error para siempre. Un
+      // "conflicto" (409) NUNCA se descarta -- es un rechazo real y
+      // legítimo que alguien tiene que ver.
+      clase: 'conflicto',
     });
   });
 
-  it('ErrorApi "sesion-vencida" (401) -> motivo "rechazado": no se va a arreglar solo insistiendo, con su propio mensaje', async () => {
+  it('ErrorApi "sesion-vencida" (401) -> motivo "rechazado": no se va a arreglar solo insistiendo, con su propio mensaje y clase', async () => {
     hojasApiMock.hojasApi.guardarConteo.mockRejectedValueOnce(new ErrorApi('sesion-vencida'));
     await expect(enviarPorRed(itemConteo, HOJA)).resolves.toEqual({
       ok: false,
       motivo: 'rechazado',
       mensaje: 'Tu sesión venció. Ingresa de nuevo con tu PIN.',
+      clase: 'sesion-vencida',
+    });
+  });
+
+  it('ErrorApi "no-encontrado" (404: la hoja se borró del servidor) -> motivo "rechazado" con clase "no-encontrado", para que se descarte de la cola', async () => {
+    hojasApiMock.hojasApi.guardarConteo.mockRejectedValueOnce(new ErrorApi('no-encontrado', { estado: 404, mensaje: 'Esa hoja no existe.' }));
+    await expect(enviarPorRed(itemConteo, HOJA)).resolves.toEqual({
+      ok: false,
+      motivo: 'rechazado',
+      mensaje: 'Esa hoja no existe.',
+      clase: 'no-encontrado',
     });
   });
 

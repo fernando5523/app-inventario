@@ -130,4 +130,36 @@ describe('aplicarResultadoEnvio', () => {
     const resultado = aplicarResultadoEnvio(item(), { ok: false, motivo: 'sin-red' });
     expect(resultado?.razon).toBeNull();
   });
+
+  describe('clase "no-encontrado" (la hoja o el producto ya no existen en el servidor)', () => {
+    it('se descarta como si se hubiera sincronizado -- irrecuperable, reintentar no lo arregla nunca', () => {
+      // Hallazgo (2026-09-07): limpiar-datos-dev.ts borró un inventario que
+      // ya tenía un conteo encolado sin sincronizar. Ese item quedaba en
+      // error PARA SIEMPRE -- la hoja nunca iba a volver a existir.
+      const resultado = aplicarResultadoEnvio(item(), {
+        ok: false,
+        motivo: 'rechazado',
+        mensaje: 'Esa hoja no existe.',
+        clase: 'no-encontrado',
+      });
+      expect(resultado).toBeNull();
+    });
+
+    it('un 409 "hoja finalizada" (clase distinta) NO se descarta -- es un rechazo real y legítimo, se muestra', () => {
+      const resultado = aplicarResultadoEnvio(item(), {
+        ok: false,
+        motivo: 'rechazado',
+        mensaje: 'La hoja ya está finalizada: no se puede corregir el conteo.',
+        clase: 'conflicto',
+      });
+      expect(resultado).not.toBeNull();
+      expect(resultado?.estado).toBe('error');
+      expect(resultado?.razon).toBe('La hoja ya está finalizada: no se puede corregir el conteo.');
+    });
+
+    it('un rechazo sin clase (mensaje.clase ausente, ej. el chequeo local de "conteo ya no existe") sigue yendo a error, no se descarta', () => {
+      const resultado = aplicarResultadoEnvio(item(), { ok: false, motivo: 'rechazado' });
+      expect(resultado?.estado).toBe('error');
+    });
+  });
 });

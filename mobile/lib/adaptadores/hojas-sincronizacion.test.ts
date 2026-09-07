@@ -72,7 +72,7 @@ vi.mock('./sesion-api', () => ({
 
 import { avance } from '../dominio/hoja';
 import type { Conteo } from '../dominio/tipos';
-import { esErrorApi, esFallaDeRed, recordarToken } from './_http';
+import { esErrorApi, esFallaDeRed, recordarToken, type ClaseErrorApi } from './_http';
 import { hojasApi } from './hojas-api';
 import { migrarSqlite } from './sqlite-esquema';
 
@@ -224,6 +224,22 @@ describe('hojasApi.guardarConteo contra un servidor HTTP real (nunca un mock de 
     expect(stub.peticiones).toHaveLength(1); // un solo intento.
   });
 
+  it('la hoja ya no existe (404 real del backend, ej. la borró limpiar-datos-dev.ts): ErrorApi clase "no-encontrado"', async () => {
+    // Mismo shape que hojas.service.ts#guardarConteo tira cuando
+    // `prisma.hojaConteo.findUnique` no encuentra nada -- ver el hallazgo
+    // de 2026-09-07: un item que quedó encolado para una hoja que después
+    // se borró del servidor recibe justo esto.
+    stub.setResponder(() => ({ status: 404, cuerpo: { error: 'Esa hoja no existe.' } }));
+
+    const error = await hojasApi.guardarConteo(7, CONTEO_DE_PRUEBA).catch((e: unknown) => e);
+
+    expect(esErrorApi(error)).toBe(true);
+    const errorApi = error as { clase: string; estado: number | null; message: string };
+    expect(errorApi.clase).toBe('no-encontrado');
+    expect(errorApi.estado).toBe(404);
+    expect(errorApi.message).toBe('Esa hoja no existe.');
+  });
+
   it('un 500 (reintentable EN TEORÍA) no se reintenta solo: PUT es escritura, de eso se ocupa la cola, no _http.ts', async () => {
     stub.setResponder(() => ({ status: 500, cuerpo: { error: 'boom' } }));
 
@@ -326,7 +342,10 @@ async function hoja002(): Promise<{ inventarioId: number; hojaId: number }> {
  * grande de arriba) -- esto prueba que la pieza, el día que se escriba,
  * tiene con qué funcionar.
  */
-async function enviarViaApiReal(item: { tipo: string; hojaId: number; productoId: number }, hoja: { conteos: Conteo[] }): Promise<{ ok: true } | { ok: false; motivo: 'sin-red' | 'rechazado' }> {
+async function enviarViaApiReal(
+  item: { tipo: string; hojaId: number; productoId: number },
+  hoja: { conteos: Conteo[] },
+): Promise<{ ok: true } | { ok: false; motivo: 'sin-red' | 'rechazado'; mensaje?: string | null; clase?: ClaseErrorApi }> {
   try {
     if (item.tipo === 'conteo') {
       const conteo = hoja.conteos.find((c) => c.productoId === item.productoId);
@@ -337,7 +356,11 @@ async function enviarViaApiReal(item: { tipo: string; hojaId: number; productoId
     }
     return { ok: true };
   } catch (error) {
-    return { ok: false, motivo: esFallaDeRed(error) ? 'sin-red' : 'rechazado' };
+    if (esFallaDeRed(error)) return { ok: false, motivo: 'sin-red' };
+    // `clase` viaja igual que en sincronizador.ts#enviarPorRed (el real):
+    // es lo que le permite a `aplicarResultadoEnvio` descartar un 404
+    // "no-encontrado" en vez de dejarlo en error para siempre.
+    return { ok: false, motivo: 'rechazado', mensaje: esErrorApi(error) ? error.message : null, clase: esErrorApi(error) ? error.clase : undefined };
   }
 }
 

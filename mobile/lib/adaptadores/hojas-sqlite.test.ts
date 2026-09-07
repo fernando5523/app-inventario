@@ -155,7 +155,8 @@ vi.mock('./catalogo-api', () => ({
 // Import DESPUÉS del vi.mock (vitest lo hoistea igual, pero así queda
 // explícito el orden real: hojas-sqlite.ts se carga con `_sqlite.ts` ya
 // reemplazado, nunca llega a tocar `expo-sqlite`).
-const { hojasSqlite, inventarioIdSinRed, rondaActivaSinRed, procesarColaDeSincronizacion, ultimaDescarga } = await import('./hojas-sqlite');
+const { hojasSqlite, inventarioIdSinRed, rondaActivaSinRed, procesarColaDeSincronizacion, ultimaDescarga, estadoDeLaCola, razonRechazoDeHoja } =
+  await import('./hojas-sqlite');
 const { obtenerInventarioDeSucursal } = await import('./_compartido');
 const { ErrorApi } = await import('./_http');
 const { hojasApi } = await import('./hojas-api');
@@ -422,6 +423,135 @@ describe('la hoja YA finalizada por otro colaborador no deja el conteo local en 
     const db = await obtenerDbDeTest();
     const conteo = await db.getFirstAsync('SELECT * FROM conteos WHERE hoja_id = ? AND producto_id = ?', [hojaId, otroProducto]);
     expect(conteo).not.toBeNull();
+  });
+});
+
+/**
+ * HALLAZGO (2026-09-07): `limpiar-datos-dev.ts` borró un inventario que
+ * ya tenía un conteo encolado sin sincronizar. Ese item quedaba en
+ * `error` para siempre (la hoja nunca iba a volver a existir), y como
+ * `estadoDeLaCola()` cuenta TODA la cola (nunca una hoja sola), ese
+ * único item podrido pintaba de rojo la banda de sincronización de
+ * CUALQUIER OTRA hoja, sana y ya sincronizada, con un mensaje ajeno
+ * ("Esa hoja no existe.") que no tenía nada que ver con lo que se veía
+ * en pantalla. Dos hojas de prueba, armadas a mano (no las del dataset
+ * de ejemplo, que solo tiene productos en la #002): una "sana" y una
+ * "borrada" del servidor.
+ */
+describe('un rechazo por "no existe" (404) se descarta -- y no contamina la hoja sana de al lado', () => {
+  const HOJA_SANA = 88001;
+  const PRODUCTO_SANA = 88011;
+  const HOJA_BORRADA = 88002;
+  const PRODUCTO_BORRADA = 88021;
+  const HOJA_RECHAZO_REAL = 88003;
+  const PRODUCTO_RECHAZO_REAL = 88031;
+
+  async function sembrarHojaDePrueba(db: DbDeTest, hojaId: number, productoId: number, codigo: string): Promise<void> {
+    await db.runAsync(
+      `INSERT INTO hojas_estructura (id, inventario_id, numero, zona, gondola, tamano, asignados, numero_conteo, sucursal_id, asignado_a_id, asignado_a2_id)
+       VALUES (?, 8800, '900', 'Zona de prueba', 'Z1', 10, ?, 1, NULL, NULL, NULL)`,
+      [hojaId, JSON.stringify(['Prueba'])],
+    );
+    await db.runAsync(
+      `INSERT INTO productos_estructura (hoja_id, id, orden, codigo, codigo_barras, descripcion, empaques, ubicacion, categoria)
+       VALUES (?, ?, 1, ?, ?, ?, ?, NULL, NULL)`,
+      [hojaId, productoId, codigo, `77${codigo}`, `Producto ${codigo}`, JSON.stringify([{ nombre: 'U', factor: 1 }])],
+    );
+  }
+
+  it('la hoja borrada del servidor: el item desaparece de la cola; la hoja sana de al lado sincroniza normal y no muestra error', async () => {
+    const db = await obtenerDbDeTest();
+    await sembrarHojaDePrueba(db, HOJA_SANA, PRODUCTO_SANA, '900');
+    await sembrarHojaDePrueba(db, HOJA_BORRADA, PRODUCTO_BORRADA, '901');
+
+    await hojasSqlite.guardarConteo(HOJA_SANA, {
+      productoId: PRODUCTO_SANA,
+      empaques: [{ empaqueNombre: 'U', cantidad: 5 }],
+      sueltas: 0,
+      confirmadoPorEscaner: false,
+      contadoEn: 't-hoja-sana',
+    });
+    await hojasSqlite.guardarConteo(HOJA_BORRADA, {
+      productoId: PRODUCTO_BORRADA,
+      empaques: [{ empaqueNombre: 'U', cantidad: 3 }],
+      sueltas: 0,
+      confirmadoPorEscaner: false,
+      contadoEn: 't-hoja-borrada',
+    });
+
+    // Sincroniza: la hoja sana va bien, la borrada responde 404 "no
+    // existe" -- exactamente lo que devuelve el backend cuando el item ya
+    // estaba encolado antes de que un limpiar-datos-dev.ts la borrara.
+    await procesarColaDeSincronizacion(async (item) => {
+      if (item.hojaId === HOJA_BORRADA) {
+        return { ok: false, motivo: 'rechazado', mensaje: 'Esa hoja no existe.', clase: 'no-encontrado' };
+      }
+      return { ok: true };
+    });
+
+    // El item podrido NO queda en error para siempre -- se descarta.
+    const itemBorrada = await db.getFirstAsync('SELECT * FROM cola_sync WHERE hoja_id = ? AND producto_id = ?', [
+      HOJA_BORRADA,
+      PRODUCTO_BORRADA,
+    ]);
+    expect(itemBorrada).toBeNull();
+
+    // La hoja sana sincronizó normal -- y, sobre todo, no quedó
+    // contaminada por el rechazo ajeno.
+    const itemSana = await db.getFirstAsync('SELECT * FROM cola_sync WHERE hoja_id = ? AND producto_id = ?', [HOJA_SANA, PRODUCTO_SANA]);
+    expect(itemSana).toBeNull();
+    expect(await razonRechazoDeHoja(HOJA_SANA)).toBeNull();
+    expect(await razonRechazoDeHoja(HOJA_BORRADA)).toBeNull(); // se descartó: no queda ninguna razón que mostrar.
+
+    // El descarte es total -- ni siquiera queda como rechazo global.
+    const global = await estadoDeLaCola();
+    expect(global.enError).toBe(0);
+  });
+
+  it('en cambio, un 409 real ("hoja finalizada") SÍ queda visible y acotado a SU hoja -- no se filtra a la sana de al lado', async () => {
+    const db = await obtenerDbDeTest();
+    await sembrarHojaDePrueba(db, HOJA_RECHAZO_REAL, PRODUCTO_RECHAZO_REAL, '902');
+
+    await hojasSqlite.guardarConteo(HOJA_RECHAZO_REAL, {
+      productoId: PRODUCTO_RECHAZO_REAL,
+      empaques: [{ empaqueNombre: 'U', cantidad: 1 }],
+      sueltas: 0,
+      confirmadoPorEscaner: false,
+      contadoEn: 't-409-real',
+    });
+
+    await procesarColaDeSincronizacion(async (item) => {
+      if (item.hojaId === HOJA_RECHAZO_REAL) {
+        return {
+          ok: false,
+          motivo: 'rechazado',
+          mensaje: 'La hoja ya esta finalizada: no se puede corregir el conteo.',
+          clase: 'conflicto',
+        };
+      }
+      return { ok: true };
+    });
+
+    // Este SÍ queda -- es un rechazo real, alguien tiene que verlo y resolverlo.
+    const item = await db.getFirstAsync<{ estado: string; razon: string }>(
+      'SELECT estado, razon FROM cola_sync WHERE hoja_id = ? AND producto_id = ?',
+      [HOJA_RECHAZO_REAL, PRODUCTO_RECHAZO_REAL],
+    );
+    expect(item?.estado).toBe('error');
+    expect(item?.razon).toBe('La hoja ya esta finalizada: no se puede corregir el conteo.');
+
+    // Acotado a ESTA hoja -- la sana del test anterior sigue sin nada que mostrar.
+    expect(await razonRechazoDeHoja(HOJA_RECHAZO_REAL)).toBe('La hoja ya esta finalizada: no se puede corregir el conteo.');
+    expect(await razonRechazoDeHoja(HOJA_SANA)).toBeNull();
+
+    // OJO acá: `estadoDeLaCola()` GLOBAL sí lo cuenta -- es exactamente lo
+    // que `contar.tsx` ya NO usa directo para armar el mensaje de su
+    // propia `BandaSync` (ver `colaDeEstaHoja` en ese archivo), porque
+    // mezclaría este rechazo real con cualquier otra hoja que se esté
+    // mirando en ese momento.
+    const global = await estadoDeLaCola();
+    expect(global.enError).toBeGreaterThanOrEqual(1);
+    expect(global.razonRechazo).toBe('La hoja ya esta finalizada: no se puede corregir el conteo.');
   });
 });
 

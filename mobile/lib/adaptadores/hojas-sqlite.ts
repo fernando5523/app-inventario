@@ -1106,6 +1106,32 @@ export async function estadoDeLaCola(): Promise<EstadoColaCruda> {
 }
 
 /**
+ * La razón del rechazo más reciente para ESTA hoja puntual — a
+ * diferencia de `estadoDeLaCola()` (que cuenta TODA la cola, a propósito,
+ * para `mis-hojas.tsx`), acá NO puede colarse el rechazo de una hoja
+ * ajena.
+ *
+ * HALLAZGO (2026-09-07): un `conteo` de una hoja que después se borró
+ * (`limpiar-datos-dev.ts`) quedó en `error` para siempre en la cola —
+ * irrecuperable por diseño (ver `sqlite-cola.ts#aplicarResultadoEnvio`,
+ * que ahora lo descarta apenas se detecta). Mientras tanto, `contar.tsx`
+ * pasaba `estadoCola` (GLOBAL) a `BandaSync`, así que ESE item ajeno
+ * pintaba de rojo la pantalla de cualquier otra hoja, sana y ya
+ * sincronizada, con un mensaje que no tenía nada que ver ("Esa hoja no
+ * existe.") — la hoja que se veía en pantalla no era la que fallaba.
+ * `contar.tsx` usa esta función en vez de `estadoCola.error` para armar
+ * el mensaje de su propia `BandaSync`.
+ */
+export async function razonRechazoDeHoja(hojaId: number): Promise<string | null> {
+  const db = await obtenerDb();
+  const fila = await db.getFirstAsync<{ razon: string | null }>(
+    "SELECT razon FROM cola_sync WHERE hoja_id = ? AND estado = 'error' AND razon IS NOT NULL ORDER BY id DESC LIMIT 1",
+    [hojaId],
+  );
+  return fila?.razon ?? null;
+}
+
+/**
  * Recorre la cola en orden y trata de mandar cada item con `enviar`
  * (inyectado a propósito: este archivo no sabe de red, `sincronizador.ts`
  * es quien decide CUÁNDO llamar a esto y CÓMO mandar cada item por HTTP).

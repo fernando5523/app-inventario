@@ -10,6 +10,7 @@
  */
 
 import type { EstadoSync } from '../dominio/tipos';
+import type { ClaseErrorApi } from './_http';
 
 export type TipoItemCola = 'conteo' | 'finalizar';
 export type EstadoItemCola = 'pendiente' | 'enviando' | 'error';
@@ -84,6 +85,12 @@ export type ResultadoEnvio =
       motivo: 'sin-red' | 'rechazado';
       /** El mensaje que dio el servidor, si `motivo` es 'rechazado'. Ver `ItemCola.razon`. */
       mensaje?: string | null;
+      /**
+       * La clase del error (`_http.ts#ClaseErrorApi`), cuando `motivo` es
+       * 'rechazado' y vino de un `ErrorApi` real. Solo `'no-encontrado'`
+       * cambia algo hoy: ver `aplicarResultadoEnvio`.
+       */
+      clase?: ClaseErrorApi;
     };
 
 /** Lo que se muestra cuando el servidor rechazó algo sin mandar un mensaje aprovechable. Nunca se inventa un motivo más específico que esto. */
@@ -119,6 +126,23 @@ export function aplicarResultadoEnvio(item: ItemCola, resultado: ResultadoEnvio)
   if (resultado.motivo === 'sin-red') {
     return { ...item, estado: 'pendiente', intentos: item.intentos + 1, razon: null };
   }
+  /**
+   * 404 "no-encontrado" -- la hoja (o el producto) a la que apunta este
+   * item ya no existe en el servidor. Es IRRECUPERABLE: a diferencia de
+   * cualquier otro rechazo, reintentar para siempre nunca lo va a
+   * arreglar, porque no hay nada del otro lado con qué reconciliarlo. Se
+   * descarta como si se hubiera sincronizado (null = sale de la cola) —
+   * NUNCA para un 409 "hoja finalizada" u otro rechazo real, que sí
+   * conviene dejar visible para que alguien lo resuelva.
+   *
+   * HALLAZGO (2026-09-07): `limpiar-datos-dev.ts` borró un inventario que
+   * ya tenía un conteo encolado sin sincronizar. Ese item quedaba en
+   * `error` para siempre (la hoja nunca iba a volver a existir) y
+   * `estadoDeLaCola()` cuenta TODA la cola, no una hoja sola -- ese único
+   * item podrido contaminaba la banda de sincronización de CUALQUIER otra
+   * hoja, sana, con un mensaje ajeno e irresoluble.
+   */
+  if (resultado.clase === 'no-encontrado') return null;
   return {
     ...item,
     estado: 'error',
