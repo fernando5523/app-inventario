@@ -1,8 +1,10 @@
 /**
  * inventarios.routes.ts expone DOS routers con acceso distinto:
- *   - `inventariosRouter` (crear/repartir hojas, cerrar ronda): SOLO
- *     administrador y coordinador -- quien reparte decide QUIÉN cuenta QUÉ,
- *     y el auditor audita lo que otros ya contaron, no arma el lote.
+ *   - `inventariosRouter`: ESCRIBIR (crear/repartir hojas, cerrar ronda) es
+ *     SOLO administrador y coordinador -- quien reparte decide QUIÉN cuenta
+ *     QUÉ. Pero LEER el resumen de una ronda (el embudo del ciclo) lo puede
+ *     TAMBIÉN el Auditor, que audita lo que otros contaron y necesita verlo,
+ *     incluso con el inventario ya cerrado.
  *   - `sucursalesInventariosRouter` (inventario activo): los 4 roles. El
  *     Contador y el Auditor necesitan saber si hay un inventario abierto
  *     para elegir la pantalla correcta -- lo que NO pueden es crear ni
@@ -89,6 +91,40 @@ describe('POST /api/inventarios/:id/rondas/:ronda/cerrar: quién puede cerrar la
       headers: autorizacion(ADMIN),
     });
     expect(r.status).toBe(200);
+  });
+});
+
+describe('GET /api/inventarios/:id/rondas/:ronda/resumen: leer el embudo del ciclo', () => {
+  async function iniciar(): Promise<void> {
+    const app = appDePrueba('/api/inventarios', inventariosRouter);
+    ({ baseUrl, cerrar } = await levantar(app));
+  }
+  const pedir = (actor: ColaboradorAutenticado) =>
+    fetch(`${baseUrl}/api/inventarios/9/rondas/2/resumen`, { headers: autorizacion(actor) });
+
+  it('sin sesión, 401', async () => {
+    await iniciar();
+    expect((await fetch(`${baseUrl}/api/inventarios/9/rondas/2/resumen`)).status).toBe(401);
+  });
+
+  it('AUDITOR, pasa el middleware -- audita lo que otros contaron y necesita ver el embudo (antes era 403)', async () => {
+    await iniciar();
+    expect((await pedir(AUDITOR)).status).toBe(200);
+  });
+
+  it('conteo, 403 -- no es su vista', async () => {
+    await iniciar();
+    expect((await pedir(CONTEO)).status).toBe(403);
+  });
+
+  it('coordinador, pasa el middleware', async () => {
+    await iniciar();
+    expect((await pedir(COORDINADOR)).status).toBe(200);
+  });
+
+  it('administrador, pasa el middleware', async () => {
+    await iniciar();
+    expect((await pedir(ADMIN)).status).toBe(200);
   });
 });
 

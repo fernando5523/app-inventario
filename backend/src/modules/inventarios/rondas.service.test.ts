@@ -30,7 +30,7 @@ vi.mock('../../shared/auditoria', () => ({ registrarAuditoria: vi.fn() }));
 
 import { Conflicto, NoEncontrado, Prohibido } from '../../shared/errores';
 import type { ColaboradorAutenticado } from '../../shared/tipos';
-import { cerrar } from './rondas.service';
+import { cerrar, resumen } from './rondas.service';
 
 const COORD: ColaboradorAutenticado = { colaboradorId: 5, sucursalId: 1, rol: 'coordinador' };
 
@@ -112,6 +112,55 @@ beforeEach(() => {
   prismaMock.producto.findMany.mockResolvedValue([]);
   prismaMock.catalogoItem.findMany.mockResolvedValue([]);
   prismaMock.colaborador.count.mockResolvedValue(0);
+});
+
+describe('resumen: el embudo de una ronda, también para un inventario YA cerrado', () => {
+  it('conteo_cerrado NO tira 409: el ciclo terminado igual se puede consultar (pantalla de Ciclo / Auditor)', async () => {
+    prismaMock.inventario.findUnique.mockResolvedValue({ id: 9, sucursalId: 1, estado: 'conteo_cerrado', tamanoHoja: 50 });
+    prismaMock.hojaConteo.count.mockResolvedValue(1); // la ronda tiene hojas
+
+    await expect(resumen(COORD, 9, 2)).resolves.toMatchObject({ inventarioId: 9, ronda: 2 });
+  });
+
+  it('otra sucursal: Prohibido, aunque sea de solo lectura', async () => {
+    prismaMock.inventario.findUnique.mockResolvedValue({ id: 9, sucursalId: 77, estado: 'conteo_cerrado', tamanoHoja: 50 });
+    await expect(resumen(COORD, 9, 2)).rejects.toBeInstanceOf(Prohibido);
+  });
+
+  it('la ronda no tiene hojas: NoEncontrado, no un embudo vacío que miente', async () => {
+    prismaMock.inventario.findUnique.mockResolvedValue({ id: 9, sucursalId: 1, estado: 'conteo_cerrado', tamanoHoja: 50 });
+    prismaMock.hojaConteo.count.mockResolvedValue(0);
+    await expect(resumen(COORD, 9, 2)).rejects.toBeInstanceOf(NoEncontrado);
+  });
+
+  it('REPRODUCE EL CASO DEL CLIENTE: 3 rondas cerradas con conteos completos -> el embudo REAL de una ronda', async () => {
+    // El "1 de 10" del bug salía de leer el SQLite LOCAL del que mira; esto
+    // sale del SERVER, sobre TODOS los conteos. Ronda 2: 2 ítems, ambos
+    // contados; A cuadra (5=5), B no (4≠3) -> 1 cuadrado, 1 a recontar.
+    prismaMock.inventario.findUnique.mockResolvedValue({ id: 9, sucursalId: 1, estado: 'conteo_cerrado', tamanoHoja: 50 });
+    prismaMock.hojaConteo.count.mockResolvedValue(1);
+    prismaMock.producto.findMany.mockResolvedValue([producto('A', 'Lácteos'), producto('B', 'Lácteos')]);
+    prismaMock.catalogoItem.findMany.mockResolvedValue([itemCatalogo('A', 'Lácteos', 5), itemCatalogo('B', 'Lácteos', 3)]);
+    mockHojaConteoFindMany({
+      sinFinalizar: [],
+      contadoPorRonda: [
+        {
+          numeroConteo: 2,
+          productos: [
+            { codigo: 'A', empaques: [{ nombre: 'U', factor: 1 }], conteos: [{ sueltas: 5, empaques: [] }] },
+            { codigo: 'B', empaques: [{ nombre: 'U', factor: 1 }], conteos: [{ sueltas: 4, empaques: [] }] },
+          ],
+        },
+      ],
+    });
+
+    const r = await resumen(COORD, 9, 2);
+    expect(r.total).toBe(2);
+    expect(r.contados).toBe(2); // los DOS ítems tienen conteo -- no "1 de 10"
+    expect(r.cuadrados).toBe(1); // A: 5 = 5
+    expect(r.aRecontar).toBe(1); // B: 4 ≠ 3
+    expect(r.sePuedeCerrar).toBe(true); // ninguna hoja sin finalizar
+  });
 });
 
 describe('cerrar', () => {

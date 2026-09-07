@@ -3,9 +3,9 @@ import { AlertTriangle, ArrowRightCircle, Check, FileText, Lock } from 'lucide-r
 import { useCallback, useEffect, useState, type JSX } from 'react';
 import { ActivityIndicator, Alert, Pressable, StyleSheet, Text, View } from 'react-native';
 
-import { repositorioHojas, repositorioInventario } from '../../lib/contenedor';
+import { repositorioHistorial, repositorioInventario } from '../../lib/contenedor';
 import { comparativoDeRonda } from '../../lib/dominio/comparativo-ronda';
-import { avanceConjunto } from '../../lib/dominio/hoja';
+import { inventarioDelCiclo } from '../../lib/dominio/inventario-del-ciclo';
 import {
   estadoDePaso,
   etiquetaARecontar,
@@ -16,7 +16,7 @@ import {
   type EstadoPaso,
 } from '../../lib/dominio/texto-cierre-ronda';
 import { partirEnHojas } from '../../lib/dominio/lote';
-import { type HojaConteo, type Rol, type TamanoHoja } from '../../lib/dominio/tipos';
+import { type Rol, type TamanoHoja } from '../../lib/dominio/tipos';
 import type { ResumenRonda } from '../../lib/puertos/repositorios';
 import { useSesion } from '../../lib/sesion-contexto';
 import { colors, fonts, radius, spacing } from '../../lib/theme';
@@ -146,35 +146,32 @@ export interface CicloScreenProps {
  * lo ve de solo lectura y tiene además el acceso a la matriz de auditoría,
  * que no le corresponde al Coordinador.
  *
- * HALLAZGO I-4 DE LA AUDITORIA (ya corregido acá): el embudo y los 3
- * badges de estado eran datos locales fijos (650/130 hardcodeados,
- * "Finalizada" a fuego) — la MISMA sesión contaba dos historias
- * distintas: Inicio decía "34 de 160 hojas finalizadas" y Ciclo decía
- * que los 3 conteos habían terminado. Ahora el Paso 1 sale de
- * `repositorioHojas.todas()` vía `hoja.ts#estadoConjunto`/`avanceConjunto`
- * — LAS MISMAS funciones que se pueden aplicar sobre las mismas hojas que
- * usa InicioScreen.tsx, así que no pueden divergir: no hay dos cálculos,
- * hay uno solo aplicado dos veces.
+ * LOS 3 PASOS LEEN UNA SOLA FUENTE: el resumen del SERVIDOR de cada ronda
+ * (`resumenRonda(inventarioId, 1/2/3)`), sobre TODOS los conteos del
+ * inventario. Devuelve AGREGADOS (cuántos cuadraron, cuántos pasan a
+ * recontar), nunca el stock de un ítem: por eso el Coordinador puede verlo
+ * mientras todavía coordina el conteo sin romper el conteo ciego. La matriz
+ * de auditoría, que sí trae `stockErp` por ítem, NO se usa acá.
  *
- * EL COMPARATIVO CONTRA DYNAMICS YA ESTÁ EN LOS 3 PASOS. Sale de
- * `resumenRonda(inventarioId, ronda)` llamado con 1, 2 y 3 — el mismo
- * endpoint que usa el cierre. Devuelve AGREGADOS (cuántos cuadraron, cuántos
- * pasan a recontar), nunca el stock de un ítem: por eso el Coordinador puede
- * verlo mientras todavía coordina el conteo sin romper el conteo ciego. La
- * matriz de auditoría, que sí trae `stockErp` por ítem, NO se usa acá.
+ * ARREGLO DE LA LECTURA (bug del cliente, inventario cerrado): antes el Paso 1
+ * salía de `repositorioHojas.todas()`, que en el adaptador offline trae los
+ * conteos del SQLite LOCAL — la superposición de quien mira la pantalla. El
+ * Coordinador veía "1 de 10" porque su teléfono tenía UN conteo local, aunque
+ * el servidor tuviera los 10. Y como `activo()` filtra `estado: en_curso`,
+ * para un inventario ya cerrado devolvía null y la carga cortaba en seco: los
+ * 3 pasos "sin datos", el bloque final "no hay ningún conteo cargado", todo
+ * falso. Ahora Paso 1 usa el server como los otros dos, y cuando `activo()`
+ * es null el ciclo se resuelve contra el historial (`inventario-del-ciclo.ts`)
+ * — el último inventario cerrado de la sucursal, con su embudo real. Es el
+ * mismo criterio de "leer siempre del servidor" que `todas()` en d8b2859.
  *
  * Una ronda que todavía no se abrió responde 404 y el paso dice "todavía no
  * empezó" — que es la verdad, distinto de "no lo podemos calcular".
  *
- * LO QUE SIGUE FALTANDO (avance de las rondas 2 y 3, no el comparativo):
- * `RepositorioHojas` no tiene parámetro de ronda (el backend
- * sí lo soporta, `GET /api/hojas?...&ronda=`, pero el puerto del front
- * nunca lo pasa, siempre trae la 1ra) y `RepositorioAuditoria.matriz()`
- * (que sí tiene conteo1/2/3 por ítem) hoy solo trae 3 ítems de ejemplo,
- * no el inventario completo (ver auditoria-memoria.ts). Con eso, los
- * Pasos 2 y 3 muestran "Sin datos todavía" en vez de inventar un número
- * — se habilitan cuando exista ese dato (el módulo de auditoría que
- * min-5 está construyendo en el backend puede ser quien lo exponga).
+ * El preview de cierre (solo Coordinador) NO es una segunda llamada: es el
+ * mismo `resumenRonda` de la ronda activa que ya se trajo para el embudo
+ * (`resumenPorRonda[rondaActiva]`), así el número del bloque de cierre y el
+ * del Paso correspondiente no pueden discrepar.
  */
 export function CicloScreen({ rol }: CicloScreenProps): JSX.Element {
   const { sesion, cerrar } = useSesion();
@@ -187,45 +184,34 @@ export function CicloScreen({ rol }: CicloScreenProps): JSX.Element {
   // que no era la real (ver lib/dominio/lote.ts#partirEnHojas).
   const [tamanoHoja, setTamanoHoja] = useState<TamanoHoja | null>(null);
   const [inventarioId, setInventarioId] = useState<number | null>(null);
-  const [hojasT1, setHojasT1] = useState<HojaConteo[] | null>(null);
 
-  // Cierre de ronda (solo Coordinador). El resumen es un PREVIEW que no muta:
-  // se ve ANTES de decidir. Ver RepositorioInventario.resumenRonda.
-  const [resumen, setResumen] = useState<ResumenRonda | null>(null);
   const [cerrandoRonda, setCerrandoRonda] = useState(false);
   // La ronda que HOY admite cierre: la activa que devuelve el backend
   // (max(numeroConteo), null si no hay ninguna). NO es siempre la 1ra — cuando
   // el 1er conteo ya se cerró y corre el 2do, esto vale 2 y el bloque cierra el
   // 2do. Si es null no hay ronda que cerrar: el bloque no se muestra y NUNCA
-  // cae a 1 por defecto ("no hay ronda" ≠ "ronda 1").
+  // cae a 1 por defecto ("no hay ronda" ≠ "ronda 1"). Con el inventario ya
+  // cerrado también es null, y el embudo de las 3 pasadas se muestra igual.
   const [rondaActiva, setRondaActiva] = useState<number | null>(null);
   const esCoordinador = rol === 'coordinador';
 
-  const cargarResumen = useCallback(async (invId: number, ronda: number): Promise<void> => {
-    try {
-      setResumen(await repositorioInventario.resumenRonda(invId, ronda));
-    } catch {
-      // Sin resumen la pantalla no se rompe: el bloque de cierre no aparece y
-      // el resto del ciclo (Paso 1, embudo) se ve igual. Un error acá es "no
-      // pude traer el preview", no "el inventario está mal".
-      setResumen(null);
-    }
-  }, []);
-
   /**
-   * El comparativo contra Dynamics de CADA ronda, no solo de la 1ra.
+   * El comparativo contra Dynamics de CADA ronda -- LA ÚNICA fuente de las
+   * cifras de los 3 pasos Y del preview de cierre. Es el mismo endpoint del
+   * SERVIDOR (`resumenRonda`) llamado con 1, 2 y 3, sobre TODOS los conteos del
+   * inventario, no solo los de este teléfono.
    *
-   * Es el mismo endpoint (`resumenRonda`) llamado con 1, 2 y 3: devuelve
-   * AGREGADOS -- cuántos cuadraron, cuántos van a recontar -- y nunca el
-   * stock de un ítem puntual. Por eso el Coordinador puede verlo mientras
-   * todavía coordina el conteo sin romper el conteo ciego: de "1.100
-   * cuadraron y 136 pasan al 2do" no se deduce cuánto stock espera el ERP de
-   * ningún artículo. La matriz de auditoría, que sí trae `stockErp` por ítem,
-   * NO se usa acá y no debe usarse.
+   * Antes el Paso 1 leía `repositorioHojas.todas()`, que en el adaptador
+   * offline trae los conteos del SQLite LOCAL -- la superposición de quien mira
+   * la pantalla. Por eso el Coordinador veía "1 de 10": su teléfono tenía UN
+   * conteo local, aunque el servidor tuviera los 10. El ciclo es del inventario
+   * entero; su lectura tiene que ir SIEMPRE al servidor (mismo criterio que
+   * `todas()` en d8b2859).
    *
-   * Una ronda que todavía no existe responde 404 y queda en `null`: la
-   * pantalla lo muestra como "todavía no empezó", que es la verdad, y no como
-   * un dato que no sabemos calcular.
+   * Devuelve AGREGADOS -- cuántos cuadraron, cuántos van a recontar -- y nunca
+   * el stock de un ítem: el Coordinador lo ve sin romper el conteo ciego. Una
+   * ronda que todavía no existe responde 404 y queda en `null`: la pantalla lo
+   * muestra como "todavía no empezó", que es la verdad, no un cálculo que falló.
    */
   const [resumenPorRonda, setResumenPorRonda] = useState<Record<number, ResumenRonda | null>>({});
 
@@ -236,8 +222,8 @@ export function CicloScreen({ rol }: CicloScreenProps): JSX.Element {
         try {
           return [r, await repositorioInventario.resumenRonda(invId, r)] as const;
         } catch {
-          // 404 = esa ronda todavía no se abrió. No es un fallo: es el estado
-          // normal de las rondas 2 y 3 mientras se cuenta la primera.
+          // 404 = esa ronda todavía no se abrió (rondas 2/3 mientras se cuenta
+          // la 1ra), o el inventario no llegó a tener esa ronda. No es un fallo.
           return [r, null] as const;
         }
       }),
@@ -250,32 +236,31 @@ export function CicloScreen({ rol }: CicloScreenProps): JSX.Element {
     let vigente = true;
 
     async function cargar(): Promise<void> {
+      // `activo()` filtra `estado: en_curso`: para un inventario YA cerrado
+      // devuelve null. Ahí el ciclo es el ÚLTIMO cerrado de la sucursal, que
+      // sale del historial. Sin este fallback la pantalla quedaba en blanco
+      // sobre un ciclo que en realidad terminó con sus 3 pasadas contadas.
       const activo = await repositorioInventario.activo(sesion!.sucursal!.id);
+      const historial = activo
+        ? []
+        : (await repositorioHistorial.listar({ sucursalId: sesion!.sucursal!.id })).inventarios;
       if (!vigente) return;
-      setItems(activo?.items ?? null);
-      setTamanoHoja(activo?.tamanoHoja ?? null);
-      setInventarioId(activo?.inventarioId ?? null);
-      setRondaActiva(activo?.rondaActiva ?? null);
-      if (!activo) {
+
+      const delCiclo = inventarioDelCiclo(activo, historial);
+      setItems(delCiclo?.items ?? null);
+      setTamanoHoja(delCiclo?.tamanoHoja ?? null);
+      setInventarioId(delCiclo?.inventarioId ?? null);
+      setRondaActiva(delCiclo?.rondaActiva ?? null);
+      if (!delCiclo) {
+        setResumenPorRonda({});
         setCargando(false);
         return;
       }
-      // `todas()`, no `mias()`: el embudo es del inventario entero, no de
-      // lo que le toca a quien mira la pantalla (mismo puerto que ya usa
-      // InicioScreen.tsx para el Coordinador — ver el comentario de arriba).
-      // Ronda 1 FIJA: `hojasT1` alimenta el "Paso 1 · 1er Conteo", que es
-      // siempre la 1ra pasada. La ronda activa gobierna el CIERRE, no este
-      // embudo; el avance de las rondas 2/3 sale de `resumenRonda`, abajo.
-      const todas = await repositorioHojas.todas(activo.inventarioId, 1);
-      if (!vigente) return;
-      setHojasT1(todas);
-      // El comparativo de las 3 rondas lo ven los DOS roles: es el embudo del
-      // ciclo, no una herramienta de cierre.
-      await cargarResumenDeRondas(activo.inventarioId);
-      if (!vigente) return;
-      // El preview del cierre, en cambio, solo lo necesita quien puede cerrar,
-      // y solo si hay una ronda activa que cerrar (null = ninguna).
-      if (esCoordinador && activo.rondaActiva !== null) await cargarResumen(activo.inventarioId, activo.rondaActiva);
+
+      // El embudo de las 3 rondas, del servidor. Lo ven los DOS roles: es el
+      // ciclo del inventario, no una herramienta de cierre. El preview del
+      // cierre sale de este mismo objeto (resumenPorRonda[rondaActiva]).
+      await cargarResumenDeRondas(delCiclo.inventarioId);
       if (!vigente) return;
       setCargando(false);
     }
@@ -284,7 +269,7 @@ export function CicloScreen({ rol }: CicloScreenProps): JSX.Element {
     return () => {
       vigente = false;
     };
-  }, [sesion, esCoordinador, cargarResumen, cargarResumenDeRondas]);
+  }, [sesion, cargarResumenDeRondas]);
 
   if (!sesion) return <View />;
 
@@ -293,8 +278,13 @@ export function CicloScreen({ rol }: CicloScreenProps): JSX.Element {
     router.replace('/');
   }
 
+  // El preview del cierre es el resumen de la ronda ACTIVA -- el MISMO objeto
+  // que ya trajo `cargarResumenDeRondas` para el embudo, no una segunda llamada
+  // que podría discrepar. `null` si no hay ronda activa (inventario cerrado).
+  const resumenActivo = rondaActiva !== null ? resumenPorRonda[rondaActiva] ?? null : null;
+
   async function cerrarRondaAhora(): Promise<void> {
-    if (inventarioId === null || rondaActiva === null || resumen === null || !resumen.sePuedeCerrar) return;
+    if (inventarioId === null || rondaActiva === null || resumenActivo === null || !resumenActivo.sePuedeCerrar) return;
     setCerrandoRonda(true);
     try {
       const cierre = await repositorioInventario.cerrarRonda(inventarioId, rondaActiva);
@@ -310,19 +300,12 @@ export function CicloScreen({ rol }: CicloScreenProps): JSX.Element {
       }
       // El cierre cambió la RONDA ACTIVA en el backend: hay que RE-PEDIR
       // activo() para no quedar mostrando el bloque de cierre de la ronda que
-      // se acaba de cerrar. Antes `rondaActiva` quedaba en 1 y el botón
-      // "Cerrar el 1er conteo" seguía habilitado sobre una ronda ya cerrada.
+      // se acaba de cerrar. Si el ciclo terminó, activo() devuelve null y
+      // `rondaActiva` pasa a null: el bloque de cierre desaparece solo, pero el
+      // embudo de las 3 pasadas (resumenPorRonda) se recarga y se sigue viendo.
       const activo = await repositorioInventario.activo(sesion!.sucursal!.id);
       setRondaActiva(activo?.rondaActiva ?? null);
-      // `hojasT1` sigue siendo la ronda 1 (Paso 1, siempre la 1ra pasada).
-      const todas = await repositorioHojas.todas(inventarioId, 1);
-      setHojasT1(todas);
       await cargarResumenDeRondas(inventarioId);
-      // El preview del cierre, ahora para la ronda ACTIVA nueva. Si el ciclo
-      // terminó (rondaActiva null), no queda nada que cerrar: se limpia el
-      // preview para que el bloque desaparezca.
-      if (activo?.rondaActiva != null) await cargarResumen(inventarioId, activo.rondaActiva);
-      else setResumen(null);
     } catch (error) {
       // El backend rechaza con mensaje claro (hojas sin finalizar, o ya
       // cerrada): se muestra tal cual, no un "no se pudo" genérico.
@@ -333,11 +316,9 @@ export function CicloScreen({ rol }: CicloScreenProps): JSX.Element {
   }
 
   const totalT1 = items ?? 0;
-  const avanceT1 = hojasT1 ? avanceConjunto(hojasT1) : null;
-  const pctAvanceT1 = avanceT1 && avanceT1.totalItems > 0 ? (avanceT1.itemsContados / avanceT1.totalItems) * 100 : 0;
 
-  // El comparativo contra Dynamics de cada ronda. `null` = esa ronda todavía
-  // no se abrió, y el paso lo dice con esas palabras.
+  // Los 3 pasos leen la MISMA fuente: el resumen del servidor de su ronda.
+  // `null` = esa ronda todavía no se abrió, y el paso lo dice con esas palabras.
   const comparativoT1 = comparativoVisible(resumenPorRonda[1] ?? null);
   const comparativoT2 = comparativoVisible(resumenPorRonda[2] ?? null);
   const comparativoT3 = comparativoVisible(resumenPorRonda[3] ?? null);
@@ -376,19 +357,18 @@ export function CicloScreen({ rol }: CicloScreenProps): JSX.Element {
           <PasoCiclo
             titulo="Paso 1 · 1er Conteo General"
             descripcion="100% del catálogo, comparado contra el stock de Dynamics a medida que se cuenta."
-            estado={estadoDePaso(1, rondaActiva, (hojasT1?.length ?? 0) > 0)}
+            // MISMA fuente que los pasos 2 y 3: el resumen del servidor de la
+            // ronda 1 (sobre TODOS los conteos), no el SQLite local del que mira.
+            estado={estadoDePaso(1, rondaActiva, comparativoT1 != null)}
             // El cálculo de hojas Y, cuando ya hay conteos, el comparativo
             // contra el ERP: cuántos cuadraron y cuántos pasarían al 2do.
             calculo={[textoCalculoHojasT1, comparativoT1?.detalle].filter(Boolean).join(' ')}
-            avance={
-              avanceT1 && hojasT1 && hojasT1.length > 0
-                ? {
-                    pct: pctAvanceT1,
-                    texto: `${nf.format(avanceT1.itemsContados)} de ${nf.format(avanceT1.totalItems)} ítems contados (${formatoPct(pctAvanceT1)}%)`,
-                  }
-                : undefined
+            avance={comparativoT1?.avance}
+            notaSinDato={
+              comparativoT1
+                ? undefined
+                : 'El 1er conteo todavía no tiene hojas con datos para esta sucursal.'
             }
-            notaSinDato={!hojasT1 || hojasT1.length === 0 ? 'Todavía no hay hojas del 1er conteo creadas para esta sucursal.' : undefined}
           />
 
           <PasoCiclo
@@ -417,38 +397,38 @@ export function CicloScreen({ rol }: CicloScreenProps): JSX.Element {
             }
           />
 
-          {esCoordinador && resumen && rondaActiva !== null ? (
+          {esCoordinador && resumenActivo && rondaActiva !== null ? (
             <View style={styles.tarjeta}>
               <View style={styles.tarjetaCabecera}>
                 <Text style={styles.tarjetaTitulo}>Cerrar el {ORDINAL[rondaActiva]} conteo</Text>
                 <Badge
-                  label={resumen.sePuedeCerrar ? 'Listo para cerrar' : 'Faltan hojas'}
-                  variant={resumen.sePuedeCerrar ? 'ok' : 'espera'}
+                  label={resumenActivo.sePuedeCerrar ? 'Listo para cerrar' : 'Faltan hojas'}
+                  variant={resumenActivo.sePuedeCerrar ? 'ok' : 'espera'}
                 />
               </View>
 
-              {/* El embudo REAL del 1er conteo, del backend. Es lo que hace de
-                  cerrar una decisión y no un trámite: se ve el número ANTES de
-                  apretar. */}
+              {/* El embudo REAL de la ronda activa, del backend. Es lo que hace
+                  de cerrar una decisión y no un trámite: se ve el número ANTES
+                  de apretar. */}
               <View style={styles.embudoResumen}>
-                <FilaResumen etiqueta="Cuadraron contra Dynamics" valor={`${formatoMiles(resumen.cuadrados)} (${formatoPct(resumen.porcentajeCuadrado)}%)`} tono="ok" />
-                <FilaResumen etiqueta={etiquetaARecontar(rondaActiva, resumen.aRecontar)} valor={formatoMiles(resumen.aRecontar)} tono="falta" />
-                {resumen.sinContar > 0 ? <FilaResumen etiqueta="Sin contar todavía" valor={formatoMiles(resumen.sinContar)} /> : null}
-                {resumen.sinDatoErp > 0 ? <FilaResumen etiqueta="Sin stock del ERP (no se auditan)" valor={formatoMiles(resumen.sinDatoErp)} /> : null}
+                <FilaResumen etiqueta="Cuadraron contra Dynamics" valor={`${formatoMiles(resumenActivo.cuadrados)} (${formatoPct(resumenActivo.porcentajeCuadrado)}%)`} tono="ok" />
+                <FilaResumen etiqueta={etiquetaARecontar(rondaActiva, resumenActivo.aRecontar)} valor={formatoMiles(resumenActivo.aRecontar)} tono="falta" />
+                {resumenActivo.sinContar > 0 ? <FilaResumen etiqueta="Sin contar todavía" valor={formatoMiles(resumenActivo.sinContar)} /> : null}
+                {resumenActivo.sinDatoErp > 0 ? <FilaResumen etiqueta="Sin stock del ERP (no se auditan)" valor={formatoMiles(resumenActivo.sinDatoErp)} /> : null}
               </View>
 
-              <Text style={styles.tarjetaTexto}>{textoCierreExplicacion(rondaActiva, resumen.aRecontar)}</Text>
+              <Text style={styles.tarjetaTexto}>{textoCierreExplicacion(rondaActiva, resumenActivo.aRecontar)}</Text>
 
               {/* El motivo del bloqueo, a la vista: qué hojas faltan finalizar.
                   Un botón gris sin decir por qué obliga a adivinar. */}
-              {!resumen.sePuedeCerrar ? (
+              {!resumenActivo.sePuedeCerrar ? (
                 <View style={styles.bloqueoAviso}>
                   <AlertTriangle size={16} color={colors.proceso} />
                   <Text style={styles.bloqueoTexto}>
-                    Quedan {formatoMiles(resumen.hojasSinFinalizar.length)} hoja
-                    {resumen.hojasSinFinalizar.length === 1 ? '' : 's'} sin finalizar:{' '}
-                    {resumen.hojasSinFinalizar.slice(0, 4).map((h) => `#${h.numero}`).join(', ')}
-                    {resumen.hojasSinFinalizar.length > 4 ? ` y ${resumen.hojasSinFinalizar.length - 4} más` : ''}. Una
+                    Quedan {formatoMiles(resumenActivo.hojasSinFinalizar.length)} hoja
+                    {resumenActivo.hojasSinFinalizar.length === 1 ? '' : 's'} sin finalizar:{' '}
+                    {resumenActivo.hojasSinFinalizar.slice(0, 4).map((h) => `#${h.numero}`).join(', ')}
+                    {resumenActivo.hojasSinFinalizar.length > 4 ? ` y ${resumenActivo.hojasSinFinalizar.length - 4} más` : ''}. Una
                     hoja sin finalizar es una hoja que alguien todavía está contando.
                   </Text>
                 </View>
@@ -456,13 +436,13 @@ export function CicloScreen({ rol }: CicloScreenProps): JSX.Element {
 
               <Button
                 label={
-                  resumen.sePuedeCerrar
-                    ? textoBotonCierre(rondaActiva, resumen.aRecontar, formatoMiles)
+                  resumenActivo.sePuedeCerrar
+                    ? textoBotonCierre(rondaActiva, resumenActivo.aRecontar, formatoMiles)
                     : 'Termina las hojas para poder cerrar'
                 }
                 icon={Lock}
                 onPress={cerrarRondaAhora}
-                disabled={!resumen.sePuedeCerrar}
+                disabled={!resumenActivo.sePuedeCerrar}
                 loading={cerrandoRonda}
               />
             </View>

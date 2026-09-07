@@ -47,8 +47,14 @@ import { redondear } from '../historial/historial.calculos';
 import { totalUnidades } from '../hojas/hojas.calculos';
 import { INCLUIR_TODO, aHojaDto, type HojaDto } from '../hojas/hojas.service';
 
-/** El inventario, validando que el actor pueda tocarlo. */
-async function inventarioDelActor(actor: ColaboradorAutenticado, inventarioId: number) {
+/**
+ * El inventario para LEER: existe y es de la sucursal del actor. NO chequea
+ * estado -- un inventario ya cerrado (`conteo_cerrado`/`liquidado`) igual se
+ * puede CONSULTAR: el Coordinador y el Auditor tienen que poder ver el
+ * resultado del ciclo terminado (el embudo de la pantalla de Ciclo). Escribir
+ * es otra cosa: para eso está `inventarioDelActor`, que sí exige en_curso.
+ */
+async function inventarioParaLeer(actor: ColaboradorAutenticado, inventarioId: number) {
   const inventario = await prisma.inventario.findUnique({
     where: { id: inventarioId },
     select: { id: true, sucursalId: true, estado: true, tamanoHoja: true },
@@ -58,6 +64,12 @@ async function inventarioDelActor(actor: ColaboradorAutenticado, inventarioId: n
   if (actor.rol !== 'administrador' && actor.sucursalId !== inventario.sucursalId) {
     throw new Prohibido('Ese inventario es de otra sucursal.');
   }
+  return inventario;
+}
+
+/** El inventario para ESCRIBIR (cerrar la ronda): además tiene que estar en curso. */
+async function inventarioDelActor(actor: ColaboradorAutenticado, inventarioId: number) {
+  const inventario = await inventarioParaLeer(actor, inventarioId);
   if (inventario.estado !== 'en_curso') {
     // Sin el enum crudo: `conteo_cerrado` es un valor de Postgres. Lo que la
     // persona necesita saber es que el ciclo ya se cerro y donde entra lo que
@@ -254,7 +266,10 @@ export async function resumen(
   inventarioId: number,
   ronda: number,
 ): Promise<ResumenRondaDto> {
-  await inventarioDelActor(actor, inventarioId);
+  // `inventarioParaLeer`, NO `inventarioDelActor`: el resumen es de solo
+  // lectura y se muestra también para un inventario ya cerrado (el embudo del
+  // ciclo terminado que ven Coordinador y Auditor en la pantalla de Ciclo).
+  await inventarioParaLeer(actor, inventarioId);
 
   const hojas = await prisma.hojaConteo.count({ where: { inventarioId, numeroConteo: ronda } });
   if (hojas === 0) {

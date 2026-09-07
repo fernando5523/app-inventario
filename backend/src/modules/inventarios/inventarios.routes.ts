@@ -16,18 +16,25 @@ import {
  * Pasos 2 y 3 del wizard del Coordinador. El paso 1 (traer el catalogo) vive
  * en `/api/d365/snapshot`, que es donde esta la integracion con el ERP.
  *
- * SOLO COORDINADOR (y administrador, que da soporte). No es un detalle de
- * permisos: quien reparte las hojas decide QUIEN cuenta QUE, y un Contador
- * que pudiera repartirse las suyas elegiria las gondolas faciles. Tampoco el
- * Auditor -- audita lo que otros contaron, no arma el lote.
+ * ESCRIBIR (crear/repartir hojas, cerrar ronda) es SOLO Coordinador y
+ * administrador (que da soporte): quien reparte las hojas decide QUIEN cuenta
+ * QUE, y un Contador que pudiera repartirse las suyas elegiria las gondolas
+ * faciles. LEER el resumen de una ronda (el embudo del ciclo) lo puede hacer
+ * TAMBIEN el Auditor -- audita lo que otros contaron, y necesita ver ese
+ * embudo, incluso con el inventario ya cerrado. Por eso el rol va POR RUTA,
+ * no a nivel del router.
  */
 export const inventariosRouter = Router();
 
-inventariosRouter.use(requiereSesion, requiereRol('administrador', 'coordinador'));
+inventariosRouter.use(requiereSesion);
+
+const puedeEscribir = requiereRol('administrador', 'coordinador');
+const puedeLeerResumen = requiereRol('administrador', 'coordinador', 'auditor');
 
 /** PASO 2: parte el inventario en hojas del tamaño elegido. Destructivo si no se conto nada todavia. */
 inventariosRouter.post(
   '/:inventarioId/hojas',
+  puedeEscribir,
   validar(parametrosInventarioSchema, 'params'),
   validar(crearHojasSchema, 'body'),
   controller.crearHojas,
@@ -36,6 +43,7 @@ inventariosRouter.post(
 /** PASO 3: reparte las hojas SIN asignar entre los presentes. */
 inventariosRouter.post(
   '/:inventarioId/hojas/asignar',
+  puedeEscribir,
   validar(parametrosInventarioSchema, 'params'),
   validar(asignarHojasSchema, 'body'),
   controller.asignarHojas,
@@ -51,6 +59,7 @@ inventariosRouter.post(
  */
 inventariosRouter.get(
   '/:inventarioId/rondas/:ronda/resumen',
+  puedeLeerResumen,
   validar(parametrosRondaSchema, 'params'),
   controller.resumenRonda,
 );
@@ -58,6 +67,7 @@ inventariosRouter.get(
 /** Cierra la ronda y abre la siguiente SOLO con los items que no cuadraron. */
 inventariosRouter.post(
   '/:inventarioId/rondas/:ronda/cerrar',
+  puedeEscribir,
   validar(parametrosRondaSchema, 'params'),
   controller.cerrarRonda,
 );
