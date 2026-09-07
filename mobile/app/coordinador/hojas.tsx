@@ -1,6 +1,6 @@
 import { router, useFocusEffect } from 'expo-router';
-import { Check, CloudDownload, LayoutGrid, Users } from 'lucide-react-native';
-import { useCallback, useMemo, useRef, useState, type JSX, type ReactNode } from 'react';
+import { Check, ChevronDown, ChevronUp, CloudDownload, LayoutGrid, Users } from 'lucide-react-native';
+import { useCallback, useEffect, useMemo, useRef, useState, type JSX, type ReactNode } from 'react';
 import { ActivityIndicator, Alert, Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { PantallaConTabs } from '../../components/navegacion/PantallaConTabs';
@@ -18,6 +18,7 @@ import {
 } from '../../lib/dominio/filtro-hojas';
 import { avance } from '../../lib/dominio/hoja';
 import { partirEnHojas } from '../../lib/dominio/lote';
+import { textoResumenArmado } from '../../lib/dominio/resumen-armado';
 import { TAMANOS_HOJA, type Colaborador, type HojaConteo, type TamanoHoja } from '../../lib/dominio/tipos';
 import { ErrorSnapshot, type AvanceSnapshot, type DesgloseSnapshot, type TipoInventario } from '../../lib/puertos/repositorios';
 import { useSesion } from '../../lib/sesion-contexto';
@@ -207,6 +208,45 @@ function ResumenSnapshot({ items, desglose, tipo }: ResumenSnapshotProps): JSX.E
   );
 }
 
+interface ResumenArmadoProps {
+  items: number;
+  totalHojas: number;
+  onExpandir: () => void;
+}
+
+/**
+ * La línea que reemplaza a los 3 pasos de armado una vez terminados (catálogo
+ * + hojas + reparto) -- pedido del cliente de no mezclar "configuración de
+ * hojas" con "Hojas de esta ronda". El colapso mismo se decide en
+ * HojasScreen (deriva de paso3Hecho, nunca es un toggle manual suelto); acá
+ * solo se dibuja la línea y se avisa cuando la tocan para ver el detalle.
+ */
+function ResumenArmado({ items, totalHojas, onExpandir }: ResumenArmadoProps): JSX.Element {
+  return (
+    <Pressable
+      onPress={onExpandir}
+      style={styles.resumenArmado}
+      accessibilityRole="button"
+      accessibilityState={{ expanded: false }}
+      accessibilityLabel="Ver el detalle del armado de hojas"
+    >
+      <Check size={15} color={colors.ok} />
+      <Text style={styles.resumenArmadoTexto}>{textoResumenArmado(items, totalHojas, formatoMiles)}</Text>
+      <ChevronDown size={16} color={colors.gris} />
+    </Pressable>
+  );
+}
+
+/** Para volver a colapsar sin salir de la pantalla, después de reabrir el detalle a mano. */
+function BotonColapsarArmado({ onColapsar }: { onColapsar: () => void }): JSX.Element {
+  return (
+    <Pressable onPress={onColapsar} style={styles.colapsarArmado} accessibilityRole="button" accessibilityLabel="Ocultar el detalle del armado">
+      <Text style={styles.colapsarArmadoTexto}>Ocultar detalle del armado</Text>
+      <ChevronUp size={16} color={colors.gris} />
+    </Pressable>
+  );
+}
+
 /**
  * Panel del Coordinador — 3 pasos en orden, cada uno bloqueado hasta que
  * el anterior termina (mobile/design/hojas.html, ya validada). Un solo
@@ -238,6 +278,13 @@ export default function HojasScreen(): JSX.Element {
   const [avanceSnapshot, setAvanceSnapshot] = useState<AvanceSnapshot | null>(null);
   const [creandoHojas, setCreandoHojas] = useState(false);
   const [asignando, setAsignando] = useState(false);
+
+  // Cuándo el bloque de armado se colapsa a una línea resumen: por defecto
+  // apenas termina (paso3Hecho, más abajo), pero la persona puede reabrirlo
+  // para mirar el detalle. El efecto de más abajo es lo que lo vuelve a
+  // colapsar solo en la ronda siguiente -- si no, quedaría expandido para
+  // siempre después de la primera vez que alguien lo abrió a mano.
+  const [verArmado, setVerArmado] = useState(false);
 
   // AbortController, no un booleano "cancelado": es lo mismo que va a usar
   // el adaptador HTTP real para cortar un fetch de OData en vuelo — el
@@ -340,6 +387,17 @@ export default function HojasScreen(): JSX.Element {
   const paso1Hecho = inventarioId !== null;
   const paso2Hecho = hojas.length > 0;
   const paso3Hecho = paso2Hecho && hojas.every((h) => h.asignados.length > 0);
+
+  // Ronda nueva (paso2Hecho vuelve a false: las hojas de la ronda anterior ya
+  // no están) => se descarta cualquier "lo abrí para mirar" que haya quedado
+  // de la ronda anterior, para que el armado de ESTA ronda vuelva a
+  // colapsarse solo en cuanto termine -- nadie tiene que acordarse de volver
+  // a cerrarlo a mano.
+  useEffect(() => {
+    if (!paso2Hecho) setVerArmado(false);
+  }, [paso2Hecho]);
+
+  const armadoColapsado = paso3Hecho && !verArmado;
 
   // Resultado ANTES de crear: el Coordinador tiene que ver cuántas hojas
   // va a generar antes de generarlas. partirEnHojas() es el mismo cálculo
@@ -515,6 +573,12 @@ export default function HojasScreen(): JSX.Element {
         </View>
       ) : (
         <>
+          {armadoColapsado ? (
+            <ResumenArmado items={items ?? 0} totalHojas={hojas.length} onExpandir={() => setVerArmado(true)} />
+          ) : (
+          <>
+          {paso3Hecho ? <BotonColapsarArmado onColapsar={() => setVerArmado(false)} /> : null}
+
           <PasoTarjeta
             numero={1}
             icon={CloudDownload}
@@ -622,34 +686,36 @@ export default function HojasScreen(): JSX.Element {
             }
           />
 
-          <Button
-            label={
-              !paso1Hecho
-                ? sinAlmacen
-                  ? 'Falta configurar el almacén'
-                  : `Traer catálogo ${tipoElegido === 'anual' ? 'anual' : 'mensual'} de Dynamics`
-                : !paso2Hecho
-                  ? tamanoElegido
-                    ? `Crear ${previa ? formatoMiles(previa.total) : ''} hojas de ${tamanoElegido} ítems`
-                    : 'Elige el tamaño de hoja'
-                  : !paso3Hecho
-                    ? 'Repartir automáticamente'
-                    : 'Hojas repartidas'
-            }
-            icon={!paso1Hecho ? CloudDownload : !paso2Hecho ? LayoutGrid : !paso3Hecho ? Users : Check}
-            size="lg"
-            loading={trayendoSnapshot || creandoHojas || asignando}
-            // Sin almacén no se deja avanzar, y el propio label dice por qué:
-            // un botón gris sin motivo obliga a la persona a adivinar.
-            disabled={sinAlmacen || (paso1Hecho && !paso2Hecho && !tamanoElegido) || paso3Hecho}
-            onPress={!paso1Hecho ? traerSnapshot : !paso2Hecho ? crearHojasAhora : !paso3Hecho ? asignarAhora : undefined}
-          />
+          {!paso3Hecho ? (
+            <Button
+              label={
+                !paso1Hecho
+                  ? sinAlmacen
+                    ? 'Falta configurar el almacén'
+                    : `Traer catálogo ${tipoElegido === 'anual' ? 'anual' : 'mensual'} de Dynamics`
+                  : !paso2Hecho
+                    ? tamanoElegido
+                      ? `Crear ${previa ? formatoMiles(previa.total) : ''} hojas de ${tamanoElegido} ítems`
+                      : 'Elige el tamaño de hoja'
+                    : 'Repartir automáticamente'
+              }
+              icon={!paso1Hecho ? CloudDownload : !paso2Hecho ? LayoutGrid : Users}
+              size="lg"
+              loading={trayendoSnapshot || creandoHojas || asignando}
+              // Sin almacén no se deja avanzar, y el propio label dice por qué:
+              // un botón gris sin motivo obliga a la persona a adivinar.
+              disabled={sinAlmacen || (paso1Hecho && !paso2Hecho && !tamanoElegido)}
+              onPress={!paso1Hecho ? traerSnapshot : !paso2Hecho ? crearHojasAhora : asignarAhora}
+            />
+          ) : null}
+          </>
+          )}
 
           {/*
-            LA LISTA CON FILTRO va DESPUÉS del wizard, y solo cuando ya hay
-            hojas: antes de crearlas no hay nada que validar, y una sección
-            vacía arriba del paso 2 competiría con lo único que hay para
-            hacer.
+            LA LISTA CON FILTRO: protagonista apenas el armado colapsa --
+            pedido del cliente de no mezclar "configuración de hojas" con
+            "Hojas de esta ronda". Solo se muestra cuando ya hay hojas: antes
+            de crearlas no hay nada que validar.
 
             Es con lo que el Coordinador valida antes de cerrar la ronda
             -- decisión del cliente: un filtro, no una notificación.
@@ -838,6 +904,27 @@ const styles = StyleSheet.create({
   resumenNota: { fontSize: 11.5, lineHeight: 16, color: colors.gris, fontFamily: fonts.regular },
 
   previaTexto: { fontSize: 12.5, fontWeight: '600', color: colors.proceso, fontFamily: fonts.semibold },
+
+  resumenArmado: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    padding: 12,
+    backgroundColor: colors.campo,
+    borderWidth: 1,
+    borderColor: colors.borde,
+    borderRadius: 13,
+  },
+  resumenArmadoTexto: { flex: 1, fontSize: 13, color: colors.tinta, fontFamily: fonts.semibold },
+
+  colapsarArmado: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    paddingVertical: 6,
+  },
+  colapsarArmadoTexto: { fontSize: 12, color: colors.gris, fontFamily: fonts.medium },
 
   lista: { gap: spacing.sm, marginTop: spacing.xs },
   listaTitulo: { fontSize: 14.5, color: colors.tinta, fontFamily: fonts.bold },
