@@ -3,6 +3,7 @@ import { useState, type JSX } from 'react';
 import { Modal, Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { colors, fonts, fontSize, radius, shadow, spacing } from '../../lib/theme';
+import { teclear } from '../../lib/dominio/teclado-pin';
 import { PinPuntos } from './PinPuntos';
 
 export interface TecladoPinProps {
@@ -11,6 +12,19 @@ export interface TecladoPinProps {
   valor: string;
   longitud: number;
   onCambiar: (nuevoValor: string) => void;
+  /**
+   * Se dispara al completar los `longitud` dígitos, con el valor FINAL como
+   * argumento. Úsalo (no `onCerrar`) cuando al completar haya que HACER algo
+   * con el PIN —resetearlo, enviarlo—: `onCerrar` corre en el mismo tick que
+   * el `setState` de `onCambiar`, así que leer el valor del estado del padre
+   * ahí devuelve el dígito ANTERIOR. Ver lib/dominio/teclado-pin.ts.
+   *
+   * Si no se pasa, completar cierra el teclado (comportamiento de siempre):
+   * sirve para los campos que solo capturan el PIN y lo usan en otro render
+   * (login, alta de cuenta, cambiar mi PIN).
+   */
+  onCompletar?: (valorFinal: string) => void;
+  /** Cierre MANUAL: X, fondo o botón atrás. No recibe el valor. */
   onCerrar: () => void;
 }
 
@@ -22,14 +36,23 @@ const FILAS = [TECLAS.slice(0, 3), TECLAS.slice(3, 6), TECLAS.slice(6, 9), TECLA
  * por el fondo, por la X, con el botón atrás de Android (onRequestClose) y
  * solo al completar los dígitos (mismo comportamiento que login.html).
  */
-export function TecladoPin({ visible, titulo, valor, longitud, onCambiar, onCerrar }: TecladoPinProps): JSX.Element {
+export function TecladoPin({ visible, titulo, valor, longitud, onCambiar, onCompletar, onCerrar }: TecladoPinProps): JSX.Element {
   const [revelado, setRevelado] = useState(false);
 
   function tecleaDigito(d: string): void {
-    if (valor.length >= longitud) return;
-    const nuevo = valor + d;
+    // `teclear` es puro y devuelve el valor FINAL: se lo pasamos a los
+    // callbacks como argumento, nunca dependemos del estado del padre (que en
+    // este mismo tick todavía tiene el dígito anterior). Ver teclado-pin.ts.
+    const { valor: nuevo, completo } = teclear(valor, d, longitud);
+    if (nuevo === null) return;
     onCambiar(nuevo);
-    if (nuevo.length === longitud) onCerrar();
+    if (completo) {
+      // Con onCompletar, quien consume recibe los `longitud` dígitos y decide
+      // qué hacer (y cierra por su cuenta). Sin él, completar cierra el
+      // teclado, como siempre.
+      if (onCompletar) onCompletar(nuevo);
+      else onCerrar();
+    }
   }
 
   function borrarDigito(): void {

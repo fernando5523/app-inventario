@@ -648,18 +648,27 @@ export function UsuariosScreen({ rol }: UsuariosScreenProps): JSX.Element {
         valor={pinReset}
         longitud={LARGO_PIN}
         onCambiar={setPinReset}
-        onCerrar={async () => {
+        // onCompletar, NO onCerrar: el PIN completo viene como ARGUMENTO. Con
+        // onCerrar leíamos `pinReset` del estado, que en el mismo tick del
+        // último dígito todavía tenía 5 -> caía en el guard de longitud y
+        // volvía sin llamar al backend (el bug de "Resetear PIN" en 2.12.0).
+        onCompletar={async (nuevoPin) => {
           const usuario = usuarioResetPin;
-          const nuevoPin = pinReset;
           setUsuarioResetPin(null);
           setPinReset('');
-          if (!usuario || nuevoPin.length !== LARGO_PIN) return;
+          if (!usuario) return;
           try {
             await repositorioUsuarios.resetearPin(usuario.id, nuevoPin);
             Alert.alert('PIN actualizado', `Se asignó un PIN nuevo a ${usuario.nombre}.`);
           } catch (error) {
             Alert.alert('No se pudo resetear el PIN', error instanceof Error ? error.message : 'Intentá de nuevo.');
           }
+        }}
+        // Cierre manual (X, fondo, atrás): se cancela el reseteo sin tocar el
+        // backend.
+        onCerrar={() => {
+          setUsuarioResetPin(null);
+          setPinReset('');
         }}
       />
     </PantallaConTabs>
