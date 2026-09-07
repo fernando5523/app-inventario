@@ -1,26 +1,25 @@
 import { router, useFocusEffect, useLocalSearchParams } from 'expo-router';
-import { ClipboardList, ScanLine, Search } from 'lucide-react-native';
+import { ClipboardList, Filter, ScanLine, Search } from 'lucide-react-native';
 import { useCallback, useEffect, useRef, useState, type JSX } from 'react';
-import { ActivityIndicator, Alert, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import { ActivityIndicator, Alert, Pressable, StyleSheet, Text, View } from 'react-native';
 
 import {
   AvanceFila,
   BandaSync,
   BarraApp,
-  ChipsFiltro,
   EmptyState,
   ModalConteo,
   ModalEscaner,
+  ModalFiltrosProductos,
   TarjetaProducto,
   sincronizacionDeHojas,
-  type OpcionChip,
   type RechazoEscaneo,
 } from '../../components/ui';
 import { PantallaConTabs } from '../../components/navegacion/PantallaConTabs';
 import { inventarioIdSinRed, rondaActivaSinRed } from '../../lib/adaptadores/hojas-sqlite';
 import { repositorioHojas, repositorioInventario, sincronizador } from '../../lib/contenedor';
 import { resolverCodigoEnHoja, type CoincidenciaEscaneo } from '../../lib/dominio/escaneo';
-import { categoriasDeHoja, ID_TODAS, productosVisibles, textoFiltroActivo } from '../../lib/dominio/filtro-productos';
+import { aplicarFiltro, contarFiltrosActivos, FILTRO_VACIO, textoFiltroActivo, type FiltroProductos } from '../../lib/dominio/filtro-productos';
 import { avance, puedeEditar, puedeFinalizar } from '../../lib/dominio/hoja';
 import { ORDINAL } from '../../lib/dominio/texto-cierre-ronda';
 import type { Conteo, HojaConteo, Producto } from '../../lib/dominio/tipos';
@@ -46,8 +45,8 @@ export default function ContarScreen(): JSX.Element {
   const [ronda, setRonda] = useState<number | null>(null);
   const [numeroActivo, setNumeroActivo] = useState<string | null>(params.numero ?? null);
   const [hoja, setHoja] = useState<HojaConteo | null>(null);
-  const [busqueda, setBusqueda] = useState('');
-  const [categoriaActiva, setCategoriaActiva] = useState(ID_TODAS);
+  const [filtro, setFiltro] = useState<FiltroProductos>(FILTRO_VACIO);
+  const [modalFiltrosVisible, setModalFiltrosVisible] = useState(false);
 
   // Confirmado por escáner ANTES de guardar el conteo — el escaneo puede
   // pasar antes de que exista un Conteo para ese producto (regla c).
@@ -196,13 +195,9 @@ export default function ContarScreen(): JSX.Element {
 
   const bloqueado = !puedeEditar(hoja);
   const { contados, total, porcentaje } = avance(hoja);
-  const visibles = productosVisibles(hoja.productos, busqueda, categoriaActiva);
-  const categorias = categoriasDeHoja(hoja.productos);
-  const filtroTexto = textoFiltroActivo(busqueda, categoriaActiva);
-  const opcionesCategoria: OpcionChip[] = [
-    { id: ID_TODAS, etiqueta: 'Todas' },
-    ...categorias.map((c) => ({ id: c, etiqueta: c })),
-  ];
+  const visibles = aplicarFiltro(hoja.productos, filtro);
+  const filtroTexto = textoFiltroActivo(filtro);
+  const filtrosActivos = contarFiltrosActivos(filtro);
 
   function conteoDe(producto: Producto): Conteo | null {
     return hoja!.conteos.find((c) => c.productoId === producto.id) ?? null;
@@ -351,16 +346,24 @@ export default function ContarScreen(): JSX.Element {
       <BandaSync estado={sync.estado} mensaje={sync.mensaje} onSincronizar={() => sincronizador.sincronizar()} />
 
       <View style={styles.buscadorFila}>
-        <View style={styles.buscador}>
-          <Search size={17} color={colors.grisClaro} />
-          <TextInput
-            style={styles.buscadorInput}
-            value={busqueda}
-            onChangeText={setBusqueda}
-            placeholder={`Filtrar entre los ${total} de esta hoja o buscar código...`}
-            placeholderTextColor={colors.grisClaro}
-          />
-        </View>
+        {/* El buscador + los chips de categoría se reemplazaron por este
+            botón que abre el modal de filtros (categoría, nombre, código):
+            los chips no escalaban a una hoja mezclada con muchas categorías
+            (decisión del cliente, 2026-09-07). El badge dice cuántos filtros
+            hay puestos. */}
+        <Pressable
+          style={styles.btnFiltros}
+          onPress={() => setModalFiltrosVisible(true)}
+          accessibilityLabel={filtrosActivos > 0 ? `Filtros, ${filtrosActivos} activo${filtrosActivos === 1 ? '' : 's'}` : 'Filtros'}
+        >
+          <Filter size={17} color={colors.tinta} />
+          <Text style={styles.btnFiltrosTexto}>Filtros</Text>
+          {filtrosActivos > 0 ? (
+            <View style={styles.filtrosBadge}>
+              <Text style={styles.filtrosBadgeTexto}>{filtrosActivos}</Text>
+            </View>
+          ) : null}
+        </Pressable>
         <Pressable
           style={[styles.btnScan, bloqueado && styles.btnScanDeshabilitado]}
           onPress={bloqueado ? undefined : abrirEscaner}
@@ -371,23 +374,12 @@ export default function ContarScreen(): JSX.Element {
         </Pressable>
       </View>
 
-      {categorias.length > 1 ? (
-        <ChipsFiltro opciones={opcionesCategoria} activo={categoriaActiva} onCambiar={setCategoriaActiva} />
-      ) : null}
-
-      {ultimoEscaneo ? (
-        <View style={styles.notaEscaneo}>
-          <Text style={styles.notaEscaneoTexto}>
-            {/* Se dice lo que el código probó (qué producto es) y nada más.
-                "Leíste el código de la UNIDAD suelta" sonaba a que el
-                sistema sabía que había una unidad en la mano, y no lo sabe:
-                el mismo código está impreso en la unidad y en la caja. */}
-            {ultimoEscaneo.empaque
-              ? `Confirmado con la cámara: ${ultimoEscaneo.producto.descripcion} · ${ultimoEscaneo.empaque.nombre} ×${ultimoEscaneo.empaque.factor}.`
-              : `Confirmado con la cámara: ${ultimoEscaneo.producto.descripcion}. El código no dice cuántas hay — la cantidad y el empaque los cargas tú.`}
-          </Text>
-        </View>
-      ) : null}
+      {/* El cartel verde persistente del último escaneo se quitó a pedido del
+          cliente ("no es necesario el mensaje"). El escaneo sigue igual: abre
+          el modal del producto y lo marca como confirmado; `ultimoEscaneo`
+          se conserva SOLO para `empaquePreseleccionado` de ModalConteo. El
+          aviso de "código no pertenece a la hoja" NO se toca: ese vive en
+          ModalEscaner y es el que evita contar de más. */}
 
       {visibles.length > 0 ? (
         <View style={styles.lista}>
@@ -448,6 +440,17 @@ export default function ContarScreen(): JSX.Element {
         onCerrar={() => setModalScanVisible(false)}
       />
 
+      <ModalFiltrosProductos
+        visible={modalFiltrosVisible}
+        productos={hoja.productos}
+        filtro={filtro}
+        onAplicar={(nuevo) => {
+          setFiltro(nuevo);
+          setModalFiltrosVisible(false);
+        }}
+        onCerrar={() => setModalFiltrosVisible(false)}
+      />
+
       {modalFinalizarVisible ? (
         <View style={styles.modalFinalizarFondo}>
           <Pressable style={StyleSheet.absoluteFill} onPress={() => setModalFinalizarVisible(false)} />
@@ -483,23 +486,31 @@ const styles = StyleSheet.create({
   irAMisHojasTexto: { fontSize: 14, color: colors.blanco, fontFamily: fonts.bold },
   cabeceraHoja: { gap: 13, paddingBottom: 14, borderBottomWidth: 1, borderBottomColor: colors.borde },
   buscadorFila: { flexDirection: 'row', gap: 10 },
-  buscador: {
+  btnFiltros: {
     flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
-    paddingHorizontal: 13,
+    paddingHorizontal: 14,
     minHeight: 46,
     borderRadius: radius.md,
     borderWidth: 1,
     borderColor: colors.borde,
     backgroundColor: colors.campo,
   },
-  buscadorInput: { flex: 1, fontSize: 14, color: colors.tinta, fontFamily: fonts.regular, padding: 0 },
+  btnFiltrosTexto: { flex: 1, fontSize: 14, color: colors.tinta, fontFamily: fonts.semibold },
+  filtrosBadge: {
+    minWidth: 20,
+    height: 20,
+    paddingHorizontal: 6,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: 10,
+    backgroundColor: colors.rojo,
+  },
+  filtrosBadgeTexto: { fontSize: 12, color: colors.blanco, fontFamily: fonts.bold },
   btnScan: { width: 46, height: 46, alignItems: 'center', justifyContent: 'center', borderRadius: radius.md, backgroundColor: colors.rojo },
   btnScanDeshabilitado: { backgroundColor: '#DCD6D2' },
-  notaEscaneo: { padding: 11, borderRadius: radius.sm, backgroundColor: colors.okSuave },
-  notaEscaneoTexto: { fontSize: 12.5, color: colors.ok, fontFamily: fonts.semibold, lineHeight: 17 },
   lista: { gap: 10 },
   pieLista: { padding: 12, borderRadius: 11, backgroundColor: colors.esperaSuave },
   pieTexto: { fontSize: 12.5, color: colors.gris, fontFamily: fonts.regular },

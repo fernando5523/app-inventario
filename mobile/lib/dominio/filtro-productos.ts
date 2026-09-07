@@ -1,78 +1,119 @@
 /**
- * El filtro de la lista de productos en Contar: cada persona busca a su
- * manera (decisión del cliente, 2026-09-07). Aparte del JSX por lo mismo
- * que `filtro-hojas.ts`: son reglas con bordes (acentos, "sin categoría",
- * qué gana cuando los dos filtros están activos) que adentro de un
- * `.filter()` en el render no se pueden probar.
+ * El filtro de la lista de productos en Contar: un modal con TRES campos
+ * combinables —categoría, nombre y código—, cada uno un select con búsqueda
+ * de texto adentro (decisión del cliente 2026-09-07: los chips no escalaban a
+ * hojas con muchas categorías). Aparte del JSX porque son reglas con bordes
+ * (acentos, "sin categoría", cómo se combinan) que dentro de un `.filter()` en
+ * el render no se pueden probar.
  *
  * El ORDEN nunca lo toca este módulo: `.filter()` conserva el orden de
  * `hoja.productos`, que ya viene ordenado por categoría y código desde el
- * backend (ver `lote.ts#ordenarParaContar`) — filtrar no es lo mismo que
- * reordenar.
+ * backend (ver `lote.ts#ordenarParaContar`) — filtrar no es reordenar. Y
+ * CONTEO CIEGO: acá no entra ni stock ni precio, solo lo que sirve para
+ * encontrar un renglón.
  */
 
 import type { Producto } from './tipos';
 
-/** Chip "Todas" en el selector de categoría — no es una categoría real, nunca puede colisionar con una del ERP. */
-export const ID_TODAS = '__todas__';
-
 /** El ERP no clasifica todos los productos (`Producto.categoria` es opcional) — este es el bucket para esos. */
 export const SIN_CATEGORIA = 'Sin categoría';
 
-const DIACRITICOS = /\p{Diacritic}/gu;
-
-/** Quita tildes y pasa a minúsculas — "GASEOSA" y "gaseosa" (o "gaseósa" mal tipeado) tienen que matchear igual. */
-function normalizar(texto: string): string {
-  return texto.normalize('NFD').replace(DIACRITICOS, '').toLowerCase();
+/**
+ * Los tres campos del modal. `null` en un campo = ese campo NO filtra. Se
+ * combinan con Y (AND): un producto tiene que pasar los tres a la vez.
+ */
+export interface FiltroProductos {
+  categoria: string | null;
+  nombre: string | null;
+  codigo: string | null;
 }
 
-/** Nombre O código (interno o de barras) — una sola caja para las dos cosas, sin distinguir mayúsculas ni acentos. */
-export function coincideBusqueda(producto: Producto, busqueda: string): boolean {
-  const q = normalizar(busqueda.trim());
-  if (!q) return true;
-  return (
-    normalizar(producto.descripcion).includes(q) ||
-    normalizar(producto.codigoBarras).includes(q) ||
-    normalizar(producto.codigo).includes(q)
-  );
+export const FILTRO_VACIO: FiltroProductos = { categoria: null, nombre: null, codigo: null };
+
+const DIACRITICOS = /\p{Diacritic}/gu;
+
+/** Quita tildes y pasa a minúsculas — "GASEOSA" y "gaseósa" (mal tipeado) matchean igual. */
+function normalizar(texto: string): string {
+  return texto.normalize('NFD').replace(DIACRITICOS, '').toLowerCase();
 }
 
 export function categoriaDe(producto: Producto): string {
   return producto.categoria ?? SIN_CATEGORIA;
 }
 
-/** Categorías presentes en la hoja, en el orden en que aparecen (el mismo orden con el que ya camina la góndola). Sin duplicados. */
-export function categoriasDeHoja(productos: readonly Producto[]): string[] {
-  const vistas = new Set<string>();
+/**
+ * Valores DISTINTOS en el orden en que aparecen en la hoja (el mismo con el
+ * que se camina la góndola). Sin duplicados, sin reordenar.
+ */
+function distintosEnOrden(valores: Iterable<string>): string[] {
+  const vistos = new Set<string>();
   const orden: string[] = [];
-  for (const p of productos) {
-    const categoria = categoriaDe(p);
-    if (!vistas.has(categoria)) {
-      vistas.add(categoria);
-      orden.push(categoria);
+  for (const v of valores) {
+    if (!vistos.has(v)) {
+      vistos.add(v);
+      orden.push(v);
     }
   }
   return orden;
 }
 
-function coincideCategoria(producto: Producto, categoria: string): boolean {
-  return categoria === ID_TODAS || categoriaDe(producto) === categoria;
+export function categoriasDeHoja(productos: readonly Producto[]): string[] {
+  return distintosEnOrden((function* () {
+    for (const p of productos) yield categoriaDe(p);
+  })());
 }
 
-/** Los dos filtros son combinables: un producto tiene que pasar los dos, no uno u otro. */
-export function productosVisibles(productos: readonly Producto[], busqueda: string, categoria: string): Producto[] {
-  return productos.filter((p) => coincideCategoria(p, categoria) && coincideBusqueda(p, busqueda));
+export function nombresDeHoja(productos: readonly Producto[]): string[] {
+  return distintosEnOrden((function* () {
+    for (const p of productos) yield p.descripcion;
+  })());
+}
+
+export function codigosDeHoja(productos: readonly Producto[]): string[] {
+  return distintosEnOrden((function* () {
+    for (const p of productos) yield p.codigo;
+  })());
+}
+
+/**
+ * La búsqueda DENTRO de un campo (estilo select2): deja las opciones que
+ * CONTIENEN el texto, sin distinguir mayúsculas ni acentos. Vacío = todas.
+ * Es lo que hace que un campo con 100 categorías se navegue igual que uno con
+ * 2: se tipea y la lista se achica, en vez de scrollear cien chips.
+ */
+export function filtrarOpciones(opciones: readonly string[], texto: string): string[] {
+  const q = normalizar(texto.trim());
+  if (!q) return [...opciones];
+  return opciones.filter((o) => normalizar(o).includes(q));
+}
+
+/**
+ * Los tres campos combinados con Y. Conserva el orden de `productos`. Un campo
+ * en `null` no filtra; uno con valor exige coincidencia EXACTA (es lo que se
+ * eligió de la lista del select, no texto libre).
+ */
+export function aplicarFiltro(productos: readonly Producto[], filtro: FiltroProductos): Producto[] {
+  return productos.filter(
+    (p) =>
+      (filtro.categoria === null || categoriaDe(p) === filtro.categoria) &&
+      (filtro.nombre === null || p.descripcion === filtro.nombre) &&
+      (filtro.codigo === null || p.codigo === filtro.codigo),
+  );
+}
+
+/** Cuántos de los tres campos están puestos — el número que muestra el botón "Filtros". */
+export function contarFiltrosActivos(filtro: FiltroProductos): number {
+  return (filtro.categoria !== null ? 1 : 0) + (filtro.nombre !== null ? 1 : 0) + (filtro.codigo !== null ? 1 : 0);
 }
 
 /**
  * Qué mostrar como "filtro activo" en el pie de la lista — `null` cuando no
- * hay ningún filtro puesto, para que la pantalla no diga "filtro:" sin nada
- * detrás.
+ * hay ninguno, para que la pantalla no diga "filtro:" sin nada detrás.
  */
-export function textoFiltroActivo(busqueda: string, categoria: string): string | null {
+export function textoFiltroActivo(filtro: FiltroProductos): string | null {
   const partes: string[] = [];
-  if (categoria !== ID_TODAS) partes.push(categoria);
-  const q = busqueda.trim();
-  if (q) partes.push(`"${q}"`);
+  if (filtro.categoria !== null) partes.push(filtro.categoria);
+  if (filtro.nombre !== null) partes.push(filtro.nombre);
+  if (filtro.codigo !== null) partes.push(`#${filtro.codigo}`);
   return partes.length > 0 ? partes.join(' · ') : null;
 }

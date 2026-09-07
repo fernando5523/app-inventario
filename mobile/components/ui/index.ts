@@ -41,3 +41,7 @@ export type { TarjetaItemAuditoriaProps } from './TarjetaItemAuditoria';
 export { formatoMiles, formatoPct, formatoMoneda, formatoFecha, formatoFechaHora, MESES_CORTOS } from './formato';
 export { CampoTexto } from './CampoTexto';
 export type { CampoTextoProps } from './CampoTexto';
+export { SelectBuscable } from './SelectBuscable';
+export type { SelectBuscableProps } from './SelectBuscable';
+export { ModalFiltrosProductos } from './ModalFiltrosProductos';
+export type { ModalFiltrosProductosProps } from './ModalFiltrosProductos';
