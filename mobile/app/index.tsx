@@ -228,7 +228,7 @@ export default function LoginScreen(): JSX.Element {
               placeholder={modoAdmin ? 'Selecciona un administrador' : 'Selecciona una persona'}
               opciones={opcionesPersona}
               disabled={!modoAdmin && !sucursal}
-              disabledHint="Elegí primero la sucursal"
+              disabledHint="Elige primero la sucursal"
               accessibilityLabel="Persona"
               abierto={campoAbierto === 'persona'}
               onCambiarAbierto={(abierto) => setCampoAbierto(abierto ? 'persona' : null)}
@@ -251,7 +251,7 @@ export default function LoginScreen(): JSX.Element {
             ) : null}
             <Pressable onPress={alternarModoAdmin} accessibilityRole="button">
               <Text style={styles.olvide}>
-                {modoAdmin ? '← Volver al ingreso de tienda' : '¿Sos administrador del sistema? Ingresá acá'}
+                {modoAdmin ? '← Volver al ingreso de tienda' : '¿Eres administrador del sistema? Ingresa aquí'}
               </Text>
             </Pressable>
           </View>

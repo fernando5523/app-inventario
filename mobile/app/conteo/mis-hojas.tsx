@@ -27,34 +27,34 @@ function estadoVacio(motivo: 'sin-red' | 'sesion-vencida' | 'error' | 'incomplet
     return {
       icon: WifiOff,
       title: 'Sin conexión',
-      subtitle: 'Todavía no se pudieron bajar tus hojas. Conectate a la WiFi de la tienda y volvé a entrar a esta pantalla.',
+      subtitle: 'Todavía no se pudieron bajar tus hojas. Conéctate a la WiFi de la tienda y vuelve a entrar a esta pantalla.',
     };
   }
   if (motivo === 'sesion-vencida') {
     return {
       icon: Lock,
       title: 'Tu sesión venció',
-      subtitle: 'Salí (arriba a la derecha) y volvé a entrar con tu PIN para que se puedan bajar tus hojas.',
+      subtitle: 'Sal (arriba a la derecha) y vuelve a entrar con tu PIN para que se puedan bajar tus hojas.',
     };
   }
   if (motivo === 'error') {
     return {
       icon: TriangleAlert,
       title: 'No se pudo conectar con el servidor',
-      subtitle: 'Hubo un problema al bajar tus hojas. Volvé a entrar a esta pantalla en un momento.',
+      subtitle: 'Hubo un problema al bajar tus hojas. Vuelve a entrar a esta pantalla en un momento.',
     };
   }
   if (motivo === 'incompleta') {
     return {
       icon: TriangleAlert,
       title: 'Descarga incompleta',
-      subtitle: 'La descarga de tus hojas se cortó a mitad de camino y no se guardó ninguna. Volvé a entrar a esta pantalla para reintentar.',
+      subtitle: 'La descarga de tus hojas se cortó a mitad de camino y no se guardó ninguna. Vuelve a entrar a esta pantalla para reintentar.',
     };
   }
   return {
     icon: ClipboardList,
-    title: 'Todavía no tenés hojas asignadas',
-    subtitle: 'Cuando el coordinador te asigne hojas de este inventario, van a aparecer acá.',
+    title: 'Todavía no tienes hojas asignadas',
+    subtitle: 'Cuando el coordinador te asigne hojas de este inventario, van a aparecer aquí.',
   };
 }
 

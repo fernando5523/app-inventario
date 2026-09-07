@@ -381,7 +381,7 @@ export default function HojasScreen(): JSX.Element {
         // Lo pidió la propia persona — no es un error, no hay nada que avisar.
         return;
       case 'sin-red':
-        Alert.alert('Sin conexión con la tienda', 'Revisá el WiFi de la tienda y volvé a intentar cuando vuelva.');
+        Alert.alert('Sin conexión con la tienda', 'Revisa el WiFi de la tienda y vuelve a intentar cuando vuelva.');
         return;
       case 'dynamics-no-configurado':
         if (sesion!.colaborador.rol === 'administrador') {
@@ -585,14 +585,14 @@ export default function HojasScreen(): JSX.Element {
             estado={!paso1Hecho ? 'bloqueado' : paso2Hecho ? 'hecho' : 'pendiente'}
             texto={
               !paso1Hecho
-                ? 'Traé primero el catálogo de Dynamics para poder crear las hojas.'
+                ? 'Trae primero el catálogo de Dynamics para poder crear las hojas.'
                 : paso2Hecho
                   ? `${formatoMiles(hojas.length)} hojas creadas de ${tamanoCreado} ítems (${formatoMiles(items ?? 0)} ítems en total)${
                       hojas[hojas.length - 1] && hojas[hojas.length - 1].tamano !== tamanoCreado
                         ? ` · la última con ${hojas[hojas.length - 1].tamano} ítems`
                         : ''
                     }.`
-                  : 'Elegí cuántos ítems por hoja querés y mirá cuántas hojas salen antes de crearlas.'
+                  : 'Elige cuántos ítems por hoja quieres y mira cuántas hojas salen antes de crearlas.'
             }
           >
             {paso1Hecho && !paso2Hecho ? (
@@ -615,10 +615,10 @@ export default function HojasScreen(): JSX.Element {
             estado={!paso2Hecho ? 'bloqueado' : paso3Hecho ? 'hecho' : 'pendiente'}
             texto={
               !paso2Hecho
-                ? 'Creá primero las hojas de conteo para poder asignarlas.'
+                ? 'Crea primero las hojas de conteo para poder asignarlas.'
                 : paso3Hecho && resultadoReparto
                   ? `Las ${formatoMiles(hojas.length)} hojas ya están repartidas entre los ${contadores.length} contadores presentes, en bloques contiguos (${resultadoReparto}).`
-                  : `Repartí las ${formatoMiles(hojas.length)} hojas entre los ${contadores.length} contadores presentes, en bloques contiguos. Contar es caminar la góndola, no saltar de punta a punta.`
+                  : `Reparte las ${formatoMiles(hojas.length)} hojas entre los ${contadores.length} contadores presentes, en bloques contiguos. Contar es caminar la góndola, no saltar de punta a punta.`
             }
           />
 
@@ -631,7 +631,7 @@ export default function HojasScreen(): JSX.Element {
                 : !paso2Hecho
                   ? tamanoElegido
                     ? `Crear ${previa ? formatoMiles(previa.total) : ''} hojas de ${tamanoElegido} ítems`
-                    : 'Elegí el tamaño de hoja'
+                    : 'Elige el tamaño de hoja'
                   : !paso3Hecho
                     ? 'Repartir automáticamente'
                     : 'Hojas repartidas'

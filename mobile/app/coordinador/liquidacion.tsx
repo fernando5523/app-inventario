@@ -51,7 +51,7 @@ const MOTIVO_SIN_AJUSTES = 'No se puede calcular: faltan los ajustes del mes.';
  * la persona tocando un botón en loop.
  */
 const SIN_CICLO_CERRADO =
-  'Todavía no hay un inventario con el conteo cerrado en esta tienda. Cerrá las 3 rondas desde Ciclo de conteos y volvé acá.';
+  'Todavía no hay un inventario con el conteo cerrado en esta tienda. Cierra las 3 rondas desde Ciclo de conteos y vuelve aquí.';
 
 type Filtro = 'todos' | 'asistio' | 'falto';
 
@@ -171,7 +171,7 @@ export default function LiquidacionScreen(): JSX.Element {
       // Recarga: la pantalla pasa a mostrar la planilla FIRME, sin edición.
       await cargar();
     } catch (e) {
-      Alert.alert('No se pudo cerrar la planilla', e instanceof Error ? e.message : 'Probá de nuevo en un momento.');
+      Alert.alert('No se pudo cerrar la planilla', e instanceof Error ? e.message : 'Prueba de nuevo en un momento.');
     } finally {
       setLiquidando(false);
     }
@@ -186,7 +186,7 @@ export default function LiquidacionScreen(): JSX.Element {
     } catch (e) {
       Alert.alert(
         'No se pudieron guardar los ajustes',
-        e instanceof Error ? e.message : 'Probá de nuevo en un momento.',
+        e instanceof Error ? e.message : 'Prueba de nuevo en un momento.',
       );
     } finally {
       setGuardandoAjustes(false);
@@ -522,7 +522,7 @@ export default function LiquidacionScreen(): JSX.Element {
                 {cerrado.colaboradores} colaboradores quedaron firmes por {soles(cerrado.totalDescontado)} en total.
               </Text>
               <Text style={styles.tarjetaTexto}>
-                El paso que sigue es el lacrado, y lo firma un auditor — no vos: el sello incluye esta planilla, y quien
+                El paso que sigue es el lacrado, y lo firma un auditor — no tú: el sello incluye esta planilla, y quien
                 la cierra no puede además firmarla.
               </Text>
             </View>
@@ -601,7 +601,7 @@ function CierreDePlanilla({
           {!ajustesListos
             ? 'Primero cargá los ajustes del mes, arriba. Sin eso no se puede calcular lo que se le descuenta a cada persona.'
             : asistentes === 0
-              ? 'Ningún colaborador registró conteos en este inventario: no hay asistencia deducible ni a quién repartir el faltante. Revisá que las hojas tengan conteos cargados.'
+              ? 'Ningún colaborador registró conteos en este inventario: no hay asistencia deducible ni a quién repartir el faltante. Revisa que las hojas tengan conteos cargados.'
               : 'Todavía no se puede calcular la planilla: revisá las advertencias de arriba.'}
         </Text>
       )}

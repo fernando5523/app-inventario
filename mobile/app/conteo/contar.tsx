@@ -189,8 +189,8 @@ export default function ContarScreen(): JSX.Element {
       <PantallaConTabs contentStyle={styles.centrado}>
         <EmptyState
           icon={ClipboardList}
-          title="No tenés ninguna hoja para contar"
-          subtitle="Elegí una hoja con catálogo cargado desde Mis hojas."
+          title="No tienes ninguna hoja para contar"
+          subtitle="Elige una hoja con catálogo cargado desde Mis hojas."
         >
           <Pressable style={styles.irAMisHojas} onPress={() => router.push('/conteo/mis-hojas')}>
             <Text style={styles.irAMisHojasTexto}>Ir a Mis hojas</Text>
@@ -278,7 +278,7 @@ export default function ContarScreen(): JSX.Element {
       // el producto equivocado. Se pregunta, no se adivina.
       Alert.alert(
         `El código ${codigo} coincide con más de un producto`,
-        'Elegí cuál es el que tenés en la mano.',
+        'Elige cuál es el que tienes en la mano.',
         [
           ...resultado.opciones.map((opcion) => ({
             text: opcion.empaque ? `${opcion.producto.descripcion} (${opcion.empaque.nombre})` : opcion.producto.descripcion,
@@ -380,7 +380,7 @@ export default function ContarScreen(): JSX.Element {
                 el mismo código está impreso en la unidad y en la caja. */}
             {ultimoEscaneo.empaque
               ? `Confirmado con la cámara: ${ultimoEscaneo.producto.descripcion} · ${ultimoEscaneo.empaque.nombre} ×${ultimoEscaneo.empaque.factor}.`
-              : `Confirmado con la cámara: ${ultimoEscaneo.producto.descripcion}. El código no dice cuántas hay — la cantidad y el empaque los cargás vos.`}
+              : `Confirmado con la cámara: ${ultimoEscaneo.producto.descripcion}. El código no dice cuántas hay — la cantidad y el empaque los cargas tú.`}
           </Text>
         </View>
       ) : null}
@@ -402,7 +402,7 @@ export default function ContarScreen(): JSX.Element {
         <Text style={styles.pieTexto}>
           {busqueda
             ? `Mostrando ${visibles.length} de ${hoja.productos.length} ítems · filtro: "${busqueda}"`
-            : `Mostrando los ${hoja.productos.length} ítems de esta hoja · desplazate para ver más`}
+            : `Mostrando los ${hoja.productos.length} ítems de esta hoja · desplázate para ver más`}
         </Text>
       </View>
 

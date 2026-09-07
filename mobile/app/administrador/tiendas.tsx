@@ -299,7 +299,7 @@ export default function TiendasScreen(): JSX.Element {
             <Select
               icon={Warehouse}
               valor={almacenSeleccionado}
-              placeholder={almacenes.length === 0 ? 'No se pudo traer la lista de Dynamics' : 'Elegí un almacén'}
+              placeholder={almacenes.length === 0 ? 'No se pudo traer la lista de Dynamics' : 'Elige un almacén'}
               opciones={almacenes.map(almacenAOpcion)}
               onSeleccionar={elegirAlmacen}
               disabled={almacenes.length === 0}
@@ -341,7 +341,7 @@ export default function TiendasScreen(): JSX.Element {
           <Button label="Reintentar" onPress={cargar} />
         </Card>
       ) : tiendas.length === 0 ? (
-        <EmptyState icon={Store} title="Todavía no hay tiendas" subtitle="Creá la primera con el botón de arriba." />
+        <EmptyState icon={Store} title="Todavía no hay tiendas" subtitle="Crea la primera con el botón de arriba." />
       ) : (
         <View style={styles.lista}>
           <View style={styles.seccion}>
@@ -359,7 +359,7 @@ export default function TiendasScreen(): JSX.Element {
                 onPress={() => alternarSeleccion(tienda)}
                 accessibilityRole="button"
                 accessibilityState={{ selected: esSeleccionada }}
-                accessibilityLabel={`${tienda.nombre}. ${esSeleccionada ? 'Seleccionada' : 'Tocá para elegirla'}`}
+                accessibilityLabel={`${tienda.nombre}. ${esSeleccionada ? 'Seleccionada' : 'Toca para elegirla'}`}
               >
               <Card style={[styles.fila, esSeleccionada && styles.filaSeleccionada]}>
                 <View style={styles.filaCabecera}>
