@@ -27,7 +27,7 @@ describe('validarAjustes', () => {
   it('el campo vacío NO es 0: pide que se escriba', () => {
     const r = validarAjustes({ ...vacio, nota: 'x' });
     expect(r.ok).toBe(false);
-    if (!r.ok) expect(r.error).toMatch(/escribí 0/i);
+    if (!r.ok) expect(r.error).toMatch(/escribe 0/i);
   });
 
   it('acepta coma decimal: en el teclado del teléfono es lo que sale', () => {

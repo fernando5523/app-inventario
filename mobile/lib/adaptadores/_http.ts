@@ -137,17 +137,17 @@ export type ClaseErrorApi =
  * "Error de conexión" en rojo la hace pensar que perdió el conteo.
  */
 const MENSAJE_POR_CLASE: Record<ClaseErrorApi, string> = {
-  'sin-red': 'Sin señal en este sector. Seguí contando: nada se pierde.',
+  'sin-red': 'Sin señal en este sector. Sigue contando: nada se pierde.',
   timeout: 'La red de la tienda está lenta y el pedido no llegó a completarse.',
   cancelado: 'La operación se canceló.',
   'credenciales-invalidas': 'PIN incorrecto.',
-  'sesion-vencida': 'Tu sesión venció. Ingresá de nuevo con tu PIN.',
+  'sesion-vencida': 'Tu sesión venció. Ingresa de nuevo con tu PIN.',
   'sin-permiso': 'Tu rol no tiene permiso para esta operación.',
   'no-encontrado': 'No se encontró lo que buscabas.',
   conflicto: 'Ese registro ya existe.',
-  'demasiados-intentos': 'Demasiados intentos. Esperá unos minutos antes de volver a probar.',
+  'demasiados-intentos': 'Demasiados intentos. Espera unos minutos antes de volver a probar.',
   validacion: 'Los datos enviados no son válidos.',
-  servidor: 'El servidor tuvo un problema. Volvé a intentar en un momento.',
+  servidor: 'El servidor tuvo un problema. Vuelve a intentar en un momento.',
   'respuesta-invalida': 'El servidor respondió algo que no se pudo interpretar.',
 };
 

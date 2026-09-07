@@ -34,11 +34,11 @@ export function mensajeDeErrorIngreso(error: unknown): string {
     if (segundos !== null) {
       const minutos = Math.ceil(segundos / 60);
       return minutos > 0
-        ? `Demasiados intentos. Esperá ${minutos} min antes de volver a probar.`
-        : 'Demasiados intentos. Esperá un momento antes de volver a probar.';
+        ? `Demasiados intentos. Espera ${minutos} min antes de volver a probar.`
+        : 'Demasiados intentos. Espera un momento antes de volver a probar.';
     }
     // Sin el campo: el mensaje del backend ("…en unos minutos"), como antes.
   }
   if (error instanceof Error) return error.message;
-  return 'Intentá de nuevo.';
+  return 'Intenta de nuevo.';
 }

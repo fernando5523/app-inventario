@@ -58,7 +58,7 @@ function numeroDe(filas: ConfiguracionDto[], clave: string): number {
   // ciclo de conteo no es algo que este archivo pueda suponer.
   if (!fila) {
     throw new ErrorApi('respuesta-invalida', {
-      mensaje: `El servidor no devolvió la configuración "${clave}". Revisá la carga inicial del sistema.`,
+      mensaje: `El servidor no devolvió la configuración "${clave}". Revisa la carga inicial del sistema.`,
     });
   }
   const valor = Number(fila.valor);

@@ -154,7 +154,7 @@ describe('cambiarPin', () => {
   });
 
   it('en 429 (demasiados intentos), respeta el mensaje del limitador y no toca la sesión', async () => {
-    fetchQueDevuelve(json({ error: 'Demasiados intentos de ingreso. Volvé a intentar en unos minutos.' }, 429));
+    fetchQueDevuelve(json({ error: 'Demasiados intentos de ingreso. Vuelve a intentar en unos minutos.' }, 429));
 
     await expect(sesionApi.cambiarPin('000102', '820394')).rejects.toThrow(/Demasiados intentos/);
     await expect(sesionApi.sesionActiva()).resolves.not.toBeNull();

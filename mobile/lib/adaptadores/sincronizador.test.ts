@@ -171,7 +171,7 @@ describe('enviarPorRed: traduce hojasApi (resuelve o tira ErrorApi) a ResultadoE
     await expect(enviarPorRed(itemConteo, HOJA)).resolves.toEqual({
       ok: false,
       motivo: 'rechazado',
-      mensaje: 'Tu sesión venció. Ingresá de nuevo con tu PIN.',
+      mensaje: 'Tu sesión venció. Ingresa de nuevo con tu PIN.',
     });
   });
 

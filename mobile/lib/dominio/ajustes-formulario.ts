@@ -46,7 +46,7 @@ function aNumero(texto: string): number | null {
 export function validarAjustes(campos: CamposAjustes): ResultadoValidacion {
   const negativos = aNumero(campos.montoNegativos);
   if (negativos === null) {
-    return { ok: false, error: 'Poné cuánto suman los ajustes del mes. Si no hubo ninguno, escribí 0.' };
+    return { ok: false, error: 'Pon cuánto suman los ajustes del mes. Si no hubo ninguno, escribe 0.' };
   }
   if (negativos < 0) {
     return { ok: false, error: 'Los ajustes no pueden ser negativos: son plata a favor del personal.' };

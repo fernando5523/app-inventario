@@ -16,15 +16,15 @@ const con429 = (detalles: unknown) =>
 
 describe('mensajeDeErrorIngreso: "demasiados intentos" dice el minuto exacto', () => {
   it('redondea los segundos del backend HACIA ARRIBA a minutos', () => {
-    expect(mensajeDeErrorIngreso(con429({ reintentarEnSegundos: 180 }))).toBe('Demasiados intentos. Esperá 3 min antes de volver a probar.');
+    expect(mensajeDeErrorIngreso(con429({ reintentarEnSegundos: 180 }))).toBe('Demasiados intentos. Espera 3 min antes de volver a probar.');
     // 61 s NO es "1 min": a ese minuto todavía está bloqueada. Redondea a 2.
-    expect(mensajeDeErrorIngreso(con429({ reintentarEnSegundos: 61 }))).toBe('Demasiados intentos. Esperá 2 min antes de volver a probar.');
+    expect(mensajeDeErrorIngreso(con429({ reintentarEnSegundos: 61 }))).toBe('Demasiados intentos. Espera 2 min antes de volver a probar.');
     // Menos de un minuto redondea a 1, no a 0.
-    expect(mensajeDeErrorIngreso(con429({ reintentarEnSegundos: 30 }))).toBe('Demasiados intentos. Esperá 1 min antes de volver a probar.');
+    expect(mensajeDeErrorIngreso(con429({ reintentarEnSegundos: 30 }))).toBe('Demasiados intentos. Espera 1 min antes de volver a probar.');
   });
 
   it('0 segundos: "un momento", sin número', () => {
-    expect(mensajeDeErrorIngreso(con429({ reintentarEnSegundos: 0 }))).toBe('Demasiados intentos. Esperá un momento antes de volver a probar.');
+    expect(mensajeDeErrorIngreso(con429({ reintentarEnSegundos: 0 }))).toBe('Demasiados intentos. Espera un momento antes de volver a probar.');
   });
 
   it('sin el campo (backend viejo, o detalles ausente): cae al mensaje del backend, no inventa un tiempo', () => {
@@ -41,6 +41,6 @@ describe('mensajeDeErrorIngreso: "demasiados intentos" dice el minuto exacto', (
 
   it('un error que no es de API: mensaje del Error, o genérico si ni Error es', () => {
     expect(mensajeDeErrorIngreso(new Error('algo raro'))).toBe('algo raro');
-    expect(mensajeDeErrorIngreso('caída suelta')).toBe('Intentá de nuevo.');
+    expect(mensajeDeErrorIngreso('caída suelta')).toBe('Intenta de nuevo.');
   });
 });

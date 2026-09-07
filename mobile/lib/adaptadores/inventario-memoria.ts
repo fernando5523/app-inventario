@@ -93,7 +93,7 @@ export const inventarioMemoria: RepositorioInventario = {
   async crearHojas(inventarioId, tamano) {
     await simularLatencia();
     const inventario = await obtenerInventario(inventarioId);
-    if (!inventario) throw new Error(`Inventario ${inventarioId} no encontrado: traé el snapshot primero.`);
+    if (!inventario) throw new Error(`Inventario ${inventarioId} no encontrado: trae el snapshot primero.`);
     return crearHojasEnInventario(inventario, tamano);
   },
 
