@@ -505,11 +505,7 @@ export function HistorialScreen({ rol }: HistorialScreenProps): JSX.Element {
           ) : (
             detalle.hojas.map((h) => (
               <View key={h.id} style={styles.hojaMini}>
-                <Text style={styles.hojaMiniTitulo}>
-                  Hoja #{h.numero}
-                  {h.zona ? ` · Zona ${h.zona}` : ''}
-                  {h.gondola ? ` · Góndola ${h.gondola}` : ''}
-                </Text>
+                <Text style={styles.hojaMiniTitulo}>Hoja #{h.numero}</Text>
                 <Text style={styles.hojaMiniMeta}>
                   {h.contados}/{h.productos} · {h.asignados.map((a) => a.nombre).join(', ') || 'Sin asignar'}
                 </Text>
