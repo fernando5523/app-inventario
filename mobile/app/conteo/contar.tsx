@@ -230,7 +230,7 @@ export default function ContarScreen(): JSX.Element {
       setModalProducto(null);
       await refrescarHoja();
     } catch (error) {
-      Alert.alert('No se pudo guardar', error instanceof Error ? error.message : 'Intentá de nuevo.');
+      Alert.alert('No se pudo guardar', error instanceof Error ? error.message : 'Intenta de nuevo.');
     }
   }
 
@@ -309,7 +309,7 @@ export default function ContarScreen(): JSX.Element {
       // se dispara acá y no se espera al próximo trigger automático.
       void sincronizador.sincronizar();
     } catch (error) {
-      Alert.alert('No se pudo finalizar', error instanceof Error ? error.message : 'Intentá de nuevo.');
+      Alert.alert('No se pudo finalizar', error instanceof Error ? error.message : 'Intenta de nuevo.');
     } finally {
       setFinalizando(false);
     }

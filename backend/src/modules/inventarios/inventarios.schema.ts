@@ -41,7 +41,7 @@ export const asignarHojasSchema = z
      * personas pueden llamarse igual, y una hoja asignada a la persona
      * equivocada es una gondola que nadie cuenta.
      */
-    colaboradorIds: z.array(z.number().int().positive()).min(1, 'Elegí al menos una persona.'),
+    colaboradorIds: z.array(z.number().int().positive()).min(1, 'Elige al menos una persona.'),
   })
   .strict();
 export type AsignarHojasInput = z.infer<typeof asignarHojasSchema>;

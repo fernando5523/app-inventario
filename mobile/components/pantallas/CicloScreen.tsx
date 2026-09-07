@@ -293,7 +293,7 @@ export function CicloScreen({ rol }: CicloScreenProps): JSX.Element {
       if (cierre.rondaAbierta !== null) {
         Alert.alert(
           `${ORDINAL[cierre.rondaAbierta]} conteo abierto`,
-          `Se abrió la ronda ${cierre.rondaAbierta} con ${formatoMiles(cierre.hojas.length)} hoja${cierre.hojas.length === 1 ? '' : 's'} nueva${cierre.hojas.length === 1 ? '' : 's'}, sin asignar. Repartilas desde Gestión de hojas.`,
+          `Se abrió la ronda ${cierre.rondaAbierta} con ${formatoMiles(cierre.hojas.length)} hoja${cierre.hojas.length === 1 ? '' : 's'} nueva${cierre.hojas.length === 1 ? '' : 's'}, sin asignar. Repártelas desde Gestión de hojas.`,
         );
       } else {
         // No se abrió ronda nueva: el ciclo terminó (todo cuadró, o se llegó

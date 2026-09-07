@@ -81,7 +81,7 @@ export class D365AuthService {
     if (cred.origen === 'ninguno') {
       throw new ErrorHttp(
         400,
-        'Dynamics no configurado. Cargalas en el servidor con `npm run config:dynamics`, o poné D365_TENANT_ID, D365_CLIENT_ID, D365_CLIENT_SECRET y D365_BASE_URL en el .env.',
+        'Dynamics no configurado. Cárgalas en el servidor con `npm run config:dynamics`, o pon D365_TENANT_ID, D365_CLIENT_ID, D365_CLIENT_SECRET y D365_BASE_URL en el .env.',
       );
     }
 

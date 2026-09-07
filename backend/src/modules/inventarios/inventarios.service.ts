@@ -150,7 +150,7 @@ export async function crearHojas(actor: ColaboradorAutenticado, inventarioId: nu
     include: { empaques: { orderBy: { orden: 'asc' } } },
   });
   if (items.length === 0) {
-    throw new SolicitudInvalida('Este inventario no tiene ítems: traé primero el catálogo de Dynamics (paso 1).');
+    throw new SolicitudInvalida('Este inventario no tiene ítems: trae primero el catálogo de Dynamics (paso 1).');
   }
 
   // EL ORDEN ES LO QUE HACE UTIL A LA HOJA: agrupado por categoria, cada

@@ -373,7 +373,7 @@ export default function HojasScreen(): JSX.Element {
 
   function manejarErrorSnapshot(error: unknown): void {
     if (!(error instanceof ErrorSnapshot)) {
-      Alert.alert('No se pudo traer el catálogo', error instanceof Error ? error.message : 'Intentá de nuevo.');
+      Alert.alert('No se pudo traer el catálogo', error instanceof Error ? error.message : 'Intenta de nuevo.');
       return;
     }
     switch (error.codigo) {
@@ -415,7 +415,7 @@ export default function HojasScreen(): JSX.Element {
         );
         return;
       case 'timeout':
-        Alert.alert('Se cortó a mitad de camino', 'Podés reintentar: no quedó nada a medio hacer.');
+        Alert.alert('Se cortó a mitad de camino', 'Puedes reintentar: no quedó nada a medio hacer.');
         return;
       default:
         Alert.alert('No se pudo traer el catálogo', error.message);
@@ -466,7 +466,7 @@ export default function HojasScreen(): JSX.Element {
       setHojas(nuevas);
       setTamanoCreado(tamanoElegido);
     } catch (error) {
-      Alert.alert('No se pudieron crear las hojas', error instanceof Error ? error.message : 'Intentá de nuevo.');
+      Alert.alert('No se pudieron crear las hojas', error instanceof Error ? error.message : 'Intenta de nuevo.');
     } finally {
       setCreandoHojas(false);
     }
@@ -482,7 +482,7 @@ export default function HojasScreen(): JSX.Element {
       );
       setHojas(actualizadas);
     } catch (error) {
-      Alert.alert('No se pudieron repartir las hojas', error instanceof Error ? error.message : 'Intentá de nuevo.');
+      Alert.alert('No se pudieron repartir las hojas', error instanceof Error ? error.message : 'Intenta de nuevo.');
     } finally {
       setAsignando(false);
     }

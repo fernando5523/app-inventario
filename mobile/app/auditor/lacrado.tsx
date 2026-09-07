@@ -112,7 +112,7 @@ export default function LacradoScreen(): JSX.Element {
       const nuevo = await repositorioLacrado.aprobar(inventarioId);
       setEstado(nuevo);
     } catch (error) {
-      Alert.alert('No se pudo aprobar', error instanceof Error ? error.message : 'Intentá de nuevo.');
+      Alert.alert('No se pudo aprobar', error instanceof Error ? error.message : 'Intenta de nuevo.');
     } finally {
       setAprobando(false);
     }
@@ -126,7 +126,7 @@ export default function LacradoScreen(): JSX.Element {
       const nuevo = await repositorioLacrado.lacrar(inventarioId);
       setEstado(nuevo);
     } catch (error) {
-      Alert.alert('No se pudo lacrar', error instanceof Error ? error.message : 'Intentá de nuevo.');
+      Alert.alert('No se pudo lacrar', error instanceof Error ? error.message : 'Intenta de nuevo.');
     } finally {
       setLacrando(false);
     }
@@ -139,7 +139,7 @@ export default function LacradoScreen(): JSX.Element {
       const nuevo = await repositorioLacrado.marcarRegistradoEnDynamics(inventarioId);
       setEstado(nuevo);
     } catch (error) {
-      Alert.alert('No se pudo registrar', error instanceof Error ? error.message : 'Intentá de nuevo.');
+      Alert.alert('No se pudo registrar', error instanceof Error ? error.message : 'Intenta de nuevo.');
     } finally {
       setRegistrando(false);
     }
@@ -172,7 +172,7 @@ export default function LacradoScreen(): JSX.Element {
         : todasAprobadas
           ? 'Las dos firmas quedaron registradas. Ya se puede ejecutar el lacrado.'
           : !miFirma && pendientes.length === otrosAuditores.length
-            ? `Todavía no hay ninguna firma. Podés registrar la tuya ahora; la segunda la tiene que registrar ${nombresPendientes}, ingresando con su propio PIN.`
+            ? `Todavía no hay ninguna firma. Puedes registrar la tuya ahora; la segunda la tiene que registrar ${nombresPendientes}, ingresando con su propio PIN.`
             : !miFirma
               ? 'La otra firma ya está registrada. Falta la tuya para completar la doble validación.'
               : `Tu firma ya quedó registrada. Falta la de ${nombresPendientes}, y solo esa persona puede ponerla: tiene que ingresar con su propio PIN, desde otro equipo o cerrando esta sesión con el botón de arriba a la derecha.`;

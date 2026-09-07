@@ -67,7 +67,7 @@ export default function ConfiguracionScreen(): JSX.Element {
       setConfig(actualizado);
       Alert.alert('Configuración guardada', 'Los nuevos valores rigen desde ahora.');
     } catch (error) {
-      Alert.alert('No se pudo guardar', error instanceof Error ? error.message : 'Intentá de nuevo.');
+      Alert.alert('No se pudo guardar', error instanceof Error ? error.message : 'Intenta de nuevo.');
     } finally {
       setGuardando(false);
     }
@@ -79,7 +79,7 @@ export default function ConfiguracionScreen(): JSX.Element {
       const resultado = await repositorioConfigDynamics.probarConexion();
       Alert.alert(resultado.ok ? 'Conexión correcta' : 'No se pudo conectar', resultado.mensaje);
     } catch (error) {
-      Alert.alert('No se pudo probar la conexión', error instanceof Error ? error.message : 'Intentá de nuevo.');
+      Alert.alert('No se pudo probar la conexión', error instanceof Error ? error.message : 'Intenta de nuevo.');
     } finally {
       setProbando(false);
     }
@@ -94,7 +94,7 @@ export default function ConfiguracionScreen(): JSX.Element {
       ) : error || !config ? (
         <Card style={styles.tarjeta}>
           <Text style={styles.titulo}>No se pudo cargar la configuración</Text>
-          <Text style={styles.texto}>{error ?? 'Intentá de nuevo.'}</Text>
+          <Text style={styles.texto}>{error ?? 'Intenta de nuevo.'}</Text>
           <Button label="Reintentar" onPress={cargar} />
         </Card>
       ) : (
@@ -196,7 +196,7 @@ export default function ConfiguracionScreen(): JSX.Element {
               {dynamics?.secretoConfigurado ? <Badge label="Configurado" variant="ok" /> : <Badge label="Sin configurar" variant="espera" />}
             </View>
             <Text style={styles.texto}>
-              Se configura en el servidor, no desde el teléfono. Acá se ve qué credenciales está usando el sistema para que el paso 1 del
+              Se configura en el servidor, no desde el teléfono. Aquí se ve qué credenciales está usando el sistema para que el paso 1 del
               Coordinador ("Catálogo de Dynamics") traiga los ítems reales. Solo lectura del catálogo — nunca escribe en Dynamics.
             </Text>
 

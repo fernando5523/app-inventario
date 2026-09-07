@@ -89,7 +89,7 @@ export default function TiendasScreen(): JSX.Element {
       setMostrandoTodos(true);
       setSelectAlmacenAbierto(true);
     } catch (error) {
-      Alert.alert('No se pudo traer la lista completa', error instanceof Error ? error.message : 'Intentá de nuevo.');
+      Alert.alert('No se pudo traer la lista completa', error instanceof Error ? error.message : 'Intenta de nuevo.');
     } finally {
       setTrayendoTodos(false);
     }
@@ -196,7 +196,7 @@ export default function TiendasScreen(): JSX.Element {
       cerrarFormulario();
       await cargar();
     } catch (error) {
-      Alert.alert('No se pudo guardar la tienda', error instanceof Error ? error.message : 'Intentá de nuevo.');
+      Alert.alert('No se pudo guardar la tienda', error instanceof Error ? error.message : 'Intenta de nuevo.');
     } finally {
       setGuardando(false);
     }
@@ -207,7 +207,7 @@ export default function TiendasScreen(): JSX.Element {
       await repositorioTiendas.cambiarActiva(tienda.id, !(tienda.activa ?? true));
       await cargar();
     } catch (error) {
-      Alert.alert('No se pudo actualizar la tienda', error instanceof Error ? error.message : 'Intentá de nuevo.');
+      Alert.alert('No se pudo actualizar la tienda', error instanceof Error ? error.message : 'Intenta de nuevo.');
     }
   }
 
