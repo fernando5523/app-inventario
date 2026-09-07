@@ -261,7 +261,7 @@ export function ModalEscaner({ visible, error, onEscanear, onCerrar }: ModalEsca
               operario confiaría en un dato que el escáner no tiene. */}
           <Text style={styles.nota}>
             El escáner dice QUÉ producto es, no cuánto hay: el código es el mismo para una unidad que para una caja.
-            Después de confirmarlo, la cantidad y el empaque los cargás vos.
+            Después de confirmarlo, la cantidad y el empaque los cargas tú.
           </Text>
 
           {!permiso ? (
@@ -331,14 +331,14 @@ export function ModalEscaner({ visible, error, onEscanear, onCerrar }: ModalEsca
 
           {permiso?.granted ? (
             <Text style={styles.nota}>
-              Poné el código DENTRO del recuadro. Lo que quede afuera no se lee, para no tomar por error el código del
+              Pon el código DENTRO del recuadro. Lo que quede afuera no se lee, para no tomar por error el código del
               producto de al lado.
             </Text>
           ) : null}
 
           {avisoGeometria ? (
             <Text style={styles.aviso}>
-              No se puede ubicar el código dentro del cuadro en este teléfono. Alejá un poco la cámara y centrá el
+              No se puede ubicar el código dentro del cuadro en este teléfono. Aleja un poco la cámara y centra el
               código.
             </Text>
           ) : null}

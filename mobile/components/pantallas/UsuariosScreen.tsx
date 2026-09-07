@@ -170,7 +170,7 @@ export function UsuariosScreen({ rol }: UsuariosScreenProps): JSX.Element {
       limpiarFormulario();
       await cargar();
     } catch (error) {
-      Alert.alert('No se pudo crear la cuenta', error instanceof Error ? error.message : 'Intentá de nuevo.');
+      Alert.alert('No se pudo crear la cuenta', error instanceof Error ? error.message : 'Intenta de nuevo.');
     } finally {
       setCreando(false);
     }
@@ -181,7 +181,7 @@ export function UsuariosScreen({ rol }: UsuariosScreenProps): JSX.Element {
       await repositorioUsuarios.cambiarActivo(usuario.id, !usuario.activo);
       await cargar();
     } catch (error) {
-      Alert.alert('No se pudo actualizar la cuenta', error instanceof Error ? error.message : 'Intentá de nuevo.');
+      Alert.alert('No se pudo actualizar la cuenta', error instanceof Error ? error.message : 'Intenta de nuevo.');
     }
   }
 
@@ -251,7 +251,7 @@ export function UsuariosScreen({ rol }: UsuariosScreenProps): JSX.Element {
       await cargar();
       Alert.alert('Cuenta editada', `Se actualizaron los datos de ${editNombre.trim()}.`);
     } catch (error) {
-      Alert.alert('No se pudo editar la cuenta', error instanceof Error ? error.message : 'Intentá de nuevo.');
+      Alert.alert('No se pudo editar la cuenta', error instanceof Error ? error.message : 'Intenta de nuevo.');
     } finally {
       setGuardandoEdicion(false);
     }
@@ -272,7 +272,7 @@ export function UsuariosScreen({ rol }: UsuariosScreenProps): JSX.Element {
             await cargar();
             Alert.alert('Cuenta eliminada', `Se eliminó la cuenta de ${usuario.nombre}.`);
           } catch (error) {
-            Alert.alert('No se pudo eliminar la cuenta', error instanceof Error ? error.message : 'Intentá de nuevo.');
+            Alert.alert('No se pudo eliminar la cuenta', error instanceof Error ? error.message : 'Intenta de nuevo.');
           }
         },
       },
@@ -314,7 +314,7 @@ export function UsuariosScreen({ rol }: UsuariosScreenProps): JSX.Element {
               <Select
                 icon={Users}
                 valor={rolNuevo ? { id: rolNuevo, titulo: NOMBRE_ROL[rolNuevo] } : null}
-                placeholder="Elegí un rol"
+                placeholder="Elige un rol"
                 opciones={opcionesRol}
                 accessibilityLabel="Rol de la nueva cuenta"
                 abierto={campoAbierto === 'rol'}
@@ -332,7 +332,7 @@ export function UsuariosScreen({ rol }: UsuariosScreenProps): JSX.Element {
                 <Select
                   icon={MapPin}
                   valor={sucursalNueva ? { id: sucursalNueva.id, titulo: sucursalNueva.nombre } : null}
-                  placeholder="Elegí una sucursal"
+                  placeholder="Elige una sucursal"
                   opciones={opcionesTienda}
                   accessibilityLabel="Sucursal de la nueva cuenta"
                   abierto={campoAbierto === 'sucursal'}
@@ -371,7 +371,7 @@ export function UsuariosScreen({ rol }: UsuariosScreenProps): JSX.Element {
             <Button label="Reintentar" onPress={cargar} />
           </Card>
         ) : usuarios.length === 0 ? (
-          <EmptyState icon={Users} title="Todavía no hay cuentas" subtitle="Creá la primera con el botón de arriba." />
+          <EmptyState icon={Users} title="Todavía no hay cuentas" subtitle="Crea la primera con el botón de arriba." />
         ) : (
           <View style={styles.lista}>
             {/* Encabezado de sección: separa el formulario de la lista y dice
@@ -595,7 +595,7 @@ export function UsuariosScreen({ rol }: UsuariosScreenProps): JSX.Element {
               <Select
                 icon={Users}
                 valor={editRol ? { id: editRol, titulo: NOMBRE_ROL[editRol] } : null}
-                placeholder="Elegí un rol"
+                placeholder="Elige un rol"
                 opciones={opcionesRol}
                 accessibilityLabel="Rol de la cuenta"
                 abierto={campoEditAbierto === 'rol'}
@@ -613,7 +613,7 @@ export function UsuariosScreen({ rol }: UsuariosScreenProps): JSX.Element {
                 <Select
                   icon={MapPin}
                   valor={editSucursal ? { id: editSucursal.id, titulo: editSucursal.nombre } : null}
-                  placeholder="Elegí una sucursal"
+                  placeholder="Elige una sucursal"
                   opciones={opcionesTienda}
                   accessibilityLabel="Sucursal de la cuenta"
                   abierto={campoEditAbierto === 'sucursal'}
@@ -635,7 +635,7 @@ export function UsuariosScreen({ rol }: UsuariosScreenProps): JSX.Element {
 
       <TecladoPin
         visible={modalPinVisible}
-        titulo="Definí el PIN inicial"
+        titulo="Define el PIN inicial"
         valor={pin}
         longitud={LARGO_PIN}
         onCambiar={setPin}
@@ -661,7 +661,7 @@ export function UsuariosScreen({ rol }: UsuariosScreenProps): JSX.Element {
             await repositorioUsuarios.resetearPin(usuario.id, nuevoPin);
             Alert.alert('PIN actualizado', `Se asignó un PIN nuevo a ${usuario.nombre}.`);
           } catch (error) {
-            Alert.alert('No se pudo resetear el PIN', error instanceof Error ? error.message : 'Intentá de nuevo.');
+            Alert.alert('No se pudo resetear el PIN', error instanceof Error ? error.message : 'Intenta de nuevo.');
           }
         }}
         // Cierre manual (X, fondo, atrás): se cancela el reseteo sin tocar el

@@ -51,7 +51,7 @@ export function CambiarPinScreen(): JSX.Element {
       // demás de la misma persona) — no hay "seguir en la app" posible acá:
       // el próximo pedido con este token volvería 401. `cerrar()` limpia
       // el estado local para que sea el mismo camino que "Salir".
-      Alert.alert('PIN actualizado', 'A partir de ahora entrá con tu PIN nuevo.', [
+      Alert.alert('PIN actualizado', 'A partir de ahora entra con tu PIN nuevo.', [
         {
           text: 'Entendido',
           onPress: async () => {
@@ -65,7 +65,7 @@ export function CambiarPinScreen(): JSX.Element {
       // Administrador): el mensaje del backend ya viene en castellano y
       // pensado para el operario ("El PIN actual no es correcto.",
       // "Demasiados intentos..."), se muestra tal cual.
-      Alert.alert('No se pudo cambiar el PIN', error instanceof Error ? error.message : 'Intentá de nuevo.');
+      Alert.alert('No se pudo cambiar el PIN', error instanceof Error ? error.message : 'Intenta de nuevo.');
       setGuardando(false);
     }
   }
@@ -80,7 +80,7 @@ export function CambiarPinScreen(): JSX.Element {
           <Text style={styles.titulo}>Cambiar mi PIN</Text>
         </View>
         <Text style={styles.texto}>
-          Un PIN que también conoce otra persona no te identifica solo a vos. Elegí uno nuevo que no sea tu número de
+          Un PIN que también conoce otra persona no te identifica solo a ti. Elige uno nuevo que no sea tu número de
           colaborador ni una secuencia fácil.
         </Text>
 
@@ -96,7 +96,7 @@ export function CambiarPinScreen(): JSX.Element {
             {pinActual.length > 0 ? (
               <PinPuntos valor={pinActual} longitud={LARGO_PIN} revelado={false} />
             ) : (
-              <Text style={styles.valorVacio}>Ingresá tu PIN actual</Text>
+              <Text style={styles.valorVacio}>Ingresa tu PIN actual</Text>
             )}
           </Pressable>
         </View>
@@ -113,7 +113,7 @@ export function CambiarPinScreen(): JSX.Element {
             {pinNuevo.length > 0 ? (
               <PinPuntos valor={pinNuevo} longitud={LARGO_PIN} revelado={false} />
             ) : (
-              <Text style={styles.valorVacio}>Ingresá tu PIN nuevo</Text>
+              <Text style={styles.valorVacio}>Ingresa tu PIN nuevo</Text>
             )}
           </Pressable>
         </View>

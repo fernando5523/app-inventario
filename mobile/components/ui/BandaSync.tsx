@@ -57,7 +57,7 @@ export function sincronizacionDeHojas(hojas: HojaConteo[], cola?: EstadoCola): E
             estado: 'offline',
             mensaje: `Sin conexión — ${cola.pendientes} ${cola.pendientes === 1 ? 'conteo guardado' : 'conteos guardados'} en el equipo, se van a subir solos.`,
           }
-        : { estado: 'offline', mensaje: 'Sin conexión — seguí contando, se guarda en el equipo y sube solo.' };
+        : { estado: 'offline', mensaje: 'Sin conexión — sigue contando, se guarda en el equipo y sube solo.' };
     }
     if (cola.pendientes === 0) return { estado: 'ok', mensaje: 'Sincronizado' };
     const sufijo = cola.ultimaSync ? ` · última sync ${formatoFechaHora(cola.ultimaSync)}` : ' · todavía no sincronizó';
@@ -68,7 +68,7 @@ export function sincronizacionDeHojas(hojas: HojaConteo[], cola?: EstadoCola): E
   }
 
   if (hojas.some((h) => h.sync === 'error')) {
-    return { estado: 'error', mensaje: 'No se pudo sincronizar — revisá la conexión o pedí ayuda.' };
+    return { estado: 'error', mensaje: 'No se pudo sincronizar — revisa la conexión o pide ayuda.' };
   }
   const pendientes = hojas.filter((h) => h.sync !== 'sincronizado').length;
   if (pendientes === 0) return { estado: 'ok', mensaje: 'Sincronizado' };

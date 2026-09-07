@@ -289,7 +289,7 @@ export function HistorialScreen({ rol }: HistorialScreenProps): JSX.Element {
       // detalle) — es una acción puntual de tocar una fila, mismo criterio
       // que el resto de la app para una acción que puede fallar (login,
       // reseteo de PIN): un Alert, no un estado de pantalla nuevo.
-      Alert.alert('No se pudo abrir la historia', e instanceof Error ? e.message : 'Intentá de nuevo.');
+      Alert.alert('No se pudo abrir la historia', e instanceof Error ? e.message : 'Intenta de nuevo.');
     } finally {
       setCargandoHistoricoItem(false);
     }
@@ -659,7 +659,7 @@ export function HistorialScreen({ rol }: HistorialScreenProps): JSX.Element {
                 <View style={[styles.verifTarjeta, styles.verifAdvertencia]}>
                   <Text style={styles.ayuda}>
                     El formato con el que se guarda el sello cambió desde que se lacró este inventario. La
-                    comparación de arriba no es 100% concluyente: si hay dudas, contrastá el hash a mano contra el
+                    comparación de arriba no es 100% concluyente: si hay dudas, contrasta el hash a mano contra el
                     acta.
                   </Text>
                 </View>
@@ -788,7 +788,7 @@ export function HistorialScreen({ rol }: HistorialScreenProps): JSX.Element {
           </View>
 
           {inventarios.length === 0 ? (
-            <EmptyState icon={History} title="Ningún inventario con estos filtros" subtitle="Probá con otra combinación." />
+            <EmptyState icon={History} title="Ningún inventario con estos filtros" subtitle="Prueba con otra combinación." />
           ) : (
             <ScrollView horizontal={false} scrollEnabled={false} contentContainerStyle={styles.lista}>
               {inventarios.map((inv) => (

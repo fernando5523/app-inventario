@@ -221,8 +221,8 @@ export function ModalConteo({
                 <ScanLine size={15} color={colors.ok} />
                 <Text style={styles.confirmadoTexto}>
                   {empaquePreseleccionado
-                    ? `Producto confirmado con la cámara, y el código era el del empaque ${empaquePreseleccionado}. Ajustá la cantidad si tenés más de uno.`
-                    : 'Producto confirmado con la cámara. El código no dice cuántas hay: indicá abajo cuántos empaques cerrados y cuántas unidades sueltas tenés.'}
+                    ? `Producto confirmado con la cámara, y el código era el del empaque ${empaquePreseleccionado}. Ajusta la cantidad si tienes más de uno.`
+                    : 'Producto confirmado con la cámara. El código no dice cuántas hay: indica abajo cuántos empaques cerrados y cuántas unidades sueltas tienes.'}
                 </Text>
               </View>
             ) : null}

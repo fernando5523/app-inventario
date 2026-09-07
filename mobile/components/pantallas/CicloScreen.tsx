@@ -318,7 +318,7 @@ export function CicloScreen({ rol }: CicloScreenProps): JSX.Element {
     } catch (error) {
       // El backend rechaza con mensaje claro (hojas sin finalizar, o ya
       // cerrada): se muestra tal cual, no un "no se pudo" genérico.
-      Alert.alert('No se pudo cerrar la ronda', error instanceof Error ? error.message : 'Intentá de nuevo.');
+      Alert.alert('No se pudo cerrar la ronda', error instanceof Error ? error.message : 'Intenta de nuevo.');
     } finally {
       setCerrandoRonda(false);
     }
@@ -388,7 +388,7 @@ export function CicloScreen({ rol }: CicloScreenProps): JSX.Element {
             <Text style={styles.tarjetaTitulo}>Tamaño de hoja para los reconteos</Text>
             <Text style={styles.tarjetaTexto}>
               {rol === 'coordinador'
-                ? 'Elegí cuántos ítems entran por hoja en el 2do y 3er conteo. La cantidad de hojas se recalcula siempre — nunca es un número fijo, y la última hoja puede quedar parcial.'
+                ? 'Elige cuántos ítems entran por hoja en el 2do y 3er conteo. La cantidad de hojas se recalcula siempre — nunca es un número fijo, y la última hoja puede quedar parcial.'
                 : 'El Coordinador elige cuántos ítems entran por hoja en el 2do y 3er conteo. La cantidad de hojas se recalcula siempre — nunca es un número fijo.'}
             </Text>
             {rol === 'coordinador' ? (
@@ -432,7 +432,7 @@ export function CicloScreen({ rol }: CicloScreenProps): JSX.Element {
 
           <PasoCiclo
             titulo="Paso 3 · 3er Reconteo Definitivo"
-            descripcion={`Los ítems que persistieron tras la 2da pasada, auditados directamente${rol === 'auditor' ? ' por vos' : ''}. Las cantidades resultantes quedan fijas para la liquidación — no hay un 4to conteo.`}
+            descripcion={`Los ítems que persistieron tras la 2da pasada, auditados directamente${rol === 'auditor' ? ' por ti' : ''}. Las cantidades resultantes quedan fijas para la liquidación — no hay un 4to conteo.`}
             estado={comparativoT3 ? 'en-proceso' : 'sin-hojas'}
             calculo={comparativoT3?.detalle}
             avance={comparativoT3?.avance}
@@ -488,7 +488,7 @@ export function CicloScreen({ rol }: CicloScreenProps): JSX.Element {
                 label={
                   resumen.sePuedeCerrar
                     ? textoBotonCierre(rondaActiva, resumen.aRecontar, formatoMiles)
-                    : 'Terminá las hojas para poder cerrar'
+                    : 'Termina las hojas para poder cerrar'
                 }
                 icon={Lock}
                 onPress={cerrarRondaAhora}
