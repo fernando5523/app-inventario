@@ -5,8 +5,16 @@ import { ActivityIndicator, Alert, Pressable, StyleSheet, Text, View } from 'rea
 
 import { repositorioHojas, repositorioInventario } from '../../lib/contenedor';
 import { comparativoDeRonda } from '../../lib/dominio/comparativo-ronda';
-import { avanceConjunto, estadoConjunto, type EstadoConjunto } from '../../lib/dominio/hoja';
-import { ORDINAL, textoBotonCierre } from '../../lib/dominio/texto-cierre-ronda';
+import { avanceConjunto } from '../../lib/dominio/hoja';
+import {
+  estadoDePaso,
+  etiquetaARecontar,
+  ORDINAL,
+  RONDA_MAX,
+  textoBotonCierre,
+  textoCierreExplicacion,
+  type EstadoPaso,
+} from '../../lib/dominio/texto-cierre-ronda';
 import { partirEnHojas } from '../../lib/dominio/lote';
 import { TAMANOS_HOJA, type HojaConteo, type Rol, type TamanoHoja } from '../../lib/dominio/tipos';
 import type { ResumenRonda } from '../../lib/puertos/repositorios';
@@ -43,20 +51,21 @@ function textoCalculo(c: CalculoHojas, tamano: number): string {
 }
 
 /**
- * Traduce el estado de una ronda (`hoja.ts#EstadoConjunto`) al badge que
- * se muestra -- NUNCA "Finalizada" fija: antes de este cambio el badge
- * era texto hardcodeado, sin relacion con las hojas reales (hallazgo I-4
- * de la auditoria).
+ * Traduce el estado de un PASO (`texto-cierre-ronda.ts#EstadoPaso`, derivado
+ * de la ronda ACTIVA) al badge que se muestra -- NUNCA un literal. Antes el
+ * Paso 2 mostraba "En curso" fijo aunque esa ronda ya estuviera cerrada (bug
+ * del cliente; de la misma familia que el hallazgo I-4 de la auditoría, badges
+ * hardcodeados sin relación con la ronda real).
  */
-function badgeDeEstado(estado: EstadoConjunto): { label: string; variant: BadgeVariant } {
+function badgeDePaso(estado: EstadoPaso): { label: string; variant: BadgeVariant } {
   switch (estado) {
-    case 'finalizada':
-      return { label: 'Finalizada', variant: 'ok' };
-    case 'en-proceso':
+    case 'cerrado':
+      return { label: 'Cerrado', variant: 'ok' };
+    case 'en-curso':
       return { label: 'En curso', variant: 'proceso' };
     case 'pendiente':
       return { label: 'Pendiente', variant: 'espera' };
-    case 'sin-hojas':
+    case 'sin-datos':
       return { label: 'Sin datos todavía', variant: 'outline' };
   }
 }
@@ -79,7 +88,7 @@ const comparativoVisible = (r: ResumenRonda | null) =>
 interface PasoCicloProps {
   titulo: string;
   descripcion: string;
-  estado: EstadoConjunto;
+  estado: EstadoPaso;
   calculo?: string;
   /** Barra + cifra de avance REAL (items contados / total). Sin esto, no se dibuja embudo. */
   avance?: { pct: number; texto: string };
@@ -89,7 +98,7 @@ interface PasoCicloProps {
 
 /** Tarjeta de un paso del embudo (`.tarjeta` + `.embudo-*` en la maqueta). */
 function PasoCiclo({ titulo, descripcion, estado, calculo, avance, notaSinDato }: PasoCicloProps): JSX.Element {
-  const badge = badgeDeEstado(estado);
+  const badge = badgeDePaso(estado);
   return (
     <View style={styles.tarjeta}>
       <View style={styles.tarjetaCabecera}>
@@ -325,7 +334,6 @@ export function CicloScreen({ rol }: CicloScreenProps): JSX.Element {
   }
 
   const totalT1 = items ?? 0;
-  const estadoT1 = hojasT1 ? estadoConjunto(hojasT1) : 'sin-hojas';
   const avanceT1 = hojasT1 ? avanceConjunto(hojasT1) : null;
   const pctAvanceT1 = avanceT1 && avanceT1.totalItems > 0 ? (avanceT1.itemsContados / avanceT1.totalItems) * 100 : 0;
 
@@ -369,7 +377,7 @@ export function CicloScreen({ rol }: CicloScreenProps): JSX.Element {
           <PasoCiclo
             titulo="Paso 1 · 1er Conteo General"
             descripcion="100% del catálogo, comparado contra el stock de Dynamics a medida que se cuenta."
-            estado={estadoT1}
+            estado={estadoDePaso(1, rondaActiva, (hojasT1?.length ?? 0) > 0)}
             // El cálculo de hojas Y, cuando ya hay conteos, el comparativo
             // contra el ERP: cuántos cuadraron y cuántos pasarían al 2do.
             calculo={[textoCalculoHojasT1, comparativoT1?.detalle].filter(Boolean).join(' ')}
@@ -420,7 +428,7 @@ export function CicloScreen({ rol }: CicloScreenProps): JSX.Element {
           <PasoCiclo
             titulo="Paso 2 · 2do Reconteo"
             descripcion="Solo los ítems que no coincidieron con el stock de Dynamics en el 1er conteo."
-            estado={comparativoT2 ? 'en-proceso' : 'sin-hojas'}
+            estado={estadoDePaso(2, rondaActiva, comparativoT2 != null)}
             calculo={comparativoT2?.detalle}
             avance={comparativoT2?.avance}
             notaSinDato={
@@ -433,7 +441,7 @@ export function CicloScreen({ rol }: CicloScreenProps): JSX.Element {
           <PasoCiclo
             titulo="Paso 3 · 3er Reconteo Definitivo"
             descripcion={`Los ítems que persistieron tras la 2da pasada, auditados directamente${rol === 'auditor' ? ' por ti' : ''}. Las cantidades resultantes quedan fijas para la liquidación — no hay un 4to conteo.`}
-            estado={comparativoT3 ? 'en-proceso' : 'sin-hojas'}
+            estado={estadoDePaso(3, rondaActiva, comparativoT3 != null)}
             calculo={comparativoT3?.detalle}
             avance={comparativoT3?.avance}
             notaSinDato={
@@ -458,16 +466,12 @@ export function CicloScreen({ rol }: CicloScreenProps): JSX.Element {
                   apretar. */}
               <View style={styles.embudoResumen}>
                 <FilaResumen etiqueta="Cuadraron contra Dynamics" valor={`${formatoMiles(resumen.cuadrados)} (${formatoPct(resumen.porcentajeCuadrado)}%)`} tono="ok" />
-                <FilaResumen etiqueta="A recontar en el 2do conteo" valor={formatoMiles(resumen.aRecontar)} tono="falta" />
+                <FilaResumen etiqueta={etiquetaARecontar(rondaActiva, resumen.aRecontar)} valor={formatoMiles(resumen.aRecontar)} tono="falta" />
                 {resumen.sinContar > 0 ? <FilaResumen etiqueta="Sin contar todavía" valor={formatoMiles(resumen.sinContar)} /> : null}
                 {resumen.sinDatoErp > 0 ? <FilaResumen etiqueta="Sin stock del ERP (no se auditan)" valor={formatoMiles(resumen.sinDatoErp)} /> : null}
               </View>
 
-              <Text style={styles.tarjetaTexto}>
-                Cerrar abre el 2do conteo solo con lo que no cuadró — el 1er conteo queda intacto. Si quedan pocos
-                ítems para recontar, es media hora; si quedan muchos, conviene mirar qué se contó mal antes de mandar a
-                todos a recontar.
-              </Text>
+              <Text style={styles.tarjetaTexto}>{textoCierreExplicacion(rondaActiva, resumen.aRecontar)}</Text>
 
               {/* El motivo del bloqueo, a la vista: qué hojas faltan finalizar.
                   Un botón gris sin decir por qué obliga a adivinar. */}
@@ -509,7 +513,7 @@ export function CicloScreen({ rol }: CicloScreenProps): JSX.Element {
                 Al cierre del {ORDINAL[ultimoComparativo.ronda]} conteo: {ultimoComparativo.datos.detalle}
                 {ultimoComparativo.datos.avance.pct >= 100
                   ? ' El ciclo puede cerrarse: no queda nada por recontar.'
-                  : ` Los que no cuadren tras el ${ORDINAL[3]} quedan como diferencia definitiva para la liquidación.`}
+                  : ` Los que no cuadren tras el ${ORDINAL[RONDA_MAX]} quedan como diferencia definitiva para la liquidación.`}
               </Text>
             ) : (
               <Text style={styles.tarjetaTexto}>
