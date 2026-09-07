@@ -1,5 +1,5 @@
 import { router, useLocalSearchParams } from 'expo-router';
-import { ClipboardList, Filter, ScanLine, Search } from 'lucide-react-native';
+import { AlertTriangle, ClipboardList, Filter, ScanLine, Search } from 'lucide-react-native';
 import { useCallback, useEffect, useRef, useState, type JSX } from 'react';
 import { ActivityIndicator, Alert, Pressable, StyleSheet, Text, View } from 'react-native';
 
@@ -24,7 +24,7 @@ import { aplicarFiltro, contarFiltrosActivos, FILTRO_VACIO, textoFiltroActivo, t
 import { avance, puedeEditar, puedeFinalizar } from '../../lib/dominio/hoja';
 import { ORDINAL } from '../../lib/dominio/texto-cierre-ronda';
 import type { Conteo, HojaConteo, Producto } from '../../lib/dominio/tipos';
-import { cargarHojaActiva } from '../../lib/orquestar-carga-de-hoja';
+import { cargarHojaActiva, textoHojaVieja, type MotivoSinHoja } from '../../lib/orquestar-carga-de-hoja';
 import type { EstadoCola } from '../../lib/puertos/repositorios';
 import { useSesion } from '../../lib/sesion-contexto';
 import { colors, fonts, fontSize, radius } from '../../lib/theme';
@@ -37,7 +37,7 @@ import { colors, fonts, fontSize, radius } from '../../lib/theme';
  */
 export default function ContarScreen(): JSX.Element {
   const { sesion } = useSesion();
-  const params = useLocalSearchParams<{ numero?: string }>();
+  const params = useLocalSearchParams<{ hojaId?: string }>();
 
   const [cargando, setCargando] = useState(true);
   // La ronda ACTIVA del inventario. El Contador cuenta la ronda en curso, no
@@ -45,8 +45,16 @@ export default function ContarScreen(): JSX.Element {
   // SQLite sin red) en `cargarHojaActiva`, que también decide si cambió
   // desde la última carga.
   const [ronda, setRonda] = useState<number | null>(null);
-  const [numeroActivo, setNumeroActivo] = useState<string | null>(params.numero ?? null);
+  // Se navega por hojaId (identidad ESTABLE entre rondas), NUNCA por número de
+  // hoja: el número se repite en cada ronda y resolverlo contra la ronda
+  // activa dejaba a la persona parada en otra hoja #001, de otra persona/ronda
+  // (bug del cliente 2026-09-08). Ver orquestar-carga-de-hoja.ts.
+  const [hojaIdActivo, setHojaIdActivo] = useState<number | null>(params.hojaId ? Number(params.hojaId) : null);
   const [hoja, setHoja] = useState<HojaConteo | null>(null);
+  // Por qué NO hay hoja (distingue "hoja vieja" del vacío común) y de qué
+  // ronda era la que quedó vieja, para el texto del aviso.
+  const [motivo, setMotivo] = useState<MotivoSinHoja | null>(null);
+  const [rondaVieja, setRondaVieja] = useState<number | null>(null);
   const [filtro, setFiltro] = useState<FiltroProductos>(FILTRO_VACIO);
   const [modalFiltrosVisible, setModalFiltrosVisible] = useState(false);
 
@@ -92,6 +100,16 @@ export default function ContarScreen(): JSX.Element {
   const [estadoCola, setEstadoCola] = useState<EstadoCola>(sincronizador.estado());
   useEffect(() => sincronizador.suscribir(setEstadoCola), []);
 
+  // Elegir una hoja desde Mis hojas llega como un hojaId nuevo en la ruta: se
+  // apunta a ESA por id y se limpia cualquier "hoja vieja" anterior. `cargar`
+  // (al enfocar) la resuelve enseguida contra `mias` de la ronda activa.
+  useEffect(() => {
+    if (params.hojaId) {
+      setHojaIdActivo(Number(params.hojaId));
+      setMotivo(null);
+    }
+  }, [params.hojaId]);
+
   /**
    * La razón del rechazo, ACOTADA a esta hoja — `estadoCola.error` es
    * GLOBAL (cuenta toda la cola, ver hojas-sqlite.ts#estadoDeLaCola) y no
@@ -117,28 +135,34 @@ export default function ContarScreen(): JSX.Element {
   }, [hoja, estadoCola]);
 
   // Toda la resolución de "qué hoja toca ver ahora" vive en
-  // `cargarHojaActiva` (fuera del componente, testeable sin montar RN) —
-  // ver ese archivo para el hallazgo que la motiva: si la ronda activa
-  // cambió en el servidor desde la última vez, descarta el número de hoja
-  // viejo y elige el que corresponde a la ronda nueva, en vez de
-  // arrastrar a ciegas el de una ronda que el Coordinador ya cerró.
+  // `cargarHojaActiva` (fuera del componente, testeable sin montar RN) — ver
+  // ese archivo para el hallazgo que la motiva: se resuelve la hoja abierta
+  // POR ID contra `mias` de la ronda ACTIVA (identidad estable, no el número
+  // que se repite en cada ronda), y si ya no está —la ronda se cerró o se
+  // reasignó— se saca de la vista con un aviso, en vez de dejar contar en el
+  // vacío.
   const cargar = useCallback(async () => {
     if (!sesion) return;
     const resultado = await cargarHojaActiva(
-      { ronda, numeroActivo },
+      { ronda, hojaId: hojaIdActivo },
       {
         activo: () => repositorioInventario.activo(sesion.sucursal!.id),
         inventarioIdSinRed,
         rondaActivaSinRed,
         mias: repositorioHojas.mias,
-        porNumero: repositorioHojas.porNumero,
       },
     );
     setRonda(resultado.ronda);
-    setNumeroActivo(resultado.numeroActivo);
     setHoja(resultado.hoja);
+    setMotivo(resultado.motivo);
+    setRondaVieja(resultado.rondaVieja);
+    // Solo se fija el id cuando se resolvió una hoja REAL (primera carga por
+    // el tab). Con 'hoja-vieja' se conserva el id abierto para que el aviso
+    // persista hasta que la persona elija otra desde Mis hojas — la pantalla
+    // nunca se salta sola a otra hoja.
+    if (resultado.hoja) setHojaIdActivo(resultado.hojaId);
     setCargando(false);
-  }, [sesion, ronda, numeroActivo]);
+  }, [sesion, ronda, hojaIdActivo]);
 
   // `useRefrescoAlEnfocar` cubre los dos disparadores (enfocar la pantalla
   // Y volver la app a primer plano) con un solo candado -- ver ese hook
@@ -165,15 +189,19 @@ export default function ContarScreen(): JSX.Element {
   }
 
   if (!hoja) {
+    // 'hoja-vieja': la que estaba abierta ya no es de la ronda activa o se
+    // reasignó — se saca de la vista con un aviso que dice qué pasó y a dónde
+    // ir, en vez de dejar contar en el vacío (cada conteo daría 403).
+    const hojaVieja = motivo === 'hoja-vieja' && ronda !== null;
     return (
       <PantallaConTabs contentStyle={styles.centrado}>
         <EmptyState
-          icon={ClipboardList}
-          title="No tienes ninguna hoja para contar"
-          subtitle="Elige una hoja con catálogo cargado desde Mis hojas."
+          icon={hojaVieja ? AlertTriangle : ClipboardList}
+          title={hojaVieja ? 'Esta hoja ya no está disponible' : 'No tienes ninguna hoja para contar'}
+          subtitle={hojaVieja ? textoHojaVieja(rondaVieja, ronda) : 'Elige una hoja con catálogo cargado desde Mis hojas.'}
         >
           <Pressable style={styles.irAMisHojas} onPress={() => router.push('/conteo/mis-hojas')}>
-            <Text style={styles.irAMisHojasTexto}>Ir a Mis hojas</Text>
+            <Text style={styles.irAMisHojasTexto}>{hojaVieja ? 'Volver a Mis hojas' : 'Ir a Mis hojas'}</Text>
           </Pressable>
         </EmptyState>
       </PantallaConTabs>

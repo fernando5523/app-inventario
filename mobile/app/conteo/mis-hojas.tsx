@@ -151,7 +151,10 @@ export default function MisHojasScreen(): JSX.Element {
       Alert.alert('Sin catálogo cargado', `La Hoja #${hoja.numero} todavía no tiene productos cargados.`);
       return;
     }
-    router.push({ pathname: '/conteo/contar', params: { numero: hoja.numero } });
+    // Por hojaId (identidad estable), NO por número: el número se repite en
+    // cada ronda y Contar terminaba resolviéndolo contra otra hoja #001 (bug
+    // del cliente 2026-09-08).
+    router.push({ pathname: '/conteo/contar', params: { hojaId: String(hoja.id) } });
   }
 
   const contadosTotal = hojas.reduce((acc, h) => acc + h.conteos.length, 0);
