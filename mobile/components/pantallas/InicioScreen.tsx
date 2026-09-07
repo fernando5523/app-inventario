@@ -1,6 +1,6 @@
 import { router, useFocusEffect } from 'expo-router';
 import { useCallback, useEffect, useState, type JSX } from 'react';
-import { ActivityIndicator, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, AppState, StyleSheet, Text, View, type AppStateStatus } from 'react-native';
 
 import { inventarioIdSinRed, rondaActivaSinRed } from '../../lib/adaptadores/hojas-sqlite';
 import { repositorioHojas, repositorioInventario, repositorioTiendas, repositorioUsuarios, sincronizador } from '../../lib/contenedor';
@@ -196,6 +196,23 @@ export function InicioScreen(): JSX.Element {
       };
     }, [sesion, intentoManual]),
   );
+
+  // HALLAZGO (2026-09-08, cliente en el ciclo real): el Coordinador cierra
+  // una ronda y abre la siguiente con el Contador (o el Coordinador/Auditor
+  // mirando "Tu avance") todavía con la app abierta EN ESTA pantalla, sin
+  // cambiar de tab -- ahí nunca se dispara un focus nuevo. Volver a primer
+  // plano es la otra señal de que puede haber cambiado algo del servidor.
+  // Reusa el mismo truco que el botón "Reintentar": incrementar
+  // `intentoManual` fuerza al `useFocusEffect` de arriba a correr de
+  // nuevo sin duplicar su lógica de las 4 ramas (administrador/
+  // coordinador/conteo/auditor) acá.
+  useEffect(() => {
+    function alCambiarAppState(siguiente: AppStateStatus): void {
+      if (siguiente === 'active') setIntentoManual((n) => n + 1);
+    }
+    const suscripcion = AppState.addEventListener('change', alCambiarAppState);
+    return () => suscripcion.remove();
+  }, []);
 
   // El layout del grupo (RolTabsLayout) ya garantiza que no se llega acá
   // sin sesión — este guard es solo para que TypeScript no se queje.

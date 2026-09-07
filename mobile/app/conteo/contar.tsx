@@ -1,7 +1,7 @@
 import { router, useFocusEffect, useLocalSearchParams } from 'expo-router';
 import { ClipboardList, Filter, ScanLine, Search } from 'lucide-react-native';
 import { useCallback, useEffect, useRef, useState, type JSX } from 'react';
-import { ActivityIndicator, Alert, Pressable, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Alert, AppState, Pressable, StyleSheet, Text, View, type AppStateStatus } from 'react-native';
 
 import {
   AvanceFila,
@@ -23,6 +23,7 @@ import { aplicarFiltro, contarFiltrosActivos, FILTRO_VACIO, textoFiltroActivo, t
 import { avance, puedeEditar, puedeFinalizar } from '../../lib/dominio/hoja';
 import { ORDINAL } from '../../lib/dominio/texto-cierre-ronda';
 import type { Conteo, HojaConteo, Producto } from '../../lib/dominio/tipos';
+import { cargarHojaActiva } from '../../lib/orquestar-carga-de-hoja';
 import type { EstadoCola } from '../../lib/puertos/repositorios';
 import { useSesion } from '../../lib/sesion-contexto';
 import { colors, fonts, fontSize, radius } from '../../lib/theme';
@@ -38,10 +39,10 @@ export default function ContarScreen(): JSX.Element {
   const params = useLocalSearchParams<{ numero?: string }>();
 
   const [cargando, setCargando] = useState(true);
-  const [inventarioId, setInventarioId] = useState<number | null>(null);
   // La ronda ACTIVA del inventario. El Contador cuenta la ronda en curso, no
-  // siempre la 1ra: se resuelve junto con el inventarioId (del servidor, o de
-  // SQLite sin red) y se pasa a cada lectura de hojas.
+  // siempre la 1ra: se resuelve junto con el inventario (del servidor, o de
+  // SQLite sin red) en `cargarHojaActiva`, que también decide si cambió
+  // desde la última carga.
   const [ronda, setRonda] = useState<number | null>(null);
   const [numeroActivo, setNumeroActivo] = useState<string | null>(params.numero ?? null);
   const [hoja, setHoja] = useState<HojaConteo | null>(null);
@@ -114,82 +115,60 @@ export default function ContarScreen(): JSX.Element {
     };
   }, [hoja, estadoCola]);
 
-  // Carga inicial: si no vino un número de hoja por parámetro (se entró
-  // por el tab "Contar", no desde Mis hojas), se busca la hoja en proceso
-  // del colaborador — nunca todas(), siempre mias().
-  useEffect(() => {
+  // Toda la resolución de "qué hoja toca ver ahora" vive en
+  // `cargarHojaActiva` (fuera del componente, testeable sin montar RN) —
+  // ver ese archivo para el hallazgo que la motiva: si la ronda activa
+  // cambió en el servidor desde la última vez, descarta el número de hoja
+  // viejo y elige el que corresponde a la ronda nueva, en vez de
+  // arrastrar a ciegas el de una ronda que el Coordinador ya cerró.
+  //
+  // `idCargaRef` evita que una carga vieja (disparada por un focus o un
+  // vuelta-a-primer-plano anterior) pise el resultado de una más nueva si
+  // las dos terminan fuera de orden -- solo se aplica el resultado de la
+  // ÚLTIMA carga que arrancó.
+  const idCargaRef = useRef(0);
+  const cargar = useCallback(async () => {
     if (!sesion) return;
-    let vigente = true;
+    const miId = ++idCargaRef.current;
+    const resultado = await cargarHojaActiva(
+      { ronda, numeroActivo },
+      {
+        activo: () => repositorioInventario.activo(sesion.sucursal!.id),
+        inventarioIdSinRed,
+        rondaActivaSinRed,
+        mias: repositorioHojas.mias,
+        porNumero: repositorioHojas.porNumero,
+      },
+    );
+    if (idCargaRef.current !== miId) return;
+    setRonda(resultado.ronda);
+    setNumeroActivo(resultado.numeroActivo);
+    setHoja(resultado.hoja);
+    setCargando(false);
+  }, [sesion, ronda, numeroActivo]);
 
-    async function iniciar(): Promise<void> {
-      let inventarioIdResuelto: number | null;
-      let rondaResuelta: number | null;
-      try {
-        const activo = await repositorioInventario.activo(sesion!.sucursal!.id);
-        inventarioIdResuelto = activo?.inventarioId ?? null;
-        rondaResuelta = activo?.rondaActiva ?? null;
-      } catch {
-        // Sin red (u otra falla): no hay forma de preguntarle al servidor
-        // cuál es el inventario activo, pero el avance de HOY puede estar
-        // completo en SQLite — se sigue con eso en vez de dejar la
-        // pantalla colgada esperando una respuesta que no va a llegar. Ver
-        // inventarioIdSinRed: es EL bug que reportó el cliente ("conté sin
-        // señal, cerré la app, la reabrí y vi un spinner infinito" con el
-        // trabajo sano en el teléfono, pero invisible).
-        inventarioIdResuelto = await inventarioIdSinRed();
-        rondaResuelta = inventarioIdResuelto ? await rondaActivaSinRed(inventarioIdResuelto) : null;
-      }
-      if (!vigente) return;
-      // Sin inventario o sin ronda (no hay hojas todavía) no hay nada que
-      // contar: la ronda es tan requisito como el inventario.
-      if (!inventarioIdResuelto || rondaResuelta === null) {
-        setCargando(false);
-        return;
-      }
-      setInventarioId(inventarioIdResuelto);
-      setRonda(rondaResuelta);
-
-      let numero = numeroActivo;
-      if (!numero) {
-        const mias = await repositorioHojas.mias(inventarioIdResuelto, rondaResuelta);
-        const actual = mias.find((h) => h.estado === 'en-proceso' && h.productos.length > 0) ?? mias.find((h) => h.productos.length > 0);
-        numero = actual?.numero ?? null;
-        if (vigente && numero) setNumeroActivo(numero);
-      }
-
-      if (!numero) {
-        if (vigente) setCargando(false);
-        return;
-      }
-
-      const encontrada = await repositorioHojas.porNumero(inventarioIdResuelto, numero, rondaResuelta);
-      if (vigente) {
-        setHoja(encontrada);
-        setCargando(false);
-      }
-    }
-
-    iniciar();
-    return () => {
-      vigente = false;
-    };
-  }, [sesion, numeroActivo]);
-
-  const refrescarHoja = useCallback(async () => {
-    if (!inventarioId || !numeroActivo || ronda === null) return;
-    const actualizada = await repositorioHojas.porNumero(inventarioId, numeroActivo, ronda);
-    setHoja(actualizada);
-  }, [inventarioId, numeroActivo, ronda]);
-
-  // useFocusEffect: si se vuelve a esta pantalla por el tab (no por "Abrir
-  // hoja" en Mis hojas), la hoja ya cargada puede haber cambiado mientras
-  // tanto — no-op en el montaje inicial (inventarioId/numeroActivo todavía
-  // null), la carga real la hace el efecto de arriba.
+  // useFocusEffect, no useEffect: cubre tanto la carga inicial (se
+  // dispara solo al montar si la pantalla ya está enfocada) como volver a
+  // este tab después de estar en otro -- la hoja o la ronda pueden haber
+  // cambiado mientras tanto.
   useFocusEffect(
     useCallback(() => {
-      refrescarHoja();
-    }, [refrescarHoja]),
+      cargar();
+    }, [cargar]),
   );
+
+  // EL CASO QUE REPORTÓ EL CLIENTE: el Coordinador cierra una ronda y abre
+  // la siguiente con el Contador todavía con la app abierta, SIN cambiar
+  // de pantalla -- ahí nunca se dispara un focus nuevo. Volver a primer
+  // plano es la otra señal de "puede haber cambiado algo del lado del
+  // servidor, valdría la pena volver a mirar".
+  useEffect(() => {
+    function alCambiarAppState(siguiente: AppStateStatus): void {
+      if (siguiente === 'active') cargar();
+    }
+    const suscripcion = AppState.addEventListener('change', alCambiarAppState);
+    return () => suscripcion.remove();
+  }, [cargar]);
 
   if (!sesion) return <View />;
 
@@ -247,7 +226,7 @@ export default function ContarScreen(): JSX.Element {
         return nuevo;
       });
       setModalProducto(null);
-      await refrescarHoja();
+      await cargar();
     } catch (error) {
       Alert.alert('No se pudo guardar', error instanceof Error ? error.message : 'Intenta de nuevo.');
     }

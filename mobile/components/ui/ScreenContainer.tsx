@@ -5,6 +5,7 @@ import {
   ScrollView,
   StyleSheet,
   View,
+  type ScrollViewProps,
   type StyleProp,
   type ViewStyle,
 } from 'react-native';
@@ -16,6 +17,8 @@ export interface ScreenContainerProps extends PropsWithChildren {
   scrollable?: boolean;
   style?: StyleProp<ViewStyle>;
   contentStyle?: StyleProp<ViewStyle>;
+  /** Solo tiene efecto con `scrollable` -- "tirar para refrescar" (`<RefreshControl />`), pasado directo al `ScrollView`. */
+  refreshControl?: ScrollViewProps['refreshControl'];
 }
 
 export function ScreenContainer({
@@ -23,6 +26,7 @@ export function ScreenContainer({
   scrollable = false,
   style,
   contentStyle,
+  refreshControl,
 }: ScreenContainerProps): JSX.Element {
   return (
     <SafeAreaView edges={['top', 'left', 'right']} style={[styles.root, style]}>
@@ -32,6 +36,7 @@ export function ScreenContainer({
             style={styles.flex}
             contentContainerStyle={[styles.content, contentStyle]}
             showsVerticalScrollIndicator={false}
+            refreshControl={refreshControl}
           >
             {children}
           </ScrollView>

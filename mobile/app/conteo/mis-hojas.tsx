@@ -1,7 +1,7 @@
 import { router, useFocusEffect } from 'expo-router';
 import { ClipboardList, Lock, TriangleAlert, WifiOff } from 'lucide-react-native';
 import { useCallback, useEffect, useState, type JSX } from 'react';
-import { ActivityIndicator, Alert, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Alert, AppState, RefreshControl, StyleSheet, Text, View, type AppStateStatus } from 'react-native';
 
 import { AvanceFila, BandaSync, BarraApp, Button, EmptyState, TarjetaHoja, sincronizacionDeHojas } from '../../components/ui';
 import { PantallaConTabs } from '../../components/navegacion/PantallaConTabs';
@@ -80,6 +80,10 @@ export default function MisHojasScreen(): JSX.Element {
   // activo().rondaActiva; sin red, de rondaActivaSinRed. NUNCA fija en "1er":
   // en la ronda 2 el rótulo tiene que decir "2do conteo".
   const [rondaActual, setRondaActual] = useState<number | null>(null);
+  // Solo para el "tirar para refrescar" -- `cargando` es el spinner de
+  // pantalla completa de la carga inicial, este es el de la rueda nativa
+  // de `RefreshControl` mientras la lista ya visible se actualiza.
+  const [refrescando, setRefrescando] = useState(false);
   const [estadoCola, setEstadoCola] = useState<EstadoCola>(sincronizador.estado());
   useEffect(() => sincronizador.suscribir(setEstadoCola), []);
 
@@ -138,6 +142,28 @@ export default function MisHojasScreen(): JSX.Element {
     }, [cargar]),
   );
 
+  // HALLAZGO (2026-09-08, cliente en el ciclo real): el Coordinador cierra
+  // una ronda y asigna las hojas de la siguiente con el Contador todavía
+  // con la app abierta EN ESTA MISMA pantalla -- sin cambiar de tab nunca
+  // se dispara un focus nuevo, así que la lista se quedaba mostrando la
+  // ronda vieja hasta cerrar y reabrir la app. Volver a primer plano es la
+  // otra señal de que puede haber cambiado algo del lado del servidor.
+  useEffect(() => {
+    function alCambiarAppState(siguiente: AppStateStatus): void {
+      if (siguiente === 'active') cargar();
+    }
+    const suscripcion = AppState.addEventListener('change', alCambiarAppState);
+    return () => suscripcion.remove();
+  }, [cargar]);
+
+  // "Tirar para refrescar": la persona puede forzar el mismo chequeo sin
+  // esperar a un focus o a que la app pase a segundo plano y vuelva.
+  async function refrescarConGesto(): Promise<void> {
+    setRefrescando(true);
+    await cargar();
+    setRefrescando(false);
+  }
+
   if (!sesion) return <View />;
 
   async function salir(): Promise<void> {
@@ -166,7 +192,11 @@ export default function MisHojasScreen(): JSX.Element {
   const sync = sincronizacionDeHojas(hojas, estadoCola);
 
   return (
-    <PantallaConTabs scrollable contentStyle={styles.contenido}>
+    <PantallaConTabs
+      scrollable
+      contentStyle={styles.contenido}
+      refreshControl={<RefreshControl refreshing={refrescando} onRefresh={refrescarConGesto} colors={[colors.rojo]} tintColor={colors.rojo} />}
+    >
       <View style={styles.cabeceraHoja}>
         <BarraApp
           rotulo={`Mis hojas · ${ORDINAL[rondaActual ?? 1]} conteo`}
