@@ -1,15 +1,25 @@
 /**
- * Decision del cliente: limpiar TODOS los datos operativos y dejar SOLO a
- * los administradores (rol = 'administrador'), antes de compilar el
+ * Decision del cliente: limpiar datos operativos antes de compilar el
  * 2.12.0. Borra en orden de FKs todo lo que cuelga de un inventario
  * (lacrado, aprobaciones, liquidaciones, resultado, diferencias, hojas,
- * productos, conteos, catalogo), los inventarios mismos, los colaboradores
- * no administradores y las sucursales que se quedan sin inventarios.
+ * productos, conteos, catalogo).
  *
- * NUNCA toca: Colaborador con rol=administrador, Configuracion,
- * ConfigDynamics (las credenciales en si -- solo se limpia el puntero de
- * "quien la actualizo por ultimo" si apuntaba a alguien que se borra, para
- * no dejar una FK rota).
+ * DOS MODOS de que sobrevive fuera de lo transaccional:
+ *
+ *   Por defecto: solo quedan los Colaborador con rol=administrador; el
+ *   resto de colaboradores y las sucursales que se quedan sin inventarios
+ *   tambien se borran.
+ *
+ *   --conservar-usuarios-tiendas: NO toca Colaborador (ningun rol) ni
+ *   Sucursal -- solo borra lo transaccional (inventarios, catalogo, hojas,
+ *   conteos, lacrados, liquidaciones, etc.). Pensado para dejar el padron
+ *   armado (usuarios y tiendas ya cargados) y poder sembrar un inventario
+ *   de prueba encima sin tener que recrear a nadie
+ *   (ver sembrar-inventario-prueba.ts).
+ *
+ * NUNCA toca: Configuracion, ConfigDynamics (las credenciales en si -- solo
+ * se limpia el puntero de "quien la actualizo por ultimo" si apuntaba a
+ * alguien que se borra, para no dejar una FK rota).
  *
  * DOS GUARDAS, aparte de --dry-run/--confirmar:
  *
@@ -26,8 +36,8 @@
  *     borra, y lo vuelve a activar antes de terminar -- la proteccion sigue
  *     intacta para produccion, solo se salta en este momento puntual.
  *
- *   npx tsx scripts/limpiar-datos-dev.ts --dry-run   [--incluye-lacrados]
- *   npx tsx scripts/limpiar-datos-dev.ts --confirmar [--incluye-lacrados]
+ *   npx tsx scripts/limpiar-datos-dev.ts --dry-run   [--incluye-lacrados] [--conservar-usuarios-tiendas]
+ *   npx tsx scripts/limpiar-datos-dev.ts --confirmar [--incluye-lacrados] [--conservar-usuarios-tiendas]
  */
 import { prisma } from '../src/config/database';
 
@@ -39,11 +49,12 @@ async function main(): Promise<number> {
 
   const modo = process.argv[2];
   if (modo !== '--dry-run' && modo !== '--confirmar') {
-    console.error('Uso: npx tsx scripts/limpiar-datos-dev.ts --dry-run|--confirmar [--incluye-lacrados]');
+    console.error('Uso: npx tsx scripts/limpiar-datos-dev.ts --dry-run|--confirmar [--incluye-lacrados] [--conservar-usuarios-tiendas]');
     return 1;
   }
   const dryRun = modo === '--dry-run';
   const incluyeLacrados = process.argv.includes('--incluye-lacrados');
+  const conservarUsuariosTiendas = process.argv.includes('--conservar-usuarios-tiendas');
 
   const noAdminWhere = { rol: { not: 'administrador' as const } };
 
@@ -73,22 +84,28 @@ async function main(): Promise<number> {
   const conteoEmpaquesCatalogo = await prisma.empaqueCatalogo.count({ where: porCatalogo });
   const conteoCatalogo = await prisma.catalogoItem.count({ where: invNotIn });
   const conteoInventarios = await prisma.inventario.count({ where: idNotIn });
-  const conteoSesionesNoAdmin = await prisma.sesionToken.count({ where: { colaborador: noAdminWhere } });
-  const conteoAuditoriaNoAdmin = await prisma.registroAuditoria.count({ where: { actor: noAdminWhere } });
-  const conteoColaboradoresNoAdmin = await prisma.colaborador.count({ where: noAdminWhere });
+  const totalColaboradores = await prisma.colaborador.count();
+  const totalSucursales = await prisma.sucursal.count();
 
-  const todosLosInventarios = await prisma.inventario.findMany({ select: { id: true, sucursalId: true } });
-  const idsQueSobreviven = incluyeLacrados ? [] : todosLosInventarios.filter((i) => idsLacrados.includes(i.id)).map((i) => i.id);
-  const sucursalesQueSobreviven = new Set(
-    todosLosInventarios.filter((i) => idsQueSobreviven.includes(i.id)).map((i) => i.sucursalId),
-  );
-  const conteoSucursalesTotal = await prisma.sucursal.count();
-  const conteoSucursalesABorrar = conteoSucursalesTotal - sucursalesQueSobreviven.size;
+  // Con --conservar-usuarios-tiendas ninguno de estos cinco se toca: quedan
+  // en 0 en el resumen y en la transaccion, sea cual sea el dato real.
+  const conteoSesionesNoAdmin = conservarUsuariosTiendas ? 0 : await prisma.sesionToken.count({ where: { colaborador: noAdminWhere } });
+  const conteoAuditoriaNoAdmin = conservarUsuariosTiendas ? 0 : await prisma.registroAuditoria.count({ where: { actor: noAdminWhere } });
+  const conteoColaboradoresNoAdmin = conservarUsuariosTiendas ? 0 : await prisma.colaborador.count({ where: noAdminWhere });
+  const configDynamicsAApuntarANoAdmin = conservarUsuariosTiendas ? 0 : await prisma.configDynamics.count({ where: { actualizadoPor: noAdminWhere } });
+  const adminsConCreadorNoAdmin = conservarUsuariosTiendas ? 0 : await prisma.colaborador.count({ where: { rol: 'administrador', creadoPor: noAdminWhere } });
 
-  const configDynamicsAApuntarANoAdmin = await prisma.configDynamics.count({ where: { actualizadoPor: noAdminWhere } });
-  const adminsConCreadorNoAdmin = await prisma.colaborador.count({ where: { rol: 'administrador', creadoPor: noAdminWhere } });
+  let conteoSucursalesABorrar = 0;
+  if (!conservarUsuariosTiendas) {
+    const todosLosInventarios = await prisma.inventario.findMany({ select: { id: true, sucursalId: true } });
+    const idsQueSobreviven = incluyeLacrados ? [] : todosLosInventarios.filter((i) => idsLacrados.includes(i.id)).map((i) => i.id);
+    const sucursalesQueSobreviven = new Set(
+      todosLosInventarios.filter((i) => idsQueSobreviven.includes(i.id)).map((i) => i.sucursalId),
+    );
+    conteoSucursalesABorrar = totalSucursales - sucursalesQueSobreviven.size;
+  }
 
-  console.log(`--- Resumen (${dryRun ? 'DRY RUN, no se borra nada' : 'MODO REAL'}${incluyeLacrados ? ', INCLUYE LACRADOS' : ''}) ---`);
+  console.log(`--- Resumen (${dryRun ? 'DRY RUN, no se borra nada' : 'MODO REAL'}${incluyeLacrados ? ', INCLUYE LACRADOS' : ''}${conservarUsuariosTiendas ? ', CONSERVA USUARIOS Y TIENDAS' : ''}) ---`);
   console.log(`lineas_conteo:            ${conteoLineas}`);
   console.log(`conteos:                  ${conteoConteos}`);
   console.log(`empaques:                 ${conteoEmpaques}`);
@@ -119,9 +136,13 @@ async function main(): Promise<number> {
     }
   }
 
-  const admins = await prisma.colaborador.findMany({ where: { rol: 'administrador' }, select: { id: true, nombre: true, dni: true } });
-  console.log(`\nQuedan como administradores (${admins.length}):`);
-  for (const a of admins) console.log(`  id=${a.id} nombre="${a.nombre}" dni=${a.dni}`);
+  if (conservarUsuariosTiendas) {
+    console.log(`\nConserva ${totalColaboradores} colaborador(es) y ${totalSucursales} sucursal(es) (--conservar-usuarios-tiendas): ninguno se toca.`);
+  } else {
+    const admins = await prisma.colaborador.findMany({ where: { rol: 'administrador' }, select: { id: true, nombre: true, dni: true } });
+    console.log(`\nQuedan como administradores (${admins.length}):`);
+    for (const a of admins) console.log(`  id=${a.id} nombre="${a.nombre}" dni=${a.dni}`);
+  }
 
   if (dryRun) {
     console.log('\nDRY RUN: no se borro nada. Correr con --confirmar para ejecutar.');
@@ -134,14 +155,16 @@ async function main(): Promise<number> {
         await tx.$executeRawUnsafe('ALTER TABLE lacrados_inventario DISABLE TRIGGER lacrado_inmutable');
       }
 
-      // Puntero de auditoria de ConfigDynamics: la fila y sus credenciales
-      // quedan intactas, solo se limpia quien la actualizo por ultimo si esa
-      // persona va a dejar de existir.
-      await tx.configDynamics.updateMany({ where: { actualizadoPor: noAdminWhere }, data: { actualizadoPorId: null } });
-      // Mismo criterio para un administrador cuyo creador (creadoPorId) fuera
-      // un no-administrador -- no deberia pasar dada la jerarquia de alta,
-      // pero se limpia igual para no dejar una FK rota.
-      await tx.colaborador.updateMany({ where: { rol: 'administrador', creadoPor: noAdminWhere }, data: { creadoPorId: null } });
+      if (!conservarUsuariosTiendas) {
+        // Puntero de auditoria de ConfigDynamics: la fila y sus credenciales
+        // quedan intactas, solo se limpia quien la actualizo por ultimo si esa
+        // persona va a dejar de existir.
+        await tx.configDynamics.updateMany({ where: { actualizadoPor: noAdminWhere }, data: { actualizadoPorId: null } });
+        // Mismo criterio para un administrador cuyo creador (creadoPorId) fuera
+        // un no-administrador -- no deberia pasar dada la jerarquia de alta,
+        // pero se limpia igual para no dejar una FK rota.
+        await tx.colaborador.updateMany({ where: { rol: 'administrador', creadoPor: noAdminWhere }, data: { creadoPorId: null } });
+      }
 
       await tx.lineaConteo.deleteMany({ where: porConteoHoja });
       await tx.conteo.deleteMany({ where: porHoja });
@@ -158,17 +181,19 @@ async function main(): Promise<number> {
       await tx.catalogoItem.deleteMany({ where: invNotIn });
       await tx.inventario.deleteMany({ where: idNotIn });
 
-      await tx.sesionToken.deleteMany({ where: { colaborador: noAdminWhere } });
-      await tx.registroAuditoria.deleteMany({ where: { actor: noAdminWhere } });
-      // Un solo deleteMany: Postgres chequea la FK autoreferencial
-      // (creado_por_id) al final del statement, cuando ya no queda ninguna
-      // fila no-admin -- borrar de a una rompería con quien creo a quien.
-      await tx.colaborador.deleteMany({ where: noAdminWhere });
+      if (!conservarUsuariosTiendas) {
+        await tx.sesionToken.deleteMany({ where: { colaborador: noAdminWhere } });
+        await tx.registroAuditoria.deleteMany({ where: { actor: noAdminWhere } });
+        // Un solo deleteMany: Postgres chequea la FK autoreferencial
+        // (creado_por_id) al final del statement, cuando ya no queda ninguna
+        // fila no-admin -- borrar de a una rompería con quien creo a quien.
+        await tx.colaborador.deleteMany({ where: noAdminWhere });
 
-      // Solo las sucursales que se quedaron sin ningun inventario (las que
-      // tenian unicamente inventarios lacrados sobreviven si no se paso
-      // --incluye-lacrados, porque ese inventario sigue colgando de ellas).
-      await tx.sucursal.deleteMany({ where: { inventarios: { none: {} } } });
+        // Solo las sucursales que se quedaron sin ningun inventario (las que
+        // tenian unicamente inventarios lacrados sobreviven si no se paso
+        // --incluye-lacrados, porque ese inventario sigue colgando de ellas).
+        await tx.sucursal.deleteMany({ where: { inventarios: { none: {} } } });
+      }
 
       if (incluyeLacrados) {
         await tx.$executeRawUnsafe('ALTER TABLE lacrados_inventario ENABLE TRIGGER lacrado_inmutable');
@@ -185,7 +210,11 @@ async function main(): Promise<number> {
     console.log(`\nVerificacion post-limpieza: trigger lacrado_inmutable tgenabled=${tgenabled} (${tgenabled === 'O' ? 'HABILITADO, correcto' : 'ATENCION: no quedo habilitado como se esperaba'})`);
   }
 
-  console.log('\nListo. Datos limpiados, solo quedan los administradores.');
+  console.log(
+    conservarUsuariosTiendas
+      ? '\nListo. Dato transaccional limpiado; colaboradores y sucursales quedaron intactos.'
+      : '\nListo. Datos limpiados, solo quedan los administradores.',
+  );
   return 0;
 }
 

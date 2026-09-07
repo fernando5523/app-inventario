@@ -462,6 +462,14 @@ async function obtenerCatalogoReal(
   tipo: TipoInventario,
   almacen?: string,
   onProductos?: (traidos: number, total: number) => void,
+  /**
+   * Solo para sembrar un inventario de PRUEBA chico (ver
+   * scripts/sembrar-inventario-prueba.ts): trunca el catalogo a los
+   * primeros N items CON EXISTENCIA, despues de filtrar por stock -- nunca
+   * antes, o "los primeros N" podrian no tener nada en el almacen.
+   * `undefined` (el default real, usado por crearSnapshot) no trunca nada.
+   */
+  limite?: number,
 ): Promise<{ catalogo: CatalogoItemDto[]; descartes: DescartesPorStock }> {
   const dataAreaId = await d365AuthService.getDataAreaId();
   const filtroCompania = dataAreaId ? `dataAreaId eq '${dataAreaId}'` : undefined;
@@ -574,7 +582,7 @@ async function obtenerCatalogoReal(
   // Solo se filtra si de verdad se consulto stock: sin almacen no hay dato y
   // filtrar dejaria el inventario vacio.
   const catalogo = almacen ? sinFiltrar.filter((item) => tieneExistencia(item.stockErp)) : sinFiltrar;
-  return { catalogo, descartes };
+  return { catalogo: limite !== undefined ? catalogo.slice(0, limite) : catalogo, descartes };
 }
 
 // ---------------------------------------------------------------------------
@@ -655,6 +663,8 @@ export async function crearSnapshot(
   tipo: TipoInventario = 'mensual',
   almacenOverride?: string,
   actorId = 0,
+  /** Ver el comentario de `limite` en `obtenerCatalogoReal`. Sin uso en la app real. */
+  limite?: number,
 ): Promise<SnapshotDto> {
   const sucursal = await prisma.sucursal.findUnique({
     where: { id: sucursalId },
@@ -719,8 +729,11 @@ export async function crearSnapshot(
     const resultado =
       modo === 'ejemplo'
         ? { catalogo: obtenerCatalogoEjemplo(), descartes: { sinRegistro: 0, stockCero: 0 } }
-        : await obtenerCatalogoReal(tipo, almacen, (traidos, total) =>
-            progreso.reportar(sucursalId, traidos, total),
+        : await obtenerCatalogoReal(
+            tipo,
+            almacen,
+            (traidos, total) => progreso.reportar(sucursalId, traidos, total),
+            limite,
           );
     catalogo = resultado.catalogo;
     descartes = resultado.descartes;
