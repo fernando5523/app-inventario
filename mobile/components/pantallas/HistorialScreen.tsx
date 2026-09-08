@@ -7,7 +7,7 @@ import { ActivityIndicator, Alert, Pressable, RefreshControl, ScrollView, StyleS
 
 import { useRefrescoAlEnfocar } from '../hooks/useRefrescoAlEnfocar';
 import { repositorioHistorial, repositorioSesion } from '../../lib/contenedor';
-import { nombreArchivoDiferencias } from '../../lib/dominio/exportar-diferencias';
+import { estadoExportacion, nombreArchivoDiferencias } from '../../lib/dominio/exportar-diferencias';
 import type { Rol, Sucursal } from '../../lib/dominio/tipos';
 import type {
   DetalleInventarioHistorico,
@@ -440,6 +440,9 @@ export function HistorialScreen({ rol }: HistorialScreenProps): JSX.Element {
   if (detalle) {
     const est = ESTADOS[detalle.estado];
     const r = detalle.resultado;
+    // Si hay algo que exportar y, si no, por qué. Ver
+    // dominio/exportar-diferencias.ts#estadoExportacion.
+    const exportacion = estadoExportacion(detalle.estado, diferencias.length);
     return (
       <PantallaConTabs scrollable contentStyle={styles.contenido}>
         <BarraApp rotulo="Historial" sede={detalle.sucursalNombre} cifras={detalle.periodo} />
@@ -505,17 +508,23 @@ export function HistorialScreen({ rol }: HistorialScreenProps): JSX.Element {
           )}
         </View>
 
-        {/* Igual que las diferencias: no existen hasta que se cierra el
-            conteo (recién ahí se fija el resultado de los 3 conteos contra
-            el ERP). "En curso" no las pide -- ver abrirDetalle. */}
-        {detalle.estado !== 'en_curso' ? (
-          <>
+        {/* La sección se muestra SIEMPRE, incluso con el conteo abierto.
+            Antes desaparecía entera cuando el inventario estaba `en_curso`, y
+            el Auditor que entraba a exportar no veía ni el botón ni una
+            explicación (hallazgo 2026-09-08) -- "no está" y "todavía no" se
+            ven igual cuando no hay nada en pantalla. Las diferencias siguen
+            sin pedirse hasta el cierre (ver abrirDetalle): lo que cambia es
+            que ahora se dice por qué. */}
+        <>
             <Text style={styles.seccion}>Diferencias</Text>
             <View style={styles.tarjeta}>
               {errorCierre ? (
                 <Text style={styles.ayuda}>{errorCierre}</Text>
-              ) : diferencias.length === 0 ? (
-                <Text style={styles.sinDatos}>Sin diferencias: el conteo cuadró contra el ERP.</Text>
+              ) : !exportacion.puedeExportar ? (
+                // El motivo REAL, no uno genérico: distingue "todavía no
+                // cerró" de "cerró y cuadró" de "se anuló". Ver
+                // dominio/exportar-diferencias.ts#estadoExportacion.
+                <Text style={styles.sinDatos}>{exportacion.motivo}</Text>
               ) : (
                 // Ya vienen ordenadas por valor absoluto descendente (ver
                 // historial-api.ts#aDiferencias): lo que más plata mueve arriba.
@@ -553,8 +562,15 @@ export function HistorialScreen({ rol }: HistorialScreenProps): JSX.Element {
 
             {/* DUEÑO: el Auditor -- pedido del cliente. El Administrador es
                 un rol técnico que no participa del inventario, así que no
-                se le ofrece el botón (aunque el backend lo dejaría pasar). */}
-            {rol === 'auditor' ? (
+                se le ofrece el botón (aunque el backend lo dejaría pasar).
+
+                Y SOLO cuando hay algo que exportar: con el inventario cerrado
+                y cero diferencias el botón habría generado un .xlsx con solo
+                los encabezados. Un archivo vacío mandado por WhatsApp es peor
+                que no tener el botón -- quien lo recibe no sabe si el
+                inventario cuadró o si la exportación falló. Se oculta, y el
+                renglón de arriba dice por qué. */}
+            {rol === 'auditor' && exportacion.puedeExportar ? (
               <Pressable
                 style={[styles.verificarBtn, exportando && styles.verificarBtnDeshabilitado]}
                 onPress={exportarDiferencias}
@@ -569,8 +585,7 @@ export function HistorialScreen({ rol }: HistorialScreenProps): JSX.Element {
                 )}
               </Pressable>
             ) : null}
-          </>
-        ) : null}
+        </>
 
         <Text style={styles.seccion}>Hojas de conteo</Text>
         <View style={styles.tarjeta}>
