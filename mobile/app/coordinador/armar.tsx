@@ -383,7 +383,7 @@ export default function ArmarHojasScreen(): JSX.Element {
             { text: 'Ir a configurar', onPress: () => router.push('/administrador/config') },
           ]);
         } else {
-          Alert.alert('Dynamics no está configurado', `${error.message} Pedile a un Administrador que cargue las credenciales.`);
+          Alert.alert('Dynamics no está configurado', `${error.message} Pídele a un Administrador que cargue las credenciales.`);
         }
         return;
       case 'sin-almacen':
@@ -397,14 +397,14 @@ export default function ArmarHojasScreen(): JSX.Element {
         } else {
           Alert.alert(
             'La sucursal no tiene almacén',
-            `${error.message} Pedile a un Administrador que le asocie el almacén de Dynamics a esta tienda.`,
+            `${error.message} Pídele a un Administrador que le asocie el almacén de Dynamics a esta tienda.`,
           );
         }
         return;
       case 'credenciales-rechazadas':
         Alert.alert(
           'Dynamics rechazó las credenciales',
-          'La conexión con la tienda anduvo bien, pero Dynamics no aceptó las credenciales configuradas. Avisale a un Administrador.',
+          'La conexión con la tienda funcionó bien, pero Dynamics no aceptó las credenciales configuradas. Avísale a un Administrador.',
         );
         return;
       case 'timeout':
@@ -540,7 +540,7 @@ export default function ArmarHojasScreen(): JSX.Element {
                     onPress={() => router.push('/administrador/tiendas')}
                   />
                 ) : (
-                  <Text style={styles.avisoBloqueoTexto}>Pedile a un Administrador que la configure.</Text>
+                  <Text style={styles.avisoBloqueoTexto}>Pídele a un Administrador que la configure.</Text>
                 )}
               </View>
             ) : null}

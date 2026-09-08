@@ -178,7 +178,7 @@ describe('aplicarResultadoEnvio', () => {
         clase: 'sin-permiso',
       });
       expect(resultado?.razon).toBe(
-        'Este conteo no se puede guardar: la hoja #001 no está asignada a vos. Pedile al coordinador que te la asigne.',
+        'Este conteo no se puede guardar: la hoja #001 no está asignada a tu usuario. Pídele al coordinador que te la asigne.',
       );
     });
 

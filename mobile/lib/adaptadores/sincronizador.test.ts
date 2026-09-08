@@ -149,7 +149,7 @@ describe('estado()/suscribir(): la banda tiene que decir la verdad', () => {
       rechazados: 1,
       razonRechazo: null,
       razonRechazoDefinitivo:
-        'Este conteo no se puede guardar: la hoja #001 no está asignada a vos. Pedile al coordinador que te la asigne.',
+        'Este conteo no se puede guardar: la hoja #001 no está asignada a tu usuario. Pídele al coordinador que te la asigne.',
     });
 
     await sincronizadorReal.sincronizar();
@@ -157,8 +157,8 @@ describe('estado()/suscribir(): la banda tiene que decir la verdad', () => {
     const estado = sincronizadorReal.estado();
     expect(estado.pendientes).toBe(0); // NO se cuenta como "va a subir".
     expect(estado.rechazados).toBe(1);
-    expect(estado.rechazo).toContain('no está asignada a vos');
-    expect(estado.rechazo).toContain('Pedile al coordinador');
+    expect(estado.rechazo).toContain('no está asignada a tu usuario');
+    expect(estado.rechazo).toContain('Pídele al coordinador');
   });
 
   it('enviarPorRed traduce un 403 al mensaje accionable, con el NÚMERO de la hoja', async () => {
@@ -176,7 +176,7 @@ describe('estado()/suscribir(): la banda tiene que decir la verdad', () => {
       ok: false,
       motivo: 'rechazado',
       clase: 'sin-permiso',
-      mensaje: 'Este conteo no se puede guardar: la hoja #001 no está asignada a vos. Pedile al coordinador que te la asigne.',
+      mensaje: 'Este conteo no se puede guardar: la hoja #001 no está asignada a tu usuario. Pídele al coordinador que te la asigne.',
     });
   });
 

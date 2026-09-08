@@ -132,7 +132,7 @@ export async function registrarAjustes(
   if (inventario.resultado === null) {
     throw new Conflicto(
       'El inventario está cerrado pero no tiene resultado calculado. ' +
-        'Sin él no hay faltante sobre el que ajustar -- avisale a soporte.',
+        'Sin él no hay faltante sobre el que ajustar: avísale a soporte.',
     );
   }
 

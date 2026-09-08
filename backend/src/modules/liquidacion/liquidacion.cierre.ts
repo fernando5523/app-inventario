@@ -259,7 +259,7 @@ export async function liquidar(
   if (r === null) {
     throw new Conflicto(
       'El inventario esta cerrado pero no tiene resultado calculado. ' +
-        'Sin el no hay faltante que repartir -- avisale a soporte antes de firmar nada.',
+        'Sin él no hay faltante que repartir: avísale a soporte antes de firmar nada.',
     );
   }
 

@@ -132,7 +132,12 @@ export const RECHAZO_SIN_MOTIVO = 'Rechazado por el servidor.';
  * siguiente. Este lo reemplaza a propósito.
  */
 export function mensajeRechazoPorPermiso(numeroHoja: string): string {
-  return `Este conteo no se puede guardar: la hoja #${numeroHoja} no está asignada a vos. Pedile al coordinador que te la asigne.`;
+  // Español latino neutro con TUTEO, igual que el resto de la app (barrido
+  // de 2d2f417/3fec7a2/cb1c201/0a337fc/2c7c0a8). Este texto se escribió
+  // después de ese barrido y se coló con voseo ("a vos", "Pedile") -- lo vio
+  // el cliente en una captura. Se lee en Perú y en México, que es donde se
+  // usa.
+  return `Este conteo no se puede guardar: la hoja #${numeroHoja} no está asignada a tu usuario. Pídele al coordinador que te la asigne.`;
 }
 
 /**
