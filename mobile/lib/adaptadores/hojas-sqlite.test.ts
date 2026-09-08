@@ -32,6 +32,7 @@ import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 vi.mock('react-native', () => ({ Platform: { OS: 'android' } }));
 vi.mock('expo-constants', () => ({ default: { expoConfig: { extra: {} } } }));
 
+import { categoriasDeHoja, codigosDeHoja, nombresDeHoja } from '../dominio/filtro-productos';
 import { avance } from '../dominio/hoja';
 import type { Sesion } from '../dominio/tipos';
 import { migrarSqlite, MIGRACIONES_SQLITE } from './sqlite-esquema';
@@ -1261,6 +1262,89 @@ describe('AISLAMIENTO ENTRE CONTADORES: cada uno ve SOLO sus hojas, aunque el ca
     vi.mocked(sesionApi.sesionActiva).mockResolvedValue(null as unknown as Sesion);
     expect(await hojasSqlite.mias(INV, 1)).toEqual([]);
     expect(await hojasSqlite.porNumero(INV, '001', 1)).toBeNull();
+  });
+});
+
+describe('VERIFICACIÓN (2026-09-08, pedido del cliente): el modal de filtros de Contar nunca ve productos de OTRA hoja', () => {
+  // El conteo es CIEGO y por hoja: si `categoriasDeHoja`/`nombresDeHoja`/
+  // `codigosDeHoja` (lo que arma `opcionesEnCascada` para el modal de
+  // filtros, ver `ModalFiltrosProductos.tsx` y `contar.tsx:468:
+  // productos={hoja.productos}`) llegaran a mezclar productos de OTRA
+  // ronda o de OTRO colaborador -- aunque estén en el MISMO teléfono, en
+  // la MISMA tabla compartida `hojas_estructura`/`productos_estructura`
+  // (ver el comentario de `mias()` sobre el bug de min-5, ef44a2d) --
+  // rompería el conteo ciego. `productosDeHojaDb` filtra por `hoja_id`
+  // (hojas-sqlite.ts:230), así que esto debería estar bien de por sí;
+  // este test lo blinda de punta a punta -- desde la descarga hasta las
+  // funciones exactas que consume el modal -- para que falle si mañana
+  // alguien cambia la fuente de `productos` por algo más amplio.
+  const INV_FILTRO = 777701;
+
+  function hojaConProducto(
+    id: number,
+    numero: string,
+    asignadoAId: number,
+    quien: string,
+    productoId: number,
+    categoria: string,
+    codigo: string,
+    descripcion: string,
+  ) {
+    return {
+      id,
+      inventarioId: INV_FILTRO,
+      numero,
+      zona: 'Zona F',
+      gondola: 'F1',
+      tamano: 10,
+      estado: 'pendiente' as const,
+      sync: 'sincronizado' as const,
+      asignados: [quien],
+      asignadoAId,
+      asignadoA2Id: null,
+      productos: [
+        {
+          id: productoId,
+          codigo,
+          codigoBarras: `77${codigo}`,
+          descripcion,
+          categoria,
+          empaques: [{ nombre: 'Unidad', factor: 1 }],
+        },
+      ],
+      conteos: [],
+    };
+  }
+
+  it('hoja ajena (otra ronda, otro colaborador) ya en el cache compartido: su categoría/nombre/código no aparecen al abrir la hoja propia', async () => {
+    // La hoja AJENA llega por `todas()` -- el camino del Coordinador, que
+    // deja en el teléfono hojas de colaboradores que no son quien está
+    // mirando la pantalla. Ronda 2, asignada a "Otro Colaborador" (id
+    // 9999, no María).
+    const HOJA_AJENA = hojaConProducto(7777002, '900', 9999, 'Otro Colaborador', 97770021, 'HIELO', '9902', 'Hielo En Cubitos 1KG');
+    vi.mocked(hojasApi.todas).mockResolvedValueOnce([HOJA_AJENA]);
+    await hojasSqlite.todas(INV_FILTRO, 2);
+
+    // La hoja PROPIA de María: ronda 1, la que de verdad tiene abierta en
+    // Contar (contar.tsx resuelve por `mias()` de la ronda activa).
+    const HOJA_PROPIA = hojaConProducto(7777001, '901', 501, 'María Rojas', 97770011, 'LICOR-RON', '9901', 'Ron Especial 750ML');
+    vi.mocked(hojasApi.mias).mockResolvedValueOnce([HOJA_PROPIA]);
+    const [hoja] = await hojasSqlite.mias(INV_FILTRO, 1);
+
+    expect(hoja).toBeDefined();
+    // 1) La hoja resuelta trae SOLO su propio producto -- nada de la ajena.
+    expect(hoja!.productos.map((p) => p.codigo)).toEqual(['9901']);
+
+    // 2) Lo que alimenta el modal de filtros (las mismas funciones que usa
+    //    `opcionesEnCascada` en filtro-productos.ts) ve solo lo propio.
+    expect(categoriasDeHoja(hoja!.productos)).toEqual(['LICOR-RON']);
+    expect(nombresDeHoja(hoja!.productos)).toEqual(['Ron Especial 750ML']);
+    expect(codigosDeHoja(hoja!.productos)).toEqual(['9901']);
+
+    // 3) Ninguna huella de la hoja ajena -- ni categoría, ni nombre, ni código.
+    expect(categoriasDeHoja(hoja!.productos)).not.toContain('HIELO');
+    expect(nombresDeHoja(hoja!.productos)).not.toContain('Hielo En Cubitos 1KG');
+    expect(codigosDeHoja(hoja!.productos)).not.toContain('9902');
   });
 });
 
