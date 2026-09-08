@@ -1,7 +1,7 @@
 import { memo, type JSX } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 
-import { diferenciaUnidades, diferenciaValor, veredicto } from '../../lib/dominio/auditoria';
+import { diferenciaUnidades, diferenciaValor, rondasNecesarias, veredicto } from '../../lib/dominio/auditoria';
 import type { ItemAuditoria } from '../../lib/dominio/tipos';
 import { colors, fonts, fontSize, radius } from '../../lib/theme';
 import { Badge, type BadgeVariant } from './Badge';
@@ -15,25 +15,47 @@ const BORDE_VEREDICTO: Record<string, string> = {
   cuadrado: 'rgba(10,107,87,0.34)',
   falta: 'rgba(162,59,46,0.38)',
   empresa: colors.borde,
+  // Neutro: un ítem sin datos no se pinta ni verde (éxito) ni rojo (falta).
+  sin_contar: colors.borde,
+  sin_erp: colors.borde,
 };
 
+const ORDINAL: Record<number, string> = { 1: '1er', 2: '2do', 3: '3er' };
+
 function badgeDe(item: ItemAuditoria, v: string): { texto: string; variante: BadgeVariant } {
+  // Sin datos: neutro y honesto — NUNCA verde, NUNCA nombra una ronda que no ocurrió.
+  if (v === 'sin_contar') return { texto: 'Sin contar', variante: 'outline' };
+  if (v === 'sin_erp') return { texto: 'Sin dato del ERP', variante: 'outline' };
   if (v === 'cuadrado') {
-    const pasada = item.conteo1 === item.stockErp ? '1er' : item.conteo2 === item.stockErp ? '2do' : '3er';
-    return { texto: `Cuadró en ${pasada}`, variante: 'ok' };
+    // La ronda REAL en la que quedó fijado, no un default a la 3ra.
+    return { texto: `Cuadró en ${ORDINAL[rondasNecesarias(item)] ?? 'el conteo'}`, variante: 'ok' };
   }
   if (v === 'empresa') return { texto: 'Regla Gerencia · Empresa', variante: 'default' };
-  return { texto: 'Faltante definitivo', variante: 'espera' };
+  const dif = diferenciaUnidades(item);
+  return { texto: dif !== null && dif > 0 ? 'Sobrante definitivo' : 'Faltante definitivo', variante: 'espera' };
 }
 
 function notaDe(item: ItemAuditoria, v: string): { texto: string; clase: 'ok' | 'falta' | 'neutral' } {
+  if (v === 'sin_contar') {
+    return { texto: 'Todavía sin contar — ninguna hoja finalizada incluye este ítem.', clase: 'neutral' };
+  }
+  if (v === 'sin_erp') {
+    return {
+      texto: 'Sin dato del ERP — el snapshot de Dynamics no trajo stock para este ítem, no hay contra qué compararlo.',
+      clase: 'neutral',
+    };
+  }
   if (v === 'cuadrado') {
     return { texto: `Cuadró en el conteo — no llegó a necesitar una pasada más.`, clase: 'ok' };
   }
-  const dif = diferenciaUnidades(item);
+  // falta o empresa: el veredicto garantiza ERP y conteo, así que la
+  // diferencia es un número; el `?? 0` es solo para que TS no reclame el null.
+  const dif = diferenciaUnidades(item) ?? 0;
   const val = diferenciaValor(item);
   const tipo = dif < 0 ? 'faltante' : 'sobrante';
-  const base = `${dif < 0 ? '' : '+'}${dif} unid. × S/${formatoMoneda(item.precioVenta)} = ${val < 0 ? '-' : '+'}S/${formatoMoneda(Math.abs(val))} (${tipo}).`;
+  const precioTxt = item.precioVenta === null ? 's/ precio' : `S/${formatoMoneda(item.precioVenta)}`;
+  const valorTxt = val === null ? 'sin valorizar' : `${val < 0 ? '-' : '+'}S/${formatoMoneda(Math.abs(val))}`;
+  const base = `${dif < 0 ? '' : '+'}${dif} unid. × ${precioTxt} = ${valorTxt} (${tipo}).`;
   if (v === 'empresa') {
     return { texto: `${base} Regla Gerencia: asumido por la empresa (S/0 a nómina).`, clase: 'neutral' };
   }
@@ -87,7 +109,8 @@ function TarjetaItemAuditoriaComponent({ item }: TarjetaItemAuditoriaProps): JSX
         <View style={styles.textos}>
           <Text style={styles.nombre}>{item.descripcion}</Text>
           <Text style={styles.meta}>
-            Código {item.codigo} · {item.zona} · P. Venta S/{formatoMoneda(item.precioVenta)}
+            Código {item.codigo}
+            {item.zona ? ` · ${item.zona}` : ''} · P. Venta {item.precioVenta === null ? '—' : `S/${formatoMoneda(item.precioVenta)}`}
           </Text>
         </View>
         <Badge label={badge.texto} variant={badge.variante} />

@@ -15,19 +15,27 @@ import {
   type OpcionChip,
 } from '../../components/ui';
 import { repositorioAuditoria, repositorioInventario } from '../../lib/contenedor';
-import { diferenciaValor, veredicto } from '../../lib/dominio/auditoria';
+import { resumirAuditoria } from '../../lib/dominio/auditoria';
 import type { ItemAuditoria, VeredictoAuditoria } from '../../lib/dominio/tipos';
 import { useSesion } from '../../lib/sesion-contexto';
 import { colors, fonts, radius } from '../../lib/theme';
 
-type FiltroId = 'todos' | VeredictoAuditoria;
+type FiltroId = 'todos' | 'cuadrado' | 'falta' | 'empresa' | 'sin_dato';
 
 const FILTROS: { id: FiltroId; etiqueta: string }[] = [
   { id: 'todos', etiqueta: 'Todos' },
   { id: 'cuadrado', etiqueta: 'Cuadrados' },
   { id: 'falta', etiqueta: 'Faltante' },
   { id: 'empresa', etiqueta: 'Empresa' },
+  // Los que todavía no se pueden auditar: sin conteo o sin stock del ERP.
+  { id: 'sin_dato', etiqueta: 'Sin dato' },
 ];
+
+/** `sin_dato` junta los dos veredictos de "no sé"; el resto mapea 1 a 1. */
+function coincideFiltro(v: VeredictoAuditoria, filtro: Exclude<FiltroId, 'todos'>): boolean {
+  if (filtro === 'sin_dato') return v === 'sin_contar' || v === 'sin_erp';
+  return v === filtro;
+}
 
 function formatoMoneda(valor: number): string {
   const signo = valor < 0 ? '-' : '+';
@@ -96,58 +104,36 @@ export default function AuditoriaScreen(): JSX.Element {
   }
 
   /**
-   * UN SOLO recorrido de `items` (hasta 8.000 en el catálogo real) para
-   * sacar veredicto por ítem, los 3 contadores de los chips y los 3 netos
-   * en plata. Antes esto eran 6-7 `.map`/`.filter` separados corriendo en
-   * CADA render (sin useMemo) — con 4 productos de ejemplo no se notaba,
-   * con el catálogo real de un inventario grande recalcular todo eso en
-   * cada render (y `visibles.map` montando TODAS las tarjetas de una, ver
-   * más abajo) es lo que le daba el ANR al Auditor en el teléfono.
+   * UN SOLO recorrido de `items` (hasta 8.000 en el catálogo real), en el
+   * dominio: `resumirAuditoria` saca los contadores, los netos en plata Y el
+   * mapa de veredictos que usa el filtro. La fuente es la MISMA cuenta que
+   * corre el backend (auditoria.calculos.ts), para que la pantalla no vuelva a
+   * discrepar del cierre — ese fue el bug: la pantalla recalculaba con una
+   * versión vieja que leía un ítem SIN contar como "cuadrado".
    *
-   * Las cifras de la cabecera (`items.length`, `cuadrados`, `conDiferencia`)
-   * salen de acá, de recorrer `items` completo — nunca de `visibles`
-   * (la lista ya filtrada/renderizada): filtrar por "Faltante" no puede
-   * hacer que el encabezado diga "3 de 3 auditados".
+   * Las cifras de la cabecera salen de acá, de recorrer `items` completo —
+   * nunca de `visibles` (la lista ya filtrada): filtrar por "Faltante" no
+   * puede hacer que el encabezado diga "3 de 3 auditados".
    */
-  const resumen = useMemo(() => {
-    const veredictoPorId = new Map<number, VeredictoAuditoria>();
-    const contadorPorVeredicto: Record<VeredictoAuditoria, number> = { cuadrado: 0, falta: 0, empresa: 0 };
-    let faltanteNeto = 0;
-    let sobranteNeto = 0;
-    let asumidoEmpresa = 0;
-
-    for (const it of items) {
-      const v = veredicto(it);
-      veredictoPorId.set(it.productoId, v);
-      contadorPorVeredicto[v]++;
-      if (v === 'falta') {
-        const val = diferenciaValor(it);
-        if (val < 0) faltanteNeto += val;
-        else sobranteNeto += val;
-      } else if (v === 'empresa') {
-        asumidoEmpresa += diferenciaValor(it);
-      }
-    }
-
-    return {
-      veredictoPorId,
-      contadorPorVeredicto,
-      cuadrados: contadorPorVeredicto.cuadrado,
-      conDiferencia: items.length - contadorPorVeredicto.cuadrado,
-      faltanteNeto,
-      sobranteNeto,
-      asumidoEmpresa,
-    };
-  }, [items]);
-
-  const { cuadrados, conDiferencia, faltanteNeto, sobranteNeto, asumidoEmpresa } = resumen;
+  const resumen = useMemo(() => resumirAuditoria(items), [items]);
+  const { cuadrados, auditables, contados, sinContar, sinDatoErp, conDiferencia, faltanteNeto, sobranteNeto, asumidoEmpresa } =
+    resumen;
 
   const opciones: OpcionChip[] = useMemo(
     () =>
       FILTROS.map((f) => ({
         id: f.id,
         etiqueta: f.etiqueta,
-        contador: f.id === 'todos' ? items.length : resumen.contadorPorVeredicto[f.id],
+        contador:
+          f.id === 'todos'
+            ? items.length
+            : f.id === 'cuadrado'
+              ? resumen.cuadrados
+              : f.id === 'falta'
+                ? resumen.conFalta
+                : f.id === 'empresa'
+                  ? resumen.deEmpresa
+                  : resumen.sinContar + resumen.sinDatoErp,
       })),
     [items.length, resumen],
   );
@@ -155,7 +141,13 @@ export default function AuditoriaScreen(): JSX.Element {
   // Filtra usando el veredicto YA CALCULADO en `resumen` (Map, lookup O(1))
   // en vez de volver a llamar `veredicto(it)` por ítem en cada render.
   const visibles = useMemo(
-    () => (filtro === 'todos' ? items : items.filter((it) => resumen.veredictoPorId.get(it.productoId) === filtro)),
+    () =>
+      filtro === 'todos'
+        ? items
+        : items.filter((it) => {
+            const v = resumen.veredictoPorId.get(it.productoId);
+            return v !== undefined && coincideFiltro(v, filtro);
+          }),
     [items, filtro, resumen],
   );
 
@@ -164,7 +156,7 @@ export default function AuditoriaScreen(): JSX.Element {
       <BarraApp
         rotulo="Auditoría · Panel de auditoría"
         sede={sesion.sucursal!.nombre}
-        cifras={cargando ? undefined : `${items.length} ítems auditados · ${conDiferencia} con diferencia`}
+        cifras={cargando ? undefined : `${contados} de ${items.length} ítems contados · ${conDiferencia} con diferencia`}
         onSalir={salir}
       />
 
@@ -218,13 +210,28 @@ export default function AuditoriaScreen(): JSX.Element {
           ListHeaderComponent={
             <View style={styles.headerLista}>
               <View style={styles.tarjetaResumen}>
-                <Text style={styles.resumenTitulo}>Resultado (ítems auditados)</Text>
+                <Text style={styles.resumenTitulo}>Resultado del conteo</Text>
                 <View style={styles.resumenFila}>
                   <Text style={styles.resumenEtiqueta}>Cuadrado</Text>
-                  <Text style={[styles.resumenValor, { color: colors.ok }]}>
-                    {cuadrados} <Text style={styles.resumenPct}>de {items.length}</Text>
+                  {/* Denominador = AUDITABLES (con ERP y con conteo), nunca el
+                      total: un ítem que nadie contó no entra al "cuadrado X de Y". */}
+                  <Text style={[styles.resumenValor, cuadrados > 0 && { color: colors.ok }]}>
+                    {cuadrados} <Text style={styles.resumenPct}>de {auditables} auditables</Text>
                   </Text>
                 </View>
+                {sinContar > 0 ? (
+                  <View style={styles.resumenFila}>
+                    <Text style={styles.resumenEtiqueta}>Sin contar</Text>
+                    {/* Neutro a propósito: un vacío no es ni éxito ni faltante. */}
+                    <Text style={[styles.resumenValor, styles.resumenNeutro]}>{sinContar}</Text>
+                  </View>
+                ) : null}
+                {sinDatoErp > 0 ? (
+                  <View style={styles.resumenFila}>
+                    <Text style={styles.resumenEtiqueta}>Sin dato del ERP</Text>
+                    <Text style={[styles.resumenValor, styles.resumenNeutro]}>{sinDatoErp}</Text>
+                  </View>
+                ) : null}
                 <View style={styles.resumenFila}>
                   <Text style={styles.resumenEtiqueta}>Faltante neto</Text>
                   <Text style={[styles.resumenValor, faltanteNeto !== 0 && { color: colors.proceso }]}>{formatoMoneda(faltanteNeto)}</Text>
@@ -253,7 +260,7 @@ export default function AuditoriaScreen(): JSX.Element {
             <View style={styles.footerLista}>
               <View style={styles.pieLista}>
                 <Text style={styles.pieTexto}>
-                  Mostrando {visibles.length} de <Text style={styles.pieFuerte}>{items.length} ítems auditados</Text> · {conDiferencia} con
+                  Mostrando {visibles.length} de <Text style={styles.pieFuerte}>{items.length} ítems</Text> · {contados} contados · {conDiferencia} con
                   diferencia en total
                 </Text>
               </View>
@@ -278,6 +285,7 @@ const styles = StyleSheet.create({
   resumenFila: { flexDirection: 'row', alignItems: 'baseline', justifyContent: 'space-between', gap: 10 },
   resumenEtiqueta: { fontSize: 12.5, color: colors.gris, fontFamily: fonts.regular },
   resumenValor: { fontSize: 16, color: colors.tinta, fontFamily: fonts.bold },
+  resumenNeutro: { color: colors.gris },
   resumenPct: { fontSize: 11.5, color: colors.gris, fontFamily: fonts.medium },
   seccion: { flexDirection: 'row', alignItems: 'baseline', justifyContent: 'space-between', gap: 10 },
   seccionTitulo: { fontSize: 11, letterSpacing: 1.3, textTransform: 'uppercase', color: colors.gris, fontFamily: fonts.semibold },

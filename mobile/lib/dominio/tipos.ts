@@ -279,8 +279,10 @@ export interface ItemAuditoria {
   codigo: string;
   descripcion: string;
   zona: string;
-  precioVenta: number;
-  stockErp: number;
+  /** null = el snapshot de Dynamics no trajo precio: la diferencia no se puede valorizar. */
+  precioVenta: number | null;
+  /** null = el snapshot no trajo stock: este ítem NO se puede auditar (veredicto `sin_erp`). */
+  stockErp: number | null;
   conteo1: number | null;
   conteo2: number | null;
   conteo3: number | null;
@@ -292,7 +294,15 @@ export interface ItemAuditoria {
   esEmpresa: boolean;
 }
 
-export type VeredictoAuditoria = 'cuadrado' | 'falta' | 'empresa';
+/**
+ * Los tres veredictos de la maqueta MÁS dos que dicen "no sé" — ESPEJA
+ * backend/src/modules/auditoria/auditoria.calculos.ts. `sin_erp` (el snapshot
+ * no trajo stock) y `sin_contar` (nadie lo contó todavía) existen para que un
+ * ítem SIN información no se reporte como "cuadrado": un vacío no es un éxito.
+ * Un inventario prefiere decir "no sé" cien veces antes que "cuadra" una sola
+ * vez sin evidencia.
+ */
+export type VeredictoAuditoria = 'cuadrado' | 'falta' | 'empresa' | 'sin_erp' | 'sin_contar';
 
 // ---------------------------------------------------------------------------
 // Gestión (rol Administrador, y Usuarios también para el Auditor)
