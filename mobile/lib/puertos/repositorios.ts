@@ -1319,4 +1319,12 @@ export interface RepositorioHistorial {
    * código interno de la hoja ("0051") ni el código de barras.
    */
   historicoDeItem(codigo: string, filtro?: FiltroHistoricoItem): Promise<HistoricoItem>;
+  /**
+   * El .xlsx de faltantes/sobrantes de este inventario, para compartir por
+   * WhatsApp/correo -- pedido del cliente. Mismo acceso que `diferencias`
+   * (auditor recortado a su sucursal); no exige lacrado, sirve desde que
+   * hay diferencias calculadas. Devuelve los bytes crudos: la pantalla
+   * decide dónde guardarlos y con qué nombre (ver dominio/exportar-diferencias.ts).
+   */
+  exportarDiferencias(inventarioId: number): Promise<ArrayBuffer>;
 }

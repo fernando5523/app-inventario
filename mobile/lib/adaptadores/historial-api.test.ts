@@ -691,3 +691,33 @@ describe('historialApi.historicoDeItem', () => {
     expect(h.apariciones).toEqual([]);
   });
 });
+
+describe('historialApi.exportarDiferencias', () => {
+  it('devuelve los bytes CRUDOS -- nunca intenta JSON.parse sobre el .xlsx', async () => {
+    const bytesXlsx = new Uint8Array([0x50, 0x4b, 0x03, 0x04]).buffer; // firma ZIP de un .xlsx real
+    const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => ({
+      ok: true,
+      status: 200,
+      arrayBuffer: async () => bytesXlsx,
+    }));
+    vi.stubGlobal('fetch', fetchMock as unknown as typeof fetch);
+
+    const bytes = await historialApi.exportarDiferencias(30);
+
+    expect(new Uint8Array(bytes)).toEqual(new Uint8Array(bytesXlsx));
+  });
+
+  it('pega contra la ruta correcta', async () => {
+    const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => ({
+      ok: true,
+      status: 200,
+      arrayBuffer: async () => new ArrayBuffer(0),
+    }));
+    vi.stubGlobal('fetch', fetchMock as unknown as typeof fetch);
+
+    await historialApi.exportarDiferencias(30);
+
+    const url = String(fetchMock.mock.calls[0][0]);
+    expect(url).toContain('/api/historial/inventarios/30/diferencias/exportar');
+  });
+});

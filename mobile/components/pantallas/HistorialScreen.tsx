@@ -1,10 +1,13 @@
+import { File, Paths } from 'expo-file-system';
 import { router } from 'expo-router';
+import * as Sharing from 'expo-sharing';
 import { ChevronLeft, History, Lock, ShieldAlert, ShieldCheck, TrendingUp } from 'lucide-react-native';
 import { useCallback, useEffect, useState, type JSX } from 'react';
 import { ActivityIndicator, Alert, Pressable, RefreshControl, ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import { useRefrescoAlEnfocar } from '../hooks/useRefrescoAlEnfocar';
 import { repositorioHistorial, repositorioSesion } from '../../lib/contenedor';
+import { nombreArchivoDiferencias } from '../../lib/dominio/exportar-diferencias';
 import type { Rol, Sucursal } from '../../lib/dominio/tipos';
 import type {
   DetalleInventarioHistorico,
@@ -142,6 +145,11 @@ export function HistorialScreen({ rol }: HistorialScreenProps): JSX.Element {
   const [verificacion, setVerificacion] = useState<VerificacionSello | null>(null);
   const [verificandoSello, setVerificandoSello] = useState(false);
   const [errorVerificacion, setErrorVerificacion] = useState<string | null>(null);
+
+  // DUEÑO: el Auditor (decisión del cliente, 2026-09-08) -- el Administrador
+  // es un rol técnico que no participa del proceso de inventario, así que
+  // el botón ni se ofrece para ese rol, aunque el backend lo deje pasar.
+  const [exportando, setExportando] = useState(false);
 
   const [diferencias, setDiferencias] = useState<DiferenciaHistorica[]>([]);
   const [liquidacion, setLiquidacion] = useState<LiquidacionInventario | null>(null);
@@ -285,6 +293,39 @@ export function HistorialScreen({ rol }: HistorialScreenProps): JSX.Element {
       setErrorVerificacion(e instanceof Error ? e.message : 'No se pudo verificar el sello.');
     } finally {
       setVerificandoSello(false);
+    }
+  }
+
+  /**
+   * El .xlsx de faltantes/sobrantes: se descarga a un archivo TEMPORAL (caché
+   * del teléfono, no la carpeta de Descargas) y de ahí se abre el selector
+   * nativo para compartir -- pedido del cliente: el destino es WhatsApp o
+   * correo, no el teléfono. Un Alert, no un estado de pantalla nuevo: es una
+   * acción puntual de un botón, mismo criterio que `abrirHistoricoItem`.
+   */
+  async function exportarDiferencias(): Promise<void> {
+    if (!detalle) return;
+    setExportando(true);
+    try {
+      const puedeCompartir = await Sharing.isAvailableAsync();
+      if (!puedeCompartir) {
+        Alert.alert('No se puede compartir', 'Este dispositivo no tiene disponible el selector nativo para compartir archivos.');
+        return;
+      }
+      const bytes = await repositorioHistorial.exportarDiferencias(detalle.id);
+      const nombreArchivo = nombreArchivoDiferencias(detalle.sucursalNombre, detalle.periodoAnio, detalle.periodoMes, detalle.id);
+      const archivo = new File(Paths.cache, nombreArchivo);
+      if (archivo.exists) archivo.delete();
+      archivo.write(new Uint8Array(bytes));
+      await Sharing.shareAsync(archivo.uri, {
+        mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        dialogTitle: 'Compartir diferencias',
+        UTI: 'org.openxmlformats.spreadsheetml.sheet',
+      });
+    } catch (e) {
+      Alert.alert('No se pudo exportar', e instanceof Error ? e.message : 'Intenta de nuevo.');
+    } finally {
+      setExportando(false);
     }
   }
 
@@ -509,6 +550,25 @@ export function HistorialScreen({ rol }: HistorialScreenProps): JSX.Element {
                 ))
               )}
             </View>
+
+            {/* DUEÑO: el Auditor -- pedido del cliente. El Administrador es
+                un rol técnico que no participa del inventario, así que no
+                se le ofrece el botón (aunque el backend lo dejaría pasar). */}
+            {rol === 'auditor' ? (
+              <Pressable
+                style={[styles.verificarBtn, exportando && styles.verificarBtnDeshabilitado]}
+                onPress={exportarDiferencias}
+                disabled={exportando}
+                accessibilityRole="button"
+                accessibilityLabel="Exportar diferencias a Excel y compartir"
+              >
+                {exportando ? (
+                  <ActivityIndicator color={colors.blanco} size="small" />
+                ) : (
+                  <Text style={styles.verificarBtnTexto}>Exportar a Excel</Text>
+                )}
+              </Pressable>
+            ) : null}
           </>
         ) : null}
 

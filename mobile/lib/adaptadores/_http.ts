@@ -375,6 +375,14 @@ export interface OpcionesPedido {
   idempotente?: boolean;
   /** Máximo de intentos. Pisa el default (3 en lecturas, 1 en escrituras). */
   intentos?: number;
+  /**
+   * `true` = el cuerpo de la respuesta NO es JSON (hoy, el .xlsx de
+   * historial-api.ts#exportarDiferencias) -- se devuelve el `ArrayBuffer`
+   * crudo en vez de intentar `JSON.parse`. Comparte token, timeout,
+   * reintentos y la misma traducción de errores que cualquier otro pedido:
+   * un archivo también se cae con la WiFi de la tienda.
+   */
+  binario?: boolean;
 }
 
 interface CuerpoError {
@@ -405,9 +413,9 @@ async function intentarUnaVez<T>(
   opciones: OpcionesPedido,
   msTimeoutEfectivo: number,
 ): Promise<T> {
-  const { metodo = 'GET', cuerpo, sinSesion = false, senal } = opciones;
+  const { metodo = 'GET', cuerpo, sinSesion = false, senal, binario = false } = opciones;
 
-  const encabezados: Record<string, string> = { Accept: 'application/json' };
+  const encabezados: Record<string, string> = { Accept: binario ? '*/*' : 'application/json' };
   if (cuerpo !== undefined) encabezados['Content-Type'] = 'application/json';
 
   if (!sinSesion) {
@@ -509,6 +517,10 @@ async function intentarUnaVez<T>(
       detalles,
     });
   }
+
+  // El archivo NUNCA pasa por `.text()`/`JSON.parse`: son bytes, no texto --
+  // decodificarlos como UTF-8 y volver a codificarlos los corrompería.
+  if (binario) return (await respuesta.arrayBuffer()) as unknown as T;
 
   // 204 (y cualquier respuesta vacía) no tiene JSON que parsear: `.json()`
   // tiraría. Los métodos de puerto que devuelven void terminan acá.

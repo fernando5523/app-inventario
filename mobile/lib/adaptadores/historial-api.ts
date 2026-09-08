@@ -30,6 +30,13 @@
  *   GET /api/historial/items/:codigo[?sucursalId=&desdeAnio=&hastaAnio=]
  *       → { codigo, descripcion, resumen: ResumenItemDto, apariciones: AparicionDto[] }
  *       — verificado contra historial.service.ts#historicoDeItem.
+ *   GET /api/historial/inventarios/:id/diferencias/exportar
+ *       → el .xlsx crudo (Content-Type xlsx), NO json — leído contra
+ *       historial.service.ts#exportarDiferencias (mismo día que se escribió
+ *       ese endpoint, backend/src/modules/historial/historial.exportar.ts).
+ *       Pendiente lo único que este archivo no puede confirmar solo: correrlo
+ *       contra un servidor vivo desde el teléfono (ver mobile/README.md,
+ *       "verificar siempre desde la app").
  *
  * Todo el router va detrás de `requiereSesion` + `requiereRol('administrador',
  * 'auditor')`. Un Coordinador o un Contador reciben 403 — y está bien que
@@ -446,5 +453,9 @@ export const historialApi: RepositorioHistorial = {
       resumen: dto.resumen,
       apariciones: dto.apariciones.map(aAparicion),
     };
+  },
+
+  async exportarDiferencias(inventarioId): Promise<ArrayBuffer> {
+    return pedir<ArrayBuffer>(`${BASE}/${inventarioId}/diferencias/exportar`, { binario: true });
   },
 };
