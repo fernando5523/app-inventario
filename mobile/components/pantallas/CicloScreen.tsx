@@ -452,22 +452,30 @@ export function CicloScreen({ rol }: CicloScreenProps): JSX.Element {
             El cierre del embudo: dónde quedó parado el ciclo. Sale de la
             ÚLTIMA ronda que tiene datos -- no de una suma de las tres, que
             contaría dos veces a los ítems que pasaron de una a otra.
+
+            SOLO Coordinador (pedido del cliente): al Auditor no le aporta y le
+            come espacio -- su detalle repite el del Paso más avanzado, y abajo
+            tiene el acceso directo a la matriz de auditoría. Al renderizar
+            `null` no queda hueco: el `gap` del contenedor no reserva espacio
+            para un hijo ausente.
           */}
-          <View style={styles.resumen}>
-            {ultimoComparativo ? (
-              <Text style={styles.tarjetaTexto}>
-                Al cierre del {ORDINAL[ultimoComparativo.ronda]} conteo: {ultimoComparativo.datos.detalle}
-                {ultimoComparativo.datos.avance.pct >= 100
-                  ? ' El ciclo puede cerrarse: no queda nada por recontar.'
-                  : ` Los que no cuadren tras el ${ORDINAL[RONDA_MAX]} quedan como diferencia definitiva para la liquidación.`}
-              </Text>
-            ) : (
-              <Text style={styles.tarjetaTexto}>
-                El resultado final de las 3 pasadas se arma a medida que se cuenta: todavía no hay ningún conteo
-                cargado en este inventario.
-              </Text>
-            )}
-          </View>
+          {esCoordinador ? (
+            <View style={styles.resumen}>
+              {ultimoComparativo ? (
+                <Text style={styles.tarjetaTexto}>
+                  Al cierre del {ORDINAL[ultimoComparativo.ronda]} conteo: {ultimoComparativo.datos.detalle}
+                  {ultimoComparativo.datos.avance.pct >= 100
+                    ? ' El ciclo puede cerrarse: no queda nada por recontar.'
+                    : ` Los que no cuadren tras el ${ORDINAL[RONDA_MAX]} quedan como diferencia definitiva para la liquidación.`}
+                </Text>
+              ) : (
+                <Text style={styles.tarjetaTexto}>
+                  El resultado final de las 3 pasadas se arma a medida que se cuenta: todavía no hay ningún conteo
+                  cargado en este inventario.
+                </Text>
+              )}
+            </View>
+          ) : null}
 
           {rol === 'auditor' ? (
             <Pressable
