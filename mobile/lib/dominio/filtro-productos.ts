@@ -101,6 +101,73 @@ export function aplicarFiltro(productos: readonly Producto[], filtro: FiltroProd
   );
 }
 
+function filtrarSinCampo(productos: readonly Producto[], filtro: FiltroProductos, excepto: keyof FiltroProductos): Producto[] {
+  return aplicarFiltro(productos, { ...filtro, [excepto]: null });
+}
+
+function valorDeCampo(p: Producto, campo: keyof FiltroProductos): string {
+  switch (campo) {
+    case 'categoria':
+      return categoriaDe(p);
+    case 'nombre':
+      return p.descripcion;
+    case 'codigo':
+      return p.codigo;
+  }
+}
+
+const CAMPOS: (keyof FiltroProductos)[] = ['categoria', 'nombre', 'codigo'];
+
+/**
+ * Los tres selectores EN CASCADA: cada campo ofrece solo lo que sigue
+ * siendo posible dado lo que ya se eligió en los OTROS dos (nunca sobre el
+ * filtro completo, o el propio campo se quedaría viendo una sola opción:
+ * la que ya tiene puesta). Pedido del cliente 2026-09-08: elegir
+ * LICOR-RON en categoría tiene que dejar Nombre ofreciendo solo esos 2
+ * productos, no los 10 de la hoja entera.
+ */
+export function opcionesEnCascada(
+  productos: readonly Producto[],
+  filtro: FiltroProductos,
+): { categoria: string[]; nombre: string[]; codigo: string[] } {
+  return {
+    categoria: categoriasDeHoja(filtrarSinCampo(productos, filtro, 'categoria')),
+    nombre: nombresDeHoja(filtrarSinCampo(productos, filtro, 'nombre')),
+    codigo: codigosDeHoja(filtrarSinCampo(productos, filtro, 'codigo')),
+  };
+}
+
+/**
+ * Se llama al elegir `valor` para `campo` en el modal. Ese campo se pone
+ * tal cual -- sale de sus propias opciones en cascada (`opcionesEnCascada`),
+ * así que ya es compatible con lo demás. Los OTROS DOS, si su valor actual
+ * dejó de tener algún producto en común con el recién elegido, se
+ * limpian -- nunca se deja un filtro puesto que no corresponde a ninguna
+ * fila. Se comparan cada uno CONTRA EL CAMPO QUE CAMBIÓ nada más, no entre
+ * sí: ya eran compatibles entre ellos antes de este cambio (si no lo
+ * fueran, ya se habrían limpiado en el cambio anterior), así que revisar
+ * uno contra el otro además del que cambió los invalidaría en falso —
+ * cambiar de categoría con nombre Y código de ANTES ya puestos limpiaría
+ * también el código con solo mirar si combina con el nombre viejo.
+ */
+export function elegirCampo(
+  productos: readonly Producto[],
+  filtro: FiltroProductos,
+  campo: keyof FiltroProductos,
+  valor: string | null,
+): FiltroProductos {
+  const resultado: FiltroProductos = { ...filtro, [campo]: valor };
+  if (valor === null) return resultado;
+  for (const otro of CAMPOS) {
+    if (otro === campo) continue;
+    const actual = resultado[otro];
+    if (actual !== null && !productos.some((p) => valorDeCampo(p, campo) === valor && valorDeCampo(p, otro) === actual)) {
+      resultado[otro] = null;
+    }
+  }
+  return resultado;
+}
+
 /** Cuántos de los tres campos están puestos — el número que muestra el botón "Filtros". */
 export function contarFiltrosActivos(filtro: FiltroProductos): number {
   return (filtro.categoria !== null ? 1 : 0) + (filtro.nombre !== null ? 1 : 0) + (filtro.codigo !== null ? 1 : 0);

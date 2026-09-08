@@ -2,14 +2,7 @@ import { Barcode, Package, Tag, X } from 'lucide-react-native';
 import { useEffect, useState, type JSX } from 'react';
 import { Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
-import {
-  categoriasDeHoja,
-  codigosDeHoja,
-  contarFiltrosActivos,
-  FILTRO_VACIO,
-  nombresDeHoja,
-  type FiltroProductos,
-} from '../../lib/dominio/filtro-productos';
+import { contarFiltrosActivos, elegirCampo, FILTRO_VACIO, opcionesEnCascada, type FiltroProductos } from '../../lib/dominio/filtro-productos';
 import type { Producto } from '../../lib/dominio/tipos';
 import { colors, fonts, fontSize, radius, shadow, spacing } from '../../lib/theme';
 import { SelectBuscable } from './SelectBuscable';
@@ -49,6 +42,7 @@ export function ModalFiltrosProductos({ visible, productos, filtro, onAplicar, o
   }, [visible, filtro]);
 
   const activos = contarFiltrosActivos(borrador);
+  const opciones = opcionesEnCascada(productos, borrador);
 
   function abrir(campo: Exclude<CampoAbierto, null>, abierto: boolean): void {
     setCampoAbierto(abierto ? campo : null);
@@ -75,9 +69,9 @@ export function ModalFiltrosProductos({ visible, productos, filtro, onAplicar, o
             <SelectBuscable
               label="Categoría"
               icon={Tag}
-              opciones={categoriasDeHoja(productos)}
+              opciones={opciones.categoria}
               valor={borrador.categoria}
-              onCambiar={(v) => setBorrador((b) => ({ ...b, categoria: v }))}
+              onCambiar={(v) => setBorrador((b) => elegirCampo(productos, b, 'categoria', v))}
               etiquetaVacia="Todas las categorías"
               placeholderBusqueda="Buscar categoría..."
               abierto={campoAbierto === 'categoria'}
@@ -86,9 +80,9 @@ export function ModalFiltrosProductos({ visible, productos, filtro, onAplicar, o
             <SelectBuscable
               label="Nombre de producto"
               icon={Package}
-              opciones={nombresDeHoja(productos)}
+              opciones={opciones.nombre}
               valor={borrador.nombre}
-              onCambiar={(v) => setBorrador((b) => ({ ...b, nombre: v }))}
+              onCambiar={(v) => setBorrador((b) => elegirCampo(productos, b, 'nombre', v))}
               etiquetaVacia="Cualquier nombre"
               placeholderBusqueda="Buscar nombre..."
               abierto={campoAbierto === 'nombre'}
@@ -97,9 +91,9 @@ export function ModalFiltrosProductos({ visible, productos, filtro, onAplicar, o
             <SelectBuscable
               label="Código de producto"
               icon={Barcode}
-              opciones={codigosDeHoja(productos)}
+              opciones={opciones.codigo}
               valor={borrador.codigo}
-              onCambiar={(v) => setBorrador((b) => ({ ...b, codigo: v }))}
+              onCambiar={(v) => setBorrador((b) => elegirCampo(productos, b, 'codigo', v))}
               etiquetaVacia="Cualquier código"
               placeholderBusqueda="Buscar código..."
               abierto={campoAbierto === 'codigo'}

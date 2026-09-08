@@ -5,9 +5,11 @@ import {
   categoriasDeHoja,
   codigosDeHoja,
   contarFiltrosActivos,
+  elegirCampo,
   filtrarOpciones,
   FILTRO_VACIO,
   nombresDeHoja,
+  opcionesEnCascada,
   SIN_CATEGORIA,
   textoFiltroActivo,
   type FiltroProductos,
@@ -106,6 +108,74 @@ describe('contarFiltrosActivos: el número del botón "Filtros"', () => {
     expect(contarFiltrosActivos(filtro({ categoria: 'Lácteos' }))).toBe(1);
     expect(contarFiltrosActivos(filtro({ categoria: 'Lácteos', codigo: '0001' }))).toBe(2);
     expect(contarFiltrosActivos(filtro({ categoria: 'x', nombre: 'y', codigo: 'z' }))).toBe(3);
+  });
+});
+
+describe('opcionesEnCascada: cada selector se recorta con lo que ya eligieron los otros dos', () => {
+  it('sin nada elegido: las tres listas completas de la hoja', () => {
+    const op = opcionesEnCascada(HOJA, FILTRO_VACIO);
+    expect(op.categoria).toEqual(['Lácteos', 'Galletas', SIN_CATEGORIA]);
+    expect(op.nombre).toEqual(['Yogur Frutilla', 'Yogur Natural', 'Galleta de Agua', 'Detergente']);
+    expect(op.codigo).toEqual(['0001', '0002', '0003', '0004']);
+  });
+
+  it('elegir categoría reduce nombre y código a esa categoría', () => {
+    const op = opcionesEnCascada(HOJA, filtro({ categoria: 'Lácteos' }));
+    expect(op.nombre).toEqual(['Yogur Frutilla', 'Yogur Natural']);
+    expect(op.codigo).toEqual(['0001', '0002']);
+  });
+
+  it('categoría NO se recorta a sí misma -- si no, quedaría viendo una sola opción: la que ya tiene puesta', () => {
+    const op = opcionesEnCascada(HOJA, filtro({ categoria: 'Lácteos' }));
+    expect(op.categoria).toEqual(['Lácteos', 'Galletas', SIN_CATEGORIA]);
+  });
+
+  it('elegir nombre deja la categoría en la suya', () => {
+    const op = opcionesEnCascada(HOJA, filtro({ nombre: 'Yogur Natural' }));
+    expect(op.categoria).toEqual(['Lácteos']);
+    expect(op.codigo).toEqual(['0002']);
+  });
+
+  it('categoría + nombre juntos: código queda en uno solo', () => {
+    const op = opcionesEnCascada(HOJA, filtro({ categoria: 'Lácteos', nombre: 'Yogur Frutilla' }));
+    expect(op.codigo).toEqual(['0001']);
+  });
+});
+
+describe('elegirCampo: un valor que deja de tener sentido con el cambio se limpia solo', () => {
+  it('cambiar la categoría descarta el nombre que ya no pertenece a ella', () => {
+    const conNombre = filtro({ categoria: 'Lácteos', nombre: 'Yogur Frutilla' });
+    expect(elegirCampo(HOJA, conNombre, 'categoria', 'Galletas')).toEqual(filtro({ categoria: 'Galletas', nombre: null, codigo: null }));
+  });
+
+  it('cambiar la categoría descarta también el código, si tampoco corresponde', () => {
+    const completo = filtro({ categoria: 'Lácteos', nombre: 'Yogur Frutilla', codigo: '0001' });
+    expect(elegirCampo(HOJA, completo, 'categoria', 'Galletas')).toEqual(filtro({ categoria: 'Galletas', nombre: null, codigo: null }));
+  });
+
+  it('un valor que sigue siendo compatible no se toca', () => {
+    const conCategoria = filtro({ categoria: 'Lácteos' });
+    expect(elegirCampo(HOJA, conCategoria, 'nombre', 'Yogur Natural')).toEqual(filtro({ categoria: 'Lácteos', nombre: 'Yogur Natural' }));
+  });
+
+  it('elegir un nombre no toca un código que sigue siendo el mismo producto', () => {
+    const conNombreYCodigo = filtro({ nombre: 'Yogur Frutilla', codigo: '0001' });
+    expect(elegirCampo(HOJA, conNombreYCodigo, 'categoria', 'Lácteos')).toEqual(
+      filtro({ categoria: 'Lácteos', nombre: 'Yogur Frutilla', codigo: '0001' }),
+    );
+  });
+
+  it('limpiar UN campo (valor null) nunca borra los otros', () => {
+    const completo = filtro({ categoria: 'Lácteos', nombre: 'Yogur Frutilla', codigo: '0001' });
+    expect(elegirCampo(HOJA, completo, 'nombre', null)).toEqual(filtro({ categoria: 'Lácteos', nombre: null, codigo: '0001' }));
+  });
+
+  it('"Limpiar todo" (FILTRO_VACIO) vuelve a las opciones completas de la hoja', () => {
+    expect(opcionesEnCascada(HOJA, FILTRO_VACIO)).toEqual({
+      categoria: ['Lácteos', 'Galletas', SIN_CATEGORIA],
+      nombre: ['Yogur Frutilla', 'Yogur Natural', 'Galleta de Agua', 'Detergente'],
+      codigo: ['0001', '0002', '0003', '0004'],
+    });
   });
 });
 
