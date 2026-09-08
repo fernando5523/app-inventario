@@ -3,9 +3,11 @@ import {
   contarFiltrosActivosModal,
   cumpleFiltro,
   cumpleFiltroModal,
+  elegirCampo,
   filtrarHojasModal,
   FILTRO_HOJAS_MODAL_VACIO,
   numerosDeHojas,
+  opcionesEnCascada,
   personasDeHojas,
   textoFiltroModalActivo,
   textoMostrando,
@@ -217,5 +219,112 @@ describe('textoFiltroModalActivo', () => {
 
   it('solo el número puesto', () => {
     expect(textoFiltroModalActivo({ persona: null, estado: 'todas', numero: '007' })).toBe('Hoja #007');
+  });
+});
+
+// Fixture del modal en cascada -- Elena solo aparece en hojas sin finalizar
+// (una con productos sin contar), Marcos solo en la finalizada, y la última
+// queda sin asignar. Así cada campo demuestra una reducción distinta, mismo
+// espíritu que el fixture HOJA de filtro-productos.test.ts (af4810f).
+const HOJAS_MODAL = [
+  hoja('pendiente', 5, 0, 1, ['Elena Príncipe']), // 001, sin-finalizar + sin-conteo
+  hoja('en-proceso', 5, 5, 2, ['Elena Príncipe']), // 002, sin-finalizar, todo contado
+  hoja('finalizada', 5, 5, 3, ['Marcos Ruiz']), // 003, finalizada
+  hoja('finalizada', 5, 5, 4, []), // 004, finalizada, sin asignar
+];
+
+describe('opcionesEnCascada: cada selector se recorta con lo que ya eligieron los otros dos', () => {
+  it('sin nada elegido: las tres listas completas', () => {
+    const op = opcionesEnCascada(HOJAS_MODAL, FILTRO_HOJAS_MODAL_VACIO);
+    expect(op.persona).toEqual(['Elena Príncipe', 'Marcos Ruiz']);
+    expect(op.estado).toEqual(['sin-finalizar', 'sin-conteo', 'finalizadas']);
+    expect(op.numero).toEqual(['001', '002', '003', '004']);
+  });
+
+  it('elegir persona reduce estado y número a los de sus hojas', () => {
+    const op = opcionesEnCascada(HOJAS_MODAL, { ...FILTRO_HOJAS_MODAL_VACIO, persona: 'Elena Príncipe' });
+    expect(op.estado).toEqual(['sin-finalizar', 'sin-conteo']);
+    expect(op.numero).toEqual(['001', '002']);
+  });
+
+  it('persona NO se recorta a sí misma -- si no, quedaría viendo una sola opción: la que ya tiene puesta', () => {
+    const op = opcionesEnCascada(HOJAS_MODAL, { ...FILTRO_HOJAS_MODAL_VACIO, persona: 'Elena Príncipe' });
+    expect(op.persona).toEqual(['Elena Príncipe', 'Marcos Ruiz']);
+  });
+
+  it('elegir estado reduce persona y número a los de esas hojas', () => {
+    const op = opcionesEnCascada(HOJAS_MODAL, { ...FILTRO_HOJAS_MODAL_VACIO, estado: 'finalizadas' });
+    // La 004 está finalizada pero sin asignar -- no aporta ningún nombre.
+    expect(op.persona).toEqual(['Marcos Ruiz']);
+    expect(op.numero).toEqual(['003', '004']);
+  });
+
+  it('persona + estado juntos: número queda en uno solo', () => {
+    const op = opcionesEnCascada(HOJAS_MODAL, { persona: 'Elena Príncipe', estado: 'sin-conteo', numero: null });
+    expect(op.numero).toEqual(['001']);
+  });
+
+  it('"Limpiar todo" (FILTRO_HOJAS_MODAL_VACIO) vuelve a las opciones completas', () => {
+    expect(opcionesEnCascada(HOJAS_MODAL, FILTRO_HOJAS_MODAL_VACIO)).toEqual({
+      persona: ['Elena Príncipe', 'Marcos Ruiz'],
+      estado: ['sin-finalizar', 'sin-conteo', 'finalizadas'],
+      numero: ['001', '002', '003', '004'],
+    });
+  });
+});
+
+describe('elegirCampo: un valor que deja de tener sentido con el cambio se limpia solo', () => {
+  it('cambiar el estado descarta la persona que ya no pertenece a él', () => {
+    const conPersona = { ...FILTRO_HOJAS_MODAL_VACIO, persona: 'Elena Príncipe' };
+    expect(elegirCampo(HOJAS_MODAL, conPersona, 'estado', 'finalizadas')).toEqual({
+      persona: null,
+      estado: 'finalizadas',
+      numero: null,
+    });
+  });
+
+  it('cambiar el estado descarta también el número, si tampoco corresponde', () => {
+    const completo = { persona: 'Elena Príncipe', estado: 'todas' as const, numero: '001' };
+    expect(elegirCampo(HOJAS_MODAL, completo, 'estado', 'finalizadas')).toEqual({
+      persona: null,
+      estado: 'finalizadas',
+      numero: null,
+    });
+  });
+
+  it('un valor que sigue siendo compatible no se toca', () => {
+    const conPersona = { ...FILTRO_HOJAS_MODAL_VACIO, persona: 'Elena Príncipe' };
+    expect(elegirCampo(HOJAS_MODAL, conPersona, 'estado', 'sin-finalizar')).toEqual({
+      persona: 'Elena Príncipe',
+      estado: 'sin-finalizar',
+      numero: null,
+    });
+  });
+
+  it('elegir un estado no toca un número que sigue siendo la misma hoja', () => {
+    const conNumeroYPersona = { persona: 'Elena Príncipe', estado: 'todas' as const, numero: '001' };
+    expect(elegirCampo(HOJAS_MODAL, conNumeroYPersona, 'estado', 'sin-conteo')).toEqual({
+      persona: 'Elena Príncipe',
+      estado: 'sin-conteo',
+      numero: '001',
+    });
+  });
+
+  it('limpiar UN campo (valor vacío) nunca borra los otros', () => {
+    const completo = { persona: 'Marcos Ruiz', estado: 'finalizadas' as const, numero: '003' };
+    expect(elegirCampo(HOJAS_MODAL, completo, 'persona', null)).toEqual({
+      persona: null,
+      estado: 'finalizadas',
+      numero: '003',
+    });
+  });
+
+  it('limpiar el estado (valor "todas") tampoco borra los otros', () => {
+    const completo = { persona: 'Marcos Ruiz', estado: 'finalizadas' as const, numero: '003' };
+    expect(elegirCampo(HOJAS_MODAL, completo, 'estado', 'todas')).toEqual({
+      persona: 'Marcos Ruiz',
+      estado: 'todas',
+      numero: '003',
+    });
   });
 });

@@ -112,6 +112,86 @@ export function filtrarHojasModal(hojas: readonly HojaConteo[], filtro: FiltroHo
   return hojas.filter((h) => cumpleFiltroModal(h, filtro));
 }
 
+/** Estados con al menos una hoja -- nunca 'todas', esa es el "sin filtro" del propio hueco. */
+function estadosDeHojas(hojas: readonly HojaConteo[]): FiltroHojas[] {
+  return FILTROS_HOJAS.filter((f) => f !== 'todas' && hojas.some((h) => cumpleFiltro(h, f)));
+}
+
+function filtrarSinCampo(hojas: readonly HojaConteo[], filtro: FiltroHojasModal, excepto: keyof FiltroHojasModal): HojaConteo[] {
+  return filtrarHojasModal(hojas, { ...filtro, [excepto]: FILTRO_HOJAS_MODAL_VACIO[excepto] });
+}
+
+/**
+ * Los tres selectores del modal EN CASCADA -- mismo pedido del cliente y
+ * mismo patrón que `filtro-productos.ts#opcionesEnCascada` (af4810f, min-2):
+ * cada campo ofrece solo lo que sigue siendo posible dado lo que ya se
+ * eligió en los OTROS DOS (nunca sobre el filtro completo, o el propio
+ * campo se quedaría viendo una sola opción: la que ya tiene puesta).
+ *
+ * `estado` devuelve los valores del ENUM (`FiltroHojas`), no las etiquetas:
+ * lo que se muestra es cosa de `ModalFiltrosHojas.tsx`, acá solo se decide
+ * QUÉ opciones siguen teniendo sentido.
+ */
+export function opcionesEnCascada(
+  hojas: readonly HojaConteo[],
+  filtro: FiltroHojasModal,
+): { persona: string[]; estado: FiltroHojas[]; numero: string[] } {
+  return {
+    persona: personasDeHojas(filtrarSinCampo(hojas, filtro, 'persona')),
+    estado: estadosDeHojas(filtrarSinCampo(hojas, filtro, 'estado')),
+    numero: numerosDeHojas(filtrarSinCampo(hojas, filtro, 'numero')),
+  };
+}
+
+/** ¿Existe una hoja que matchee los dos valores a la vez? Los demás campos quedan sin restringir. */
+function algunaCoincide(hojas: readonly HojaConteo[], a: Partial<FiltroHojasModal>, b: Partial<FiltroHojasModal>): boolean {
+  const combinado: FiltroHojasModal = { ...FILTRO_HOJAS_MODAL_VACIO, ...a, ...b };
+  return hojas.some((h) => cumpleFiltroModal(h, combinado));
+}
+
+/**
+ * Se llama al elegir `valor` para `campo` en el modal. Mismo patrón que
+ * `filtro-productos.ts#elegirCampo`: ese campo se pone tal cual -- sale de
+ * sus propias opciones en cascada, así que ya es compatible con lo demás.
+ * Los OTROS DOS, si su valor actual dejó de tener alguna hoja en común con
+ * el recién elegido, se limpian -- nunca se deja un filtro puesto que no
+ * corresponde a ninguna fila. Se comparan cada uno CONTRA EL CAMPO QUE
+ * CAMBIÓ nada más, no entre sí (mismo motivo que allá: ya eran compatibles
+ * entre ellos antes de este cambio).
+ *
+ * Es EXPLÍCITO por campo (no un loop genérico sobre `keyof FiltroHojasModal`
+ * como el de productos) porque acá los tres campos no comparten tipo:
+ * `estado` es un enum con su propio "vacío" (`'todas'`), no `string | null`
+ * como `persona`/`numero` -- el algoritmo es el mismo, la forma de escribirlo
+ * no puede serlo sin perder el tipado.
+ */
+export function elegirCampo(
+  hojas: readonly HojaConteo[],
+  filtro: FiltroHojasModal,
+  campo: keyof FiltroHojasModal,
+  // FiltroHojas es un subtipo de string, así que un valor de `estado` entra
+  // igual por acá -- un solo signature alcanza, sin perder tipado en las
+  // otras dos llamadas (persona/numero).
+  valor: string | null,
+): FiltroHojasModal {
+  const resultado = { ...filtro, [campo]: valor } as FiltroHojasModal;
+  const cambio = { [campo]: valor } as Partial<FiltroHojasModal>;
+
+  const esVacio = valor === FILTRO_HOJAS_MODAL_VACIO[campo];
+  if (esVacio) return resultado;
+
+  if (campo !== 'persona' && resultado.persona !== null && !algunaCoincide(hojas, cambio, { persona: resultado.persona })) {
+    resultado.persona = null;
+  }
+  if (campo !== 'estado' && resultado.estado !== 'todas' && !algunaCoincide(hojas, cambio, { estado: resultado.estado })) {
+    resultado.estado = 'todas';
+  }
+  if (campo !== 'numero' && resultado.numero !== null && !algunaCoincide(hojas, cambio, { numero: resultado.numero })) {
+    resultado.numero = null;
+  }
+  return resultado;
+}
+
 /** Cuántos de los tres campos están puestos -- el número que muestra el botón "Filtros". */
 export function contarFiltrosActivosModal(filtro: FiltroHojasModal): number {
   return (filtro.persona !== null ? 1 : 0) + (filtro.estado !== 'todas' ? 1 : 0) + (filtro.numero !== null ? 1 : 0);

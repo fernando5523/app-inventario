@@ -4,11 +4,11 @@ import { Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-nati
 
 import {
   contarFiltrosActivosModal,
+  elegirCampo,
   ETIQUETA_FILTRO,
   FILTRO_HOJAS_MODAL_VACIO,
   FILTROS_HOJAS,
-  numerosDeHojas,
-  personasDeHojas,
+  opcionesEnCascada,
   type FiltroHojas,
   type FiltroHojasModal,
 } from '../../lib/dominio/filtro-hojas';
@@ -27,13 +27,6 @@ export interface ModalFiltrosHojasProps {
 
 type CampoAbierto = 'persona' | 'estado' | 'numero' | null;
 
-// 'todas' no es una opción del select de estado -- ES el "sin filtro" que ya
-// resuelve `etiquetaVacia`. Ofrecerla dos veces (el hueco Y una opción que
-// dice lo mismo) es la clase de duplicado que confunde cuál de las dos usar.
-const ETIQUETAS_ESTADO = FILTROS_HOJAS.filter((f): f is Exclude<FiltroHojas, 'todas'> => f !== 'todas').map(
-  (f) => ETIQUETA_FILTRO[f],
-);
-
 function estadoDeEtiqueta(etiqueta: string | null): FiltroHojas {
   const encontrado = FILTROS_HOJAS.find((f) => ETIQUETA_FILTRO[f] === etiqueta);
   return encontrado ?? 'todas';
@@ -43,9 +36,11 @@ function estadoDeEtiqueta(etiqueta: string | null): FiltroHojas {
  * Modal de filtros de "Hojas de esta ronda" (Coordinador): mismo patrón que
  * `ModalFiltrosProductos.tsx` (min-4) -- un `SelectBuscable` por campo, un
  * BORRADOR que no toca la lista hasta "Aplicar", un solo campo abierto a la
- * vez. Es un componente HERMANO, no una edición de aquel: los criterios acá
- * son de HOJA (persona/estado/número), no de producto, y así el modal de
- * Contar no se toca ni un poco.
+ * vez, y los tres EN CASCADA (af4810f: elegir un campo recorta los otros
+ * dos a lo que sigue siendo posible, y limpia cualquiera que dejó de tener
+ * sentido). Es un componente HERMANO, no una edición de aquel: los
+ * criterios acá son de HOJA (persona/estado/número), no de producto, y así
+ * el modal de Contar no se toca ni un poco.
  *
  * La lógica de filtrado vive en `lib/dominio/filtro-hojas.ts` (pura, testeada).
  */
@@ -63,6 +58,12 @@ export function ModalFiltrosHojas({ visible, hojas, filtro, onAplicar, onCerrar 
   }, [visible, filtro]);
 
   const activos = contarFiltrosActivosModal(borrador);
+  const opciones = opcionesEnCascada(hojas, borrador);
+  // 'todas' no es una opción del select de estado -- ES el "sin filtro" que
+  // ya resuelve `etiquetaVacia`. Ofrecerla dos veces (el hueco Y una opción
+  // que dice lo mismo) es la clase de duplicado que confunde cuál de las
+  // dos usar.
+  const etiquetasEstado = opciones.estado.map((f) => ETIQUETA_FILTRO[f]);
 
   function abrir(campo: Exclude<CampoAbierto, null>, abierto: boolean): void {
     setCampoAbierto(abierto ? campo : null);
@@ -89,9 +90,9 @@ export function ModalFiltrosHojas({ visible, hojas, filtro, onAplicar, onCerrar 
             <SelectBuscable
               label="Persona asignada"
               icon={Users}
-              opciones={personasDeHojas(hojas)}
+              opciones={opciones.persona}
               valor={borrador.persona}
-              onCambiar={(v) => setBorrador((b) => ({ ...b, persona: v }))}
+              onCambiar={(v) => setBorrador((b) => elegirCampo(hojas, b, 'persona', v))}
               etiquetaVacia="Cualquier persona"
               placeholderBusqueda="Buscar persona..."
               abierto={campoAbierto === 'persona'}
@@ -100,9 +101,9 @@ export function ModalFiltrosHojas({ visible, hojas, filtro, onAplicar, onCerrar 
             <SelectBuscable
               label="Estado"
               icon={ListChecks}
-              opciones={ETIQUETAS_ESTADO}
+              opciones={etiquetasEstado}
               valor={borrador.estado === 'todas' ? null : ETIQUETA_FILTRO[borrador.estado]}
-              onCambiar={(v) => setBorrador((b) => ({ ...b, estado: estadoDeEtiqueta(v) }))}
+              onCambiar={(v) => setBorrador((b) => elegirCampo(hojas, b, 'estado', estadoDeEtiqueta(v)))}
               etiquetaVacia="Cualquier estado"
               placeholderBusqueda="Buscar estado..."
               abierto={campoAbierto === 'estado'}
@@ -111,9 +112,9 @@ export function ModalFiltrosHojas({ visible, hojas, filtro, onAplicar, onCerrar 
             <SelectBuscable
               label="Número de hoja"
               icon={Hash}
-              opciones={numerosDeHojas(hojas)}
+              opciones={opciones.numero}
               valor={borrador.numero}
-              onCambiar={(v) => setBorrador((b) => ({ ...b, numero: v }))}
+              onCambiar={(v) => setBorrador((b) => elegirCampo(hojas, b, 'numero', v))}
               etiquetaVacia="Cualquier número"
               placeholderBusqueda="Buscar número..."
               abierto={campoAbierto === 'numero'}
