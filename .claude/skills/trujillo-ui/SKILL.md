@@ -10,7 +10,7 @@ description: >
 license: Apache-2.0
 metadata:
   author: gentleman-programming
-  version: "1.0"
+  version: "1.1"
 ---
 
 ## When to Use
@@ -42,6 +42,38 @@ Reglas que salieron de bugs reales en la pantalla 1. No son preferencias.
 | El estado se comunica por **al menos dos vías** además del texto | En una lista de 160 filas el ojo escanea, no lee: badge + color del código de hoja (`.hoja-codigo`) + borde de la tarjeta (`.hoja.contada` / `.hoja.en-proceso`) refuerzan la misma señal |
 | Una tarjeta de lista con **2 o más acciones** las pone en un speed dial flotante, **nunca apiladas dentro de la card** | Las acciones dentro de cada card multiplican el alto de la lista (una fila de botones por ítem) y compiten con el contenido que uno vino a leer. El flotante deja la lista limpia y da **una sola zona de acción**, siempre en el mismo lugar del pulgar |
 | `--pad-lateral` es la única fuente del margen lateral | La leen `.pantalla`, `.toast`, `.chips` y `.accion-fija`. Una pantalla operativa usa `<div class="telefono denso">` (14px); el default es 26px |
+| Todo texto visible va en **español latino neutro con tuteo** | Pedido explícito del cliente. Nada de voseo rioplatense: *ingresa* y no *ingresá*, *elige* y no *elegí*, *intenta de nuevo* y no *intentá*, *aquí* y no *acá*, *a ti* y no *a vos*. Se coló dos veces después del barrido, así que cada texto nuevo se revisa antes de commitear. Solo aplica a lo que la persona ve o escucha (incluye `accessibilityLabel`); comentarios e identificadores quedan como están |
+| Un control que no cambia nada **se saca** | Aparecieron dos: un selector de rol que era decorativo (el rol sale de la sesión) y un selector de tamaño de hoja que no viajaba en la petición — el servidor ya usaba el tamaño del primer conteo. Un control muerto le hace creer a la persona que está decidiendo algo |
+| Si la tarjeta abre algo al tocarla, **no lleva botón** | El botón "+ Contar" repetía la acción de la tarjeta, comía ancho del nombre del producto y multiplicaba el alto de la lista. Antes de sacar un botón: confirmar que la tarjeta ya es táctil, y dejarle `accessibilityRole="button"` con un label que diga qué abre |
+| Cantidades: **campo numérico**, no botones de incremento | Cargar 300 unidades con `+1` son 300 toques. Con teclado numérico son dos. Los atajos de empaque quedan como opción, nunca como único camino |
+| Filtros en **modal con selector buscable** cuando las opciones pueden crecer | Los chips en fila funcionan con 3 categorías y se rompen con 100. El modal aguanta los dos extremos con lista buscable y desplazamiento |
+| El bloque de **configuración** no se mezcla con el contenido operativo | En la pantalla de hojas, el armado (catálogo, crear, repartir) convivía con la lista en un mismo desplazamiento. La configuración va en su propia entrada del menú, o se colapsa a una línea de resumen cuando ya está hecha — y vuelve a abrirse sola cuando hace falta otra vez, derivado del estado real y no de un interruptor manual |
+| Una acción irreversible **dice qué queda firme** antes de ejecutarse | "Esto cierra la planilla: los descuentos quedan firmes y solo un auditor puede lacrar después. No se puede deshacer." La confirmación nombra la consecuencia y la cifra, no pregunta "¿Estás seguro?" |
+
+### Honestidad de los datos en pantalla
+
+De lejos, la familia de bugs más cara de la app: **números y estados que mienten**. Ninguno lo vio un test; todos aparecieron mirando la pantalla con datos reales.
+
+| Regla | Por qué |
+|---|---|
+| Un **vacío nunca se muestra como éxito** | El panel de auditoría dijo "10 de 10 cuadrado" y "Cuadró en 3er", en verde, con cero conteos cargados. Sin dato no es coincidencia: es *sin contar*, con su propio estado y color neutro. Nada en verde sin dato que lo respalde |
+| Sin red, un dato que no se pudo traer es **"—"**, nunca `0` | Inicio mostraba "0 hojas · 0 ítems" con 25 hojas reales, y usaba ese 0 como denominador de un porcentaje. Un cero inventado es peor que un guion honesto |
+| Ningún texto nombra una **ronda fija** | Había literales de "2do conteo" en el bloque de la 3ra, y un paso cerrado que seguía diciendo "todavía no empezó". El ordinal y el estado salen de la ronda real; en la última ronda no hay "siguiente conteo", hay cierre |
+| No se inventan datos que parezcan reales | "Zona ACONDICIONADORES · Góndola 001" se derivaba de la categoría y del número de hoja. Nadie los había cargado, así que confundían más de lo que ayudaban |
+| Los nombres que vienen del ERP se muestran **tal cual** | La app pluralizaba el empaque ("Emp.45s"). Si Dynamics dice `Emp.45`, en pantalla dice `Emp.45` |
+| La cuenta que se **muestra** es la que se **guarda** | El total del modal se calculaba aparte del desglose. Un solo cálculo, o el día que difieran nadie va a saber cuál creer. Y la conversión va a la vista: `2 Emp.45 × 45 = 90` + `3 sueltas` → `93 und` |
+| Un total sale del **conjunto completo**, no del filtrado | El avance de la hoja sigue siendo el de la hoja aunque haya un filtro puesto; si se muestra el del filtro, se dice que es del filtro |
+| Una pantalla que lee de la copia local **pide al servidor cuando hay red** | El Coordinador veía "Quedan 20 hojas sin finalizar" horas después de que se finalizaran en otro teléfono, y el Ciclo mostraba "sin datos" con 22 conteos cargados. La copia local es para seguir trabajando sin señal, no la fuente de verdad |
+
+### Frescura y avisos
+
+| Regla | Por qué |
+|---|---|
+| **Ningún dato depende de cerrar sesión** para actualizarse | El Coordinador abría la ronda 3 y los contadores seguían viendo la 2 hasta reiniciar la app. Toda pantalla recarga al enfocarse y al volver la app a primer plano; las listas además con "tirar para refrescar" |
+| Refrescar **no pisa** lo que la persona está haciendo | Si hay un modal de conteo abierto o una edición en curso, el refresco espera. Y jamás borra trabajo local sin sincronizar |
+| Se navega por **identidad**, no por el número visible | Los números de hoja se repiten en cada ronda: al cambiar de ronda, "Hoja #001" llevaba a la hoja de otra persona, con los mismos productos a la vista y cada conteo rechazado. Si la hoja abierta ya no pertenece a la ronda activa, se saca de la vista y se dice por qué |
+| Un aviso va **donde se puede actuar** | Un rechazo de una hoja ajena pintaba de rojo el Inicio de cualquiera. El Inicio dice cuántas hojas propias faltan subir; el motivo puntual vive en la hoja que lo causó |
+| **Pendiente ≠ rechazado ≠ sin red** | "1 ítem sin sincronizar" se mostraba igual para algo que iba a subir solo y para algo que el servidor ya había rechazado y no iba a entrar nunca. Cada estado con su texto, su color y su acción; un fallo de red deja el ítem pendiente, un 4xx lo marca rechazado con el motivo del servidor |
 
 ### Paleta
 
