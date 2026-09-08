@@ -33,6 +33,15 @@ export const listarDiferencias = asyncHandler(async (req: RequestAutenticado, re
   res.json(await service.listarDiferencias(req.colaborador!, id, req.query as unknown as ListarDiferenciasQuery));
 });
 
+/** El .xlsx de faltantes/sobrantes -- ver historial.service.ts#exportarDiferencias. */
+export const exportarDiferencias = asyncHandler(async (req: RequestAutenticado, res: Response) => {
+  const { id } = req.params as unknown as ParametrosInventario;
+  const { buffer, nombreArchivo } = await service.exportarDiferencias(req.colaborador!, id);
+  res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+  res.setHeader('Content-Disposition', `attachment; filename="${nombreArchivo}"`);
+  res.send(buffer);
+});
+
 export const obtenerLiquidacion = asyncHandler(async (req: RequestAutenticado, res: Response) => {
   const { id } = req.params as unknown as ParametrosInventario;
   res.json(await service.obtenerLiquidacion(req.colaborador!, id));

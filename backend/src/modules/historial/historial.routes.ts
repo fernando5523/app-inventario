@@ -52,6 +52,19 @@ historialRouter.get(
   controller.listarDiferencias,
 );
 
+/**
+ * El .xlsx para WhatsApp/correo -- pedido del cliente: tabla plana, un
+ * archivo por inventario, para analizar en otra herramienta. MISMOS
+ * permisos que `/diferencias` de arriba (auditor recortado a su sucursal,
+ * administrador sin recorte) y SIN exigir lacrado: sirve desde que hay
+ * diferencias calculadas, ver historial.service.ts#exportarDiferencias.
+ */
+historialRouter.get(
+  '/inventarios/:id/diferencias/exportar',
+  validar(parametrosInventarioSchema, 'params'),
+  controller.exportarDiferencias,
+);
+
 historialRouter.get(
   '/inventarios/:id/liquidacion',
   validar(parametrosInventarioSchema, 'params'),

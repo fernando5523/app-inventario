@@ -25,6 +25,7 @@ vi.mock('./historial.controller', () =>
     'listarInventarios',
     'obtenerDetalle',
     'listarDiferencias',
+    'exportarDiferencias',
     'obtenerLiquidacion',
     'estadoLacrado',
     'verificarSello',

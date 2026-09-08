@@ -19,6 +19,7 @@ import {
   resumirHistoricoItem,
   type PuntoComparativo,
 } from './historial.calculos';
+import { armarLibroDiferencias, nombreArchivoExportDiferencias, type FilaDiferenciaExport } from './historial.exportar';
 import {
   ALGORITMO_HASH,
   armarContenidoLacrado,
@@ -482,6 +483,67 @@ export async function listarDiferencias(
       precioUnitario: aNumero(d.precioUnitario),
       montoDiferencia: aNumero(d.montoDiferencia),
     })),
+  };
+}
+
+/**
+ * El archivo EXCEL de faltantes/sobrantes de este inventario, para mandar
+ * por WhatsApp/correo -- pedido del cliente. MISMO guard que
+ * `listarDiferencias` (`traerInventarioOFallar` -> `validarAccesoAInventario`,
+ * historial.permisos.ts): el auditor solo exporta lo de su sucursal, el
+ * administrador cualquiera. A PROPOSITO no exige ningun estado del
+ * inventario mas alla de eso -- sirve desde que hay `DiferenciaItem`
+ * (se crean al cerrar la 3ra ronda, rondas.service.ts, ANTES de liquidar y
+ * lacrar), no recien cuando el mes queda sellado.
+ *
+ * NUNCA paginado: es un archivo para abrir en otra herramienta, no una
+ * pantalla -- una exportacion que corta a la mitad no sirve para nada.
+ *
+ * `codigoBarras`/`categoria` no viven en `DiferenciaItem` (ver el porque en
+ * el modelo, prisma/schema.prisma): se completan con un JOIN en memoria
+ * contra `CatalogoItem` de ESTE inventario por `codigo` -- mismo par que su
+ * `@@unique([inventarioId, codigo])`, asi que no hay ambiguedad posible.
+ */
+export async function exportarDiferencias(actor: ColaboradorAutenticado, id: number): Promise<{ buffer: Buffer; nombreArchivo: string }> {
+  const inv = await traerInventarioOFallar(actor, id, { sucursal: { select: { nombre: true } } });
+
+  const [diferencias, catalogo] = await Promise.all([
+    prisma.diferenciaItem.findMany({
+      where: { inventarioId: id },
+      orderBy: [{ diferencia: 'asc' }, { codigo: 'asc' }],
+    }),
+    prisma.catalogoItem.findMany({
+      where: { inventarioId: id },
+      select: { codigo: true, codigoBarras: true, categoria: true },
+    }),
+  ]);
+  const catalogoPorCodigo = new Map(catalogo.map((c) => [c.codigo, c]));
+
+  const filas: FilaDiferenciaExport[] = diferencias.map((d) => {
+    const item = catalogoPorCodigo.get(d.codigo);
+    return {
+      sucursal: inv.sucursal.nombre,
+      periodoAnio: inv.periodoAnio,
+      periodoMes: inv.periodoMes,
+      inventarioId: id,
+      codigo: d.codigo,
+      // '' y no undefined: una columna del reporte, nunca ausente de la fila.
+      codigoBarras: item?.codigoBarras ?? '',
+      descripcion: d.descripcion,
+      categoria: item?.categoria ?? null,
+      stockSistema: d.stockSistema,
+      conteoFinal: d.conteoFinal,
+      diferencia: d.diferencia,
+      tipo: d.diferencia < 0 ? 'faltante' : 'sobrante',
+      resueltoEnConteo: d.resueltoEnConteo,
+      precioUnitario: aNumero(d.precioUnitario),
+      montoDiferencia: aNumero(d.montoDiferencia),
+    };
+  });
+
+  return {
+    buffer: await armarLibroDiferencias(filas),
+    nombreArchivo: nombreArchivoExportDiferencias(inv.sucursal.nombre, inv.periodoAnio, inv.periodoMes, id),
   };
 }
 
