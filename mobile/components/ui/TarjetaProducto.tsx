@@ -1,10 +1,10 @@
-import { Check } from 'lucide-react-native';
+import { Check, ChevronRight } from 'lucide-react-native';
 import type { JSX } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { totalUnidades } from '../../lib/dominio/empaque';
 import type { Conteo, Producto } from '../../lib/dominio/tipos';
-import { colors, fonts, fontSize, radius } from '../../lib/theme';
+import { colors, fonts, fontSize } from '../../lib/theme';
 
 export interface TarjetaProductoProps {
   producto: Producto;
@@ -65,17 +65,17 @@ export function TarjetaProducto({ producto, conteo, confirmado, bloqueado, onPre
             <Text style={styles.totalCifra}>{total}</Text>
             <Text style={styles.totalUnidad}>und</Text>
           </View>
+          {/* Affordance discreta: la tarjeta entera ya es la superficie
+              tocable (ver el Pressable raíz) -- sin esto, nada del lado
+              derecho avisa que se puede tocar para editar el conteo. Fuera
+              de totalFila (que alinea por baseline, pensado para texto) para
+              que el ícono quede centrado con el resto de la fila. */}
+          {!bloqueado ? <ChevronRight size={16} color={colors.grisClaro} /> : null}
         </View>
       ) : (
         <View style={styles.pie}>
           <Text style={styles.detalle}>Ubicación: {producto.ubicacion ?? 'Sin ubicación'}</Text>
-          {/* Vista, no Pressable: la tarjeta entera ya es la única superficie
-              tocable (ver el Pressable raíz) — un segundo Pressable anidado
-              acá le pelea el gesture responder al de afuera dentro del
-              ScrollView. */}
-          <View style={[styles.btnContar, bloqueado && styles.btnContarDeshabilitado]}>
-            <Text style={styles.btnContarTexto}>+ Contar</Text>
-          </View>
+          {!bloqueado ? <ChevronRight size={16} color={colors.grisClaro} /> : null}
         </View>
       )}
     </Pressable>
@@ -101,7 +101,4 @@ const styles = StyleSheet.create({
   totalFila: { flex: 0, flexDirection: 'row', alignItems: 'baseline', gap: 3 },
   totalCifra: { fontSize: 18, color: colors.ok, fontFamily: fonts.bold },
   totalUnidad: { fontSize: 10.5, color: colors.ok, fontFamily: fonts.bold },
-  btnContar: { paddingVertical: 8, paddingHorizontal: 13, borderRadius: radius.sm, backgroundColor: colors.rojo },
-  btnContarDeshabilitado: { backgroundColor: '#DCD6D2' },
-  btnContarTexto: { fontSize: 12.5, color: colors.blanco, fontFamily: fonts.bold },
 });
