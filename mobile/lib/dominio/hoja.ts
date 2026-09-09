@@ -105,15 +105,24 @@ export function puedeEditar(hoja: HojaConteo): boolean {
 
 export interface ResultadoPuedeFinalizar {
   puede: boolean;
-  /** Items sin contar. Informativo: no bloquea la finalizacion. */
+  /** Productos sin ningun conteo: los que todavia bloquean la finalizacion. */
   faltantes: number;
 }
 
+/**
+ * NUEVA REGLA (cliente 2026-09-09, reemplaza el criterio de fb2e224): una hoja
+ * NO se puede finalizar mientras quede algun producto SIN valor. El 0 lo teclea
+ * la persona a mano -- es la evidencia de que miro el producto y no habia
+ * ninguno-- y ya no lo rellena el sistema. Por eso `faltantes` dejo de ser
+ * informativo: `faltantes > 0` bloquea. Sigue bloqueando, ademas, finalizar dos
+ * veces (punto de no retorno).
+ */
 export function puedeFinalizar(hoja: HojaConteo): ResultadoPuedeFinalizar {
   const { contados, total } = avance(hoja);
+  const faltantes = total - contados;
   return {
-    puede: hoja.estado !== 'finalizada',
-    faltantes: total - contados,
+    puede: hoja.estado !== 'finalizada' && faltantes === 0,
+    faltantes,
   };
 }
 

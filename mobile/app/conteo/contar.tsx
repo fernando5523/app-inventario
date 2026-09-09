@@ -304,6 +304,9 @@ export default function ContarScreen(): JSX.Element {
   }
 
   function abrirModalFinalizar(): void {
+    // Guarda por si acaso: el botón ya está deshabilitado con faltantes > 0,
+    // pero finalizar es el punto de no retorno y no se dispara con la hoja a medias.
+    if (!puedeFinalizar(hoja!).puede) return;
     setModalFinalizarVisible(true);
   }
 
@@ -325,23 +328,17 @@ export default function ContarScreen(): JSX.Element {
     }
   }
 
-  const { faltantes } = puedeFinalizar(hoja);
-  // total, NUNCA hoja.tamano: tamano es el tamaño nominal del lote pedido
-  // al crear las hojas, no cuántos productos tiene ESTA — la última hoja
-  // de un inventario real queda parcial, y decirle a quien cuenta que
-  // "quedan 14 sin contar" cuando esos 14 no existen la hace dudar de su
-  // propio trabajo y recontar una hoja que ya estaba completa.
+  const { puede: puedeFinalizarHoja, faltantes } = puedeFinalizar(hoja);
+  // NUEVA REGLA (cliente 2026-09-09, reemplaza la de 2026-09-05/fb2e224):
+  // finalizar NO se ofrece mientras quede algún producto sin valor. El 0 lo
+  // teclea la persona (evidencia de que miró y no había), el sistema ya no lo
+  // rellena. Por eso el botón queda deshabilitado con el motivo mientras
+  // `faltantes > 0`, y este modal solo se abre con la hoja COMPLETA: su texto
+  // es la confirmación del punto de no retorno, no un aviso de auto-relleno.
   //
-  // DECISIÓN DEL CLIENTE (2026-09-05): finalizar con renglones vacíos ya NO
-  // los deja en "faltan N / quedan vacíos" — cada uno se registra en 0 ("si
-  // no hay el producto, es 0"). Por eso el aviso pasó a ser una CONFIRMACIÓN
-  // de que esos N se van a registrar en 0. El relleno lo hace
-  // `repositorioHojas.finalizar` (encola un 0 por cada uno y después
-  // finaliza, ver hojas-sqlite.ts#finalizar), así funciona igual sin red.
-  const textoFinalizar =
-    faltantes > 0
-      ? `${faltantes} ${faltantes === 1 ? 'producto se va' : 'productos se van'} a registrar en 0. ¿Finalizar?`
-      : `Los ${total} ítems de esta hoja están contados.`;
+  // `total`, NUNCA hoja.tamano: tamano es el tamaño nominal del lote, no cuántos
+  // productos tiene ESTA hoja — la última de un inventario real queda parcial.
+  const textoFinalizar = `Los ${total} ítems de esta hoja están contados.`;
 
   // `error` se arma con la razón ACOTADA a esta hoja (`razonRechazoHoja`),
   // nunca con `estadoCola.error` (global) directo — el resto de `estadoCola`
@@ -437,10 +434,22 @@ export default function ContarScreen(): JSX.Element {
         <Pressable style={styles.accion} onPress={() => router.push('/conteo/mis-hojas')}>
           <Text style={styles.accionTexto}>Volver a mis hojas</Text>
         </Pressable>
-      ) : (
+      ) : puedeFinalizarHoja ? (
         <Pressable style={styles.accion} onPress={abrirModalFinalizar}>
           <Text style={styles.accionTexto}>Finalizar hoja #{hoja.numero}</Text>
         </Pressable>
+      ) : (
+        // NUEVA REGLA (cliente 2026-09-09): no se finaliza hasta que TODOS los
+        // productos tengan un valor. Deshabilitado con el motivo, no escondido:
+        // esconder el botón deja a la persona sin saber por qué no puede cerrar.
+        <View style={styles.finalizarBloqueado}>
+          <View style={[styles.accion, styles.accionDeshabilitada]}>
+            <Text style={styles.accionDeshabilitadaTexto}>Finalizar hoja #{hoja.numero}</Text>
+          </View>
+          <Text style={styles.finalizarNota}>
+            {`Faltan ${faltantes} ${faltantes === 1 ? 'producto' : 'productos'} por contar. Cargá su cantidad — teclea 0 si miraste y no había — para poder finalizar.`}
+          </Text>
+        </View>
       )}
       </PantallaConTabs>
 
@@ -546,6 +555,10 @@ const styles = StyleSheet.create({
     backgroundColor: colors.rojo,
   },
   accionTexto: { fontSize: 15, color: colors.blanco, fontFamily: fonts.bold },
+  finalizarBloqueado: { gap: 8 },
+  accionDeshabilitada: { backgroundColor: '#DCD6D2' },
+  accionDeshabilitadaTexto: { fontSize: 15, color: colors.gris, fontFamily: fonts.bold },
+  finalizarNota: { fontSize: 12.5, color: colors.gris, fontFamily: fonts.regular, lineHeight: 17, textAlign: 'center' },
   accionSecundaria: { backgroundColor: colors.campo, borderWidth: 1, borderColor: colors.borde },
   accionSecundariaTexto: { fontSize: 15, color: colors.tinta, fontFamily: fonts.bold },
   modalFinalizarFondo: {

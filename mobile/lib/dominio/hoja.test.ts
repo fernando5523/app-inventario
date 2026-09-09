@@ -107,21 +107,21 @@ describe('puedeEditar', () => {
 });
 
 describe('puedeFinalizar', () => {
-  it('pendiente sin nada contado: puede finalizar, todo queda como faltante', () => {
+  it('pendiente sin nada contado: NO puede finalizar (regla 2026-09-09), los 2 faltan', () => {
     const h = hoja({ estado: 'pendiente', productos: [producto(1), producto(2)], conteos: [] });
-    expect(puedeFinalizar(h)).toEqual({ puede: true, faltantes: 2 });
+    expect(puedeFinalizar(h)).toEqual({ puede: false, faltantes: 2 });
   });
 
-  it('en-proceso con algunos contados: puede finalizar e informa cuantos faltan', () => {
+  it('en-proceso con algunos contados: NO puede finalizar hasta que no falte ninguno', () => {
     const h = hoja({
       estado: 'en-proceso',
       productos: [producto(1), producto(2), producto(3)],
       conteos: [conteoDe(1)],
     });
-    expect(puedeFinalizar(h)).toEqual({ puede: true, faltantes: 2 });
+    expect(puedeFinalizar(h)).toEqual({ puede: false, faltantes: 2 });
   });
 
-  it('completa: puede finalizar y no faltan items', () => {
+  it('completa: recien ahi puede finalizar (todos con valor, incluso los tecleados en 0)', () => {
     const h = hoja({
       estado: 'en-proceso',
       productos: [producto(1), producto(2)],
@@ -134,9 +134,9 @@ describe('puedeFinalizar', () => {
     const h = hoja({
       estado: 'finalizada',
       productos: [producto(1), producto(2)],
-      conteos: [conteoDe(1)],
+      conteos: [conteoDe(1), conteoDe(2)],
     });
-    expect(puedeFinalizar(h)).toEqual({ puede: false, faltantes: 1 });
+    expect(puedeFinalizar(h)).toEqual({ puede: false, faltantes: 0 });
   });
 });
 
