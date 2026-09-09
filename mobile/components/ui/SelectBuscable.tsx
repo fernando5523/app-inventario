@@ -20,6 +20,15 @@ export interface SelectBuscableProps {
   /** Controlado desde afuera para que un solo campo esté abierto a la vez. */
   abierto: boolean;
   onCambiarAbierto: (abierto: boolean) => void;
+  /**
+   * Si el campo de búsqueda toma el foco (y abre el teclado) apenas se
+   * despliega el select. Por defecto `true` (comportamiento de siempre).
+   * `ModalFiltrosProductos.tsx` (Contar) lo pone en `false` -- pedido del
+   * cliente 2026-09-09: ahí el teclado tapaba la pantalla al abrir el
+   * modal, sin que nadie lo haya tocado todavía. Acotado a esa pantalla:
+   * `ModalFiltrosHojas.tsx` (Coordinador) no pasa esta prop y sigue igual.
+   */
+  autoFocusBusqueda?: boolean;
 }
 
 /**
@@ -39,6 +48,7 @@ export function SelectBuscable({
   placeholderBusqueda,
   abierto,
   onCambiarAbierto,
+  autoFocusBusqueda = true,
 }: SelectBuscableProps): JSX.Element {
   const [busqueda, setBusqueda] = useState('');
   const visibles = filtrarOpciones(opciones, busqueda);
@@ -82,7 +92,7 @@ export function SelectBuscable({
               onChangeText={setBusqueda}
               placeholder={placeholderBusqueda}
               placeholderTextColor={colors.grisClaro}
-              autoFocus
+              autoFocus={autoFocusBusqueda}
             />
           </View>
           <ScrollView

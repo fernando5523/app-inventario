@@ -76,6 +76,7 @@ export function ModalFiltrosProductos({ visible, productos, filtro, onAplicar, o
               placeholderBusqueda="Buscar categoría..."
               abierto={campoAbierto === 'categoria'}
               onCambiarAbierto={(a) => abrir('categoria', a)}
+              autoFocusBusqueda={false}
             />
             <SelectBuscable
               label="Nombre de producto"
@@ -87,6 +88,7 @@ export function ModalFiltrosProductos({ visible, productos, filtro, onAplicar, o
               placeholderBusqueda="Buscar nombre..."
               abierto={campoAbierto === 'nombre'}
               onCambiarAbierto={(a) => abrir('nombre', a)}
+              autoFocusBusqueda={false}
             />
             <SelectBuscable
               label="Código de producto"
@@ -98,6 +100,7 @@ export function ModalFiltrosProductos({ visible, productos, filtro, onAplicar, o
               placeholderBusqueda="Buscar código..."
               abierto={campoAbierto === 'codigo'}
               onCambiarAbierto={(a) => abrir('codigo', a)}
+              autoFocusBusqueda={false}
             />
           </ScrollView>
 

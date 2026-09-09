@@ -6,11 +6,14 @@
  * (acentos, "sin categoría", cómo se combinan) que dentro de un `.filter()` en
  * el render no se pueden probar.
  *
- * El ORDEN nunca lo toca este módulo: `.filter()` conserva el orden de
- * `hoja.productos`, que ya viene ordenado por categoría y código desde el
- * backend (ver `lote.ts#ordenarParaContar`) — filtrar no es reordenar. Y
- * CONTEO CIEGO: acá no entra ni stock ni precio, solo lo que sirve para
- * encontrar un renglón.
+ * `aplicarFiltro` NUNCA reordena la LISTA de productos: `.filter()` conserva
+ * el orden de `hoja.productos`, que ya viene ordenado por categoría y código
+ * desde el backend (ver `lote.ts#ordenarParaContar`) — filtrar no es
+ * reordenar. Distinto es el orden de las OPCIONES de cada selector
+ * (categoría/nombre/código): esas sí van alfabético ascendente (pedido del
+ * cliente 2026-09-09) — ver `categoriasDeHoja`/`nombresDeHoja`/
+ * `codigosDeHoja` más abajo. Y CONTEO CIEGO: acá no entra ni stock ni
+ * precio, solo lo que sirve para encontrar un renglón.
  */
 
 import type { Producto } from './tipos';
@@ -41,38 +44,48 @@ export function categoriaDe(producto: Producto): string {
   return producto.categoria ?? SIN_CATEGORIA;
 }
 
-/**
- * Valores DISTINTOS en el orden en que aparecen en la hoja (el mismo con el
- * que se camina la góndola). Sin duplicados, sin reordenar.
- */
-function distintosEnOrden(valores: Iterable<string>): string[] {
-  const vistos = new Set<string>();
-  const orden: string[] = [];
-  for (const v of valores) {
-    if (!vistos.has(v)) {
-      vistos.add(v);
-      orden.push(v);
-    }
-  }
-  return orden;
+/** Valores DISTINTOS, sin ningún orden en particular (lo pone quien llama). */
+function distintos(valores: Iterable<string>): string[] {
+  return [...new Set(valores)];
 }
 
+/** Alfabético natural en español: acentos y Ñ en su lugar (localeCompare 'es'). */
+function ordenAlfabetico(valores: string[]): string[] {
+  return [...valores].sort((a, b) => a.localeCompare(b, 'es'));
+}
+
+/**
+ * Igual que `ordenAlfabetico`, pero con `numeric: true`: un código
+ * NUMÉRICO se compara por su valor, no letra por letra -- pedido del
+ * cliente 2026-09-09, "que 100010 no quede antes que 9". Sirve igual de
+ * bien para códigos no numéricos (alfabético común).
+ */
+function ordenDeCodigos(valores: string[]): string[] {
+  return [...valores].sort((a, b) => a.localeCompare(b, 'es', { numeric: true }));
+}
+
+/**
+ * Las opciones de cada selector del modal de filtros, ORDENADAS ASCENDENTE
+ * -- pedido del cliente 2026-09-09: antes salían en el orden en que
+ * aparecen en la hoja (el de la góndola), que no ayuda a encontrar un
+ * valor puntual en una lista larga.
+ */
 export function categoriasDeHoja(productos: readonly Producto[]): string[] {
-  return distintosEnOrden((function* () {
+  return ordenAlfabetico(distintos((function* () {
     for (const p of productos) yield categoriaDe(p);
-  })());
+  })()));
 }
 
 export function nombresDeHoja(productos: readonly Producto[]): string[] {
-  return distintosEnOrden((function* () {
+  return ordenAlfabetico(distintos((function* () {
     for (const p of productos) yield p.descripcion;
-  })());
+  })()));
 }
 
 export function codigosDeHoja(productos: readonly Producto[]): string[] {
-  return distintosEnOrden((function* () {
+  return ordenDeCodigos(distintos((function* () {
     for (const p of productos) yield p.codigo;
-  })());
+  })()));
 }
 
 /**

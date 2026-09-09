@@ -38,14 +38,33 @@ const HOJA: Producto[] = [
 const filtro = (p: Partial<FiltroProductos> = {}): FiltroProductos => ({ ...FILTRO_VACIO, ...p });
 const ids = (ps: Producto[]): number[] => ps.map((p) => p.id);
 
-describe('opciones de cada campo: distintas y en el orden de la hoja', () => {
-  it('categorías: sin duplicados, en orden, con "Sin categoría" para las que el ERP no clasificó', () => {
-    expect(categoriasDeHoja(HOJA)).toEqual(['Lácteos', 'Galletas', SIN_CATEGORIA]);
+describe('opciones de cada campo: distintas y ORDENADAS ASCENDENTE (pedido del cliente 2026-09-09)', () => {
+  it('categorías: sin duplicados, alfabético en español, con "Sin categoría" en su lugar alfabético', () => {
+    expect(categoriasDeHoja(HOJA)).toEqual(['Galletas', 'Lácteos', SIN_CATEGORIA]);
   });
 
-  it('nombres y códigos: en el orden en que aparecen', () => {
-    expect(nombresDeHoja(HOJA)).toEqual(['Yogur Frutilla', 'Yogur Natural', 'Galleta de Agua', 'Detergente']);
+  it('nombres: alfabético en español, no en el orden en que aparecen en la hoja', () => {
+    expect(nombresDeHoja(HOJA)).toEqual(['Detergente', 'Galleta de Agua', 'Yogur Frutilla', 'Yogur Natural']);
+  });
+
+  it('códigos alfanuméricos (mismo largo): alfabético alcanza', () => {
     expect(codigosDeHoja(HOJA)).toEqual(['0001', '0002', '0003', '0004']);
+  });
+
+  it('códigos NUMÉRICOS: por su valor, no letra por letra -- "100010" no queda antes que "9"', () => {
+    const conNumeros: Producto[] = [
+      prod({ id: 10, codigo: '100010' }),
+      prod({ id: 11, codigo: '9' }),
+      prod({ id: 12, codigo: '20' }),
+    ];
+    // Alfabético puro daría ['100010', '20', '9'] (compara letra a letra) --
+    // lo que rompe justo el caso que reportó el cliente.
+    expect(codigosDeHoja(conNumeros)).toEqual(['9', '20', '100010']);
+  });
+
+  it('acentos y Ñ en su lugar alfabético natural', () => {
+    const conEnie: Producto[] = [prod({ id: 20, descripcion: 'Ñoquis' }), prod({ id: 21, descripcion: 'Nuez' }), prod({ id: 22, descripcion: 'Omelette' })];
+    expect(nombresDeHoja(conEnie)).toEqual(['Nuez', 'Ñoquis', 'Omelette']);
   });
 });
 
@@ -112,10 +131,10 @@ describe('contarFiltrosActivos: el número del botón "Filtros"', () => {
 });
 
 describe('opcionesEnCascada: cada selector se recorta con lo que ya eligieron los otros dos', () => {
-  it('sin nada elegido: las tres listas completas de la hoja', () => {
+  it('sin nada elegido: las tres listas completas de la hoja, ordenadas ascendente', () => {
     const op = opcionesEnCascada(HOJA, FILTRO_VACIO);
-    expect(op.categoria).toEqual(['Lácteos', 'Galletas', SIN_CATEGORIA]);
-    expect(op.nombre).toEqual(['Yogur Frutilla', 'Yogur Natural', 'Galleta de Agua', 'Detergente']);
+    expect(op.categoria).toEqual(['Galletas', 'Lácteos', SIN_CATEGORIA]);
+    expect(op.nombre).toEqual(['Detergente', 'Galleta de Agua', 'Yogur Frutilla', 'Yogur Natural']);
     expect(op.codigo).toEqual(['0001', '0002', '0003', '0004']);
   });
 
@@ -127,7 +146,7 @@ describe('opcionesEnCascada: cada selector se recorta con lo que ya eligieron lo
 
   it('categoría NO se recorta a sí misma -- si no, quedaría viendo una sola opción: la que ya tiene puesta', () => {
     const op = opcionesEnCascada(HOJA, filtro({ categoria: 'Lácteos' }));
-    expect(op.categoria).toEqual(['Lácteos', 'Galletas', SIN_CATEGORIA]);
+    expect(op.categoria).toEqual(['Galletas', 'Lácteos', SIN_CATEGORIA]);
   });
 
   it('elegir nombre deja la categoría en la suya', () => {
@@ -170,10 +189,10 @@ describe('elegirCampo: un valor que deja de tener sentido con el cambio se limpi
     expect(elegirCampo(HOJA, completo, 'nombre', null)).toEqual(filtro({ categoria: 'Lácteos', nombre: null, codigo: '0001' }));
   });
 
-  it('"Limpiar todo" (FILTRO_VACIO) vuelve a las opciones completas de la hoja', () => {
+  it('"Limpiar todo" (FILTRO_VACIO) vuelve a las opciones completas de la hoja, ordenadas ascendente', () => {
     expect(opcionesEnCascada(HOJA, FILTRO_VACIO)).toEqual({
-      categoria: ['Lácteos', 'Galletas', SIN_CATEGORIA],
-      nombre: ['Yogur Frutilla', 'Yogur Natural', 'Galleta de Agua', 'Detergente'],
+      categoria: ['Galletas', 'Lácteos', SIN_CATEGORIA],
+      nombre: ['Detergente', 'Galleta de Agua', 'Yogur Frutilla', 'Yogur Natural'],
       codigo: ['0001', '0002', '0003', '0004'],
     });
   });
