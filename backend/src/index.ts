@@ -1,4 +1,9 @@
 import { crearApp } from './config/app';
+import { instalarRegistroDeCaidas, registrarCaida } from './config/registro-caidas';
+
+// ANTES que nada: que un fallo de arranque (o cualquier crash posterior) deje
+// rastro en logs/crash.log en vez de morir en silencio. Ver registro-caidas.ts.
+instalarRegistroDeCaidas();
 
 const PUERTO = process.env.PORT ? Number(process.env.PORT) : 3000;
 
@@ -23,9 +28,22 @@ const PUERTO = process.env.PORT ? Number(process.env.PORT) : 3000;
  */
 const HOST = process.env.HOST ?? '0.0.0.0';
 
-crearApp().listen(PUERTO, HOST, () => {
+const servidor = crearApp().listen(PUERTO, HOST, () => {
   console.log(`Backend de app-inventario escuchando en ${HOST}:${PUERTO}`);
   if (HOST === '0.0.0.0') {
     console.log('  Accesible desde la red local. Para restringirlo: HOST=127.0.0.1');
   }
+});
+
+// Sin este handler, un error al escuchar (típicamente EADDRINUSE: el puerto ya
+// tomado por un backend anterior que no cerró) se propaga como excepción no
+// capturada y el proceso muere ANTES de imprimir "escuchando", sin rastro. Ahora
+// deja el motivo y termina igual (mismo resultado que antes, con evidencia).
+servidor.on('error', (err: NodeJS.ErrnoException) => {
+  const motivo =
+    err.code === 'EADDRINUSE'
+      ? `El puerto ${PUERTO} ya está en uso — ¿quedó un backend anterior sin cerrar? (EADDRINUSE)`
+      : `${err.code ?? 'ERROR'}: ${err.message}`;
+  registrarCaida('ERROR_AL_ESCUCHAR', motivo);
+  process.exit(1);
 });
