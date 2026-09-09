@@ -164,7 +164,10 @@ describe('GET /api/historial/diferencias/exportar: quién puede bajar el consoli
       ];
     };
     vi.mocked(prisma.diferenciaItem.findMany).mockImplementation(implementacion as never);
-    vi.mocked(prisma.catalogoItem.findMany).mockResolvedValue([] as never);
+    vi.mocked(prisma.catalogoItem.findMany).mockResolvedValue([
+      { codigo: '000123', codigoBarras: '1', categoria: null, responsable: 'empleado' },
+      { codigo: '000456', codigoBarras: '2', categoria: null, responsable: 'empleado' },
+    ] as never);
 
     const r = await exportarConsolidado(ADMIN, '?periodoAnio=2026&periodoMes=9&sucursalId=1&sucursalId=2');
     const hoja = await leerPrimeraHoja(r);

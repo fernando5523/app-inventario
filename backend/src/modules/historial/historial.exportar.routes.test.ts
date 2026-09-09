@@ -7,6 +7,7 @@
  * sí, con lo mínimo que el camino recorrido necesita.
  */
 
+import ExcelJS from 'exceljs';
 import type { ColaboradorAutenticado } from '../../shared/tipos';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { appDePrueba, autorizacion, levantar } from '../../test-utils/http-test';
@@ -71,6 +72,15 @@ async function exportar(actor: ColaboradorAutenticado, inventarioId = 30): Promi
   });
 }
 
+async function leerPrimeraHoja(r: Response): Promise<ExcelJS.Worksheet> {
+  const bytes = await r.arrayBuffer();
+  const libro = new ExcelJS.Workbook();
+  await libro.xlsx.load(Buffer.from(bytes) as any);
+  const hoja = libro.worksheets[0];
+  if (!hoja) throw new Error('El libro no tiene ninguna hoja.');
+  return hoja;
+}
+
 describe('GET /api/historial/inventarios/:id/diferencias/exportar: quién puede bajar el .xlsx', () => {
   it('coordinador, 403 -- el conteo ciego no le permite ver el histórico', async () => {
     const r = await exportar(COORDINADOR);
@@ -130,5 +140,31 @@ describe('GET /api/historial/inventarios/:id/diferencias/exportar: quién puede 
   it('sin sesión, 401', async () => {
     const r = await fetch(`${baseUrl}/api/historial/inventarios/30/diferencias/exportar`);
     expect(r.status).toBe(401);
+  });
+});
+
+describe('columna Responsable: SOLO entra el Empleado, empresa y desconocido quedan afuera', () => {
+  it('empleado entra, empresa y sin dato NO -- decisión del cliente, replica su informe actual', async () => {
+    vi.mocked(prisma.inventario.findUnique).mockResolvedValue(inventarioDeSucursal1() as never);
+    vi.mocked(prisma.diferenciaItem.findMany).mockResolvedValue([
+      { codigo: 'EMP', descripcion: 'Del empleado', stockSistema: 10, conteoFinal: 8, diferencia: -2, resueltoEnConteo: 1, precioUnitario: null, montoDiferencia: null },
+      { codigo: 'CIA', descripcion: 'De la empresa', stockSistema: 10, conteoFinal: 8, diferencia: -2, resueltoEnConteo: 1, precioUnitario: null, montoDiferencia: null },
+      { codigo: 'NONE', descripcion: 'Responsable None', stockSistema: 10, conteoFinal: 8, diferencia: -2, resueltoEnConteo: 1, precioUnitario: null, montoDiferencia: null },
+      { codigo: 'SIN_SYNC', descripcion: 'Nunca sincronizó la entidad', stockSistema: 10, conteoFinal: 8, diferencia: -2, resueltoEnConteo: 1, precioUnitario: null, montoDiferencia: null },
+    ] as never);
+    vi.mocked(prisma.catalogoItem.findMany).mockResolvedValue([
+      { codigo: 'EMP', codigoBarras: '1', categoria: null, responsable: 'empleado' },
+      { codigo: 'CIA', codigoBarras: '2', categoria: null, responsable: 'empresa' },
+      { codigo: 'NONE', codigoBarras: '3', categoria: null, responsable: null },
+      // 'SIN_SYNC' a propósito no tiene fila de catálogo: nunca sincronizó TRU_InventoryManagerPEEntities.
+    ] as never);
+
+    const r = await exportar(AUDITOR_SUCURSAL_1);
+    const hoja = await leerPrimeraHoja(r);
+
+    expect(hoja.rowCount).toBe(2); // encabezado + 1 sola fila (EMP)
+    const fila = hoja.getRow(2);
+    expect(fila.getCell(5).value).toBe('EMP'); // Código
+    expect(fila.getCell(9).value).toBe('Empleado'); // Responsable
   });
 });

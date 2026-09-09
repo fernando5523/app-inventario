@@ -33,6 +33,14 @@ export interface FilaDiferenciaExport {
   descripcion: string;
   /** `null` = Dynamics no lo clasificó -- columna vacía, no un "Sin categoría" inventado. */
   categoria: string | null;
+  /**
+   * SIEMPRE 'Empleado': el filtro que arma estas filas (historial.service.ts
+   * #filasDeDiferencias) ya descarta los items de 'Empresa' y los de
+   * responsable desconocido -- ninguno de los dos llega a esta fila. No es
+   * un booleano ni un `string` libre para no dejar abierta la puerta a que
+   * algún día se cuele otro valor en la columna.
+   */
+  responsable: 'Empleado';
   stockSistema: number;
   conteoFinal: number;
   diferencia: number;
@@ -58,6 +66,7 @@ export const ENCABEZADOS_EXPORT_DIFERENCIAS = [
   'Código de barras',
   'Descripción',
   'Categoría',
+  'Responsable',
   'Stock ERP',
   'Conteo final',
   'Diferencia',
@@ -77,6 +86,7 @@ function filaAOrdenDeColumnas(f: FilaDiferenciaExport): (string | number | null)
     f.codigoBarras,
     f.descripcion,
     f.categoria,
+    f.responsable,
     f.stockSistema,
     f.conteoFinal,
     f.diferencia,

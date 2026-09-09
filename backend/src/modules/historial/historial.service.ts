@@ -584,32 +584,40 @@ async function filasDeDiferencias(
     }),
     prisma.catalogoItem.findMany({
       where: { inventarioId },
-      select: { codigo: true, codigoBarras: true, categoria: true },
+      select: { codigo: true, codigoBarras: true, categoria: true, responsable: true },
     }),
   ]);
   const catalogoPorCodigo = new Map(catalogo.map((c) => [c.codigo, c]));
 
-  return diferencias.map((d) => {
-    const item = catalogoPorCodigo.get(d.codigo);
-    return {
-      sucursal: sucursalNombre,
-      periodoAnio,
-      periodoMes,
-      inventarioId,
-      codigo: d.codigo,
-      // '' y no undefined: una columna del reporte, nunca ausente de la fila.
-      codigoBarras: item?.codigoBarras ?? '',
-      descripcion: d.descripcion,
-      categoria: item?.categoria ?? null,
-      stockSistema: d.stockSistema,
-      conteoFinal: d.conteoFinal,
-      diferencia: d.diferencia,
-      tipo: d.diferencia < 0 ? 'faltante' : 'sobrante',
-      resueltoEnConteo: d.resueltoEnConteo,
-      precioUnitario: aNumero(d.precioUnitario),
-      montoDiferencia: aNumero(d.montoDiferencia),
-    };
-  });
+  // Decision del cliente: el Excel muestra SOLO lo del Empleado -- lo de la
+  // Empresa y lo desconocido (sin fila de catalogo, o D365 dijo 'None') NO
+  // van al reporte, replicando el filtro del informe actual (ver
+  // CatalogoItem.responsable en schema.prisma). Por eso es un filter antes
+  // del map, no una columna que a veces queda vacia.
+  return diferencias
+    .filter((d) => catalogoPorCodigo.get(d.codigo)?.responsable === 'empleado')
+    .map((d) => {
+      const item = catalogoPorCodigo.get(d.codigo)!;
+      return {
+        sucursal: sucursalNombre,
+        periodoAnio,
+        periodoMes,
+        inventarioId,
+        codigo: d.codigo,
+        // '' y no undefined: una columna del reporte, nunca ausente de la fila.
+        codigoBarras: item.codigoBarras,
+        descripcion: d.descripcion,
+        categoria: item.categoria,
+        responsable: 'Empleado' as const,
+        stockSistema: d.stockSistema,
+        conteoFinal: d.conteoFinal,
+        diferencia: d.diferencia,
+        tipo: d.diferencia < 0 ? 'faltante' : 'sobrante',
+        resueltoEnConteo: d.resueltoEnConteo,
+        precioUnitario: aNumero(d.precioUnitario),
+        montoDiferencia: aNumero(d.montoDiferencia),
+      };
+    });
 }
 
 // ---------------------------------------------------------------------------

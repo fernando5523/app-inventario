@@ -26,6 +26,7 @@ function fila(overrides: Partial<FilaDiferenciaExport> = {}): FilaDiferenciaExpo
     codigoBarras: '7750001230001',
     descripcion: 'Yogur Frutilla 1L',
     categoria: 'Lácteos',
+    responsable: 'Empleado',
     stockSistema: 42,
     conteoFinal: 38,
     diferencia: -4,
@@ -79,7 +80,7 @@ describe('armarLibroDiferencias: tabla plana -- fila 1 encabezados, una fila por
   it('los números llegan como NUMERO, no como texto', async () => {
     const hoja = await leer(await armarLibroDiferencias([fila()]));
     const datos = hoja.getRow(2);
-    const columnasNumero = [2, 3, 4, 9, 10, 11, 13, 14, 15]; // año, mes, inventario, stock, conteo, diferencia, ronda, precio, monto (1-based)
+    const columnasNumero = [2, 3, 4, 10, 11, 12, 14, 15, 16]; // año, mes, inventario, stock, conteo, diferencia, ronda, precio, monto (1-based)
     for (const col of columnasNumero) {
       expect(typeof datos.getCell(col).value).toBe('number');
     }
@@ -88,7 +89,7 @@ describe('armarLibroDiferencias: tabla plana -- fila 1 encabezados, una fila por
   it('las columnas de texto llegan como texto', async () => {
     const hoja = await leer(await armarLibroDiferencias([fila()]));
     const datos = hoja.getRow(2);
-    const columnasTexto = [1, 5, 6, 7, 8, 12]; // sucursal, código, código de barras, descripción, categoría, tipo
+    const columnasTexto = [1, 5, 6, 7, 8, 9, 13]; // sucursal, código, código de barras, descripción, categoría, responsable, tipo
     for (const col of columnasTexto) {
       expect(typeof datos.getCell(col).value).toBe('string');
     }
@@ -98,8 +99,8 @@ describe('armarLibroDiferencias: tabla plana -- fila 1 encabezados, una fila por
     const hoja = await leer(await armarLibroDiferencias([fila({ categoria: null, precioUnitario: null, montoDiferencia: null })]));
     const datos = hoja.getRow(2);
     expect(datos.getCell(8).value).toBeNull();
-    expect(datos.getCell(14).value).toBeNull();
     expect(datos.getCell(15).value).toBeNull();
+    expect(datos.getCell(16).value).toBeNull();
   });
 
   it('vuelca los valores de cada fila en el orden de ENCABEZADOS_EXPORT_DIFERENCIAS', async () => {
@@ -114,6 +115,7 @@ describe('armarLibroDiferencias: tabla plana -- fila 1 encabezados, una fila por
       '7750001230001',
       'Yogur Frutilla 1L',
       'Lácteos',
+      'Empleado',
       42,
       38,
       -4,
