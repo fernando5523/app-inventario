@@ -66,6 +66,7 @@ import {
   type AvanceSnapshot,
   type CierreRonda,
   type CodigoErrorSnapshot,
+  type CriteriosSnapshot,
   type DesgloseSnapshot,
   type OpcionesTraerSnapshot,
   type RepositorioInventario,
@@ -98,6 +99,12 @@ interface SnapshotDto {
   items: number;
   tomadoEn: string;
   desglose?: DesgloseSnapshot;
+  /**
+   * Qué filtros corrieron. Opcional por lo mismo que `desglose`: si el
+   * servidor no lo manda, la pantalla no afirma ningún criterio en vez de
+   * asumir que se aplicaron todos (ver dominio/criterios-snapshot.ts).
+   */
+  criterios?: CriteriosSnapshot;
 }
 
 interface InventarioActivoDto extends SnapshotDto {

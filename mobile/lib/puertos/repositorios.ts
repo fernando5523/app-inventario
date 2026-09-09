@@ -210,6 +210,25 @@ export interface DesgloseSnapshot {
   sinResponsable?: number;
 }
 
+/**
+ * QUÉ FILTROS corrieron de verdad en esta corrida — datos, no un texto ya
+ * armado: el servidor informa qué hizo y la pantalla lo redacta (ver
+ * dominio/criterios-snapshot.ts).
+ *
+ * Existe porque la pantalla del Coordinador afirmaba SIEMPRE los tres
+ * criterios ("productos activos, con stock en el almacén y responsabilidad
+ * del personal") y ninguno estaba garantizado: `porEstadoActivo` nunca se
+ * aplicó, y los otros dos se caen si falta el almacén o si la entidad de
+ * responsables no contesta. Un texto que promete un filtro que no corrió es
+ * un dato que miente, y acá eso termina en un faltante descontado a alguien.
+ */
+export interface CriteriosSnapshot {
+  porStock: boolean;
+  porResponsable: boolean;
+  /** Hoy siempre `false`: Dynamics no se consulta por estado del producto. */
+  porEstadoActivo: boolean;
+}
+
 export interface ResultadoSnapshot {
   inventarioId: number;
   items: number;
@@ -220,6 +239,12 @@ export interface ResultadoSnapshot {
    * de inventar los números que faltan.
    */
   desglose?: DesgloseSnapshot;
+  /**
+   * Opcional por la misma razón que `desglose`: un backend que todavía no lo
+   * manda no es "no se filtró nada". Sin este dato la pantalla no afirma
+   * ningún criterio, que es la lectura correcta de "no sé".
+   */
+  criterios?: CriteriosSnapshot;
 }
 
 export interface OpcionesTraerSnapshot {

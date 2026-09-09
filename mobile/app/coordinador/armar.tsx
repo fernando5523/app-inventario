@@ -8,9 +8,16 @@ import { AvanceFila, BarraApp, Badge, Button, formatoFechaHora, formatoMiles, ty
 import { inventarioIdSinRed } from '../../lib/adaptadores/hojas-sqlite';
 import { repositorioHojas, repositorioInventario, repositorioSesion } from '../../lib/contenedor';
 import { avanceParaMostrar } from '../../lib/dominio/avance-snapshot';
+import { textoDeCriterios } from '../../lib/dominio/criterios-snapshot';
 import { partirEnHojas } from '../../lib/dominio/lote';
 import { TAMANOS_HOJA, type Colaborador, type HojaConteo, type TamanoHoja } from '../../lib/dominio/tipos';
-import { ErrorSnapshot, type AvanceSnapshot, type DesgloseSnapshot, type TipoInventario } from '../../lib/puertos/repositorios';
+import {
+  ErrorSnapshot,
+  type AvanceSnapshot,
+  type CriteriosSnapshot,
+  type DesgloseSnapshot,
+  type TipoInventario,
+} from '../../lib/puertos/repositorios';
 import { useSesion } from '../../lib/sesion-contexto';
 import { colors, fonts, fontSize, radius, spacing } from '../../lib/theme';
 
@@ -148,6 +155,8 @@ function SelectorTipo({ valor, onElegir, disabled }: SelectorTipoProps): JSX.Ele
 interface ResumenSnapshotProps {
   items: number | null;
   desglose: DesgloseSnapshot | null;
+  /** Qué filtros corrieron. `null` = el servidor no lo informó: no se afirma ninguno. */
+  criterios: CriteriosSnapshot | null;
   tipo: TipoInventario;
 }
 
@@ -160,8 +169,10 @@ interface ResumenSnapshotProps {
  * stock" y "no sé cuántos quedaron sin stock" son afirmaciones distintas, y
  * en un inventario esa diferencia se paga.
  */
-function ResumenSnapshot({ items, desglose, tipo }: ResumenSnapshotProps): JSX.Element | null {
+function ResumenSnapshot({ items, desglose, criterios, tipo }: ResumenSnapshotProps): JSX.Element | null {
   if (items === null) return null;
+
+  const texto = textoDeCriterios(items, tipo, criterios ?? undefined, formatoMiles);
 
   const fuera: { etiqueta: string; valor: number }[] = [];
   if (desglose?.sinStock !== undefined) fuera.push({ etiqueta: 'sin stock en el almacén', valor: desglose.sinStock });
@@ -186,13 +197,16 @@ function ResumenSnapshot({ items, desglose, tipo }: ResumenSnapshotProps): JSX.E
             </View>
           ))}
         </>
-      ) : (
-        <Text style={styles.resumenNota}>
-          {tipo === 'mensual'
-            ? 'Se contaron los productos activos, con stock en el almacén de la sucursal y que son responsabilidad del personal. El resto quedó afuera.'
-            : 'Se contó todo el catálogo activo con stock en el almacén de la sucursal, incluido lo que asume la empresa.'}
-        </Text>
-      )}
+      ) : null}
+
+      {/* QUÉ ENTRÓ, según lo que de verdad se filtró en ESTA corrida.
+          Antes acá había un texto fijo que afirmaba siempre los tres
+          criterios ("productos activos, con stock en el almacén y
+          responsabilidad del personal") -- y el de estado activo no existe,
+          y los otros dos se caen si falta el almacén o si no se pudo leer el
+          responsable. Ver dominio/criterios-snapshot.ts. */}
+      <Text style={styles.resumenNota}>{texto.resumen}</Text>
+      {texto.advertencia ? <Text style={styles.resumenAdvertencia}>{texto.advertencia}</Text> : null}
     </View>
   );
 }
@@ -229,6 +243,7 @@ export default function ArmarHojasScreen(): JSX.Element {
 
   const [tipoElegido, setTipoElegido] = useState<TipoInventario>('mensual');
   const [desglose, setDesglose] = useState<DesgloseSnapshot | null>(null);
+  const [criterios, setCriterios] = useState<CriteriosSnapshot | null>(null);
   const [tamanoElegido, setTamanoElegido] = useState<TamanoHoja | null>(null);
   const [trayendoSnapshot, setTrayendoSnapshot] = useState(false);
   const [avanceSnapshot, setAvanceSnapshot] = useState<AvanceSnapshot | null>(null);
@@ -438,6 +453,9 @@ export default function ArmarHojasScreen(): JSX.Element {
       // ausencia. La pantalla calla en vez de mostrar ceros que se leerían
       // como "no se excluyó ninguno".
       setDesglose(resultado.desglose ?? null);
+      // Mismo criterio que `desglose`: `?? null` = el servidor no lo informó,
+      // y ahí la pantalla no afirma ningún filtro en vez de asumir los tres.
+      setCriterios(resultado.criterios ?? null);
     } catch (error) {
       manejarErrorSnapshot(error);
     } finally {
@@ -551,7 +569,7 @@ export default function ArmarHojasScreen(): JSX.Element {
               <SelectorTipo valor={tipoElegido} onElegir={setTipoElegido} disabled={trayendoSnapshot} />
             ) : null}
 
-            {paso1Hecho ? <ResumenSnapshot items={items} desglose={desglose} tipo={tipoElegido} /> : null}
+            {paso1Hecho ? <ResumenSnapshot items={items} desglose={desglose} criterios={criterios} tipo={tipoElegido} /> : null}
 
             {trayendoSnapshot ? (
               <>
@@ -722,6 +740,10 @@ const styles = StyleSheet.create({
     fontFamily: fonts.semibold,
   },
   resumenNota: { fontSize: 11.5, lineHeight: 16, color: colors.gris, fontFamily: fonts.regular },
+  // Ámbar y NO rojo: el Coordinador no hizo nada mal y casi nunca puede
+  // arreglar lo que falta (configurar un almacén es del Administrador). Es
+  // información que tiene que ver, no una alarma que lo asuste.
+  resumenAdvertencia: { marginTop: 4, fontSize: 11.5, lineHeight: 16, color: colors.proceso, fontFamily: fonts.medium },
 
   previaTexto: { fontSize: 12.5, fontWeight: '600', color: colors.proceso, fontFamily: fonts.semibold },
 

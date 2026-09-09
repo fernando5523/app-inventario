@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   agruparBarcodesPorItem,
   agruparConversionesPorProducto,
+  criteriosDelSnapshot,
   elegirEmpaques,
   mapearProducto,
   obtenerCatalogoEjemplo,
@@ -181,5 +182,40 @@ describe('el factor sale del MISMO simbolo que da el nombre', () => {
     // nombre decia 12 y la cuenta usaba 1.
     const soloInventory: D365ReleasedProduct = { ItemNumber: '100018', InventoryUnitSymbol: 'Emp.12' };
     expect(elegirEmpaques([], soloInventory)).toEqual([{ nombre: 'Emp.12', factor: 12 }]);
+  });
+});
+
+describe('criteriosDelSnapshot: que filtros corrieron DE VERDAD', () => {
+  it('mensual con almacen y responsables: los dos que existen hoy', () => {
+    expect(criteriosDelSnapshot({ tipo: 'mensual', cantidadResponsables: 8000, filtrarPorStock: true })).toEqual({
+      porStock: true,
+      porResponsable: true,
+      porEstadoActivo: false,
+    });
+  });
+
+  it('porEstadoActivo es SIEMPRE false: ReleasedProductsV2 no se filtra por estado', () => {
+    // Es el hallazgo del 2026-09-09: la pantalla lo prometia y nunca se
+    // aplico. Este test lo fija hasta que el filtro exista de verdad.
+    for (const tipo of ['mensual', 'anual'] as const) {
+      for (const filtrarPorStock of [true, false]) {
+        expect(criteriosDelSnapshot({ tipo, cantidadResponsables: 100, filtrarPorStock }).porEstadoActivo).toBe(false);
+      }
+    }
+  });
+
+  it('sin almacen: porStock en false -- sin dato de stock no se filtro nada', () => {
+    expect(criteriosDelSnapshot({ tipo: 'mensual', cantidadResponsables: 100, filtrarPorStock: false }).porStock).toBe(false);
+  });
+
+  it('sin responsables (la entidad fallo o vino vacia): porResponsable en false', () => {
+    // El backend deja pasar TODO en ese caso a proposito -- mejor un catalogo
+    // de mas, que se ve, que uno vacio por un error de red. Lo que no puede
+    // pasar es que la pantalla siga afirmando que se filtro.
+    expect(criteriosDelSnapshot({ tipo: 'mensual', cantidadResponsables: 0, filtrarPorStock: true }).porResponsable).toBe(false);
+  });
+
+  it('ANUAL: porResponsable en false aunque haya responsables -- ahi se cuenta todo a proposito', () => {
+    expect(criteriosDelSnapshot({ tipo: 'anual', cantidadResponsables: 8000, filtrarPorStock: true }).porResponsable).toBe(false);
   });
 });

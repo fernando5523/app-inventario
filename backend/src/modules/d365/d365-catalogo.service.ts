@@ -381,6 +381,32 @@ const CONVERSIONES_EJEMPLO: D365UnitConversion[] = [
   { ProductNumber: '0054', FromUnitSymbol: 'Emp.20', ToUnitSymbol: 'U', Factor: 20 },
 ];
 
+/**
+ * Que filtros corrieron de verdad, con los MISMOS insumos que decide
+ * `mapearCatalogo` -- no una promesa fija. Aparte de esa funcion para no
+ * cambiarle el tipo de retorno (y sus tests) por un dato de reporte.
+ *
+ * `porEstadoActivo` es una constante `false` a proposito, no un olvido:
+ * ReleasedProductsV2 no se consulta ni se filtra por estado hoy. Declararlo
+ * hace que el dia que exista el filtro alcance con devolver `true` aca y el
+ * texto de la pantalla se actualice solo.
+ */
+export function criteriosDelSnapshot(args: {
+  tipo: TipoInventario;
+  /** Cuantos responsables llego a cruzar -- 0 = la entidad fallo o vino vacia. */
+  cantidadResponsables: number;
+  /** Si habia almacen configurado para filtrar por existencia. */
+  filtrarPorStock: boolean;
+}): CriteriosSnapshot {
+  return {
+    porStock: args.filtrarPorStock,
+    // En el ANUAL no se filtra por responsable a proposito (se cuenta todo,
+    // empresa incluida), asi que tampoco se puede afirmar ese criterio.
+    porResponsable: args.tipo !== 'anual' && args.cantidadResponsables > 0,
+    porEstadoActivo: false,
+  };
+}
+
 export function mapearCatalogo(
   productos: D365ReleasedProduct[],
   barcodes: D365ProductBarcode[],
@@ -470,7 +496,7 @@ async function obtenerCatalogoReal(
    * `undefined` (el default real, usado por crearSnapshot) no trunca nada.
    */
   limite?: number,
-): Promise<{ catalogo: CatalogoItemDto[]; descartes: DescartesPorStock }> {
+): Promise<{ catalogo: CatalogoItemDto[]; descartes: DescartesPorStock; criterios: CriteriosSnapshot }> {
   const dataAreaId = await d365AuthService.getDataAreaId();
   const filtroCompania = dataAreaId ? `dataAreaId eq '${dataAreaId}'` : undefined;
 
@@ -582,7 +608,14 @@ async function obtenerCatalogoReal(
   // Solo se filtra si de verdad se consulto stock: sin almacen no hay dato y
   // filtrar dejaria el inventario vacio.
   const catalogo = almacen ? sinFiltrar.filter((item) => tieneExistencia(item.stockErp)) : sinFiltrar;
-  return { catalogo: limite !== undefined ? catalogo.slice(0, limite) : catalogo, descartes };
+  // Los MISMOS insumos con los que se decidio arriba, para que el reporte no
+  // pueda discrepar de lo que realmente corrio.
+  const criterios = criteriosDelSnapshot({
+    tipo,
+    cantidadResponsables: responsables.length,
+    filtrarPorStock: Boolean(almacen),
+  });
+  return { catalogo: limite !== undefined ? catalogo.slice(0, limite) : catalogo, descartes, criterios };
 }
 
 // ---------------------------------------------------------------------------
@@ -641,6 +674,36 @@ export async function almacenesHabilitados(): Promise<string[]> {
 // mobile/lib/puertos/repositorios.ts#RepositorioInventario.traerSnapshot
 // ---------------------------------------------------------------------------
 
+/**
+ * QUE FILTROS SE APLICARON DE VERDAD en esta corrida. Datos, no un texto
+ * armado en el servidor: la pantalla lo redacta (ver
+ * mobile/lib/dominio/criterios-snapshot.ts).
+ *
+ * Existe porque la pantalla del Coordinador afirmaba SIEMPRE los tres
+ * criterios ("productos activos, con stock en el almacen y responsabilidad
+ * del personal"), y ninguno de los tres estaba garantizado:
+ *
+ *   - `porEstadoActivo` NUNCA se aplico -- ReleasedProductsV2 no se filtra ni
+ *     se consulta por estado (ver el $select de `obtenerCatalogoReal`). El
+ *     campo se declara igual, en `false`, para que el dia que exista el filtro
+ *     el texto se actualice solo sin tocar la pantalla.
+ *   - `porStock` se cae cuando la sucursal no tiene almacen configurado.
+ *   - `porResponsable` se cae cuando la entidad de responsables falla o viene
+ *     vacia (decision deliberada: mejor un catalogo de mas, que se ve, que
+ *     uno vacio por un error de red).
+ *
+ * Un texto que promete un filtro que no corrio es un dato que miente, y en
+ * este sistema eso termina en un faltante descontado a alguien.
+ */
+export interface CriteriosSnapshot {
+  /** Solo se quedaron los que tienen existencia en el almacen de la tienda. */
+  porStock: boolean;
+  /** Solo los que son responsabilidad del personal (nunca en el anual: ahi se cuenta todo a proposito). */
+  porResponsable: boolean;
+  /** HOY SIEMPRE FALSE: no se filtra por estado del producto en Dynamics. */
+  porEstadoActivo: boolean;
+}
+
 export interface SnapshotDto {
   inventarioId: number;
   /** Items CONTABLES: los que quedaron tras el filtro de existencia. */
@@ -648,6 +711,8 @@ export interface SnapshotDto {
   tomadoEn: string;
   /** Cuantos quedaron afuera y por que. Ausente en un inventario ya existente. */
   descartados?: DescartesPorStock;
+  /** Que filtros corrieron. Ausente en un inventario ya existente (no se volvio a filtrar nada). */
+  criterios?: CriteriosSnapshot;
 }
 
 /**
@@ -725,10 +790,17 @@ export async function crearSnapshot(
   progreso.iniciar(sucursalId);
   let catalogo: CatalogoItemDto[];
   let descartes: DescartesPorStock;
+  let criterios: CriteriosSnapshot;
   try {
     const resultado =
       modo === 'ejemplo'
-        ? { catalogo: obtenerCatalogoEjemplo(), descartes: { sinRegistro: 0, stockCero: 0 } }
+        ? {
+            catalogo: obtenerCatalogoEjemplo(),
+            descartes: { sinRegistro: 0, stockCero: 0 },
+            // El catalogo de ejemplo no pasa por ningun filtro real: decir
+            // que si seria la misma mentira que este cambio viene a sacar.
+            criterios: { porStock: false, porResponsable: false, porEstadoActivo: false },
+          }
         : await obtenerCatalogoReal(
             tipo,
             almacen,
@@ -737,11 +809,12 @@ export async function crearSnapshot(
           );
     catalogo = resultado.catalogo;
     descartes = resultado.descartes;
+    criterios = resultado.criterios;
     // La OTRA fase lenta: guardar. Son N `create` dentro de una sola
     // transaccion (ver abajo), asi que hasta el commit no hay ni una fila
     // visible -- por eso se marca la fase en vez de seguir contando items.
     progreso.marcarGuardando(sucursalId);
-    return await guardarSnapshot({ sucursalId, tipo, catalogo, descartes, actorId, almacen, modo });
+    return await guardarSnapshot({ sucursalId, tipo, catalogo, descartes, criterios, actorId, almacen, modo });
   } finally {
     progreso.terminar(sucursalId);
   }
@@ -761,12 +834,13 @@ async function guardarSnapshot(args: {
   tipo: TipoInventario;
   catalogo: CatalogoItemDto[];
   descartes: DescartesPorStock;
+  criterios: CriteriosSnapshot;
   actorId: number;
   /** `undefined` explícito: el proyecto corre con `exactOptionalPropertyTypes`. */
   almacen: string | undefined;
   modo: ModoCatalogo;
 }): Promise<SnapshotDto> {
-  const { sucursalId, tipo, catalogo, descartes, actorId, almacen } = args;
+  const { sucursalId, tipo, catalogo, descartes, criterios, actorId, almacen } = args;
   const tomadoEn = new Date();
 
   const inventario = await prisma.inventario.create({
@@ -844,5 +918,6 @@ async function guardarSnapshot(args: {
     items: catalogo.length,
     tomadoEn: tomadoEn.toISOString(),
     descartados: descartes,
+    criterios,
   };
 }
