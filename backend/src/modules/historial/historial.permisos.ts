@@ -80,6 +80,26 @@ export function resolverSucursalConsultable(
   return actor.sucursalId;
 }
 
+/**
+ * Igual que `resolverSucursalConsultable`, para el consolidado de VARIAS
+ * tiendas (2026-09-09): compone la misma regla, valor por valor, sin
+ * cambiarla -- el administrador recibe eco de lo que pidió (o `undefined` =
+ * todas, si no pidió nada), el auditor SIEMPRE termina con la suya sola,
+ * pida lo que pida. `Set` para no repetir un id si por lo que sea vino dos
+ * veces en la query.
+ */
+export function resolverSucursalesConsultables(actor: ColaboradorAutenticado, idsPedidos: number[] | undefined): number[] | undefined {
+  if (idsPedidos === undefined) {
+    const resuelto = resolverSucursalConsultable(actor, undefined);
+    return resuelto === undefined ? undefined : [resuelto];
+  }
+  const resueltos = new Set<number>();
+  for (const id of idsPedidos) {
+    resueltos.add(resolverSucursalConsultable(actor, id)!);
+  }
+  return [...resueltos];
+}
+
 /** Lanza Prohibido si el actor no puede mirar un inventario de esa sucursal. */
 export function validarAccesoAInventario(actor: ColaboradorAutenticado, inventario: { sucursalId: number }): void {
   if (actor.rol === 'administrador') return;

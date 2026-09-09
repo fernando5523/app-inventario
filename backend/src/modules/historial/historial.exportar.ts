@@ -122,3 +122,15 @@ export function nombreArchivoExportDiferencias(sucursal: string, periodoAnio: nu
   const periodo = `${periodoAnio}-${String(periodoMes).padStart(2, '0')}`;
   return `diferencias-${slugSucursal}-${periodo}-inv${inventarioId}.xlsx`;
 }
+
+/**
+ * El consolidado de varias tiendas (o todas) en un mismo período -- pedido
+ * del cliente (2026-09-09): una tienda, varias, o todas. Sin nombre de
+ * sucursal ni de inventario: el archivo mezcla N tiendas, así que ninguna de
+ * las dos identifica el contenido (la columna `Sucursal` de la tabla sí lo
+ * hace, fila por fila).
+ */
+export function nombreArchivoExportConsolidado(periodoAnio: number, periodoMes: number): string {
+  const periodo = `${periodoAnio}-${String(periodoMes).padStart(2, '0')}`;
+  return `diferencias-consolidado-${periodo}.xlsx`;
+}

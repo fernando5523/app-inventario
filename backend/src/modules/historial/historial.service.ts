@@ -19,7 +19,12 @@ import {
   resumirHistoricoItem,
   type PuntoComparativo,
 } from './historial.calculos';
-import { armarLibroDiferencias, nombreArchivoExportDiferencias, type FilaDiferenciaExport } from './historial.exportar';
+import {
+  armarLibroDiferencias,
+  nombreArchivoExportConsolidado,
+  nombreArchivoExportDiferencias,
+  type FilaDiferenciaExport,
+} from './historial.exportar';
 import {
   ALGORITMO_HASH,
   armarContenidoLacrado,
@@ -33,6 +38,7 @@ import {
 import {
   APROBACIONES_REQUERIDAS,
   resolverSucursalConsultable,
+  resolverSucursalesConsultables,
   validarAccesoAInventario,
   validarPuedeAprobar,
   validarPuedeLacrar,
@@ -42,6 +48,7 @@ import {
 import type {
   AprobarCierreInput,
   ComparativoQuery,
+  ExportarConsolidadoQuery,
   HistoricoItemQuery,
   ListarDiferenciasQuery,
   ListarInventariosQuery,
@@ -506,26 +513,89 @@ export async function listarDiferencias(
  */
 export async function exportarDiferencias(actor: ColaboradorAutenticado, id: number): Promise<{ buffer: Buffer; nombreArchivo: string }> {
   const inv = await traerInventarioOFallar(actor, id, { sucursal: { select: { nombre: true } } });
+  const filas = await filasDeDiferencias(id, inv.sucursal.nombre, inv.periodoAnio, inv.periodoMes);
 
+  return {
+    buffer: await armarLibroDiferencias(filas),
+    nombreArchivo: nombreArchivoExportDiferencias(inv.sucursal.nombre, inv.periodoAnio, inv.periodoMes, id),
+  };
+}
+
+/**
+ * El .xlsx de VARIAS tiendas (o todas) en un mismo período -- pedido del
+ * cliente (2026-09-09): una tienda, un subconjunto, o todas. UNA sola hoja
+ * con las filas de todos los inventarios que matcheen, en el MISMO formato
+ * de `exportarDiferencias` (la columna `Sucursal` ya distingue cada fila) --
+ * una tabla dinámica lee una tabla contigua, no varias hojas sueltas.
+ *
+ * El recorte de sucursales es `resolverSucursalesConsultables`
+ * (historial.permisos.ts): compone la MISMA regla de siempre, sin tocarla --
+ * el administrador puede pedir cualquier subconjunto (o ninguno = todas), el
+ * auditor SIEMPRE termina limitado a la suya, pida lo que pida.
+ *
+ * Sin coincidencias no es error: el archivo sale igual, con solo el
+ * encabezado (mismo criterio que `armarLibroDiferencias([])`).
+ */
+export async function exportarDiferenciasConsolidado(
+  actor: ColaboradorAutenticado,
+  query: ExportarConsolidadoQuery,
+): Promise<{ buffer: Buffer; nombreArchivo: string }> {
+  const sucursalesIds = resolverSucursalesConsultables(actor, query.sucursalId);
+
+  const inventarios = await prisma.inventario.findMany({
+    where: {
+      periodoAnio: query.periodoAnio,
+      periodoMes: query.periodoMes,
+      ...(sucursalesIds !== undefined ? { sucursalId: { in: sucursalesIds } } : {}),
+    },
+    select: { id: true, periodoAnio: true, periodoMes: true, sucursal: { select: { nombre: true } } },
+    // Por nombre de sucursal: en un archivo de varias tiendas conviene que
+    // las filas de una misma tienda queden juntas y en un orden legible,
+    // no en el orden arbitrario en que Postgres las haya devuelto.
+    orderBy: { sucursal: { nombre: 'asc' } },
+  });
+
+  const filasPorInventario = await Promise.all(
+    inventarios.map((inv) => filasDeDiferencias(inv.id, inv.sucursal.nombre, inv.periodoAnio, inv.periodoMes)),
+  );
+
+  return {
+    buffer: await armarLibroDiferencias(filasPorInventario.flat()),
+    nombreArchivo: nombreArchivoExportConsolidado(query.periodoAnio, query.periodoMes),
+  };
+}
+
+/**
+ * Las filas de UN inventario -- compartido entre `exportarDiferencias`
+ * (un inventario) y `exportarDiferenciasConsolidado` (varios): la consulta y
+ * el join son los mismos, cambia solo cuántas veces se llama y cómo se junta
+ * el resultado.
+ */
+async function filasDeDiferencias(
+  inventarioId: number,
+  sucursalNombre: string,
+  periodoAnio: number,
+  periodoMes: number,
+): Promise<FilaDiferenciaExport[]> {
   const [diferencias, catalogo] = await Promise.all([
     prisma.diferenciaItem.findMany({
-      where: { inventarioId: id },
+      where: { inventarioId },
       orderBy: [{ diferencia: 'asc' }, { codigo: 'asc' }],
     }),
     prisma.catalogoItem.findMany({
-      where: { inventarioId: id },
+      where: { inventarioId },
       select: { codigo: true, codigoBarras: true, categoria: true },
     }),
   ]);
   const catalogoPorCodigo = new Map(catalogo.map((c) => [c.codigo, c]));
 
-  const filas: FilaDiferenciaExport[] = diferencias.map((d) => {
+  return diferencias.map((d) => {
     const item = catalogoPorCodigo.get(d.codigo);
     return {
-      sucursal: inv.sucursal.nombre,
-      periodoAnio: inv.periodoAnio,
-      periodoMes: inv.periodoMes,
-      inventarioId: id,
+      sucursal: sucursalNombre,
+      periodoAnio,
+      periodoMes,
+      inventarioId,
       codigo: d.codigo,
       // '' y no undefined: una columna del reporte, nunca ausente de la fila.
       codigoBarras: item?.codigoBarras ?? '',
@@ -540,11 +610,6 @@ export async function exportarDiferencias(actor: ColaboradorAutenticado, id: num
       montoDiferencia: aNumero(d.montoDiferencia),
     };
   });
-
-  return {
-    buffer: await armarLibroDiferencias(filas),
-    nombreArchivo: nombreArchivoExportDiferencias(inv.sucursal.nombre, inv.periodoAnio, inv.periodoMes, id),
-  };
 }
 
 // ---------------------------------------------------------------------------

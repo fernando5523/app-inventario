@@ -6,6 +6,7 @@ import * as controller from './historial.controller';
 import {
   aprobarCierreSchema,
   comparativoQuerySchema,
+  exportarConsolidadoQuerySchema,
   historicoItemQuerySchema,
   lacrarSchema,
   listarDiferenciasQuerySchema,
@@ -63,6 +64,23 @@ historialRouter.get(
   '/inventarios/:id/diferencias/exportar',
   validar(parametrosInventarioSchema, 'params'),
   controller.exportarDiferencias,
+);
+
+/**
+ * El .xlsx de VARIAS tiendas (o todas) en un mismo período -- pedido del
+ * cliente 2026-09-09: una tienda, un subconjunto, o todas. Una sola hoja con
+ * la columna `Sucursal` (ya existe en el formato de arriba) distinguiendo
+ * cada fila -- una tabla dinámica lee UNA tabla contigua, no varias hojas.
+ *
+ * MISMO recorte que el resto del router: `resolverSucursalConsultable`
+ * (historial.permisos.ts, sin tocar) deja al administrador pedir cualquier
+ * subconjunto o ninguno (= todas), y al auditor SIEMPRE limitado a la suya,
+ * ignore lo que pida -- nunca un 403, nunca una sucursal ajena.
+ */
+historialRouter.get(
+  '/diferencias/exportar',
+  validar(exportarConsolidadoQuerySchema, 'query'),
+  controller.exportarDiferenciasConsolidado,
 );
 
 historialRouter.get(

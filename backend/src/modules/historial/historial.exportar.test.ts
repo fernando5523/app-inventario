@@ -11,6 +11,7 @@ import { describe, expect, it } from 'vitest';
 import {
   armarLibroDiferencias,
   ENCABEZADOS_EXPORT_DIFERENCIAS,
+  nombreArchivoExportConsolidado,
   nombreArchivoExportDiferencias,
   type FilaDiferenciaExport,
 } from './historial.exportar';
@@ -144,5 +145,15 @@ describe('nombreArchivoExportDiferencias: identifica tienda + período + inventa
 
   it('sucursal vacía o solo símbolos no deja un nombre roto', () => {
     expect(nombreArchivoExportDiferencias('---', 2026, 9, 30)).toBe('diferencias-sucursal-2026-09-inv30.xlsx');
+  });
+});
+
+describe('nombreArchivoExportConsolidado: identifica el período, sin atarse a una sola tienda', () => {
+  it('caso normal', () => {
+    expect(nombreArchivoExportConsolidado(2026, 9)).toBe('diferencias-consolidado-2026-09.xlsx');
+  });
+
+  it('mes de un dígito con cero adelante', () => {
+    expect(nombreArchivoExportConsolidado(2026, 3)).toBe('diferencias-consolidado-2026-03.xlsx');
   });
 });

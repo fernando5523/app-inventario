@@ -5,6 +5,7 @@ import * as service from './historial.service';
 import type {
   AprobarCierreInput,
   ComparativoQuery,
+  ExportarConsolidadoQuery,
   HistoricoItemQuery,
   ListarDiferenciasQuery,
   ListarInventariosQuery,
@@ -37,6 +38,17 @@ export const listarDiferencias = asyncHandler(async (req: RequestAutenticado, re
 export const exportarDiferencias = asyncHandler(async (req: RequestAutenticado, res: Response) => {
   const { id } = req.params as unknown as ParametrosInventario;
   const { buffer, nombreArchivo } = await service.exportarDiferencias(req.colaborador!, id);
+  res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+  res.setHeader('Content-Disposition', `attachment; filename="${nombreArchivo}"`);
+  res.send(buffer);
+});
+
+/** El .xlsx de varias tiendas (o todas) en un mismo período -- ver historial.service.ts#exportarDiferenciasConsolidado. */
+export const exportarDiferenciasConsolidado = asyncHandler(async (req: RequestAutenticado, res: Response) => {
+  const { buffer, nombreArchivo } = await service.exportarDiferenciasConsolidado(
+    req.colaborador!,
+    req.query as unknown as ExportarConsolidadoQuery,
+  );
   res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
   res.setHeader('Content-Disposition', `attachment; filename="${nombreArchivo}"`);
   res.send(buffer);

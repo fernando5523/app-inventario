@@ -39,6 +39,29 @@ export const listarDiferenciasQuerySchema = z.object({
 });
 export type ListarDiferenciasQuery = z.infer<typeof listarDiferenciasQuerySchema>;
 
+/**
+ * El .xlsx consolidado de varias tiendas -- pedido del cliente (2026-09-09):
+ * una tienda, varias, o todas. `sucursalId` es REPETIBLE en la query
+ * (`?sucursalId=1&sucursalId=2`); Express solo lo entrega como array cuando
+ * aparece 2+ veces, así que el `preprocess` normaliza el caso de una sola
+ * aparición (string suelto) antes de validar cada elemento. Ausente = "todas
+ * las que el actor pueda ver" -- el recorte real es de
+ * historial.permisos.ts#resolverSucursalConsultable, este schema solo valida
+ * FORMA (mismo criterio que el resto del modulo).
+ *
+ * El período es OBLIGATORIO: un "informe de saldo" es de un mes puntual, y
+ * sin periodo un pedido de "todas las tiendas" barreria años de historico.
+ */
+export const exportarConsolidadoQuerySchema = z.object({
+  sucursalId: z.preprocess(
+    (v) => (v === undefined ? undefined : Array.isArray(v) ? v : [v]),
+    z.array(z.coerce.number().int().positive()).min(1).optional(),
+  ),
+  periodoAnio: z.coerce.number().int().min(2000).max(2100),
+  periodoMes: z.coerce.number().int().min(1).max(12),
+});
+export type ExportarConsolidadoQuery = z.infer<typeof exportarConsolidadoQuerySchema>;
+
 export const parametrosItemSchema = z.object({
   /** ItemNumber de Dynamics -- la identidad estable del articulo entre meses. */
   codigo: z.string().trim().min(1, 'El codigo del item es obligatorio.').max(64),
