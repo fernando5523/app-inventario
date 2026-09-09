@@ -47,13 +47,21 @@ export function TarjetaProducto({ producto, conteo, confirmado, bloqueado, onPre
 
       <Text style={styles.nombre}>{producto.descripcion}</Text>
       <View style={styles.codigoFila}>
-        <Text style={styles.codigo}>Código {producto.codigoBarras}</Text>
-        {confirmado ? (
-          <View style={styles.confirmadoTag}>
-            <Check size={10} color={colors.ok} />
-            <Text style={styles.confirmadoTexto}>Confirmado</Text>
-          </View>
-        ) : null}
+        <View style={styles.codigoGrupo}>
+          <Text style={styles.codigo}>Código {producto.codigoBarras}</Text>
+          {confirmado ? (
+            <View style={styles.confirmadoTag}>
+              <Check size={10} color={colors.ok} />
+              <Text style={styles.confirmadoTexto}>Confirmado</Text>
+            </View>
+          ) : null}
+        </View>
+        {/* Sin contar: acá va la ÚNICA affordance de la tarjeta -- pedido
+            del cliente 2026-09-09: sin la línea "Ubicación: Sin ubicación"
+            (dato que nadie carga hoy, misma familia que zona/gondola) no
+            queda ningún "pie" en este estado, así que el chevron se muda
+            acá en vez de dejar una fila propia solo para él. */}
+        {!contado && !bloqueado ? <ChevronRight size={16} color={colors.grisClaro} /> : null}
       </View>
 
       {contado && conteo ? (
@@ -72,12 +80,7 @@ export function TarjetaProducto({ producto, conteo, confirmado, bloqueado, onPre
               que el ícono quede centrado con el resto de la fila. */}
           {!bloqueado ? <ChevronRight size={16} color={colors.grisClaro} /> : null}
         </View>
-      ) : (
-        <View style={styles.pie}>
-          <Text style={styles.detalle}>Ubicación: {producto.ubicacion ?? 'Sin ubicación'}</Text>
-          {!bloqueado ? <ChevronRight size={16} color={colors.grisClaro} /> : null}
-        </View>
-      )}
+      ) : null}
     </Pressable>
   );
 }
@@ -92,7 +95,8 @@ const styles = StyleSheet.create({
   categoriaBadgeTexto: { fontSize: 10, letterSpacing: 0.4, color: colors.gris, fontFamily: fonts.bold },
   numero: { fontSize: 11, color: colors.grisClaro, fontFamily: fonts.semibold },
   nombre: { fontSize: 13.5, color: colors.tinta, fontFamily: fonts.bold },
-  codigoFila: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  codigoFila: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 },
+  codigoGrupo: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   codigo: { fontSize: fontSize.xs, color: colors.gris, fontFamily: fonts.regular },
   confirmadoTag: { flexDirection: 'row', alignItems: 'center', gap: 3 },
   confirmadoTexto: { fontSize: 10.5, color: colors.ok, fontFamily: fonts.bold },
