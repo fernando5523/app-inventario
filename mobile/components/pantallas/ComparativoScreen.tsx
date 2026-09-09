@@ -11,8 +11,6 @@ import { colors, fonts } from '../../lib/theme';
 import { PantallaConTabs } from '../navegacion/PantallaConTabs';
 import { BarraApp, ChipsFiltro, EmptyState, formatoMiles, formatoMoneda, formatoPct, MESES_CORTOS, type OpcionChip } from '../ui';
 
-const TODAS = 'todas';
-
 export interface ComparativoScreenProps {
   rol: Extract<Rol, 'administrador' | 'auditor'>;
 }
@@ -29,9 +27,20 @@ function periodoLegible(anio: number, mes: number): string {
  * un faltante de S/ 1.550 tiene que leerse como el número que es, no como
  * "más o menos ahí" en un eje que nadie etiquetó con precisión.
  *
- * Mismo alcance por rol que HistorialScreen: el Administrador puede elegir
- * sucursal o ver todas, el Auditor recibe siempre la suya (recortado por
- * el backend, el control ni se ofrece acá).
+ * SIEMPRE de UNA sola sucursal, sin opción "Todas" (corrección del cliente,
+ * 2026-09-09): con el Auditor accediendo ahora a todas las tiendas, pedir
+ * "todas" acá mezclaría inventarios de sucursales distintas en una sola
+ * serie cronológica -- y "variación contra el mes anterior" terminaría
+ * comparando Market Bolívar contra Market Carhuaz sin decirlo. Un dato que
+ * miente es peor que no mostrar nada (skill trujillo-ui, "Honestidad de
+ * los datos en pantalla"). El backend además agrupa por sucursal antes de
+ * calcular la variación (historial.calculos.ts#compararPeriodosPorSucursal)
+ * como segunda barrera, pero esta pantalla ni siquiera se lo pide.
+ *
+ * Los dos roles eligen tienda con el MISMO selector -- el Auditor ya no
+ * está recortado a la suya, así que ofrecérselo es una elección con efecto
+ * real, no decorativa (ver skill trujillo-ui, sección Filtros). Arranca
+ * viendo la suya (evita una pantalla vacía al entrar) pero puede cambiarla.
  */
 export function ComparativoScreen({ rol }: ComparativoScreenProps): JSX.Element {
   const { sesion } = useSesion();
@@ -40,15 +49,34 @@ export function ComparativoScreen({ rol }: ComparativoScreenProps): JSX.Element 
   const [comparativo, setComparativo] = useState<ComparativoMensual | null>(null);
 
   const [sucursales, setSucursales] = useState<Sucursal[]>([]);
-  const [filtroSucursalId, setFiltroSucursalId] = useState<number | typeof TODAS>(TODAS);
+  // `null` = todavía no se eligió ninguna -- nunca "todas" (ver comentario
+  // de arriba). El Administrador arranca en `null` (elige explícitamente);
+  // el Auditor arranca en la suya por el efecto de abajo.
+  const [filtroSucursalId, setFiltroSucursalId] = useState<number | null>(null);
 
+  // El padrón lo necesitan los dos roles ahora (antes solo el Administrador
+  // podía elegir). Es el mismo endpoint del login (`GET /api/sesion/sucursales`),
+  // sin gate de permiso.
   useEffect(() => {
-    if (rol !== 'administrador') return;
     repositorioSesion.sucursales().then(setSucursales);
-  }, [rol]);
+  }, []);
+
+  // Default del Auditor: SU sucursal, para no abrir la pantalla vacía --
+  // pero queda como una selección más, que puede cambiar (ya no es un
+  // recorte fijo). Solo la primera vez: si ya eligió otra, no se la pisa.
+  useEffect(() => {
+    if (rol === 'auditor' && sesion?.sucursal && filtroSucursalId === null) {
+      setFiltroSucursalId(sesion.sucursal.id);
+    }
+  }, [rol, sesion, filtroSucursalId]);
 
   const cargar = useCallback(async () => {
-    if (!sesion) return;
+    if (!sesion || filtroSucursalId === null) {
+      // Sin tienda elegida no hay nada honesto que pedir: mostrar "todas"
+      // mezcladas es exactamente el dato que miente que esto vino a evitar.
+      setCargando(false);
+      return;
+    }
     setError(null);
     // El spinner de pantalla completa SOLO en la primera carga (el
     // `useState(true)` de arriba lo deja prendido hasta que termine). En un
@@ -57,17 +85,13 @@ export function ComparativoScreen({ rol }: ComparativoScreenProps): JSX.Element 
     // pestaña se siente peor que el dato viejo que el refresco viene a
     // arreglar. Ver useRefrescoAlEnfocar.
     try {
-      // El Auditor no manda sucursalId: el backend la resuelve del token y
-      // punto -- mandarla igual no cambiaría nada, solo agregaría una
-      // decisión que este rol no tiene.
-      const sucursalId = rol === 'auditor' ? undefined : filtroSucursalId === TODAS ? undefined : filtroSucursalId;
-      setComparativo(await repositorioHistorial.comparativo({ sucursalId }));
+      setComparativo(await repositorioHistorial.comparativo({ sucursalId: filtroSucursalId }));
     } catch (e) {
       setError(e instanceof Error ? e.message : 'No se pudo cargar el comparativo.');
     } finally {
       setCargando(false);
     }
-  }, [sesion, rol, filtroSucursalId]);
+  }, [sesion, filtroSucursalId]);
 
   // Al enfocar Y al volver la app a primer plano — "cualquier dato
   // actualizado no debe depender de cerrar sesión y volver" (pedido del
@@ -76,10 +100,15 @@ export function ComparativoScreen({ rol }: ComparativoScreenProps): JSX.Element 
 
   if (!sesion) return <View />;
 
-  const opcionesSucursal: OpcionChip[] = [
-    { id: TODAS, etiqueta: 'Todas' },
-    ...sucursales.map((s) => ({ id: String(s.id), etiqueta: s.nombre })),
-  ];
+  const opcionesSucursal: OpcionChip[] = sucursales.map((s) => ({ id: String(s.id), etiqueta: s.nombre }));
+  // El nombre de la tienda EFECTIVAMENTE mostrada -- nunca "todas": el
+  // rótulo tiene que decir exactamente qué se está viendo (skill
+  // trujillo-ui, "Honestidad de los datos en pantalla").
+  const nombreSeleccionada =
+    filtroSucursalId === null
+      ? null
+      : (sucursales.find((s) => s.id === filtroSucursalId)?.nombre ??
+        (filtroSucursalId === sesion.sucursal?.id ? sesion.sucursal.nombre : null));
 
   return (
     <PantallaConTabs
@@ -89,25 +118,24 @@ export function ComparativoScreen({ rol }: ComparativoScreenProps): JSX.Element 
     >
       <BarraApp
         rotulo="Comparativo mensual"
-        sede={rol === 'auditor' ? sesion.sucursal!.nombre : undefined}
-        cifras={cargando ? undefined : `${comparativo?.serie.length ?? 0} período${comparativo?.serie.length === 1 ? '' : 's'} con datos completos`}
+        sede={nombreSeleccionada ?? undefined}
+        cifras={cargando || filtroSucursalId === null ? undefined : `${comparativo?.serie.length ?? 0} período${comparativo?.serie.length === 1 ? '' : 's'} con datos completos`}
       />
 
       <Text style={styles.ayuda}>
-        Serie mes a mes de faltante neto y % cuadrado, con la variación contra el mes anterior. Solo entran los meses
-        con asistencia y ajustes ya registrados — los que faltan se listan abajo, no se ocultan.
+        Serie mes a mes de UNA tienda: faltante neto y % cuadrado, con la variación contra el mes anterior de esa
+        misma tienda. Solo entran los meses con asistencia y ajustes ya registrados — los que faltan se listan abajo,
+        no se ocultan.
       </Text>
 
-      {rol === 'administrador' ? (
-        <View style={styles.filtroBloque}>
-          <Text style={styles.filtroLabel}>Sucursal</Text>
-          <ChipsFiltro
-            opciones={opcionesSucursal}
-            activo={String(filtroSucursalId)}
-            onCambiar={(id) => setFiltroSucursalId(id === TODAS ? TODAS : Number(id))}
-          />
-        </View>
-      ) : null}
+      <View style={styles.filtroBloque}>
+        <Text style={styles.filtroLabel}>Sucursal</Text>
+        <ChipsFiltro
+          opciones={opcionesSucursal}
+          activo={filtroSucursalId === null ? '' : String(filtroSucursalId)}
+          onCambiar={(id) => setFiltroSucursalId(Number(id))}
+        />
+      </View>
 
       {cargando ? (
         <ActivityIndicator color={colors.rojo} style={styles.cargando} />
@@ -116,6 +144,12 @@ export function ComparativoScreen({ rol }: ComparativoScreenProps): JSX.Element 
           <Text style={styles.tarjetaTitulo}>No se pudo cargar el comparativo</Text>
           <Text style={styles.ayuda}>{error}</Text>
         </View>
+      ) : filtroSucursalId === null ? (
+        <EmptyState
+          icon={TrendingUp}
+          title="Elige una tienda"
+          subtitle="El comparativo es por sucursal: mezclar varias en una sola serie compararía meses de negocios distintos."
+        />
       ) : !comparativo || comparativo.serie.length === 0 ? (
         <EmptyState
           icon={TrendingUp}
