@@ -226,4 +226,10 @@ export interface CatalogoItemDto {
    * `TRU_InventoryManagerPE`, no se calcula.
    */
   esEmpresa: boolean;
+  /**
+   * Clasificacion COMPLETA de `TRU_InventoryManagerPE`, sin colapsar a
+   * `esEmpresa`: distingue 'Employee' de 'None'/sin fila, ambos `null` acá.
+   * El export de diferencias filtra por esto, no por `esEmpresa`.
+   */
+  responsable: 'empleado' | 'empresa' | null;
 }

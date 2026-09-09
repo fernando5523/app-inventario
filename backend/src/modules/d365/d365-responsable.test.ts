@@ -12,6 +12,7 @@ import {
   agruparStockPorItem,
   resumirDescartes,
   tieneExistencia,
+  clasificarResponsable,
   esDeLaEmpresa,
   mapearCatalogo,
   seCuenta,
@@ -57,6 +58,24 @@ describe('seCuenta: solo lo que responde el Empleado', () => {
     // solo agrega ruido a la auditoria.
     expect(seCuenta('None')).toBe(false);
     expect(seCuenta(undefined)).toBe(false);
+  });
+});
+
+describe('clasificarResponsable: la clasificacion COMPLETA (para persistir), sin colapsar a booleano', () => {
+  it('Employee -> empleado', () => {
+    expect(clasificarResponsable('Employee')).toBe('empleado');
+  });
+
+  it('Company -> empresa', () => {
+    expect(clasificarResponsable('Company')).toBe('empresa');
+  });
+
+  it('None -> null: no hay a quien cargarle el item', () => {
+    expect(clasificarResponsable('None')).toBeNull();
+  });
+
+  it('sin fila (nunca sincronizado) -> null', () => {
+    expect(clasificarResponsable(undefined)).toBeNull();
   });
 });
 

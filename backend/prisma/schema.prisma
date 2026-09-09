@@ -111,6 +111,17 @@ enum TipoInventario {
   @@map("tipo_inventario")
 }
 
+/// Clasificacion CRUDA de TRU_InventoryManagerPE (D365), sin colapsar a un
+/// booleano: 'None' y "nunca sincronizado" quedan afuera de este enum (el
+/// campo que lo usa es nullable) porque ninguno de los dos tiene, hoy,
+/// un responsable a quien cargarle nada.
+enum ResponsableItem {
+  empleado
+  empresa
+
+  @@map("responsable_item")
+}
+
 // ---------------------------------------------------------------------------
 // Sesion / padron
 // ---------------------------------------------------------------------------
@@ -484,6 +495,15 @@ model CatalogoItem {
   /// dominio pueda calcular solo (tipos.ts#ItemAuditoria.esEmpresa) -- por
   /// eso es una columna del snapshot y no una regla en codigo.
   esEmpresa Boolean @default(false) @map("es_empresa")
+
+  /// Clasificacion COMPLETA de TRU_InventoryManagerPE (D365), sin colapsar a
+  /// `esEmpresa`: esa columna no distingue 'Employee' de 'None', y el export
+  /// de diferencias (pedido del cliente, 2026-09) necesita justamente esa
+  /// distincion para EXCLUIR del reporte tanto lo de la empresa como lo
+  /// desconocido -- solo entra 'empleado'.
+  /// null = D365 dijo 'None', o el item nunca sincronizo esta entidad.
+  /// Aditiva: `esEmpresa` sigue existiendo tal cual, no se toca.
+  responsable ResponsableItem? @map("responsable")
 
   createdAt DateTime @default(now()) @map("created_at")
 

@@ -195,6 +195,18 @@ export function esDeLaEmpresa(responsableCrudo: string | undefined): boolean {
 }
 
 /**
+ * La clasificacion COMPLETA (para persistir en CatalogoItem.responsable), sin
+ * colapsar a un booleano: a diferencia de `esDeLaEmpresa`, esta SI distingue
+ * `Employee` de `None`/sin fila -- necesario para que el export de
+ * diferencias pueda EXCLUIR a los dos del reporte, no solo a `Company`.
+ */
+export function clasificarResponsable(responsableCrudo: string | undefined): 'empleado' | 'empresa' | null {
+  if (responsableCrudo === RESPONSABLE_EMPLEADO) return 'empleado';
+  if (responsableCrudo === RESPONSABLE_EMPRESA) return 'empresa';
+  return null;
+}
+
+/**
  * Stock por item para UN almacen. `WarehousesOnHandV2` devuelve una fila por
  * (item, almacen): filtrando por almacen, cada item aparece una sola vez.
  *
@@ -333,6 +345,7 @@ export function mapearProducto(
     descripcion,
     empaques: elegirEmpaques(conversionesDelItem, producto),
     esEmpresa: esDeLaEmpresa(responsableCrudo),
+    responsable: clasificarResponsable(responsableCrudo),
     stockErp,
     precioVenta,
     categoria,
@@ -866,6 +879,10 @@ async function guardarSnapshot(args: {
             // este item (ver seCuenta/esDeLaEmpresa). Hasta ahora quedaba
             // NULL en la base y la auditoria no podia distinguirlos.
             esEmpresa: item.esEmpresa,
+            // Clasificacion COMPLETA (empleado/empresa/null): a diferencia de
+            // esEmpresa, distingue 'None'/sin fila -- el export de
+            // diferencias filtra por esto. Ver CatalogoItem.responsable.
+            responsable: item.responsable,
             // null cuando no hubo dato: nunca 0 (ver CatalogoItemDto.stockErp).
             stockErp: item.stockErp,
             // null cuando no hay fila de precio para la unidad suelta:
