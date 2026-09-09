@@ -15,9 +15,9 @@ import {
   calcularEmbudo,
   calcularResumenLiquidacion,
   calcularTotalDescuento,
-  compararPeriodos,
+  compararPeriodosPorSucursal,
   resumirHistoricoItem,
-  type PuntoComparativo,
+  type PuntoComparativoConSucursal,
 } from './historial.calculos';
 import {
   armarLibroDiferencias,
@@ -1232,7 +1232,7 @@ export async function comparativo(
     orderBy: [{ periodoAnio: 'asc' }, { periodoMes: 'asc' }],
   });
 
-  const puntos: PuntoComparativo[] = [];
+  const puntos: PuntoComparativoConSucursal[] = [];
   const meta: Array<{ inventarioId: number; sucursalNombre: string; folio: string | null }> = [];
   // Meses que NO entran a la serie porque su faltante neto no se puede
   // calcular todavía (falta asistencia/ajustes) -- se listan aparte, no se
@@ -1263,6 +1263,7 @@ export async function comparativo(
       multaInasistencia: aNumeroObligatorio(f.resultado.multaInasistencia),
     });
     puntos.push({
+      sucursalId: f.sucursalId,
       periodoAnio: f.periodoAnio,
       periodoMes: f.periodoMes,
       itemsTotales: f.resultado.itemsTotales,
@@ -1272,7 +1273,11 @@ export async function comparativo(
     meta.push({ inventarioId: f.id, sucursalNombre: f.sucursal.nombre, folio: f.lacrado?.folio ?? null });
   }
 
-  const serie = compararPeriodos(puntos).map((p, i) => ({
+  // compararPeriodosPorSucursal, no compararPeriodos: sin sucursalId
+  // filtrado (administrador o auditor pidiendo "todas"), `filas` puede
+  // traer VARIAS tiendas mezcladas por periodo -- agrupar antes de comparar
+  // evita que la variacion salte de una tienda a otra sin avisar.
+  const serie = compararPeriodosPorSucursal(puntos).map((p, i) => ({
     ...p,
     periodo: claveDePeriodo(p.periodoAnio, p.periodoMes),
     ...meta[i],

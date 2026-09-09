@@ -6,6 +6,7 @@ import {
   resumirAsistencia,
   calcularTotalDescuento,
   compararPeriodos,
+  compararPeriodosPorSucursal,
   redondear,
   resumirHistoricoItem,
 } from './historial.calculos';
@@ -320,5 +321,53 @@ describe('compararPeriodos', () => {
       { periodoAnio: 2026, periodoMes: 8, itemsTotales: 10, itemsConDiferencia: 1, montoFaltanteNeto: 500 },
     ]);
     expect(conCero[1]?.variacionFaltantePct).toBeNull();
+  });
+
+  /**
+   * REPRODUCE EL BUG (2026-09-09): `compararPeriodos` esta documentada para
+   * "la serie mes a mes de UNA sucursal" -- si se le pasan puntos de VARIAS
+   * tiendas mezclados en orden cronologico (que es justo lo que devuelve
+   * `historial.service.ts#comparativo` cuando no se filtra por sucursal,
+   * ahora que el Auditor puede pedir "todas"), compara Market Bolivar de
+   * agosto contra Market Carhuaz de julio como si fueran el mismo negocio.
+   * Un dato que MIENTE es peor que no mostrar nada.
+   */
+  it('BUG: mezclando dos sucursales, la variacion salta de una tienda a otra sin avisar', () => {
+    const mezclada = compararPeriodos([
+      { periodoAnio: 2026, periodoMes: 7, itemsTotales: 8000, itemsConDiferencia: 200, montoFaltanteNeto: 1000 }, // Bolivar jul
+      { periodoAnio: 2026, periodoMes: 7, itemsTotales: 6000, itemsConDiferencia: 50, montoFaltanteNeto: 100 }, // Carhuaz jul
+      { periodoAnio: 2026, periodoMes: 8, itemsTotales: 8000, itemsConDiferencia: 130, montoFaltanteNeto: 1390 }, // Bolivar ago
+    ]);
+    // Hoy compara Bolivar-agosto contra Carhuaz-julio: NO es null.
+    expect(mezclada[2]?.variacionFaltantePct).not.toBeNull();
+  });
+});
+
+describe('compararPeriodosPorSucursal: el fix -- nunca cruza la variacion entre tiendas', () => {
+  it('agrupa por sucursal antes de comparar: el primer punto de CADA tienda queda sin variacion', () => {
+    const serie = compararPeriodosPorSucursal([
+      { sucursalId: 1, periodoAnio: 2026, periodoMes: 7, itemsTotales: 8000, itemsConDiferencia: 200, montoFaltanteNeto: 1000 }, // Bolivar jul
+      { sucursalId: 2, periodoAnio: 2026, periodoMes: 7, itemsTotales: 6000, itemsConDiferencia: 50, montoFaltanteNeto: 100 }, // Carhuaz jul
+      { sucursalId: 1, periodoAnio: 2026, periodoMes: 8, itemsTotales: 8000, itemsConDiferencia: 130, montoFaltanteNeto: 1390 }, // Bolivar ago
+    ]);
+    expect(serie[0]?.variacionFaltantePct).toBeNull(); // Bolivar jul: primero de su tienda
+    expect(serie[1]?.variacionFaltantePct).toBeNull(); // Carhuaz jul: primero de LA SUYA, no de Bolivar
+    expect(serie[2]?.variacionFaltantePct).toBe(39); // Bolivar ago vs Bolivar jul -- nunca contra Carhuaz
+  });
+
+  it('mantiene el orden de llegada (cronologico global), no lo reordena por sucursal', () => {
+    const serie = compararPeriodosPorSucursal([
+      { sucursalId: 1, periodoAnio: 2026, periodoMes: 7, itemsTotales: 10, itemsConDiferencia: 1, montoFaltanteNeto: 50 },
+      { sucursalId: 2, periodoAnio: 2026, periodoMes: 7, itemsTotales: 10, itemsConDiferencia: 1, montoFaltanteNeto: 30 },
+    ]);
+    expect(serie.map((p) => p.montoFaltanteNeto)).toEqual([50, 30]);
+  });
+
+  it('una sola sucursal se comporta igual que compararPeriodos', () => {
+    const puntos = [
+      { sucursalId: 1, periodoAnio: 2026, periodoMes: 7, itemsTotales: 8000, itemsConDiferencia: 200, montoFaltanteNeto: 1000 },
+      { sucursalId: 1, periodoAnio: 2026, periodoMes: 8, itemsTotales: 8000, itemsConDiferencia: 130, montoFaltanteNeto: 1390 },
+    ];
+    expect(compararPeriodosPorSucursal(puntos)).toEqual(compararPeriodos(puntos));
   });
 });

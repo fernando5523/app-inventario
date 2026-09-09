@@ -284,3 +284,38 @@ export function compararPeriodos(puntos: PuntoComparativo[]): VariacionComparati
     };
   });
 }
+
+export interface PuntoComparativoConSucursal extends PuntoComparativo {
+  sucursalId: number;
+}
+
+/**
+ * Igual que `compararPeriodos`, pero segura cuando la consulta trae VARIAS
+ * sucursales mezcladas en orden cronologico -- lo que ahora puede pasar
+ * (2026-09-09) tanto para el Administrador como para el Auditor, que
+ * accede a todas las sucursales. `compararPeriodos` esta documentada para
+ * "la serie de UNA sucursal": pasarle puntos de tiendas distintas hace que
+ * compare, por ejemplo, Market Bolivar de agosto contra Market Carhuaz de
+ * julio como si fueran el mismo negocio -- un dato que MIENTE es peor que
+ * no mostrar nada.
+ *
+ * Agrupa por sucursal, corre `compararPeriodos` DENTRO de cada grupo (nunca
+ * cruza el limite), y devuelve el resultado en el mismo orden de llegada
+ * (cronologico global) para no descolocar al llamador.
+ */
+export function compararPeriodosPorSucursal(puntos: PuntoComparativoConSucursal[]): VariacionComparativo[] {
+  const porSucursal = new Map<number, PuntoComparativoConSucursal[]>();
+  for (const p of puntos) {
+    const grupo = porSucursal.get(p.sucursalId);
+    if (grupo) grupo.push(p);
+    else porSucursal.set(p.sucursalId, [p]);
+  }
+
+  const resultadoPorPunto = new Map<PuntoComparativoConSucursal, VariacionComparativo>();
+  for (const grupo of porSucursal.values()) {
+    const comparado = compararPeriodos(grupo);
+    grupo.forEach((p, i) => resultadoPorPunto.set(p, comparado[i]!));
+  }
+
+  return puntos.map((p) => resultadoPorPunto.get(p)!);
+}
