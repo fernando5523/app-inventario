@@ -1,6 +1,6 @@
 import { Barcode, Package, Tag, X } from 'lucide-react-native';
 import { useEffect, useState, type JSX } from 'react';
-import { Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Modal, Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { contarFiltrosActivos, elegirCampo, FILTRO_VACIO, opcionesEnCascada, type FiltroProductos } from '../../lib/dominio/filtro-productos';
 import type { Producto } from '../../lib/dominio/tipos';
@@ -20,10 +20,12 @@ type CampoAbierto = 'categoria' | 'nombre' | 'codigo' | null;
 
 /**
  * Modal de filtros de la lista de Contar: tres campos combinables —categoría,
- * nombre y código—, cada uno un `SelectBuscable`. Trabaja sobre un BORRADOR:
- * los cambios no tocan la lista hasta "Aplicar", y cerrar sin aplicar (X o
- * fondo) los descarta. "Limpiar todo" deja los tres en blanco de un toque.
- * Un solo campo abierto a la vez, para que la caja no se estire.
+ * nombre y código—, cada uno un `SelectBuscable` con `flotante` (su lista
+ * cuelga sobre lo de abajo, no lo empuja -- ver SelectBuscable.tsx). Trabaja
+ * sobre un BORRADOR: los cambios no tocan la lista hasta "Aplicar", y cerrar
+ * sin aplicar (X o fondo) los descarta. "Limpiar todo" deja los tres en
+ * blanco de un toque. Un solo campo abierto a la vez, para que dos listas
+ * flotantes no se pisen entre sí.
  *
  * La lógica de filtrado vive en `lib/dominio/filtro-productos.ts` (pura,
  * testeada); acá solo se arma el borrador y se elige cuándo aplicarlo.
@@ -60,12 +62,12 @@ export function ModalFiltrosProductos({ visible, productos, filtro, onAplicar, o
             </Pressable>
           </View>
 
-          <ScrollView
-            style={styles.cuerpo}
-            contentContainerStyle={styles.cuerpoContenido}
-            nestedScrollEnabled
-            keyboardShouldPersistTaps="handled"
-          >
+          {/* View simple, no ScrollView: con la lista FLOTANDO (`flotante`)
+              ningún campo abierto estira este contenedor -- ya no hace
+              falta el scroll propio que el acordeón de antes necesitaba
+              para no reventar la caja. De paso evita que Android recorte
+              la lista flotante contra los bordes de un ScrollView. */}
+          <View style={styles.cuerpo}>
             <SelectBuscable
               label="Categoría"
               icon={Tag}
@@ -77,6 +79,7 @@ export function ModalFiltrosProductos({ visible, productos, filtro, onAplicar, o
               abierto={campoAbierto === 'categoria'}
               onCambiarAbierto={(a) => abrir('categoria', a)}
               autoFocusBusqueda={false}
+              flotante
             />
             <SelectBuscable
               label="Nombre de producto"
@@ -89,6 +92,7 @@ export function ModalFiltrosProductos({ visible, productos, filtro, onAplicar, o
               abierto={campoAbierto === 'nombre'}
               onCambiarAbierto={(a) => abrir('nombre', a)}
               autoFocusBusqueda={false}
+              flotante
             />
             <SelectBuscable
               label="Código de producto"
@@ -101,8 +105,9 @@ export function ModalFiltrosProductos({ visible, productos, filtro, onAplicar, o
               abierto={campoAbierto === 'codigo'}
               onCambiarAbierto={(a) => abrir('codigo', a)}
               autoFocusBusqueda={false}
+              flotante
             />
-          </ScrollView>
+          </View>
 
           <View style={styles.acciones}>
             <Pressable
@@ -129,10 +134,19 @@ export function ModalFiltrosProductos({ visible, productos, filtro, onAplicar, o
 
 const styles = StyleSheet.create({
   fondo: { ...StyleSheet.absoluteFillObject, backgroundColor: colors.overlay },
-  centrado: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: spacing.xl },
+  // Margen lateral acotado (14, igual que `contenido` en contar.tsx) --
+  // pedido del cliente 2026-09-09: el modal desaprovechaba el ancho de la
+  // pantalla con el margen "denso" (26) por defecto de una pantalla no
+  // operativa. Vertical se deja más holgado para que la caja no toque el
+  // borde de arriba/abajo.
+  centrado: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 14, paddingVertical: spacing.xl },
   caja: {
     width: '100%',
-    maxWidth: 340,
+    // Antes 340: en una pantalla ancha eso dejaba aire de sobra a los
+    // costados (la razón del pedido) sin ganar nada por seguir angosto.
+    // 480 alcanza el ancho de cualquier teléfono real sin desbocarse en
+    // una tablet.
+    maxWidth: 480,
     maxHeight: '82%',
     gap: spacing.md,
     padding: 17,
@@ -142,10 +156,7 @@ const styles = StyleSheet.create({
   cabecera: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: spacing.sm },
   titulo: { fontSize: fontSize.base, color: colors.tinta, fontFamily: fonts.bold },
   cerrar: { width: 32, height: 32, alignItems: 'center', justifyContent: 'center', borderRadius: radius.sm },
-  // flexShrink: que el cuerpo ceda y scrollee cuando no entra, en vez de
-  // empujar los botones fuera de la caja.
-  cuerpo: { flexShrink: 1 },
-  cuerpoContenido: { gap: 14, paddingBottom: 2 },
+  cuerpo: { gap: 14 },
   acciones: { flexDirection: 'row', gap: 10 },
   boton: { flex: 1, minHeight: 50, alignItems: 'center', justifyContent: 'center', borderRadius: radius.sm },
   botonPrimario: { backgroundColor: colors.rojo },

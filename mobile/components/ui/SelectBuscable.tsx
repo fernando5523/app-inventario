@@ -4,7 +4,7 @@ import { useState, type JSX } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 
 import { filtrarOpciones } from '../../lib/dominio/filtro-productos';
-import { colors, fonts, fontSize, radius, spacing } from '../../lib/theme';
+import { colors, fonts, fontSize, radius, shadow, spacing } from '../../lib/theme';
 
 export interface SelectBuscableProps {
   label: string;
@@ -29,6 +29,15 @@ export interface SelectBuscableProps {
    * `ModalFiltrosHojas.tsx` (Coordinador) no pasa esta prop y sigue igual.
    */
   autoFocusBusqueda?: boolean;
+  /**
+   * Si la lista desplegada FLOTA sobre lo que está debajo (`position:
+   * absolute`, mismo patrón que `Select.tsx`) en vez de empujarlo dentro
+   * del flujo (acordeón, comportamiento de siempre). Por defecto `false`.
+   * `ModalFiltrosProductos.tsx` (Contar) lo pone en `true` -- pedido del
+   * cliente 2026-09-09. Acotado a esa pantalla: `ModalFiltrosHojas.tsx`
+   * (Coordinador) no pasa esta prop y sigue con el acordeón de siempre.
+   */
+  flotante?: boolean;
 }
 
 /**
@@ -49,6 +58,7 @@ export function SelectBuscable({
   abierto,
   onCambiarAbierto,
   autoFocusBusqueda = true,
+  flotante = false,
 }: SelectBuscableProps): JSX.Element {
   const [busqueda, setBusqueda] = useState('');
   const visibles = filtrarOpciones(opciones, busqueda);
@@ -60,7 +70,7 @@ export function SelectBuscable({
   }
 
   return (
-    <View style={styles.campo}>
+    <View style={[styles.campo, flotante && styles.campoFlotante, flotante && abierto && styles.campoElevado]}>
       <Text style={styles.label}>{label}</Text>
       <Pressable
         style={[styles.control, abierto && styles.controlAbierto]}
@@ -70,7 +80,7 @@ export function SelectBuscable({
         accessibilityState={{ expanded: abierto }}
       >
         {Icon ? <Icon size={18} color={colors.gris} /> : null}
-        <Text style={[styles.valor, valor === null && styles.valorVacio]} numberOfLines={1}>
+        <Text style={[styles.valor, valor === null && styles.valorVacio]} numberOfLines={1} ellipsizeMode="tail">
           {valor ?? etiquetaVacia}
         </Text>
         {valor !== null ? (
@@ -83,7 +93,7 @@ export function SelectBuscable({
       </Pressable>
 
       {abierto ? (
-        <View style={styles.desplegado}>
+        <View style={[styles.desplegado, flotante && styles.desplegadoFlotante]}>
           <View style={styles.buscador}>
             <Search size={15} color={colors.grisClaro} />
             <TextInput
@@ -109,7 +119,7 @@ export function SelectBuscable({
               const elegida = op === valor;
               return (
                 <Pressable key={op} style={styles.opcion} onPress={() => elegir(op)}>
-                  <Text style={[styles.opcionTexto, elegida && styles.opcionElegida]} numberOfLines={1}>
+                  <Text style={[styles.opcionTexto, elegida && styles.opcionElegida]} numberOfLines={1} ellipsizeMode="tail">
                     {op}
                   </Text>
                   {elegida ? <Check size={16} color={colors.rojo} /> : null}
@@ -128,6 +138,11 @@ export function SelectBuscable({
 
 const styles = StyleSheet.create({
   campo: { gap: 6 },
+  campoFlotante: { position: 'relative' },
+  // Elevado SOLO mientras está abierto: sin esto, el siguiente campo de la
+  // lista (que pinta DESPUÉS en el orden de hermanos) taparía la lista
+  // flotante de este en vez de quedar debajo suyo.
+  campoElevado: { zIndex: 30 },
   label: { fontSize: 13.5, color: colors.tinta, fontFamily: fonts.semibold },
   control: {
     flexDirection: 'row',
@@ -149,6 +164,17 @@ const styles = StyleSheet.create({
     borderRadius: radius.md,
     backgroundColor: colors.campo,
     overflow: 'hidden',
+  },
+  // Mismo patrón que Select.tsx: cuelga fuera del flujo, sobre lo que
+  // sigue abajo, en vez de empujarlo (pedido del cliente 2026-09-09).
+  desplegadoFlotante: {
+    position: 'absolute',
+    top: '100%',
+    left: 0,
+    right: 0,
+    marginTop: spacing.xs,
+    zIndex: 30,
+    ...shadow.modal,
   },
   buscador: {
     flexDirection: 'row',
