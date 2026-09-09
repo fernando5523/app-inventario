@@ -721,3 +721,50 @@ describe('historialApi.exportarDiferencias', () => {
     expect(url).toContain('/api/historial/inventarios/30/diferencias/exportar');
   });
 });
+
+describe('historialApi.exportarDiferenciasConsolidado', () => {
+  it('pega contra la ruta correcta, con período y SIN sucursalId cuando no se pide ninguna (= todas)', async () => {
+    const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => ({
+      ok: true,
+      status: 200,
+      arrayBuffer: async () => new ArrayBuffer(0),
+    }));
+    vi.stubGlobal('fetch', fetchMock as unknown as typeof fetch);
+
+    await historialApi.exportarDiferenciasConsolidado({ periodoAnio: 2026, periodoMes: 9 });
+
+    const url = String(fetchMock.mock.calls[0][0]);
+    expect(url).toContain('/api/historial/diferencias/exportar');
+    expect(url).toContain('periodoAnio=2026');
+    expect(url).toContain('periodoMes=9');
+    expect(url).not.toContain('sucursalId');
+  });
+
+  it('manda un sucursalId REPETIDO por cada id pedido -- Express solo arma el array así', async () => {
+    const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => ({
+      ok: true,
+      status: 200,
+      arrayBuffer: async () => new ArrayBuffer(0),
+    }));
+    vi.stubGlobal('fetch', fetchMock as unknown as typeof fetch);
+
+    await historialApi.exportarDiferenciasConsolidado({ sucursalIds: [1, 2], periodoAnio: 2026, periodoMes: 9 });
+
+    const url = String(fetchMock.mock.calls[0][0]);
+    expect(url.match(/sucursalId=\d+/g)).toEqual(['sucursalId=1', 'sucursalId=2']);
+  });
+
+  it('devuelve los bytes CRUDOS -- nunca intenta JSON.parse sobre el .xlsx', async () => {
+    const bytesXlsx = new Uint8Array([0x50, 0x4b, 0x03, 0x04]).buffer;
+    const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => ({
+      ok: true,
+      status: 200,
+      arrayBuffer: async () => bytesXlsx,
+    }));
+    vi.stubGlobal('fetch', fetchMock as unknown as typeof fetch);
+
+    const bytes = await historialApi.exportarDiferenciasConsolidado({ periodoAnio: 2026, periodoMes: 9 });
+
+    expect(new Uint8Array(bytes)).toEqual(new Uint8Array(bytesXlsx));
+  });
+});

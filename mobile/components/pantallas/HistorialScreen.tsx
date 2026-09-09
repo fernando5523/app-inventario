@@ -7,7 +7,7 @@ import { ActivityIndicator, Alert, Pressable, RefreshControl, ScrollView, StyleS
 
 import { useRefrescoAlEnfocar } from '../hooks/useRefrescoAlEnfocar';
 import { repositorioHistorial, repositorioSesion } from '../../lib/contenedor';
-import { estadoExportacion, nombreArchivoDiferencias } from '../../lib/dominio/exportar-diferencias';
+import { estadoExportacion, nombreArchivoConsolidado, nombreArchivoDiferencias } from '../../lib/dominio/exportar-diferencias';
 import type { Rol, Sucursal } from '../../lib/dominio/tipos';
 import type {
   DetalleInventarioHistorico,
@@ -36,6 +36,7 @@ import {
   formatoMoneda,
   formatoPct,
   MESES_CORTOS,
+  ModalExportarConsolidado,
   type OpcionChip,
 } from '../ui';
 
@@ -150,6 +151,14 @@ export function HistorialScreen({ rol }: HistorialScreenProps): JSX.Element {
   // es un rol técnico que no participa del proceso de inventario, así que
   // el botón ni se ofrece para ese rol, aunque el backend lo deje pasar.
   const [exportando, setExportando] = useState(false);
+
+  // El consolidado (varias tiendas o todas, 2026-09-09) es AL REVÉS: solo
+  // tiene efecto real para el Administrador -- el Auditor queda SIEMPRE
+  // recortado a su sucursal en el backend, así que un selector de tiendas
+  // sería una elección sin ningún efecto (mismo criterio que el chip de
+  // Sucursal de arriba). Se ofrece únicamente donde elegir cambia algo.
+  const [modalConsolidadoVisible, setModalConsolidadoVisible] = useState(false);
+  const [exportandoConsolidado, setExportandoConsolidado] = useState(false);
 
   const [diferencias, setDiferencias] = useState<DiferenciaHistorica[]>([]);
   const [liquidacion, setLiquidacion] = useState<LiquidacionInventario | null>(null);
@@ -326,6 +335,43 @@ export function HistorialScreen({ rol }: HistorialScreenProps): JSX.Element {
       Alert.alert('No se pudo exportar', e instanceof Error ? e.message : 'Intenta de nuevo.');
     } finally {
       setExportando(false);
+    }
+  }
+
+  /**
+   * El consolidado de varias tiendas (o todas) en un mismo período -- mismo
+   * flujo de descarga-a-caché-y-compartir que `exportarDiferencias`, pero
+   * con `sucursalIds` (`undefined` = todas) en vez de un solo `inventarioId`.
+   * Exige año Y mes elegidos arriba (los mismos chips de Período): un
+   * "informe de saldo" es de un mes puntual, no de todo el histórico.
+   */
+  async function exportarConsolidado(sucursalIds: number[] | undefined): Promise<void> {
+    if (filtroAnio === null || filtroMes === null) {
+      Alert.alert('Elige un período', 'El consolidado necesita año y mes -- son los mismos chips de "Período" de arriba.');
+      return;
+    }
+    setExportandoConsolidado(true);
+    try {
+      const puedeCompartir = await Sharing.isAvailableAsync();
+      if (!puedeCompartir) {
+        Alert.alert('No se puede compartir', 'Este dispositivo no tiene disponible el selector nativo para compartir archivos.');
+        return;
+      }
+      const bytes = await repositorioHistorial.exportarDiferenciasConsolidado({ sucursalIds, periodoAnio: filtroAnio, periodoMes: filtroMes });
+      const nombreArchivo = nombreArchivoConsolidado(filtroAnio, filtroMes);
+      const archivo = new File(Paths.cache, nombreArchivo);
+      if (archivo.exists) archivo.delete();
+      archivo.write(new Uint8Array(bytes));
+      setModalConsolidadoVisible(false);
+      await Sharing.shareAsync(archivo.uri, {
+        mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        dialogTitle: 'Compartir consolidado',
+        UTI: 'org.openxmlformats.spreadsheetml.sheet',
+      });
+    } catch (e) {
+      Alert.alert('No se pudo exportar', e instanceof Error ? e.message : 'Intenta de nuevo.');
+    } finally {
+      setExportandoConsolidado(false);
     }
   }
 
@@ -876,6 +922,21 @@ export function HistorialScreen({ rol }: HistorialScreenProps): JSX.Element {
             ) : null}
           </View>
 
+          {/* Consolidado: SOLO administrador -- ver el comentario de
+              `modalConsolidadoVisible` más arriba. Exige año Y mes elegidos:
+              habilitarlo antes invitaría a tocarlo para enterarse recién
+              adentro de que falta el período. */}
+          {rol === 'administrador' && filtroAnio !== null && filtroMes !== null ? (
+            <Pressable
+              style={[styles.verificarBtn, styles.exportarConsolidadoBtn]}
+              onPress={() => setModalConsolidadoVisible(true)}
+              accessibilityRole="button"
+              accessibilityLabel="Exportar consolidado de varias tiendas"
+            >
+              <Text style={styles.verificarBtnTexto}>Exportar consolidado</Text>
+            </Pressable>
+          ) : null}
+
           {inventarios.length === 0 ? (
             <EmptyState icon={History} title="Ningún inventario con estos filtros" subtitle="Prueba con otra combinación." />
           ) : (
@@ -892,6 +953,16 @@ export function HistorialScreen({ rol }: HistorialScreenProps): JSX.Element {
           )}
         </>
       )}
+
+      {rol === 'administrador' ? (
+        <ModalExportarConsolidado
+          visible={modalConsolidadoVisible}
+          tiendas={sucursales}
+          exportando={exportandoConsolidado}
+          onExportar={exportarConsolidado}
+          onCerrar={() => setModalConsolidadoVisible(false)}
+        />
+      ) : null}
     </PantallaConTabs>
   );
 }
@@ -1173,6 +1244,7 @@ const styles = StyleSheet.create({
   },
   verificarBtnDeshabilitado: { opacity: 0.6 },
   verificarBtnTexto: { fontSize: 12.5, color: colors.blanco, fontFamily: fonts.bold },
+  exportarConsolidadoBtn: { marginTop: -spacing.xs },
 
   verifTarjeta: { gap: 6, padding: 12, borderRadius: radius.md, borderWidth: 1, borderColor: colors.borde },
   verifOk: { backgroundColor: colors.okSuave, borderColor: 'rgba(10,107,87,0.3)' },

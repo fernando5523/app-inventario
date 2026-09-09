@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { estadoExportacion, nombreArchivoDiferencias } from './exportar-diferencias';
+import { estadoExportacion, nombreArchivoConsolidado, nombreArchivoDiferencias } from './exportar-diferencias';
 import type { EstadoInventario } from '../puertos/repositorios';
 
 describe('estadoExportacion: cuándo se puede exportar, y si no, POR QUÉ', () => {
@@ -80,5 +80,15 @@ describe('nombreArchivoDiferencias: identifica tienda + período + inventario, s
 
   it('sucursal vacía o solo símbolos no deja un nombre roto', () => {
     expect(nombreArchivoDiferencias('---', 2026, 9, 30)).toBe('diferencias-sucursal-2026-09-inv30.xlsx');
+  });
+});
+
+describe('nombreArchivoConsolidado: identifica el período, sin atarse a una sola tienda', () => {
+  it('caso normal', () => {
+    expect(nombreArchivoConsolidado(2026, 9)).toBe('diferencias-consolidado-2026-09.xlsx');
+  });
+
+  it('mes de un dígito con cero adelante', () => {
+    expect(nombreArchivoConsolidado(2026, 3)).toBe('diferencias-consolidado-2026-03.xlsx');
   });
 });

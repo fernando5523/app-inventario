@@ -47,3 +47,5 @@ export { ModalFiltrosProductos } from './ModalFiltrosProductos';
 export type { ModalFiltrosProductosProps } from './ModalFiltrosProductos';
 export { ModalFiltrosHojas } from './ModalFiltrosHojas';
 export type { ModalFiltrosHojasProps } from './ModalFiltrosHojas';
+export { ModalExportarConsolidado } from './ModalExportarConsolidado';
+export type { ModalExportarConsolidadoProps, TiendaSeleccionable } from './ModalExportarConsolidado';

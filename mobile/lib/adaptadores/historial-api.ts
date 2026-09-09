@@ -95,6 +95,7 @@ import type {
   DiferenciaHistorica,
   EstadoInventario,
   FiltroComparativo,
+  FiltroExportConsolidado,
   FiltroHistorial,
   FiltroHistoricoItem,
   HistoricoItem,
@@ -457,5 +458,13 @@ export const historialApi: RepositorioHistorial = {
 
   async exportarDiferencias(inventarioId): Promise<ArrayBuffer> {
     return pedir<ArrayBuffer>(`${BASE}/${inventarioId}/diferencias/exportar`, { binario: true });
+  },
+
+  async exportarDiferenciasConsolidado(filtro: FiltroExportConsolidado): Promise<ArrayBuffer> {
+    // `sucursalId` REPETIDO, no coma-separado: es como Express arma el
+    // array del lado del backend (historial.schema.ts#exportarConsolidadoQuerySchema).
+    const partes = [`periodoAnio=${filtro.periodoAnio}`, `periodoMes=${filtro.periodoMes}`];
+    for (const id of filtro.sucursalIds ?? []) partes.push(`sucursalId=${id}`);
+    return pedir<ArrayBuffer>(`${RUTA_HISTORIAL}/diferencias/exportar?${partes.join('&')}`, { binario: true });
   },
 };

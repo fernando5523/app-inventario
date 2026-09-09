@@ -77,3 +77,15 @@ export function nombreArchivoDiferencias(sucursal: string, periodoAnio: number, 
   const periodo = `${periodoAnio}-${String(periodoMes).padStart(2, '0')}`;
   return `diferencias-${slugSucursal}-${periodo}-inv${inventarioId}.xlsx`;
 }
+
+/**
+ * El consolidado de varias tiendas (o todas) en un mismo período -- pedido
+ * del cliente 2026-09-09. Sin nombre de sucursal ni de inventario: mezcla N
+ * tiendas, así que ninguno de los dos identifica el contenido (la columna
+ * `Sucursal` de la tabla sí lo hace, fila por fila). Mismo formato que el
+ * backend (historial.exportar.ts#nombreArchivoExportConsolidado).
+ */
+export function nombreArchivoConsolidado(periodoAnio: number, periodoMes: number): string {
+  const periodo = `${periodoAnio}-${String(periodoMes).padStart(2, '0')}`;
+  return `diferencias-consolidado-${periodo}.xlsx`;
+}

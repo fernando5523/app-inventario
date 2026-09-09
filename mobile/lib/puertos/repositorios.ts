@@ -1352,4 +1352,20 @@ export interface RepositorioHistorial {
    * decide dónde guardarlos y con qué nombre (ver dominio/exportar-diferencias.ts).
    */
   exportarDiferencias(inventarioId: number): Promise<ArrayBuffer>;
+  /**
+   * El .xlsx de VARIAS tiendas (o todas) en un mismo período -- pedido del
+   * cliente 2026-09-09. `sucursalIds` ausente = "todas las que el actor
+   * pueda ver": para el Administrador, todas de verdad; para el Auditor, el
+   * backend lo recorta igual a la suya sin importar qué se mande (mismo
+   * criterio que `listar`/`comparativo`) -- por eso el filtro es opcional
+   * también acá, no una promesa de acceso ampliado.
+   */
+  exportarDiferenciasConsolidado(filtro: FiltroExportConsolidado): Promise<ArrayBuffer>;
+}
+
+/** Ver `RepositorioHistorial.exportarDiferenciasConsolidado`. */
+export interface FiltroExportConsolidado {
+  sucursalIds?: number[];
+  periodoAnio: number;
+  periodoMes: number;
 }
