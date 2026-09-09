@@ -42,12 +42,14 @@ export interface ModalConteoProps {
  * silenciosamente. `interpretarCantidad()` (cantidad-numerica.ts) es la
  * única que decide si lo tipeado es un entero válido.
  *
- * Con UN solo empaque (el caso común) el campo del primero recibe foco
- * automático al abrir. El total se muestra como conversión EXPLÍCITA (una
- * línea por empaque: "2 Caja × 12 = 24 und", más las sueltas) con
- * `lineasDeTotal`, y sale del MISMO `desgloseConteo` que produce el número
- * que se guarda — no pueden diferir. Los nombres de empaque van tal cual los
- * da el sistema, sin pluralizar.
+ * Los campos arrancan VACÍOS y SIN foco (decisión del cliente 2026-09-09): el
+ * teclado ya no se abre solo tapando la pantalla, y "vacío" no es "0" — guardar
+ * se habilita recién cuando la persona ingresó al menos un valor (un 0 tecleado
+ * cuenta: "vine, miré y no había"). El total se muestra como conversión
+ * EXPLÍCITA (una línea por empaque: "2 Caja × 12 = 24 und", más las sueltas) con
+ * `lineasDeTotal`, y sale del MISMO `desgloseConteo` que produce el número que
+ * se guarda — no pueden diferir. Los nombres de empaque van tal cual los da el
+ * sistema, sin pluralizar.
  */
 export function ModalConteo({
   visible,
@@ -68,20 +70,27 @@ export function ModalConteo({
   useEffect(() => {
     if (!visible) return;
     const iniciales: Record<string, number> = {};
+    const textosIniciales: Record<string, string> = {};
     for (const linea of conteoInicial?.empaques ?? []) {
       iniciales[linea.empaqueNombre] = linea.cantidad;
+      textosIniciales[linea.empaqueNombre] = String(linea.cantidad);
     }
     // Solo para un registro NUEVO: si ya había un conteo guardado, lo que
     // el escáner acaba de confirmar es "esto es lo que tenés en la mano",
     // no una razón para pisar un valor que la persona ya había cargado.
     if (!conteoInicial && empaquePreseleccionado && !(empaquePreseleccionado in iniciales)) {
       iniciales[empaquePreseleccionado] = 1;
+      textosIniciales[empaquePreseleccionado] = '1';
     }
     setCantidades(iniciales);
-    setTextos(Object.fromEntries(Object.entries(iniciales).map(([nombre, valor]) => [nombre, String(valor)])));
+    setTextos(textosIniciales);
     setErroresCantidad({});
+    // VACÍO ≠ 0 (decisión del cliente 2026-09-09): en un registro NUEVO los
+    // campos arrancan vacíos, no en "0". El número `sueltas` que alimenta el
+    // total es 0, pero el TEXTO vacío es lo que distingue "no ingresó nada"
+    // (no cuenta como conteo) de "tecleó 0" (sí cuenta: vio y no había).
     setSueltas(conteoInicial?.sueltas ?? 0);
-    setTextoSueltas(String(conteoInicial?.sueltas ?? 0));
+    setTextoSueltas(conteoInicial ? String(conteoInicial.sueltas) : '');
     setErrorSueltas(null);
   }, [visible, producto?.id, conteoInicial, empaquePreseleccionado]);
 
@@ -131,7 +140,18 @@ export function ModalConteo({
   const lineasTotal = lineasDeTotal(desglose);
   const advertencias = validarConteo(conteoBorrador, producto.empaques);
 
+  // VACÍO ≠ 0: guardar solo se habilita cuando la persona ingresó AL MENOS un
+  // valor -- un 0 tecleado incluido, que SÍ cuenta como "vine, miré y no había".
+  // Con todos los campos vacíos no se guarda ningún conteo: el producto queda
+  // "sin contar" y sigue bloqueando la finalización de la hoja, que es justo lo
+  // que el cliente quiere (que se vea que alguien lo miró de verdad).
+  const hayValorIngresado =
+    textoSueltas.trim() !== '' || producto.empaques.some((e) => (textos[e.nombre]?.trim() ?? '') !== '');
+  const hayError = errorSueltas !== null || Object.values(erroresCantidad).some((m) => m !== null);
+  const puedeGuardar = hayValorIngresado && !hayError;
+
   function guardar(): void {
+    if (!puedeGuardar) return;
     onGuardar({ ...conteoBorrador, contadoEn: new Date().toISOString() });
   }
 
@@ -183,7 +203,7 @@ export function ModalConteo({
               </View>
             ) : null}
 
-            {producto.empaques.map((empaque, indice) => (
+            {producto.empaques.map((empaque) => (
               <View key={empaque.nombre} style={styles.campo}>
                 <Text style={styles.campoEtiqueta}>{empaque.nombre}</Text>
                 <TextInput
@@ -191,10 +211,13 @@ export function ModalConteo({
                   keyboardType="number-pad"
                   returnKeyType="done"
                   onSubmitEditing={() => Keyboard.dismiss()}
-                  value={textos[empaque.nombre] ?? String(cantidades[empaque.nombre] ?? 0)}
+                  // Vacío, no "0": el campo arranca sin nada y sin foco (el
+                  // teclado ya no se abre solo tapando la pantalla).
+                  value={textos[empaque.nombre] ?? ''}
+                  placeholder="—"
+                  placeholderTextColor={colors.grisClaro}
                   onChangeText={(texto) => cambiarTexto(empaque.nombre, texto)}
                   selectTextOnFocus
-                  autoFocus={indice === 0}
                   accessibilityLabel={`Cantidad de ${empaque.nombre}`}
                 />
                 {erroresCantidad[empaque.nombre] ? (
@@ -211,9 +234,10 @@ export function ModalConteo({
                 returnKeyType="done"
                 onSubmitEditing={() => Keyboard.dismiss()}
                 value={textoSueltas}
+                placeholder="—"
+                placeholderTextColor={colors.grisClaro}
                 onChangeText={cambiarTextoSueltas}
                 selectTextOnFocus
-                autoFocus={producto.empaques.length === 0}
                 accessibilityLabel="Unidades sueltas"
               />
               {errorSueltas ? <Text style={styles.inputErrorTexto}>{errorSueltas}</Text> : null}
@@ -241,9 +265,18 @@ export function ModalConteo({
               <Text style={styles.totalValor}>TOTAL {total} und</Text>
             </View>
 
-            <Pressable style={styles.guardar} onPress={guardar}>
-              <Text style={styles.guardarTexto}>Guardar registro en hoja</Text>
+            <Pressable
+              style={[styles.guardar, !puedeGuardar && styles.guardarDeshabilitado]}
+              onPress={guardar}
+              disabled={!puedeGuardar}
+            >
+              <Text style={[styles.guardarTexto, !puedeGuardar && styles.guardarTextoDeshabilitado]}>
+                Guardar registro en hoja
+              </Text>
             </Pressable>
+            {!hayValorIngresado ? (
+              <Text style={styles.hintGuardar}>Ingresá la cantidad. Si miraste y no había ninguno, tecleá 0.</Text>
+            ) : null}
           </ScrollView>
         </View>
       </View>
@@ -315,4 +348,7 @@ const styles = StyleSheet.create({
     backgroundColor: colors.rojo,
   },
   guardarTexto: { fontSize: 14.5, color: colors.blanco, fontFamily: fonts.bold },
+  guardarDeshabilitado: { backgroundColor: '#DCD6D2' },
+  guardarTextoDeshabilitado: { color: colors.gris },
+  hintGuardar: { marginTop: 10, fontSize: 12, color: colors.gris, fontFamily: fonts.regular, textAlign: 'center', lineHeight: 16 },
 });
