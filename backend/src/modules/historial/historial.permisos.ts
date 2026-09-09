@@ -48,36 +48,22 @@ export const ROLES_QUE_APRUEBAN_CIERRE: Rol[] = ['administrador', 'auditor'];
 // ---------------------------------------------------------------------------
 
 /**
- * Que sucursal puede consultar este actor. Mismo criterio que
- * usuarios.service.ts#listar: el administrador ve todo (y filtra si quiere),
- * el auditor queda SIEMPRE recortado a la suya e IGNORA el query param en
- * vez de recibir un 403 -- pedir "todas" desde una cuenta de auditor no es
- * un intento de ataque, es la UI mandando el filtro por defecto.
+ * Que sucursal puede consultar este actor.
  *
- * Devuelve `undefined` cuando no hay que filtrar (administrador sin filtro).
+ * CORRECCION DEL CLIENTE (2026-09-09): el auditor audita LA CADENA, no una
+ * tienda -- accede a TODAS las sucursales, igual que el administrador (ve
+ * todo si no filtra, y puede filtrar por la que quiera). Antes quedaba
+ * recortado a la suya e ignoraba el query param; era la regla al reves.
+ *
+ * Devuelve `undefined` cuando no hay que filtrar (sin filtro pedido).
  */
 export function resolverSucursalConsultable(
   actor: ColaboradorAutenticado,
   sucursalIdPedida: number | undefined,
 ): number | undefined {
-  if (actor.rol === 'administrador') return sucursalIdPedida;
+  if (actor.rol === 'administrador' || actor.rol === 'auditor') return sucursalIdPedida;
 
-  if (actor.rol !== 'auditor') {
-    throw new Prohibido('Tu rol no tiene acceso al historico de inventarios.');
-  }
-  if (actor.sucursalId === null) {
-    // Un auditor sin sucursal no deberia existir (usuarios.schema.ts la
-    // exige para todo rol que no sea administrador). Si aparece, no se le
-    // abre el historico entero "por las dudas".
-    // "Resolver el alcance" no le dice nada a nadie, y encima esto la
-    // persona NO lo puede arreglar sola: el mensaje tiene que decirle a
-    // quien pedirselo.
-    throw new Prohibido(
-      'Tu cuenta no tiene una tienda asignada, asi que no se puede saber que historico mostrarte. ' +
-        'Pídele a un administrador que te asigne una en Usuarios.',
-    );
-  }
-  return actor.sucursalId;
+  throw new Prohibido('Tu rol no tiene acceso al historico de inventarios.');
 }
 
 /**
@@ -100,26 +86,21 @@ export function resolverSucursalesConsultables(actor: ColaboradorAutenticado, id
   return [...resueltos];
 }
 
-/** Lanza Prohibido si el actor no puede mirar un inventario de esa sucursal. */
+/**
+ * Lanza Prohibido si el actor no puede mirar un inventario de esa sucursal.
+ *
+ * CORRECCION DEL CLIENTE (2026-09-09): el auditor accede a TODAS las
+ * sucursales, igual que el administrador -- ya no hay recorte por tienda
+ * para este rol. Sigue habiendo un motivo para rechazar: el rol en si
+ * (conteo/coordinador no tienen acceso al historico, regla de conteo ciego).
+ */
 export function validarAccesoAInventario(actor: ColaboradorAutenticado, inventario: { sucursalId: number }): void {
-  if (actor.rol === 'administrador') return;
+  if (actor.rol === 'administrador' || actor.rol === 'auditor') return;
 
-  /**
-   * DOS causas distintas, dos mensajes distintos. Antes las dos caian en
-   * "solo podes consultar el historico de tu propia sucursal", que para un
-   * coordinador de ESA MISMA tienda es directamente falso: va a mirar la
-   * sucursal, la encuentra bien, y se queda sin saber que pasa. El problema
-   * era su rol, no la tienda.
-   */
-  if (actor.rol !== 'auditor') {
-    throw new Prohibido(
-      'El historico de inventarios lo consultan el auditor y el administrador. ' +
-        'Si necesitas un dato de un cierre anterior, pídeselo a ellos.',
-    );
-  }
-  if (actor.sucursalId !== inventario.sucursalId) {
-    throw new Prohibido('Ese inventario es de otra tienda: solo puedes consultar el historico de la tuya.');
-  }
+  throw new Prohibido(
+    'El historico de inventarios lo consultan el auditor y el administrador. ' +
+      'Si necesitas un dato de un cierre anterior, pídeselo a ellos.',
+  );
 }
 
 // ---------------------------------------------------------------------------

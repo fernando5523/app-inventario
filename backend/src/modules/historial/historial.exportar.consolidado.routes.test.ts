@@ -90,24 +90,27 @@ describe('GET /api/historial/diferencias/exportar: quién puede bajar el consoli
     expect(r.status).toBe(400);
   });
 
-  it('auditor SIN pedir sucursal: el WHERE queda limitado a la suya, nunca "todas"', async () => {
+  // CORRECCION DEL CLIENTE (2026-09-09): el auditor accede a TODAS las
+  // sucursales, igual que el administrador -- antes quedaba recortado a la
+  // suya y el query param se ignoraba. Era la regla al reves.
+  it('auditor SIN pedir sucursal: sin filtro (todas), igual que el administrador', async () => {
     vi.mocked(prisma.inventario.findMany).mockResolvedValue([inventario(30, 1, 'Market Bolívar')] as never);
 
     const r = await exportarConsolidado(AUDITOR_SUCURSAL_1, '?periodoAnio=2026&periodoMes=9');
 
     expect(r.status).toBe(200);
     const where = vi.mocked(prisma.inventario.findMany).mock.calls[0]![0]!.where as { sucursalId?: { in: number[] } };
-    expect(where.sucursalId).toEqual({ in: [1] });
+    expect(where.sucursalId).toBeUndefined();
   });
 
-  it('auditor pidiendo OTRA sucursal explícita: igual queda limitado a la suya, no a un 403 ni a la ajena', async () => {
-    vi.mocked(prisma.inventario.findMany).mockResolvedValue([inventario(30, 1, 'Market Bolívar')] as never);
+  it('auditor pidiendo OTRA sucursal explícita: se la dan, audita toda la cadena', async () => {
+    vi.mocked(prisma.inventario.findMany).mockResolvedValue([inventario(30, 2, 'Market Carhuaz')] as never);
 
     const r = await exportarConsolidado(AUDITOR_SUCURSAL_1, '?periodoAnio=2026&periodoMes=9&sucursalId=2');
 
     expect(r.status).toBe(200);
     const where = vi.mocked(prisma.inventario.findMany).mock.calls[0]![0]!.where as { sucursalId?: { in: number[] } };
-    expect(where.sucursalId).toEqual({ in: [1] });
+    expect(where.sucursalId).toEqual({ in: [2] });
   });
 
   it('administrador SIN pedir sucursal: sin filtro de sucursal (todas)', async () => {

@@ -284,7 +284,10 @@ export async function listarAuditables(
   actor: ColaboradorAutenticado,
   query: ListarAuditablesQuery,
 ): Promise<Record<string, unknown>> {
-  const sucursalId = actor.rol === 'administrador' ? query.sucursalId : (actor.sucursalId ?? undefined);
+  // El auditor tambien elige sucursal (o ninguna = todas), igual que el
+  // administrador -- corregido por el cliente (2026-09-09). Antes se
+  // ignoraba lo que pedia y se forzaba a la suya.
+  const sucursalId = actor.rol === 'administrador' || actor.rol === 'auditor' ? query.sucursalId : (actor.sucursalId ?? undefined);
   if (sucursalId !== undefined) validarSucursal(actor, sucursalId);
 
   const filas = await prisma.inventario.findMany({

@@ -31,10 +31,12 @@ export function validarAcceso(actor: ColaboradorAutenticado, sucursalId: number)
   if (!ROLES_CON_ACCESO.includes(actor.rol)) {
     throw new Prohibido('Tu rol no tiene acceso a la liquidacion de la sucursal.');
   }
-  // El administrador no pertenece a ninguna tienda: ve todas. Los otros dos
-  // roles, solo la suya -- si no, cualquiera leeria la nomina de otra
-  // sucursal cambiando un id en la URL.
-  if (actor.rol !== 'administrador' && actor.sucursalId !== sucursalId) {
+  // El administrador no pertenece a ninguna tienda: ve todas. El auditor
+  // TAMBIEN ve cualquiera -- corregido por el cliente (2026-09-09): audita
+  // toda la cadena, no una tienda. Solo el coordinador queda atado a la
+  // suya -- si no, cualquiera leeria la nomina de otra sucursal cambiando
+  // un id en la URL.
+  if (actor.rol !== 'administrador' && actor.rol !== 'auditor' && actor.sucursalId !== sucursalId) {
     throw new Prohibido('Esa sucursal no es la tuya.');
   }
 }

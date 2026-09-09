@@ -36,14 +36,15 @@ describe('resolverSucursalConsultable', () => {
     expect(resolverSucursalConsultable(admin, 3)).toBe(3);
   });
 
-  it('el auditor queda recortado a SU sucursal aunque no pida filtro', () => {
-    expect(resolverSucursalConsultable(gilmer, undefined)).toBe(1);
+  // CORRECCION DEL CLIENTE (2026-09-09): el auditor audita LA CADENA, no una
+  // tienda -- accede a TODAS las sucursales, igual que el administrador.
+  // Antes quedaba recortado a la suya; era la regla al reves.
+  it('el auditor ve TODO cuando no filtra, igual que el administrador', () => {
+    expect(resolverSucursalConsultable(gilmer, undefined)).toBeUndefined();
   });
 
-  it('el auditor no puede espiar otra tienda pidiendo otro sucursalId', () => {
-    // Se ignora el query param en vez de tirar 403: pedir "todas" desde una
-    // cuenta de auditor es la UI mandando su filtro por defecto, no un ataque.
-    expect(resolverSucursalConsultable(gilmer, 2)).toBe(1);
+  it('el auditor puede pedir cualquier sucursal, se la dan', () => {
+    expect(resolverSucursalConsultable(gilmer, 2)).toBe(2);
   });
 
   it('un contador NO entra al historico: es la regla de conteo ciego', () => {
@@ -52,11 +53,6 @@ describe('resolverSucursalConsultable', () => {
 
   it('un coordinador tampoco entra al historico', () => {
     expect(() => resolverSucursalConsultable(coordinador, undefined)).toThrow(Prohibido);
-  });
-
-  it('un auditor sin sucursal no recibe el historico entero por las dudas', () => {
-    const roto: ColaboradorAutenticado = { colaboradorId: 99, sucursalId: null, rol: 'auditor' };
-    expect(() => resolverSucursalConsultable(roto, undefined)).toThrow(Prohibido);
   });
 });
 
@@ -69,8 +65,8 @@ describe('validarAccesoAInventario', () => {
     expect(() => validarAccesoAInventario(gilmer, { sucursalId: 1 })).not.toThrow();
   });
 
-  it('el auditor NO entra al de otra sucursal', () => {
-    expect(() => validarAccesoAInventario(gilmer, { sucursalId: 2 })).toThrow(Prohibido);
+  it('el auditor TAMBIEN entra al de otra sucursal -- accede a todas', () => {
+    expect(() => validarAccesoAInventario(gilmer, { sucursalId: 2 })).not.toThrow();
   });
 
   it('un contador no entra ni al de su propia sucursal', () => {
@@ -190,8 +186,8 @@ describe('validarPuedeAprobar', () => {
     expect(() => validarPuedeAprobar(gilmer, inventario('anulado'), [])).toThrow(Conflicto);
   });
 
-  it('un auditor de otra tienda no firma este cierre', () => {
-    expect(() => validarPuedeAprobar(auditorOtraTienda, inventario('liquidado', 1), [])).toThrow(Prohibido);
+  it('un auditor de OTRA tienda SI puede firmar este cierre -- audita toda la cadena', () => {
+    expect(() => validarPuedeAprobar(auditorOtraTienda, inventario('liquidado', 1), [])).not.toThrow();
   });
 
   it('un contador no firma el cierre', () => {
@@ -220,10 +216,6 @@ describe('validarPuedeAprobar', () => {
     expect(() => validarPuedeAprobar(coordinador, inventario('liquidado'), [])).toThrow(
       /auditor y el administrador/,
     );
-  });
-
-  it('y a uno de OTRA tienda si se le dice que es la tienda', () => {
-    expect(() => validarPuedeAprobar(auditorOtraTienda, inventario('liquidado'), [])).toThrow(/otra tienda/);
   });
 
   it('aprobar con el conteo abierto no filtra el enum', () => {
@@ -392,8 +384,8 @@ describe('validarPuedeLacrar', () => {
     expect(() => validarPuedeLacrar(gilmer, { ...listo, estado: 'en_curso' }, dosFirmas)).toThrow(Conflicto);
   });
 
-  it('un auditor de otra tienda no lacra este inventario', () => {
-    expect(() => validarPuedeLacrar(auditorOtraTienda, listo, dosFirmas)).toThrow(Prohibido);
+  it('un auditor de OTRA tienda SI puede lacrar este inventario -- audita toda la cadena', () => {
+    expect(() => validarPuedeLacrar(auditorOtraTienda, listo, dosFirmas)).not.toThrow();
   });
 
   it('un contador no lacra', () => {

@@ -27,8 +27,13 @@ describe('validarAcceso a la liquidacion', () => {
     expect(() => validarAcceso(maria, 1)).toThrow(Prohibido);
   });
 
-  it('nadie lee la nomina de otra tienda cambiando un id en la URL', () => {
+  it('el coordinador no lee la nomina de otra tienda cambiando un id en la URL', () => {
     expect(() => validarAcceso(jose, 2)).toThrow(Prohibido);
-    expect(() => validarAcceso(gilmer, 2)).toThrow(Prohibido);
+  });
+
+  // CORRECCION DEL CLIENTE (2026-09-09): el auditor accede a TODAS las
+  // sucursales -- antes quedaba recortado a la suya, era la regla al reves.
+  it('el auditor SI lee la nomina de otra tienda -- audita toda la cadena', () => {
+    expect(() => validarAcceso(gilmer, 2)).not.toThrow();
   });
 });

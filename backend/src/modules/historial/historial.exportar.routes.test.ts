@@ -92,12 +92,14 @@ describe('GET /api/historial/inventarios/:id/diferencias/exportar: quién puede 
     expect(r.status).toBe(403);
   });
 
-  it('auditor de OTRA sucursal, 403 -- el archivo es de la tienda, no de quien lo pide', async () => {
+  it('auditor de OTRA sucursal: 200 -- corrección del cliente, el auditor audita toda la cadena', async () => {
     vi.mocked(prisma.inventario.findUnique).mockResolvedValue(inventarioDeSucursal1() as never);
+    vi.mocked(prisma.diferenciaItem.findMany).mockResolvedValue([] as never);
+    vi.mocked(prisma.catalogoItem.findMany).mockResolvedValue([] as never);
 
     const r = await exportar(AUDITOR_SUCURSAL_2);
 
-    expect(r.status).toBe(403);
+    expect(r.status).toBe(200);
   });
 
   it('auditor de SU sucursal: 200, xlsx real con nombre de archivo correcto', async () => {

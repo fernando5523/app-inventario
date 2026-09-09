@@ -91,13 +91,15 @@ export function validarAccesoALaMatriz(actor: ColaboradorAutenticado, inventario
 
 /**
  * El administrador no pertenece a ninguna sucursal (sucursalId null): es
- * del sistema y ve todo. Para los otros tres roles, salir de la propia
- * tienda esta prohibido -- si no, cualquiera leeria el inventario de otra
- * sucursal cambiando un id en la URL. Mismo criterio que
- * hojas.permisos.ts#validarSucursal.
+ * del sistema y ve todo. El auditor TAMBIEN ve cualquier sucursal --
+ * corregido por el cliente (2026-09-09): audita toda la cadena, no una
+ * tienda. Coordinador y conteo si quedan atados a la propia: salir de ahi
+ * esta prohibido, si no cualquiera leeria el inventario de otra sucursal
+ * cambiando un id en la URL. Mismo criterio que hojas.permisos.ts#validarSucursal
+ * (esa SI sigue recortando al auditor -- ver el comentario ahi, es otro dominio).
  */
 export function validarSucursal(actor: ColaboradorAutenticado, sucursalIdDelInventario: number): void {
-  if (actor.rol === 'administrador') return;
+  if (actor.rol === 'administrador' || actor.rol === 'auditor') return;
   if (actor.sucursalId !== sucursalIdDelInventario) {
     throw new Prohibido('Ese inventario es de otra sucursal.');
   }

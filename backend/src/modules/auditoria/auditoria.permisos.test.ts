@@ -77,17 +77,24 @@ describe('EL COORDINADOR: solo inventarios ya cerrados', () => {
 });
 
 describe('alcance por sucursal', () => {
-  it('un auditor no entra al inventario de otra tienda', () => {
-    expect(() => validarAccesoALaMatriz(deOtraTienda, inv('lacrado', 1))).toThrow(Prohibido);
+  // CORRECCION DEL CLIENTE (2026-09-09): el auditor accede a TODAS las
+  // sucursales -- antes quedaba recortado a la suya, era la regla al reves.
+  it('un auditor de OTRA tienda SI entra -- audita toda la cadena', () => {
+    expect(() => validarAccesoALaMatriz(deOtraTienda, inv('lacrado', 1))).not.toThrow();
   });
 
   it('validarSucursal deja pasar al administrador, que no tiene sucursal', () => {
     expect(() => validarSucursal(admin, 4)).not.toThrow();
   });
 
-  it('validarSucursal corta a los otros roles fuera de la suya', () => {
-    expect(() => validarSucursal(gilmer, 2)).toThrow(Prohibido);
+  it('validarSucursal deja pasar al auditor a cualquier sucursal', () => {
+    expect(() => validarSucursal(gilmer, 2)).not.toThrow();
     expect(() => validarSucursal(gilmer, 1)).not.toThrow();
+  });
+
+  it('validarSucursal SIGUE cortando al coordinador fuera de la suya', () => {
+    expect(() => validarSucursal(jose, 2)).toThrow(Prohibido);
+    expect(() => validarSucursal(jose, 1)).not.toThrow();
   });
 });
 
