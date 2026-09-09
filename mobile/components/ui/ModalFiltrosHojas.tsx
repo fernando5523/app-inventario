@@ -1,6 +1,6 @@
 import { Hash, ListChecks, Users, X } from 'lucide-react-native';
 import { useEffect, useState, type JSX } from 'react';
-import { Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Modal, Pressable, StyleSheet, Text, View } from 'react-native';
 
 import {
   contarFiltrosActivosModal,
@@ -34,13 +34,16 @@ function estadoDeEtiqueta(etiqueta: string | null): FiltroHojas {
 
 /**
  * Modal de filtros de "Hojas de esta ronda" (Coordinador): mismo patrón que
- * `ModalFiltrosProductos.tsx` (min-4) -- un `SelectBuscable` por campo, un
+ * `ModalFiltrosProductos.tsx` (Contar) -- un `SelectBuscable` por campo, un
  * BORRADOR que no toca la lista hasta "Aplicar", un solo campo abierto a la
- * vez, y los tres EN CASCADA (af4810f: elegir un campo recorta los otros
- * dos a lo que sigue siendo posible, y limpia cualquiera que dejó de tener
- * sentido). Es un componente HERMANO, no una edición de aquel: los
- * criterios acá son de HOJA (persona/estado/número), no de producto, y así
- * el modal de Contar no se toca ni un poco.
+ * vez, los tres EN CASCADA (af4810f: elegir un campo recorta los otros dos
+ * a lo que sigue siendo posible, y limpia cualquiera que dejó de tener
+ * sentido), `flotante` (la lista cuelga sobre lo de abajo, no lo empuja) y
+ * SIN autofoco en la búsqueda -- pedido del cliente 2026-09-09: "todos los
+ * filtros con el diseño de Contar siguen las mismas reglas". Es un
+ * componente HERMANO, no una edición de aquel: los criterios acá son de
+ * HOJA (persona/estado/número), no de producto, y así el modal de Contar
+ * no se toca ni un poco.
  *
  * La lógica de filtrado vive en `lib/dominio/filtro-hojas.ts` (pura, testeada).
  */
@@ -81,12 +84,12 @@ export function ModalFiltrosHojas({ visible, hojas, filtro, onAplicar, onCerrar 
             </Pressable>
           </View>
 
-          <ScrollView
-            style={styles.cuerpo}
-            contentContainerStyle={styles.cuerpoContenido}
-            nestedScrollEnabled
-            keyboardShouldPersistTaps="handled"
-          >
+          {/* View simple, no ScrollView: con la lista FLOTANDO (`flotante`)
+              ningún campo abierto estira este contenedor -- ya no hace
+              falta el scroll propio que el acordeón de antes necesitaba
+              para no reventar la caja. De paso evita que Android recorte
+              la lista flotante contra los bordes de un ScrollView. */}
+          <View style={styles.cuerpo}>
             <SelectBuscable
               label="Persona asignada"
               icon={Users}
@@ -97,6 +100,8 @@ export function ModalFiltrosHojas({ visible, hojas, filtro, onAplicar, onCerrar 
               placeholderBusqueda="Buscar persona..."
               abierto={campoAbierto === 'persona'}
               onCambiarAbierto={(a) => abrir('persona', a)}
+              autoFocusBusqueda={false}
+              flotante
             />
             <SelectBuscable
               label="Estado"
@@ -108,6 +113,8 @@ export function ModalFiltrosHojas({ visible, hojas, filtro, onAplicar, onCerrar 
               placeholderBusqueda="Buscar estado..."
               abierto={campoAbierto === 'estado'}
               onCambiarAbierto={(a) => abrir('estado', a)}
+              autoFocusBusqueda={false}
+              flotante
             />
             <SelectBuscable
               label="Número de hoja"
@@ -119,8 +126,10 @@ export function ModalFiltrosHojas({ visible, hojas, filtro, onAplicar, onCerrar 
               placeholderBusqueda="Buscar número..."
               abierto={campoAbierto === 'numero'}
               onCambiarAbierto={(a) => abrir('numero', a)}
+              autoFocusBusqueda={false}
+              flotante
             />
-          </ScrollView>
+          </View>
 
           <View style={styles.acciones}>
             <Pressable
@@ -147,10 +156,13 @@ export function ModalFiltrosHojas({ visible, hojas, filtro, onAplicar, onCerrar 
 
 const styles = StyleSheet.create({
   fondo: { ...StyleSheet.absoluteFillObject, backgroundColor: colors.overlay },
-  centrado: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: spacing.xl },
+  // Margen lateral acotado (14, igual que ModalFiltrosProductos.tsx) --
+  // pedido del cliente 2026-09-09: incluso mismas reglas que Contar.
+  centrado: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 14, paddingVertical: spacing.xl },
   caja: {
     width: '100%',
-    maxWidth: 340,
+    // Antes 340 -- mismo motivo y mismo valor que ModalFiltrosProductos.tsx.
+    maxWidth: 480,
     maxHeight: '82%',
     gap: spacing.md,
     padding: 17,
@@ -160,8 +172,7 @@ const styles = StyleSheet.create({
   cabecera: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: spacing.sm },
   titulo: { fontSize: fontSize.base, color: colors.tinta, fontFamily: fonts.bold },
   cerrar: { width: 32, height: 32, alignItems: 'center', justifyContent: 'center', borderRadius: radius.sm },
-  cuerpo: { flexShrink: 1 },
-  cuerpoContenido: { gap: 14, paddingBottom: 2 },
+  cuerpo: { gap: 14 },
   acciones: { flexDirection: 'row', gap: 10 },
   boton: { flex: 1, minHeight: 50, alignItems: 'center', justifyContent: 'center', borderRadius: radius.sm },
   botonPrimario: { backgroundColor: colors.rojo },

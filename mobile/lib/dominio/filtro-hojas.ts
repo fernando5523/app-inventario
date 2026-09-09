@@ -10,6 +10,13 @@
  * Aparte del JSX por lo mismo que `comparativo-ronda.ts`: son cuatro reglas
  * con bordes, y adentro de un `.filter()` en el render no se puede probar
  * ninguna.
+ *
+ * `filtrarHojasModal` NUNCA reordena la lista de hojas que devuelve -- filtrar
+ * no es reordenar. Distinto es el orden de las OPCIONES de cada selector del
+ * modal (persona/número): esas van ASCENDENTE -- alfabético en español para
+ * persona, numérico para número (pedido del cliente 2026-09-09, "todos los
+ * filtros con el diseño de Contar siguen las mismas reglas" que
+ * `filtro-productos.ts`) -- ver `personasDeHojas`/`numerosDeHojas` más abajo.
  */
 
 import { avance } from './hoja';
@@ -79,24 +86,37 @@ export interface FiltroHojasModal {
 
 export const FILTRO_HOJAS_MODAL_VACIO: FiltroHojasModal = { persona: null, estado: 'todas', numero: null };
 
-/** Personas distintas entre los asignados de todas las hojas, en el orden en que aparecen. */
-export function personasDeHojas(hojas: readonly HojaConteo[]): string[] {
-  const vistos = new Set<string>();
-  const orden: string[] = [];
-  for (const h of hojas) {
-    for (const nombre of h.asignados) {
-      if (!vistos.has(nombre)) {
-        vistos.add(nombre);
-        orden.push(nombre);
-      }
-    }
-  }
-  return orden;
+/**
+ * Alfabético natural en español: acentos y Ñ en su lugar (localeCompare
+ * 'es'). Mismo patrón que `filtro-productos.ts#ordenAlfabetico` -- pedido
+ * del cliente 2026-09-09: "todos los filtros con el diseño de Contar
+ * siguen las mismas reglas".
+ */
+function ordenAlfabetico(valores: Iterable<string>): string[] {
+  return [...new Set(valores)].sort((a, b) => a.localeCompare(b, 'es'));
 }
 
-/** Números de hoja tal cual vienen ("002"), en el orden de la lista. */
+/**
+ * Igual que `ordenAlfabetico`, con `numeric: true`: un número de hoja se
+ * compara por su VALOR, no letra por letra -- "010" no puede quedar antes
+ * que "9". Mismo patrón que `filtro-productos.ts#ordenDeCodigos`.
+ */
+function ordenNumerico(valores: Iterable<string>): string[] {
+  return [...new Set(valores)].sort((a, b) => a.localeCompare(b, 'es', { numeric: true }));
+}
+
+/** Personas distintas entre los asignados de todas las hojas, ORDENADAS ASCENDENTE (alfabético). */
+export function personasDeHojas(hojas: readonly HojaConteo[]): string[] {
+  return ordenAlfabetico(
+    (function* () {
+      for (const h of hojas) for (const nombre of h.asignados) yield nombre;
+    })(),
+  );
+}
+
+/** Números de hoja ("002"), ORDENADOS ASCENDENTE por su valor numérico, no como texto. */
 export function numerosDeHojas(hojas: readonly HojaConteo[]): string[] {
-  return hojas.map((h) => h.numero);
+  return ordenNumerico(hojas.map((h) => h.numero));
 }
 
 /** Los tres criterios combinados con Y -- misma regla de estado que `cumpleFiltro`. */

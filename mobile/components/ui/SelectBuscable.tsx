@@ -22,20 +22,21 @@ export interface SelectBuscableProps {
   onCambiarAbierto: (abierto: boolean) => void;
   /**
    * Si el campo de búsqueda toma el foco (y abre el teclado) apenas se
-   * despliega el select. Por defecto `true` (comportamiento de siempre).
-   * `ModalFiltrosProductos.tsx` (Contar) lo pone en `false` -- pedido del
-   * cliente 2026-09-09: ahí el teclado tapaba la pantalla al abrir el
-   * modal, sin que nadie lo haya tocado todavía. Acotado a esa pantalla:
-   * `ModalFiltrosHojas.tsx` (Coordinador) no pasa esta prop y sigue igual.
+   * despliega el select. Por defecto `true`. `ModalFiltrosProductos.tsx`
+   * (Contar) y `ModalFiltrosHojas.tsx` (Coordinador) lo ponen en `false` --
+   * pedido del cliente 2026-09-09: el teclado tapaba la pantalla al abrir
+   * el modal, sin que nadie lo haya tocado todavía. "Todos los filtros con
+   * el diseño de Contar siguen las mismas reglas": no queda acotado a una
+   * sola pantalla.
    */
   autoFocusBusqueda?: boolean;
   /**
    * Si la lista desplegada FLOTA sobre lo que está debajo (`position:
    * absolute`, mismo patrón que `Select.tsx`) en vez de empujarlo dentro
    * del flujo (acordeón, comportamiento de siempre). Por defecto `false`.
-   * `ModalFiltrosProductos.tsx` (Contar) lo pone en `true` -- pedido del
-   * cliente 2026-09-09. Acotado a esa pantalla: `ModalFiltrosHojas.tsx`
-   * (Coordinador) no pasa esta prop y sigue con el acordeón de siempre.
+   * `ModalFiltrosProductos.tsx` (Contar) y `ModalFiltrosHojas.tsx`
+   * (Coordinador) lo ponen en `true` -- pedido del cliente 2026-09-09,
+   * mismas reglas en los dos filtros con este diseño.
    */
   flotante?: boolean;
 }

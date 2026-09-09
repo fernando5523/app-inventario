@@ -32,6 +32,7 @@ import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 vi.mock('react-native', () => ({ Platform: { OS: 'android' } }));
 vi.mock('expo-constants', () => ({ default: { expoConfig: { extra: {} } } }));
 
+import { FILTRO_HOJAS_MODAL_VACIO, numerosDeHojas, opcionesEnCascada, personasDeHojas } from '../dominio/filtro-hojas';
 import { categoriasDeHoja, codigosDeHoja, nombresDeHoja } from '../dominio/filtro-productos';
 import { avance } from '../dominio/hoja';
 import type { Sesion } from '../dominio/tipos';
@@ -1345,6 +1346,94 @@ describe('VERIFICACIÓN (2026-09-08, pedido del cliente): el modal de filtros de
     expect(categoriasDeHoja(hoja!.productos)).not.toContain('HIELO');
     expect(nombresDeHoja(hoja!.productos)).not.toContain('Hielo En Cubitos 1KG');
     expect(codigosDeHoja(hoja!.productos)).not.toContain('9902');
+  });
+});
+
+describe('VERIFICACIÓN (2026-09-09, pedido del cliente): el modal de filtros del Coordinador nunca ve hojas de OTRA tienda ni de OTRA ronda', () => {
+  // Mismo espíritu que el bloque de arriba (349b0fd, min-2), pero para
+  // `todas()` -- el camino del Coordinador -- y para las funciones que
+  // arma `opcionesEnCascada` en `filtro-hojas.ts` (persona/número/estado),
+  // no las de `filtro-productos.ts`. `hojas_estructura` es la MISMA tabla
+  // compartida: si `hojasEstructuraDeInventarioDb` (hojas-sqlite.ts:247)
+  // no filtrara por `inventario_id` Y `numero_conteo` a la vez, una hoja de
+  // OTRA tienda o de un reconteo anterior se colaría en las opciones del
+  // modal ("Persona asignada"/"Número de hoja"/"Estado") aunque nunca haya
+  // pertenecido a esta ronda.
+  //
+  // Verificado a mano que el test detecta la regresión: sacando el
+  // `AND numero_conteo = ?` del WHERE (hojas-sqlite.ts:248) el test de más
+  // abajo falla como corresponde (la hoja de la ronda 2 aparece mezclada);
+  // revertido antes de este commit.
+  const INV_PROPIO = 777901;
+  const INV_OTRA_TIENDA = 777902;
+
+  function hojaCoordinador(inventarioId: number, id: number, numero: string, asignados: string[], estado: 'pendiente' | 'finalizada') {
+    return {
+      id,
+      inventarioId,
+      numero,
+      zona: 'Zona G',
+      gondola: 'G1',
+      tamano: 5,
+      estado,
+      sync: 'sincronizado' as const,
+      asignados,
+      asignadoAId: asignados.length > 0 ? id : null,
+      asignadoA2Id: null,
+      productos: [
+        {
+          id: id * 10 + 1,
+          codigo: String(id),
+          codigoBarras: `77${id}`,
+          descripcion: `Producto de la hoja ${numero}`,
+          categoria: undefined,
+          empaques: [{ nombre: 'Unidad', factor: 1 }],
+        },
+      ],
+      conteos: [],
+    };
+  }
+
+  it('hojas de otra tienda y de otra ronda ya en el cache compartido: sus persona/número/estado no aparecen en las opciones del modal', async () => {
+    // 1) Otra TIENDA (inventario distinto), ronda 1: hoja #999, finalizada,
+    // asignada a "Persona Ajena".
+    const HOJA_OTRA_TIENDA = hojaCoordinador(INV_OTRA_TIENDA, 9779021, '999', ['Persona Ajena'], 'finalizada');
+    vi.mocked(hojasApi.todas).mockResolvedValueOnce([HOJA_OTRA_TIENDA]);
+    await hojasSqlite.todas(INV_OTRA_TIENDA, 1);
+
+    // 2) MISMA tienda que la propia, pero OTRA RONDA (reconteo): hoja #888,
+    // finalizada, asignada a "Persona De Otra Ronda".
+    const HOJA_OTRA_RONDA = hojaCoordinador(INV_PROPIO, 9779022, '888', ['Persona De Otra Ronda'], 'finalizada');
+    vi.mocked(hojasApi.todas).mockResolvedValueOnce([HOJA_OTRA_RONDA]);
+    await hojasSqlite.todas(INV_PROPIO, 2);
+
+    // 3) La ronda que el Coordinador tiene abierta de verdad: hoja #001,
+    // pendiente, asignada a "Ana Torres".
+    const HOJA_PROPIA = hojaCoordinador(INV_PROPIO, 9779023, '001', ['Ana Torres'], 'pendiente');
+    vi.mocked(hojasApi.todas).mockResolvedValueOnce([HOJA_PROPIA]);
+    const hojas = await hojasSqlite.todas(INV_PROPIO, 1);
+
+    // 1) La ronda propia trae SOLO su propia hoja -- nada de las otras dos.
+    expect(hojas.map((h) => h.numero)).toEqual(['001']);
+
+    // 2) Lo que alimenta el modal de filtros del Coordinador (las mismas
+    //    funciones que arma `opcionesEnCascada` en filtro-hojas.ts) ve
+    //    solo lo propio.
+    expect(personasDeHojas(hojas)).toEqual(['Ana Torres']);
+    expect(numerosDeHojas(hojas)).toEqual(['001']);
+    const opciones = opcionesEnCascada(hojas, FILTRO_HOJAS_MODAL_VACIO);
+    expect(opciones.persona).toEqual(['Ana Torres']);
+    expect(opciones.numero).toEqual(['001']);
+    // La propia está pendiente y sin contar (sin-finalizar + sin-conteo);
+    // "finalizadas" -- el estado de las dos ajenas -- no puede aparecer.
+    expect(opciones.estado).toEqual(['sin-finalizar', 'sin-conteo']);
+
+    // 3) Ninguna huella de las hojas ajenas -- ni persona, ni número, ni estado.
+    expect(personasDeHojas(hojas)).not.toContain('Persona Ajena');
+    expect(personasDeHojas(hojas)).not.toContain('Persona De Otra Ronda');
+    expect(numerosDeHojas(hojas)).not.toContain('999');
+    expect(numerosDeHojas(hojas)).not.toContain('888');
+    expect(opciones.estado).not.toContain('finalizadas');
   });
 });
 

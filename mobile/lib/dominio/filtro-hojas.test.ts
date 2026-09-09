@@ -138,14 +138,20 @@ describe('textoMostrando', () => {
   });
 });
 
-describe('personasDeHojas', () => {
-  it('distintas, en el orden en que aparecen, sin repetir', () => {
+describe('personasDeHojas: distintas, ORDENADAS ASCENDENTE (alfabético en español, pedido del cliente 2026-09-09)', () => {
+  it('alfabético, no en el orden en que aparecen en la hoja', () => {
     const hojas = [
-      hoja('pendiente', 5, 0, 1, ['Elena Príncipe']),
-      hoja('pendiente', 5, 0, 2, ['Marcos Ruiz', 'Elena Príncipe']),
+      hoja('pendiente', 5, 0, 1, ['Marcos Ruiz']),
+      hoja('pendiente', 5, 0, 2, ['Elena Príncipe', 'Marcos Ruiz']),
       hoja('pendiente', 5, 0, 3, []),
     ];
+    // Marcos aparece PRIMERO en la hoja 1; alfabético lo manda después de Elena.
     expect(personasDeHojas(hojas)).toEqual(['Elena Príncipe', 'Marcos Ruiz']);
+  });
+
+  it('acentos y Ñ en su lugar alfabético natural', () => {
+    const hojas = [hoja('pendiente', 5, 0, 1, ['Ñuñez']), hoja('pendiente', 5, 0, 2, ['Nuez']), hoja('pendiente', 5, 0, 3, ['Omar'])];
+    expect(personasDeHojas(hojas)).toEqual(['Nuez', 'Ñuñez', 'Omar']);
   });
 
   it('sin hojas: lista vacía', () => {
@@ -153,10 +159,19 @@ describe('personasDeHojas', () => {
   });
 });
 
-describe('numerosDeHojas', () => {
-  it('tal cual vienen, en el orden de la lista', () => {
+describe('numerosDeHojas: ORDENADOS ASCENDENTE por VALOR NUMÉRICO, no como texto (pedido del cliente 2026-09-09)', () => {
+  it('ascendente, no en el orden de la lista', () => {
     const hojas = [hoja('pendiente', 5, 0, 3), hoja('pendiente', 5, 0, 1)];
-    expect(numerosDeHojas(hojas)).toEqual(['003', '001']);
+    expect(numerosDeHojas(hojas)).toEqual(['001', '003']);
+  });
+
+  it('NUMÉRICO de verdad: "010" no queda antes que "9" (alfabético puro los ordenaría mal)', () => {
+    const hojas = [hoja('pendiente', 1, 0, 1), hoja('pendiente', 1, 0, 2)];
+    hojas[0]!.numero = '010';
+    hojas[1]!.numero = '9';
+    // Alfabético puro daría ['010', '9'] (compara letra a letra) -- exactamente
+    // el caso que el cliente reportó para los códigos de producto en Contar.
+    expect(numerosDeHojas(hojas)).toEqual(['9', '010']);
   });
 });
 
