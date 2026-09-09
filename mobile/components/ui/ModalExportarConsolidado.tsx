@@ -31,10 +31,13 @@ export interface ModalExportarConsolidadoProps {
  * conjunto real de tiendas que el actor puede ver (nunca una lista inventada).
  *
  * SOLO lo usa el Auditor (ver HistorialScreen.tsx -- dueño de la función
- * desde que el cliente lo definió, 2026-09-09). Con `tiendas={[]}` (que es
- * como el Auditor SIEMPRE lo recibe: el backend lo recorta a su propia
- * sucursal pida lo que pida) el checklist NO se muestra -- degrada a un
- * confirmar simple, para no ofrecer un selector sin ningún efecto real.
+ * desde que el cliente lo definió). Corrección del cliente (2026-09-09): el
+ * auditor accede a TODAS las sucursales (historial.permisos.ts ya no lo
+ * recorta a la suya), así que recibe el checklist REAL con el padrón
+ * completo, igual que antes solo el Administrador. `tiendas={[]}` sigue
+ * soportado como degradación defensiva (por ejemplo mientras el padrón
+ * todavía no cargó) -- ahí el checklist se saca del medio y queda un
+ * confirmar simple, para no mostrar una lista vacía.
  */
 export function ModalExportarConsolidado({ visible, tiendas, exportando, onExportar, onCerrar }: ModalExportarConsolidadoProps): JSX.Element {
   const [seleccionadas, setSeleccionadas] = useState<Set<number>>(new Set());

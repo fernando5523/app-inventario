@@ -129,9 +129,11 @@ export function HistorialScreen({ rol }: HistorialScreenProps): JSX.Element {
   const [desplazamiento, setDesplazamiento] = useState(0);
   const [filtro, setFiltro] = useState<EstadoInventario | 'todos'>('todos');
 
-  // Solo el Administrador elige sucursal: el Auditor queda recortado a la
-  // suya por el backend (historial.permisos.ts#resolverSucursalConsultable),
-  // así que ofrecerle el control sería una elección sin efecto.
+  // Solo el Administrador elige sucursal en el filtro base de la lista de
+  // abajo (chip "Sucursal") -- eso NO cambió. El padrón en sí (`sucursales`)
+  // ahora se carga para los dos roles porque el Auditor SÍ lo necesita para
+  // el checklist real de `ModalExportarConsolidado` (corrección del
+  // cliente, 2026-09-09: el auditor accede a todas las sucursales).
   const [sucursales, setSucursales] = useState<Sucursal[]>([]);
   const [filtroSucursalId, setFiltroSucursalId] = useState<number | typeof TODAS>(TODAS);
 
@@ -152,15 +154,14 @@ export function HistorialScreen({ rol }: HistorialScreenProps): JSX.Element {
   // el botón ni se ofrece para ese rol, aunque el backend lo deje pasar.
   const [exportando, setExportando] = useState(false);
 
-  // DUEÑO: el Auditor (corrección del cliente, 2026-09-09 -- lo dijo desde
-  // el principio, no es nuevo: "administrador es técnico, no tiene nada que
-  // ver en el proceso de inventario"). El checklist de tiendas de
-  // `ModalExportarConsolidado` SÍ queda sin efecto para él -- el backend
-  // (resolverSucursalesConsultables, historial.permisos.ts) lo recorta
-  // SIEMPRE a su propia sucursal, pida lo que pida -- por eso no se le
-  // ofrece ese selector (ver `tiendas={[]}` más abajo): el valor de esto
-  // para el Auditor es un atajo de exportación por período, sin multi-tienda
-  // real. El Administrador, dueño técnico, no lo ve.
+  // DUEÑO: el Auditor (lo dijo desde el principio: "administrador es
+  // técnico, no tiene nada que ver en el proceso de inventario"). El
+  // checklist de tiendas de `ModalExportarConsolidado` SÍ tiene efecto real
+  // para él -- corrección del cliente (2026-09-09): el auditor accede a
+  // TODAS las sucursales (resolverSucursalesConsultables,
+  // historial.permisos.ts, ya no lo recorta a la suya). Por eso recibe el
+  // padrón real (`tiendas={sucursales}` más abajo), igual que antes solo
+  // ofrecía el Administrador. El Administrador, dueño técnico, no lo ve.
   const [modalConsolidadoVisible, setModalConsolidadoVisible] = useState(false);
   const [exportandoConsolidado, setExportandoConsolidado] = useState(false);
 
@@ -177,10 +178,12 @@ export function HistorialScreen({ rol }: HistorialScreenProps): JSX.Element {
   // Se pide una sola vez, no en cada refresco del historial: el padrón de
   // sucursales no cambia entre pantallazos (mismo criterio que el modoAdmin
   // del login, que trae administradores() recién al entrar a ese modo).
+  // Sin gate por rol: `GET /api/sesion/sucursales` es el mismo endpoint del
+  // login (previo a cualquier sesión), así que no hay nada que proteger acá
+  // -- y ahora lo necesitan los dos roles (ver comentario de `sucursales`).
   useEffect(() => {
-    if (rol !== 'administrador') return;
     repositorioSesion.sucursales().then(setSucursales);
-  }, [rol]);
+  }, []);
 
   // El filtro completo de la pantalla, en la forma que pide el puerto. Un
   // solo lugar arma esto: `cargar()` (primera página) y `cargarMas()` (la
@@ -961,10 +964,9 @@ export function HistorialScreen({ rol }: HistorialScreenProps): JSX.Element {
       {rol === 'auditor' ? (
         <ModalExportarConsolidado
           visible={modalConsolidadoVisible}
-          // Siempre vacío a propósito: el checklist de tiendas no tiene
-          // efecto para el Auditor (ver comentario de `modalConsolidadoVisible`
-          // más arriba) -- el modal degrada a un confirmar simple.
-          tiendas={[]}
+          // El padrón real: el checklist SÍ tiene efecto para el Auditor
+          // (ver comentario de `modalConsolidadoVisible` más arriba).
+          tiendas={sucursales}
           exportando={exportandoConsolidado}
           onExportar={exportarConsolidado}
           onCerrar={() => setModalConsolidadoVisible(false)}
