@@ -10,7 +10,7 @@ description: >
 license: Apache-2.0
 metadata:
   author: gentleman-programming
-  version: "1.1"
+  version: "1.2"
 ---
 
 ## When to Use
@@ -74,6 +74,21 @@ De lejos, la familia de bugs más cara de la app: **números y estados que mient
 | Se navega por **identidad**, no por el número visible | Los números de hoja se repiten en cada ronda: al cambiar de ronda, "Hoja #001" llevaba a la hoja de otra persona, con los mismos productos a la vista y cada conteo rechazado. Si la hoja abierta ya no pertenece a la ronda activa, se saca de la vista y se dice por qué |
 | Un aviso va **donde se puede actuar** | Un rechazo de una hoja ajena pintaba de rojo el Inicio de cualquiera. El Inicio dice cuántas hojas propias faltan subir; el motivo puntual vive en la hoja que lo causó |
 | **Pendiente ≠ rechazado ≠ sin red** | "1 ítem sin sincronizar" se mostraba igual para algo que iba a subir solo y para algo que el servidor ya había rechazado y no iba a entrar nunca. Cada estado con su texto, su color y su acción; un fallo de red deja el ítem pendiente, un 4xx lo marca rechazado con el motivo del servidor |
+
+### Filtros
+
+Modal con selectores buscables combinables (categoría/nombre/código en Contar; persona/estado/número en Gestión de hojas) — reglas que salieron de construir el de Contar y de la verificación que pidió el cliente.
+
+| Regla | Por qué |
+|---|---|
+| Las opciones de un filtro salen **SOLO del conjunto abierto** (la hoja, la ronda) — nunca de la tabla que comparte el teléfono | `hojas_estructura`/`productos_estructura` son tablas COMPARTIDAS del dispositivo (si el Coordinador bajó `todas`, ahí quedan las hojas de todos los contadores): un filtro que mirara la tabla entera en vez de la hoja abierta mezclaría categorías, nombres o códigos de otra ronda o de otro colaborador, rompiendo el conteo ciego. Se blindó con un test que siembra una hoja ajena (otra ronda, otro colaborador) y comprueba que nada de ella se cuela — y para confirmar que el test protege de verdad, se rompió a propósito el filtro por `hoja_id` de la consulta: el test falló al toque. Se revirtió el sabotaje antes de commitear |
+| Los selectores de un filtro combinable van **EN CASCADA**: cada uno ofrece lo que sigue siendo posible con los OTROS filtros YA aplicados | Calcularlos sobre el filtro completo (los tres campos a la vez) deja al propio campo viendo una sola opción: la que ya tiene puesta. Si un valor elegido deja de tener sentido con el cambio de otro campo, se limpia solo — nunca queda un filtro puesto que no corresponde a ninguna fila. Ojo con la trampa: los campos que NO cambiaron se revalidan solo contra el que cambió, nunca entre sí, o uno invalida al otro en falso |
+| Las opciones de un select buscable van **ordenadas ascendente**, alfabético natural en español (`localeCompare('es')`) | Salían en el orden en que aparecen los datos (el de la góndola), que no ayuda a encontrar un valor puntual en una lista larga. Los códigos, si son numéricos, se ordenan por su VALOR (`localeCompare` con `numeric: true`): que `100010` no quede antes que `9` |
+| El campo de búsqueda de un select buscable **nunca lleva `autoFocus`** | El teclado se abría solo al entrar al modal y tapaba la pantalla antes de que la persona tocara nada que lo pidiera. Aparece recién cuando toca el campo |
+| El modal de un filtro combinable **aprovecha el ancho de pantalla** (margen lateral coherente con `--pad-lateral`) y sus desplegables **FLOTAN** sobre lo de abajo, nunca lo empujan | Un modal angosto con ancho fijo dejaba aire de sobra en pantallas anchas y cortaba nombres largos. Es el mismo patrón que ya pide esta skill para los selects de la pantalla 1 ("El desplegable va `position: absolute` fuera del flujo", más arriba) — el de Contar se había construido en acordeón (empujando los campos de abajo) y se corrigió para que coincida |
+| Un valor o una opción que no entra **trunca al final**, nunca al medio | Cortar al medio ("SAPOLIO LIMPIATODO...NTIBACTERIAL") es ilegible; al final, la persona sigue reconociendo el producto por como empieza el nombre |
+| El total de la pantalla sigue siendo del **conjunto completo** aunque haya un filtro puesto | Reafirma la regla de "Honestidad de los datos en pantalla" de más arriba — el modal de filtros es justo la superficie donde más fácil se confunde "lo que veo filtrado" con "el total real". Si se muestra el del filtro, hay que decir que es del filtro |
+| Una prop que cambia el comportamiento de un componente **compartido** entre pantallas va **opt-in, con default igual al comportamiento de siempre** | El select buscable de Contar y el de Gestión de hojas (Coordinador) son el MISMO componente. Sacarle el `autoFocus` o hacerle flotar la lista para uno sin este criterio habría cambiado el otro sin que nadie lo pidiera ahí — la prop nueva queda en `false` (o el valor de siempre) por defecto, y solo la pantalla que la necesita la prende |
 
 ### Paleta
 
