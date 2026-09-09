@@ -152,11 +152,15 @@ export function HistorialScreen({ rol }: HistorialScreenProps): JSX.Element {
   // el botón ni se ofrece para ese rol, aunque el backend lo deje pasar.
   const [exportando, setExportando] = useState(false);
 
-  // El consolidado (varias tiendas o todas, 2026-09-09) es AL REVÉS: solo
-  // tiene efecto real para el Administrador -- el Auditor queda SIEMPRE
-  // recortado a su sucursal en el backend, así que un selector de tiendas
-  // sería una elección sin ningún efecto (mismo criterio que el chip de
-  // Sucursal de arriba). Se ofrece únicamente donde elegir cambia algo.
+  // DUEÑO: el Auditor (corrección del cliente, 2026-09-09 -- lo dijo desde
+  // el principio, no es nuevo: "administrador es técnico, no tiene nada que
+  // ver en el proceso de inventario"). El checklist de tiendas de
+  // `ModalExportarConsolidado` SÍ queda sin efecto para él -- el backend
+  // (resolverSucursalesConsultables, historial.permisos.ts) lo recorta
+  // SIEMPRE a su propia sucursal, pida lo que pida -- por eso no se le
+  // ofrece ese selector (ver `tiendas={[]}` más abajo): el valor de esto
+  // para el Auditor es un atajo de exportación por período, sin multi-tienda
+  // real. El Administrador, dueño técnico, no lo ve.
   const [modalConsolidadoVisible, setModalConsolidadoVisible] = useState(false);
   const [exportandoConsolidado, setExportandoConsolidado] = useState(false);
 
@@ -922,11 +926,11 @@ export function HistorialScreen({ rol }: HistorialScreenProps): JSX.Element {
             ) : null}
           </View>
 
-          {/* Consolidado: SOLO administrador -- ver el comentario de
+          {/* Consolidado: SOLO auditor -- ver el comentario de
               `modalConsolidadoVisible` más arriba. Exige año Y mes elegidos:
               habilitarlo antes invitaría a tocarlo para enterarse recién
               adentro de que falta el período. */}
-          {rol === 'administrador' && filtroAnio !== null && filtroMes !== null ? (
+          {rol === 'auditor' && filtroAnio !== null && filtroMes !== null ? (
             <Pressable
               style={[styles.verificarBtn, styles.exportarConsolidadoBtn]}
               onPress={() => setModalConsolidadoVisible(true)}
@@ -954,10 +958,13 @@ export function HistorialScreen({ rol }: HistorialScreenProps): JSX.Element {
         </>
       )}
 
-      {rol === 'administrador' ? (
+      {rol === 'auditor' ? (
         <ModalExportarConsolidado
           visible={modalConsolidadoVisible}
-          tiendas={sucursales}
+          // Siempre vacío a propósito: el checklist de tiendas no tiene
+          // efecto para el Auditor (ver comentario de `modalConsolidadoVisible`
+          // más arriba) -- el modal degrada a un confirmar simple.
+          tiendas={[]}
           exportando={exportandoConsolidado}
           onExportar={exportarConsolidado}
           onCerrar={() => setModalConsolidadoVisible(false)}

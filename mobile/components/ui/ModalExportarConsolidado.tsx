@@ -30,10 +30,11 @@ export interface ModalExportarConsolidadoProps {
  * diseño: orden ascendente (alfabético en español) y opciones acotadas al
  * conjunto real de tiendas que el actor puede ver (nunca una lista inventada).
  *
- * SOLO lo usa el Administrador (ver HistorialScreen.tsx): el Auditor queda
- * SIEMPRE recortado a su propia sucursal en el backend, así que ofrecerle
- * este selector sería una elección sin ningún efecto -- mismo criterio que
- * ya aplica el chip de sucursal de esta misma pantalla.
+ * SOLO lo usa el Auditor (ver HistorialScreen.tsx -- dueño de la función
+ * desde que el cliente lo definió, 2026-09-09). Con `tiendas={[]}` (que es
+ * como el Auditor SIEMPRE lo recibe: el backend lo recorta a su propia
+ * sucursal pida lo que pida) el checklist NO se muestra -- degrada a un
+ * confirmar simple, para no ofrecer un selector sin ningún efecto real.
  */
 export function ModalExportarConsolidado({ visible, tiendas, exportando, onExportar, onCerrar }: ModalExportarConsolidadoProps): JSX.Element {
   const [seleccionadas, setSeleccionadas] = useState<Set<number>>(new Set());
@@ -46,6 +47,9 @@ export function ModalExportarConsolidado({ visible, tiendas, exportando, onExpor
 
   const ordenadas = [...tiendas].sort((a, b) => a.nombre.localeCompare(b.nombre, 'es'));
   const todasSeleccionadas = seleccionadas.size === 0;
+  // Sin tiendas para elegir (caso del Auditor): el checklist no tiene nada
+  // que ofrecer, así que se saca del medio en vez de mostrar una lista vacía.
+  const sinSelector = tiendas.length === 0;
 
   function alternar(id: number): void {
     setSeleccionadas((previas) => {
@@ -69,43 +73,49 @@ export function ModalExportarConsolidado({ visible, tiendas, exportando, onExpor
           </View>
 
           <Text style={styles.ayuda}>
-            {todasSeleccionadas
-              ? 'Sin ninguna marcada: se exportan TODAS las tiendas.'
-              : `${seleccionadas.size} tienda${seleccionadas.size === 1 ? '' : 's'} marcada${seleccionadas.size === 1 ? '' : 's'}.`}
+            {sinSelector
+              ? 'Se exporta el período elegido de tu tienda.'
+              : todasSeleccionadas
+                ? 'Sin ninguna marcada: se exportan TODAS las tiendas.'
+                : `${seleccionadas.size} tienda${seleccionadas.size === 1 ? '' : 's'} marcada${seleccionadas.size === 1 ? '' : 's'}.`}
           </Text>
 
-          <ScrollView style={styles.lista} nestedScrollEnabled>
-            {ordenadas.map((tienda) => {
-              const activa = seleccionadas.has(tienda.id);
-              return (
-                <Pressable
-                  key={tienda.id}
-                  style={styles.fila}
-                  onPress={() => alternar(tienda.id)}
-                  accessibilityRole="checkbox"
-                  accessibilityState={{ checked: activa }}
-                >
-                  <View style={[styles.check, activa && styles.checkActivo]}>{activa ? <Check size={14} color={colors.blanco} /> : null}</View>
-                  <Text style={styles.filaTexto} numberOfLines={1} ellipsizeMode="tail">
-                    {tienda.nombre}
-                  </Text>
-                </Pressable>
-              );
-            })}
-          </ScrollView>
+          {sinSelector ? null : (
+            <ScrollView style={styles.lista} nestedScrollEnabled>
+              {ordenadas.map((tienda) => {
+                const activa = seleccionadas.has(tienda.id);
+                return (
+                  <Pressable
+                    key={tienda.id}
+                    style={styles.fila}
+                    onPress={() => alternar(tienda.id)}
+                    accessibilityRole="checkbox"
+                    accessibilityState={{ checked: activa }}
+                  >
+                    <View style={[styles.check, activa && styles.checkActivo]}>{activa ? <Check size={14} color={colors.blanco} /> : null}</View>
+                    <Text style={styles.filaTexto} numberOfLines={1} ellipsizeMode="tail">
+                      {tienda.nombre}
+                    </Text>
+                  </Pressable>
+                );
+              })}
+            </ScrollView>
+          )}
 
           <View style={styles.acciones}>
-            <Pressable
-              style={[styles.boton, styles.botonSecundario]}
-              onPress={() => setSeleccionadas(new Set())}
-              disabled={todasSeleccionadas}
-              accessibilityLabel="Marcar todas las tiendas"
-            >
-              <Text style={[styles.botonSecundarioTexto, todasSeleccionadas && styles.botonTextoInerte]}>Todas</Text>
-            </Pressable>
+            {sinSelector ? null : (
+              <Pressable
+                style={[styles.boton, styles.botonSecundario]}
+                onPress={() => setSeleccionadas(new Set())}
+                disabled={todasSeleccionadas}
+                accessibilityLabel="Marcar todas las tiendas"
+              >
+                <Text style={[styles.botonSecundarioTexto, todasSeleccionadas && styles.botonTextoInerte]}>Todas</Text>
+              </Pressable>
+            )}
             <Pressable
               style={[styles.boton, styles.botonPrimario]}
-              onPress={() => onExportar(todasSeleccionadas ? undefined : [...seleccionadas])}
+              onPress={() => onExportar(sinSelector || todasSeleccionadas ? undefined : [...seleccionadas])}
               disabled={exportando}
               accessibilityLabel="Exportar el consolidado"
             >
