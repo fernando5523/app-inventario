@@ -147,6 +147,7 @@ interface InventarioDto {
   cerradoEn: string | null;
   resultado: ResultadoDto | null;
   aprobaciones: number;
+  aprobacionesRequeridas: number;
   lacrado: { folio: string; lacradoEn: string; lacradoPor: { id: number; nombre: string } } | null;
 }
 
@@ -185,6 +186,7 @@ function aInventario(dto: InventarioDto): InventarioHistorico {
     cerradoEn: dto.cerradoEn,
     resultado: aResultado(dto.resultado),
     aprobaciones: dto.aprobaciones,
+    aprobacionesRequeridas: dto.aprobacionesRequeridas,
     folio: dto.lacrado?.folio ?? null,
     lacradoEn: dto.lacrado?.lacradoEn ?? null,
     lacradoPor: dto.lacrado?.lacradoPor ?? null,
@@ -387,6 +389,7 @@ export const historialApi: RepositorioHistorial = {
       // `?? []` lo dejaría pasar y la pantalla haría `.map()` sobre un
       // number. Mejor quedarse sin firmas que reventar el histórico.
       aprobaciones: Array.isArray(dto.aprobaciones) ? dto.aprobaciones : [],
+      aprobacionesRequeridas: dto.aprobacionesRequeridas,
       lacrado: dto.lacrado,
     };
   },

@@ -21,6 +21,7 @@ import type {
   VerificacionSello,
 } from '../../lib/puertos/repositorios';
 import { sucursalEnFoco } from '../../lib/dominio/sucursal-en-foco';
+import { textoFirmadoPor, textoFirmas } from '../../lib/dominio/texto-firmas';
 import { useSesion } from '../../lib/sesion-contexto';
 import { useSucursalAuditada } from '../../lib/sucursal-auditada-contexto';
 import { colors, fonts, radius, spacing } from '../../lib/theme';
@@ -843,12 +844,15 @@ export function HistorialScreen({ rol }: HistorialScreenProps): JSX.Element {
           <View style={styles.tarjeta}>
             <View style={styles.tarjetaCabecera}>
               <Text style={styles.tarjetaTitulo}>Todavía no está lacrado</Text>
-              <Badge label={`${detalle.aprobaciones.length} / 2 firmado`} variant={detalle.aprobaciones.length >= 2 ? 'ok' : 'default'} />
+              <Badge
+                label={`${detalle.aprobaciones.length} / ${detalle.aprobacionesRequeridas} firmado`}
+                variant={detalle.aprobaciones.length >= detalle.aprobacionesRequeridas ? 'ok' : 'default'}
+              />
             </View>
             <Text style={styles.ayuda}>
               {detalle.estado === 'en_curso'
-                ? 'El conteo sigue abierto: este inventario todavía se puede modificar. El lacrado llega al final del ciclo, con las dos firmas de auditoría.'
-                : `Este inventario ya no se recuenta, pero todavía no está sellado: faltan ${2 - detalle.aprobaciones.length} de las 2 firmas de auditoría. Hasta que se lacre, sigue siendo modificable.`}
+                ? `El conteo sigue abierto: este inventario todavía se puede modificar. El lacrado llega al final del ciclo, con ${detalle.aprobacionesRequeridas === 1 ? 'la firma' : `las ${detalle.aprobacionesRequeridas} firmas`} de auditoría.`
+                : `Este inventario ya no se recuenta, pero todavía no está sellado: faltan ${detalle.aprobacionesRequeridas - detalle.aprobaciones.length} de las ${detalle.aprobacionesRequeridas} firma${detalle.aprobacionesRequeridas === 1 ? '' : 's'} de auditoría. Hasta que se lacre, sigue siendo modificable.`}
             </Text>
           </View>
         )}
@@ -1125,7 +1129,9 @@ function TarjetaInventario({ inventario, onAbrir }: { inventario: InventarioHist
 
       <View style={styles.invPie}>
         <Text style={styles.invPieTexto}>
-          {inventario.folio ? 'Firmado por 2 auditores' : `${inventario.aprobaciones} / 2 firmas`}
+          {inventario.folio
+            ? textoFirmadoPor(inventario.aprobacionesRequeridas)
+            : textoFirmas(inventario.aprobaciones, inventario.aprobacionesRequeridas)}
         </Text>
         <Pressable onPress={onAbrir} accessibilityRole="button">
           <Text style={styles.invAbrir}>Ver detalle</Text>

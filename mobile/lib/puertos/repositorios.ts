@@ -962,8 +962,15 @@ export interface InventarioHistorico {
   abiertoEn: string;
   cerradoEn: string | null;
   resultado: ResultadoInventario | null;
-  /** Cuántas de las 2 firmas de auditoría ya están. */
+  /** Cuántas firmas de auditoría ya están. */
   aprobaciones: number;
+  /**
+   * Cuántas firmas distintas hacen falta para lacrar (config del backend,
+   * hoy 1). Viaja para que la tarjeta del historial lo lea en vez de hardcodear
+   * un 2 -- mismo criterio que EstadoLacrado.aprobacionesRequeridas. El detalle
+   * lo hereda (no está en el Omit de DetalleInventarioHistorico).
+   */
+  aprobacionesRequeridas: number;
   /** Solo el folio: para la lista alcanza con saber SI hay sello y cuál es. */
   folio: string | null;
   /**

@@ -104,6 +104,13 @@ export interface InventarioListadoDto {
   /** Sello del mes. `null` si todavia no se lacro. */
   lacrado: LacradoResumenDto | null;
   aprobaciones: number;
+  /**
+   * Cuantas firmas distintas hacen falta antes de poder lacrar (config
+   * APROBACIONES_REQUERIDAS, ver 5c2c23c -- hoy 1). Viaja para que la tarjeta
+   * del historial lo lea en vez de hardcodear un 2: el dia que sean tres, la
+   * lista se entera sola -- mismo motivo que EstadoLacradoDto.aprobacionesRequeridas.
+   */
+  aprobacionesRequeridas: number;
 }
 
 export interface ResultadoResumenDto {
@@ -210,6 +217,7 @@ function aListadoDto(inv: InventarioConIncludes): InventarioListadoDto {
     resultado: resumirResultado(inv.resultado),
     lacrado: resumirLacrado(inv.lacrado),
     aprobaciones: inv._count.aprobaciones,
+    aprobacionesRequeridas: APROBACIONES_REQUERIDAS,
   };
 }
 
@@ -417,6 +425,8 @@ export async function obtenerDetalle(actor: ColaboradorAutenticado, id: number):
       aprobadoEn: a.aprobadoEn.toISOString(),
       nota: a.nota,
     })),
+    // El minimo configurable (5c2c23c), para que el detalle no hardcodee un 2.
+    aprobacionesRequeridas: APROBACIONES_REQUERIDAS,
 
     lacrado:
       inv.lacrado === null
