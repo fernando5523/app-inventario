@@ -75,4 +75,24 @@ describe('crearSnapshot: idempotencia sobre el inventario EN CURSO, no sobre "ab
     expect(resultado.inventarioId).toBe(40);
     expect(prisma.inventario.create).not.toHaveBeenCalled();
   });
+
+  it('POST-MIGRACION: la fila cerrada ya quedo en `abierto: null`, y crearSnapshot igual crea el del mes siguiente', async () => {
+    // Estado tras aplicar la migracion de datos (20260910120000): el inventario
+    // 34 quedo con `abierto: null`. crearSnapshot decide por ESTADO, nunca por
+    // `abierto` -- si alguien reintrodujera un `where: { abierto: true }`, este
+    // test lo atajaria: no hay ninguna fila abierta, pero igual tiene que crear
+    // el del mes que viene (y en la base real ya no hay dos `abierto: true` que
+    // choquen contra @@unique([sucursal_id, abierto])).
+    const cerradoMigrado = { ...INVENTARIO_34_SIN_LACRAR, abierto: null };
+    vi.mocked(prisma.inventario.findFirst).mockImplementation((async ({ where }: { where: Record<string, unknown> }) => {
+      if (where.estado === 'en_curso') return null; // ningun conteo en curso
+      if (where.abierto === true) return null; // ya migrado: ninguna fila abierta
+      return cerradoMigrado;
+    }) as never);
+
+    const resultado = await crearSnapshot(1, 'ejemplo');
+
+    expect(resultado.inventarioId).toBe(99);
+    expect(prisma.inventario.create).toHaveBeenCalled();
+  });
 });
