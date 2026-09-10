@@ -304,12 +304,16 @@ describe('cerrar', () => {
       });
     });
 
-    it('pasa el inventario a conteo_cerrado', async () => {
+    it('pasa el inventario a conteo_cerrado Y libera `abierto` -- bug real 2026-09-10', async () => {
+      // `abierto: null` tiene que salir de ACA, no recien al lacrar: la
+      // firma del auditor puede tardar dias, y hasta este fix la sucursal
+      // quedaba bloqueada para el mes siguiente todo ese tiempo (ver el
+      // comentario de Inventario.abierto en el schema).
       await cerrar(COORD, 9, 1);
 
       expect(prismaMock.inventario.update).toHaveBeenCalledWith({
         where: { id: 9 },
-        data: { estado: 'conteo_cerrado' },
+        data: { estado: 'conteo_cerrado', abierto: null },
       });
     });
 

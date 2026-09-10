@@ -449,7 +449,22 @@ export async function cerrar(
     });
 
     await prisma.$transaction([
-      prisma.inventario.update({ where: { id: inventarioId }, data: { estado: 'conteo_cerrado' } }),
+      prisma.inventario.update({
+        where: { id: inventarioId },
+        data: {
+          estado: 'conteo_cerrado',
+          // Libera la sucursal para el inventario del mes que viene EN ESTE
+          // MOMENTO, no recien al lacrar -- bug real (2026-09-10): la firma
+          // del auditor puede tardar dias, y hasta ahora la sucursal quedaba
+          // bloqueada para arrancar el mes siguiente todo ese tiempo (el
+          // idempotente de d365-catalogo.service.ts#crearSnapshot devolvia
+          // el snapshot viejo de este inventario, ya cerrado, como si fuera
+          // el del mes nuevo). NULL, no false -- ver el comentario de
+          // Inventario.abierto en el schema y el de historial.service.ts#lacrar,
+          // que hace lo mismo por si este cierre llegara a saltearse alguna vez.
+          abierto: null,
+        },
+      }),
       prisma.resultadoInventario.create({
         data: {
           inventarioId,

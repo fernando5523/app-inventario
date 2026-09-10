@@ -378,6 +378,16 @@ model Inventario {
   /// Por eso CERRAR un inventario es `abierto: null`, jamas
   /// `abierto: false` -- eso volveria a bloquear la sucursal. Lo escribe
   /// siempre el service, nunca el cliente.
+  ///
+  /// "Cerrar" es cuando el CONTEO cierra (`estado -> conteo_cerrado`,
+  /// rondas.service.ts), NO cuando se lacra. Bug real (2026-09-10): estaba
+  /// solo en historial.service.ts#lacrar, asi que una tienda con el mes
+  /// contado pero sin la firma del auditor (normal, tarda dias) quedaba sin
+  /// poder arrancar el mes siguiente -- el idempotente de
+  /// d365-catalogo.service.ts#crearSnapshot (que SI debe mirar `estado`, no
+  /// este campo) devolvia el snapshot de ese inventario ya cerrado.
+  /// `lacrar()` tambien lo pone en null, por las dudas de que este paso se
+  /// saltee alguna vez -- redundante y a proposito, no un lugar de mas.
   abierto          Boolean?       @default(true)
 
   hojas            HojaConteo[]

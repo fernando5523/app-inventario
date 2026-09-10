@@ -752,9 +752,20 @@ export async function crearSnapshot(
 
   // IDEMPOTENTE sobre el inventario EN CURSO, no sobre "la fila mas
   // reciente". La diferencia importa desde que existe `tipo`: buscar
-  // cualquier fila hacia que un mensual ya cerrado impidiera abrir el anual
-  // -- y con `abierto` en el schema, "en curso" ya se puede preguntar bien.
-  const enCurso = await prisma.inventario.findFirst({ where: { sucursalId, abierto: true } });
+  // cualquier fila hacia que un mensual ya cerrado impidiera abrir el anual.
+  //
+  // Por `estado: 'en_curso'`, NUNCA por `abierto: true` (bug real,
+  // 2026-09-10): `abierto` solo se limpia al LACRAR
+  // (historial.service.ts#lacrar), no al cerrar el conteo -- una tienda con
+  // el mes anterior `conteo_cerrado` y todavia sin la firma del auditor
+  // (normal, tarda dias) tenia un inventario con `abierto: true` que este
+  // chequeo confundia con "el conteo del mes que viene ya esta en curso",
+  // devolviendo el snapshot VIEJO. `estado` es el dato real del ciclo de
+  // vida (ver EstadoInventario); `abierto` solo existe para el
+  // @@unique([sucursalId, abierto]) que evita mensual+anual simultaneos, y
+  // ahora se limpia tambien al cerrar el conteo (rondas.service.ts) -- ver
+  // el comentario de Inventario.abierto en el schema.
+  const enCurso = await prisma.inventario.findFirst({ where: { sucursalId, estado: 'en_curso' } });
   if (enCurso) {
     return {
       inventarioId: enCurso.id,
