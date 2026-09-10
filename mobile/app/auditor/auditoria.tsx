@@ -19,6 +19,7 @@ import { resumirAuditoria } from '../../lib/dominio/auditoria';
 import { sucursalEnFoco } from '../../lib/dominio/sucursal-en-foco';
 import type { ItemAuditoria, Sucursal, VeredictoAuditoria } from '../../lib/dominio/tipos';
 import { useSesion } from '../../lib/sesion-contexto';
+import { useSucursalAuditada } from '../../lib/sucursal-auditada-contexto';
 import { colors, fonts, radius } from '../../lib/theme';
 
 type FiltroId = 'todos' | 'cuadrado' | 'falta' | 'empresa' | 'sin_dato';
@@ -62,7 +63,9 @@ export default function AuditoriaScreen(): JSX.Element {
   // sucursales`), sin gate de permiso. `sucursalElegida` null = todavía no
   // eligió (arranca en la de su ficha, ver sucursalEnFoco), cambiable.
   const [sucursales, setSucursales] = useState<Sucursal[]>([]);
-  const [sucursalElegida, setSucursalElegida] = useState<number | null>(null);
+  // COMPARTIDA entre las pantallas del auditor: elegir acá también cambia el
+  // Ciclo, el Historial y el Inicio (ver lib/sucursal-auditada-contexto.tsx).
+  const { elegida: sucursalElegida, elegir: setSucursalElegida } = useSucursalAuditada();
   useEffect(() => {
     repositorioSesion.sucursales().then(setSucursales);
   }, []);

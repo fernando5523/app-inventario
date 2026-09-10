@@ -20,7 +20,9 @@ import type {
   SeccionSellada,
   VerificacionSello,
 } from '../../lib/puertos/repositorios';
+import { sucursalEnFoco } from '../../lib/dominio/sucursal-en-foco';
 import { useSesion } from '../../lib/sesion-contexto';
+import { useSucursalAuditada } from '../../lib/sucursal-auditada-contexto';
 import { colors, fonts, radius, spacing } from '../../lib/theme';
 import { PantallaConTabs } from '../navegacion/PantallaConTabs';
 import {
@@ -136,6 +138,12 @@ export function HistorialScreen({ rol }: HistorialScreenProps): JSX.Element {
   // cliente, 2026-09-09: el auditor accede a todas las sucursales).
   const [sucursales, setSucursales] = useState<Sucursal[]>([]);
   const [filtroSucursalId, setFiltroSucursalId] = useState<number | typeof TODAS>(TODAS);
+  // El Auditor NO usa el filtro de arriba: elige la sucursal COMPARTIDA con sus
+  // otras pantallas (Auditoría, Ciclo, Inicio), así que ver Carhuaz en una es
+  // ver Carhuaz en todas. El Administrador sigue con `filtroSucursalId` (y su
+  // opción "Todas"); para él el hook del contexto es inerte.
+  const { elegida: sucursalElegida, elegir: elegirSucursal } = useSucursalAuditada();
+  const sucursalAuditor = sucursalEnFoco({ rol, sucursalDeSesion: sesion?.sucursal?.id ?? null, elegida: sucursalElegida });
 
   // Período: año primero, mes solo tiene sentido una vez elegido un año —
   // filtrar por mes sin año mezclaría "marzo de cualquier año".
@@ -191,14 +199,14 @@ export function HistorialScreen({ rol }: HistorialScreenProps): JSX.Element {
   // "cargar más" podría traer una página de un filtro distinto al que se ve.
   const filtroActual = useCallback(
     (desplazamientoPedido: number) => ({
-      sucursalId: rol === 'auditor' ? sesion!.sucursal!.id : filtroSucursalId === TODAS ? undefined : filtroSucursalId,
+      sucursalId: rol === 'auditor' ? (sucursalAuditor ?? undefined) : filtroSucursalId === TODAS ? undefined : filtroSucursalId,
       estado: filtro === TODOS ? undefined : filtro,
       periodoAnio: filtroAnio ?? undefined,
       periodoMes: filtroAnio !== null ? (filtroMes ?? undefined) : undefined,
       limite: TAMANO_PAGINA,
       desplazamiento: desplazamientoPedido,
     }),
-    [rol, sesion, filtroSucursalId, filtro, filtroAnio, filtroMes],
+    [rol, sucursalAuditor, filtroSucursalId, filtro, filtroAnio, filtroMes],
   );
 
   // Trae la PRIMERA página, con los filtros actuales — reemplaza la lista.
@@ -857,7 +865,7 @@ export function HistorialScreen({ rol }: HistorialScreenProps): JSX.Element {
     >
       <BarraApp
         rotulo="Historial"
-        sede={rol === 'auditor' ? sesion.sucursal!.nombre : undefined}
+        sede={rol === 'auditor' ? (sucursales.find((s) => s.id === sucursalAuditor)?.nombre ?? sesion.sucursal?.nombre) : undefined}
         cifras={cargando ? undefined : `Mostrando ${inventarios.length} de ${total} inventario${total === 1 ? '' : 's'}`}
       />
 
@@ -887,9 +895,11 @@ export function HistorialScreen({ rol }: HistorialScreenProps): JSX.Element {
         </View>
       ) : (
         <>
-          {/* El Auditor no ve esto: su alcance ya está fijo en su sucursal
-              (el backend lo recorta igual si mandara otra), así que
-              ofrecerle el control sería una elección sin ningún efecto. */}
+          {/* El Administrador filtra con "Todas" + tiendas. El Auditor elige
+              UNA sucursal (sin "Todas"): su selección es la COMPARTIDA con
+              Auditoría/Ciclo/Inicio, así que cambiarla acá las cambia todas.
+              El informe consolidado de toda la cadena sale por el botón de
+              exportación, no por este filtro de la lista. */}
           {rol === 'administrador' ? (
             <View style={styles.filtroBloque}>
               <Text style={styles.filtroLabel}>Sucursal</Text>
@@ -897,6 +907,15 @@ export function HistorialScreen({ rol }: HistorialScreenProps): JSX.Element {
                 opciones={opcionesSucursal}
                 activo={String(filtroSucursalId)}
                 onCambiar={(id) => setFiltroSucursalId(id === TODAS ? TODAS : Number(id))}
+              />
+            </View>
+          ) : rol === 'auditor' ? (
+            <View style={styles.filtroBloque}>
+              <Text style={styles.filtroLabel}>Sucursal a auditar</Text>
+              <ChipsFiltro
+                opciones={sucursales.map((s) => ({ id: String(s.id), etiqueta: s.nombre }))}
+                activo={sucursalAuditor === null ? '' : String(sucursalAuditor)}
+                onCambiar={(id) => elegirSucursal(Number(id))}
               />
             </View>
           ) : null}

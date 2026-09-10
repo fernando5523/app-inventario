@@ -21,6 +21,7 @@ import { partirEnHojas } from '../../lib/dominio/lote';
 import { type Rol, type Sucursal, type TamanoHoja } from '../../lib/dominio/tipos';
 import type { ResumenRonda } from '../../lib/puertos/repositorios';
 import { useSesion } from '../../lib/sesion-contexto';
+import { useSucursalAuditada } from '../../lib/sucursal-auditada-contexto';
 import { colors, fonts, radius, spacing } from '../../lib/theme';
 import { PantallaConTabs } from '../navegacion/PantallaConTabs';
 import { BandaSync, Badge, BarraApp, Button, ChipsFiltro, formatoMiles, formatoPct, type BadgeVariant, type OpcionChip } from '../ui';
@@ -208,7 +209,10 @@ export function CicloScreen({ rol }: CicloScreenProps): JSX.Element {
   // mismo endpoint del login; se pide solo para el Auditor. `sucursalElegida`
   // null = arranca en la de su ficha (default, cambiable). Ver sucursalEnFoco.
   const [sucursales, setSucursales] = useState<Sucursal[]>([]);
-  const [sucursalElegida, setSucursalElegida] = useState<number | null>(null);
+  // COMPARTIDA entre las pantallas del auditor (Auditoría, Ciclo, Historial,
+  // Inicio): elegir acá cambia todas. Para el Coordinador el hook devuelve el
+  // default inerte y `sucursalEnFoco` usa la de su sesión.
+  const { elegida: sucursalElegida, elegir: setSucursalElegida } = useSucursalAuditada();
   useEffect(() => {
     if (esCoordinador) return;
     repositorioSesion.sucursales().then(setSucursales);

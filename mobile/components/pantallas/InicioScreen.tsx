@@ -1,14 +1,16 @@
 import { router } from 'expo-router';
-import { useCallback, useState, type JSX } from 'react';
+import { useCallback, useEffect, useState, type JSX } from 'react';
 import { ActivityIndicator, StyleSheet, Text, View } from 'react-native';
 
 import { cargarSeguro } from '../../lib/adaptadores/_http';
 import { inventarioIdSinRed, rondaActivaSinRed } from '../../lib/adaptadores/hojas-sqlite';
-import { repositorioHojas, repositorioInventario, repositorioTiendas, repositorioUsuarios, sincronizador } from '../../lib/contenedor';
+import { repositorioHojas, repositorioInventario, repositorioSesion, repositorioTiendas, repositorioUsuarios, sincronizador } from '../../lib/contenedor';
 import { cifraOSinRed, filaPct } from '../../lib/dominio/cifra-sin-red';
 import { avance, avanceConjunto, estadoConjunto } from '../../lib/dominio/hoja';
-import type { HojaConteo, Rol } from '../../lib/dominio/tipos';
+import { sucursalEnFoco } from '../../lib/dominio/sucursal-en-foco';
+import type { HojaConteo, Rol, Sucursal } from '../../lib/dominio/tipos';
 import { useSesion } from '../../lib/sesion-contexto';
+import { useSucursalAuditada } from '../../lib/sucursal-auditada-contexto';
 import { colors, fonts, fontSize, spacing } from '../../lib/theme';
 import { useRefrescoAlEnfocar } from '../hooks/useRefrescoAlEnfocar';
 import { ACCESOS_POR_ROL } from '../navegacion/accesos';
@@ -60,6 +62,15 @@ const ETIQUETA_ESTADO_1ER_CONTEO: Record<ReturnType<typeof estadoConjunto>, stri
  */
 export function InicioScreen(): JSX.Element {
   const { sesion, cerrar } = useSesion();
+  // El Auditor sigue la sucursal COMPARTIDA que eligió en sus otras pantallas
+  // (ver lib/sucursal-auditada-contexto.tsx); el padrón resuelve su nombre para
+  // la barra. Para los otros roles el hook es inerte y esto no aplica.
+  const { elegida: sucursalElegida } = useSucursalAuditada();
+  const [padronSucursales, setPadronSucursales] = useState<Sucursal[]>([]);
+  useEffect(() => {
+    if (sesion?.colaborador.rol !== 'auditor') return;
+    repositorioSesion.sucursales().then(setPadronSucursales);
+  }, [sesion]);
   const [cargando, setCargando] = useState(true);
   // Administrador: sin red no hay nada a lo que caer (no tiene un SQLite
   // equivalente al avance de conteo), así que esto es lo único que se
@@ -133,7 +144,15 @@ export function InicioScreen(): JSX.Element {
     let totalHojas: number | null = null;
     let sinDatos = false;
     try {
-      const activo = await repositorioInventario.activo(sesion.sucursal!.id);
+      // El Auditor mira la sucursal COMPARTIDA que eligió; el Coordinador/Conteo,
+      // la de su sesión (sucursalEnFoco lo resuelve por rol). El `?? sesion...`
+      // es solo el piso para TS: en este punto el rol siempre tiene sucursal.
+      const sucursalId = sucursalEnFoco({
+        rol: sesion.colaborador.rol,
+        sucursalDeSesion: sesion.sucursal?.id ?? null,
+        elegida: sucursalElegida,
+      });
+      const activo = await repositorioInventario.activo(sucursalId ?? sesion.sucursal!.id);
       inventarioId = activo?.inventarioId ?? null;
       ronda = activo?.rondaActiva ?? null;
       items = activo?.items ?? null;
@@ -189,7 +208,7 @@ export function InicioScreen(): JSX.Element {
     });
     if (error) setErrorSistema(error.message);
     setCargando(false);
-  }, [sesion]);
+  }, [sesion, sucursalElegida]);
 
   // Al enfocar la pantalla Y al volver la app a primer plano (el caso que
   // reportó el cliente: el Coordinador cierra una ronda y abre la
@@ -204,6 +223,15 @@ export function InicioScreen(): JSX.Element {
   const rol = sesion.colaborador.rol;
   const primerNombre = sesion.colaborador.nombre.split(' ')[0];
   const accesos = ACCESOS_POR_ROL[rol];
+
+  // El nombre de la sucursal que se muestra en la barra: para el Auditor, la
+  // EFECTIVA (la elegida en el contexto); para el Coordinador/Conteo, la suya;
+  // el Administrador no tiene sede.
+  const sucursalIdEfectiva = sucursalEnFoco({ rol, sucursalDeSesion: sesion.sucursal?.id ?? null, elegida: sucursalElegida });
+  const nombreSede =
+    rol === 'administrador'
+      ? undefined
+      : (padronSucursales.find((s) => s.id === sucursalIdEfectiva)?.nombre ?? sesion.sucursal?.nombre);
 
   async function salir(): Promise<void> {
     await cerrar();
@@ -347,7 +375,7 @@ export function InicioScreen(): JSX.Element {
   return (
     <PantallaConTabs scrollable contentStyle={styles.contenido}>
       {/* Sin `sede`: el Administrador no pertenece a una sola sucursal. */}
-      <BarraApp rotulo="Inicio" sede={rol === 'administrador' ? undefined : sesion.sucursal!.nombre} cifras={cifras} onSalir={salir} />
+      <BarraApp rotulo="Inicio" sede={nombreSede} cifras={cifras} onSalir={salir} />
 
       <BandaSync
         estado={sync.estado}
