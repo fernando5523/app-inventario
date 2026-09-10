@@ -346,6 +346,14 @@ export default function ArmarHojasScreen(): JSX.Element {
   const sinAlmacen = sesion?.sucursal?.almacenId === null;
 
   const paso1Hecho = inventarioId !== null;
+  // SOLO para el check visual (verde "Hecho") -- `paso1Hecho` sigue
+  // decidiendo la ACCION del botón sin tocar (offline: hay inventarioId
+  // local pero todavía no `items`/`tomadoEn`, y ahí el botón tiene que
+  // seguir mandando a "crear hojas", no a "traer catálogo" de nuevo). Bug
+  // real de honestidad (2026-09-10, ver d365-catalogo.service.ts#crearSnapshot):
+  // la pantalla no puede pintar el check verde sin poder mostrar CON QUÉ
+  // datos -- cantidad e instante exacto -- respalda ese "Hecho".
+  const paso1Confirmado = paso1Hecho && items !== null && tomadoEn !== null;
   const paso2Hecho = hojas.length > 0;
   const paso3Hecho = paso2Hecho && hojas.every((h) => h.asignados.length > 0);
 
@@ -530,7 +538,7 @@ export default function ArmarHojasScreen(): JSX.Element {
             numero={1}
             icon={CloudDownload}
             titulo="Catálogo de Dynamics"
-            estado={paso1Hecho ? 'hecho' : 'pendiente'}
+            estado={paso1Confirmado ? 'hecho' : 'pendiente'}
             texto={
               sinAlmacen
                 ? 'Esta sucursal todavía no tiene asociado un almacén de Dynamics, y sin almacén no hay stock contra el cual contar. Un Administrador se lo asigna en Tiendas.'
