@@ -1,6 +1,6 @@
 import { router } from 'expo-router';
 import { BarChart3 } from 'lucide-react-native';
-import { useCallback, useEffect, useMemo, useState, type JSX } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type JSX } from 'react';
 import { ActivityIndicator, FlatList, Pressable, RefreshControl, StyleSheet, Text, View } from 'react-native';
 
 import { useRefrescoAlEnfocar } from '../../components/hooks/useRefrescoAlEnfocar';
@@ -115,6 +115,22 @@ export default function AuditoriaScreen(): JSX.Element {
   // Sin `pausado`: esta pantalla no edita nada, solo filtra (y el filtro es
   // estado local que `cargar` no toca).
   const { refrescando, refrescar } = useRefrescoAlEnfocar(cargar);
+
+  // Cambió la sucursal elegida (`cargar` cambia con ella): recargar YA --
+  // useRefrescoAlEnfocar solo recarga al enfocar. Y limpiar la matriz ANTES de
+  // que llegue la nueva: la barra ya dice la tienda nueva, mostrar los ítems de
+  // la anterior sería un número con el apellido equivocado (skill, Honestidad
+  // de los datos). El primer render lo saltea (esa carga la hace el hook).
+  const primerRender = useRef(true);
+  useEffect(() => {
+    if (primerRender.current) {
+      primerRender.current = false;
+      return;
+    }
+    setItems([]);
+    setCargando(true);
+    void cargar();
+  }, [cargar]);
 
   if (!sesion) return <View />;
 

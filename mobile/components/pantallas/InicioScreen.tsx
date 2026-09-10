@@ -1,5 +1,5 @@
 import { router } from 'expo-router';
-import { useCallback, useEffect, useState, type JSX } from 'react';
+import { useCallback, useEffect, useRef, useState, type JSX } from 'react';
 import { ActivityIndicator, StyleSheet, Text, View } from 'react-native';
 
 import { cargarSeguro } from '../../lib/adaptadores/_http';
@@ -215,6 +215,25 @@ export function InicioScreen(): JSX.Element {
   // siguiente con esta pantalla todavía abierta, sin cambiar de tab) --
   // los dos disparadores con un solo candado contra solapamiento.
   const { refrescar } = useRefrescoAlEnfocar(cargar);
+
+  // El Auditor cambia la sucursal en OTRA pantalla; acá la sede (rótulo) sigue
+  // el contexto al instante, pero las cifras venían del fetch anterior hasta el
+  // próximo foco -- un dato con el apellido equivocado (skill, Honestidad de
+  // los datos). Al cambiar `cargar` (cambió la sucursal) se limpia y recarga.
+  // El primer render lo saltea: esa carga la hace useRefrescoAlEnfocar.
+  const primerRender = useRef(true);
+  useEffect(() => {
+    if (primerRender.current) {
+      primerRender.current = false;
+      return;
+    }
+    setInventario(null);
+    setHojasRonda1(null);
+    setMisHojas(null);
+    setEstadoSistema(null);
+    setCargando(true);
+    void cargar();
+  }, [cargar]);
 
   // El layout del grupo (RolTabsLayout) ya garantiza que no se llega acá
   // sin sesión — este guard es solo para que TypeScript no se queje.

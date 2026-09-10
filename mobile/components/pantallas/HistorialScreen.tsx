@@ -2,7 +2,7 @@ import { File, Paths } from 'expo-file-system';
 import { router } from 'expo-router';
 import * as Sharing from 'expo-sharing';
 import { ChevronLeft, History, Lock, ShieldAlert, ShieldCheck, TrendingUp } from 'lucide-react-native';
-import { useCallback, useEffect, useState, type JSX } from 'react';
+import { useCallback, useEffect, useRef, useState, type JSX } from 'react';
 import { ActivityIndicator, Alert, Pressable, RefreshControl, ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import { useRefrescoAlEnfocar } from '../hooks/useRefrescoAlEnfocar';
@@ -257,23 +257,36 @@ export function HistorialScreen({ rol }: HistorialScreenProps): JSX.Element {
     }
   }
 
-  // `cargar` cambia de identidad cada vez que cambia un filtro (está en sus
-  // deps vía `filtroActual`) — React Navigation vuelve a correr este efecto
-  // cuando eso pasa, aunque la pantalla siga enfocada. Es lo que hace que
-  // tocar un chip dispare una consulta nueva sin tener que salir y volver.
+  // useRefrescoAlEnfocar recarga al ENFOCAR y al volver la app a primer plano
+  // (pedido del cliente: "cualquier dato actualizado no debe depender de cerrar
+  // sesión y volver"). Pero NO recarga al cambiar un filtro sin salir: guarda
+  // `cargar` en un ref a propósito (ver ese hook). Eso lo hace el efecto de
+  // abajo.
   //
-  // Ahora también refresca al volver la app a primer plano (pedido del
-  // cliente: "cualquier dato actualizado no debe depender de cerrar sesión y
-  // volver"). Ver components/hooks/useRefrescoAlEnfocar.ts.
-  //
-  // PAUSADO mientras hay una sub-vista abierta (detalle o historia de un
-  // ítem): `cargar` recarga LA LISTA, y esas dos vistas se muestran en lugar
-  // de la lista, no encima. Refrescar detrás no rompe nada visible, pero es
-  // una consulta que nadie pidió mientras la persona lee otra cosa -- y la
-  // regla es no tocar nada mientras está en el medio de algo.
+  // PAUSADO mientras hay una sub-vista abierta (detalle o historia de un ítem):
+  // `cargar` recarga LA LISTA, que esas vistas reemplazan, no encima.
   const { refrescando, refrescar } = useRefrescoAlEnfocar(cargar, {
     pausado: detalle !== null || historicoItem !== null,
   });
+
+  // Recarga al cambiar CUALQUIER filtro (la sucursal incluida): `cargar` cambia
+  // con `filtroActual`, y este efecto sí corre por eso. Se limpia la lista
+  // ANTES de que llegue lo nuevo -- la barra ya dice la sucursal nueva, así que
+  // mostrar los inventarios de la tienda anterior sería un número con el
+  // apellido equivocado (skill, Honestidad de los datos en pantalla). El primer
+  // render lo saltea: esa carga inicial la hace useRefrescoAlEnfocar, y correr
+  // las dos duplicaría el pedido.
+  const primerRender = useRef(true);
+  useEffect(() => {
+    if (primerRender.current) {
+      primerRender.current = false;
+      return;
+    }
+    setInventarios([]);
+    setDesplazamiento(0);
+    setCargando(true);
+    void cargar();
+  }, [cargar]);
 
   async function abrirDetalle(id: number): Promise<void> {
     setCargandoDetalle(true);
