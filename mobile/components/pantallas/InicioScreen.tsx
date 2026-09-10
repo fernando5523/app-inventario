@@ -2,6 +2,7 @@ import { router } from 'expo-router';
 import { useCallback, useState, type JSX } from 'react';
 import { ActivityIndicator, StyleSheet, Text, View } from 'react-native';
 
+import { cargarSeguro } from '../../lib/adaptadores/_http';
 import { inventarioIdSinRed, rondaActivaSinRed } from '../../lib/adaptadores/hojas-sqlite';
 import { repositorioHojas, repositorioInventario, repositorioTiendas, repositorioUsuarios, sincronizador } from '../../lib/contenedor';
 import { cifraOSinRed, filaPct } from '../../lib/dominio/cifra-sin-red';
@@ -60,11 +61,13 @@ const ETIQUETA_ESTADO_1ER_CONTEO: Record<ReturnType<typeof estadoConjunto>, stri
 export function InicioScreen(): JSX.Element {
   const { sesion, cerrar } = useSesion();
   const [cargando, setCargando] = useState(true);
-  // Solo la usa la rama Administrador: las otras 3 ramas ya caen a datos
-  // locales sin red (ver inventarioIdSinRed más abajo) y no necesitan
-  // mostrar un mensaje de error — el Administrador no tiene un SQLite
-  // equivalente al avance de conteo, así que sin red no hay nada que
-  // mostrar salvo decirlo.
+  // Administrador: sin red no hay nada a lo que caer (no tiene un SQLite
+  // equivalente al avance de conteo), así que esto es lo único que se
+  // muestra. Los otros 3 roles caen a datos locales para `activo()` (ver
+  // inventarioIdSinRed más abajo), pero la SEGUNDA llamada
+  // (repositorioHojas.todas()/mias()) no tiene fallback -- si esa revienta,
+  // también se muestra acá (bug real 2026-09-10: antes escapaba sin
+  // control y dejaba el spinner de esta tarjeta girando para siempre).
   const [errorSistema, setErrorSistema] = useState<string | null>(null);
   const [inventario, setInventario] = useState<InventarioActivo | null>(null);
   // `todas()` del inventario -- Coordinador y Auditor ven el MISMO dato
@@ -123,6 +126,7 @@ export function InicioScreen(): JSX.Element {
 
     // Ya se descartó 'administrador' arriba (return temprano): acá el rol
     // siempre tiene sucursal real.
+    setErrorSistema(null);
     let inventarioId: number | null;
     let ronda: number | null = null;
     let items: number | null = null;
@@ -165,15 +169,25 @@ export function InicioScreen(): JSX.Element {
     }
     setInventario({ inventarioId, items, totalHojas });
 
-    if (sesion.colaborador.rol === 'coordinador' || sesion.colaborador.rol === 'auditor') {
-      // Sin ronda activa (null = ninguna abierta) no hay hojas que traer.
-      const todas = ronda !== null ? await repositorioHojas.todas(inventarioId, ronda) : [];
-      setHojasRonda1(todas);
-    } else if (sesion.colaborador.rol === 'conteo') {
-      // mias(), NUNCA todas(): un Contador no puede ver el lote entero.
-      const mias = ronda !== null ? await repositorioHojas.mias(inventarioId, ronda) : [];
-      setMisHojas(mias);
-    }
+    // SIN fallback local para esto (a diferencia de `activo()` arriba): si
+    // revienta, antes escapaba sin control y `setCargando(false)` de más
+    // abajo nunca se ejecutaba -- el spinner de esta tarjeta quedaba
+    // girando para siempre (bug real, 2026-09-10). `cargarSeguro` atrapa
+    // CUALQUIER falla acá y la devuelve en vez de dejarla escapar.
+    const idInventario = inventarioId;
+    const rondaActiva = ronda;
+    const error = await cargarSeguro(async () => {
+      if (sesion.colaborador.rol === 'coordinador' || sesion.colaborador.rol === 'auditor') {
+        // Sin ronda activa (null = ninguna abierta) no hay hojas que traer.
+        const todas = rondaActiva !== null ? await repositorioHojas.todas(idInventario, rondaActiva) : [];
+        setHojasRonda1(todas);
+      } else if (sesion.colaborador.rol === 'conteo') {
+        // mias(), NUNCA todas(): un Contador no puede ver el lote entero.
+        const mias = rondaActiva !== null ? await repositorioHojas.mias(idInventario, rondaActiva) : [];
+        setMisHojas(mias);
+      }
+    });
+    if (error) setErrorSistema(error.message);
     setCargando(false);
   }, [sesion]);
 

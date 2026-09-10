@@ -15,6 +15,7 @@ import {
   formatoMiles,
   sincronizacionDeHojas,
 } from '../../components/ui';
+import { cargarSeguro } from '../../lib/adaptadores/_http';
 import { inventarioIdSinRed, rondaActivaSinRed, ultimaDescarga } from '../../lib/adaptadores/hojas-sqlite';
 import { repositorioHojas, repositorioInventario, sincronizador } from '../../lib/contenedor';
 import {
@@ -132,11 +133,27 @@ export default function HojasScreen(): JSX.Element {
     }
     // todas(), NUNCA mias(): el Coordinador ve el lote entero de la ronda,
     // no solo lo que le tocaría contar a él.
-    const todas = await repositorioHojas.todas(inventarioId, ronda);
+    //
+    // `cargarSeguro`, no un await suelto: bug real (2026-09-10) -- sin
+    // envolverlo, un fallo acá (backend caído) escapaba sin control y
+    // `setCargando(false)` de más abajo nunca se ejecutaba. La pantalla YA
+    // tenía diseñado el motivo 'error' (ver estadoVacio arriba); lo que
+    // faltaba era llegar a usarlo.
+    const idInventario = inventarioId;
+    const rondaCerrar = ronda;
+    let todas: HojaConteo[] = [];
+    const error = await cargarSeguro(async () => {
+      todas = await repositorioHojas.todas(idInventario, rondaCerrar);
+    });
     setHojas(todas);
-    const resultado = ultimaDescarga(inventarioId, 'todas', ronda);
-    setMotivoSinHojas(todas.length === 0 && resultado?.ok === false ? resultado.motivo : null);
-    setDescargaIncompleta(todas.length > 0 && resultado?.ok === false && resultado.motivo === 'incompleta');
+    if (error) {
+      setMotivoSinHojas('error');
+      setDescargaIncompleta(false);
+    } else {
+      const resultado = ultimaDescarga(idInventario, 'todas', rondaCerrar);
+      setMotivoSinHojas(todas.length === 0 && resultado?.ok === false ? resultado.motivo : null);
+      setDescargaIncompleta(todas.length > 0 && resultado?.ok === false && resultado.motivo === 'incompleta');
+    }
     setCargando(false);
   }, [sesion]);
 

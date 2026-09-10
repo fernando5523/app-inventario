@@ -6,6 +6,7 @@ import { ActivityIndicator, Alert, RefreshControl, StyleSheet, Text, View } from
 import { useRefrescoAlEnfocar } from '../../components/hooks/useRefrescoAlEnfocar';
 import { PantallaConTabs } from '../../components/navegacion/PantallaConTabs';
 import { AvanceFila, BandaSync, BarraApp, Button, EmptyState, TarjetaHoja, sincronizacionDeHojas } from '../../components/ui';
+import { cargarSeguro } from '../../lib/adaptadores/_http';
 import { inventarioIdSinRed, rondaActivaSinRed, ultimaDescarga } from '../../lib/adaptadores/hojas-sqlite';
 import { ORDINAL } from '../../lib/dominio/texto-cierre-ronda';
 import { repositorioHojas, repositorioInventario, sincronizador } from '../../lib/contenedor';
@@ -118,15 +119,31 @@ export default function MisHojasScreen(): JSX.Element {
     // por accidente. `mias()` ya intenta la descarga inicial sola
     // (hojas-sqlite.ts#descargarSiHaceFalta) — acá solo se lee el
     // resultado, nunca dos veces la misma lógica.
-    const mias = await repositorioHojas.mias(inventarioId, ronda);
+    //
+    // `cargarSeguro`, no un await suelto: bug real (2026-09-10) -- sin
+    // envolverlo, un fallo acá (backend caído) escapaba sin control y
+    // `setCargando(false)` de más abajo nunca se ejecutaba. La pantalla YA
+    // tenía diseñado el motivo 'error' (ver estadoVacio arriba); lo que
+    // faltaba era llegar a usarlo.
+    const idInventario = inventarioId;
+    const rondaActual = ronda;
+    let mias: HojaConteo[] = [];
+    const error = await cargarSeguro(async () => {
+      mias = await repositorioHojas.mias(idInventario, rondaActual);
+    });
     setHojas(mias);
-    const resultado = ultimaDescarga(inventarioId, 'mias', ronda);
-    setMotivoSinHojas(mias.length === 0 && resultado?.ok === false ? resultado.motivo : null);
-    // Con hojas para mostrar (mias.length > 0) el corte no deja la lista
-    // vacía, así que `motivoSinHojas`/`estadoVacio` no llegan a verse —
-    // pero la descarga SÍ se cortó, y sin este aviso las hojas guardadas
-    // hasta el corte se ven idénticas a un lote completo.
-    setDescargaIncompleta(mias.length > 0 && resultado?.ok === false && resultado.motivo === 'incompleta');
+    if (error) {
+      setMotivoSinHojas('error');
+      setDescargaIncompleta(false);
+    } else {
+      const resultado = ultimaDescarga(idInventario, 'mias', rondaActual);
+      setMotivoSinHojas(mias.length === 0 && resultado?.ok === false ? resultado.motivo : null);
+      // Con hojas para mostrar (mias.length > 0) el corte no deja la lista
+      // vacía, así que `motivoSinHojas`/`estadoVacio` no llegan a verse —
+      // pero la descarga SÍ se cortó, y sin este aviso las hojas guardadas
+      // hasta el corte se ven idénticas a un lote completo.
+      setDescargaIncompleta(mias.length > 0 && resultado?.ok === false && resultado.motivo === 'incompleta');
+    }
     setCargando(false);
   }, [sesion]);
 

@@ -174,7 +174,7 @@ export default function ContarScreen(): JSX.Element {
   // persona todavía no guardó. `cargar()` nunca borra el conteo YA
   // guardado -- esto es solo para no interrumpir uno que se está por
   // guardar.
-  useRefrescoAlEnfocar(cargar, {
+  const { refrescar } = useRefrescoAlEnfocar(cargar, {
     pausado: modalProducto !== null || modalScanVisible || modalFinalizarVisible,
   });
 
@@ -189,6 +189,25 @@ export default function ContarScreen(): JSX.Element {
   }
 
   if (!hoja) {
+    // 'error': `mias()` reventó después de que `activo()` resolvió bien
+    // (backend caído/timeout) -- bug real (2026-09-10). Nunca un spinner
+    // infinito ni una pantalla en blanco: se dice qué pasó y se ofrece
+    // reintentar, sin mandar a Mis hojas (acá no es que falte una hoja).
+    if (motivo === 'error') {
+      return (
+        <PantallaConTabs contentStyle={styles.centrado}>
+          <EmptyState
+            icon={AlertTriangle}
+            title="No se pudo conectar con el servidor"
+            subtitle="La red de la tienda puede estar lenta o caída. Vuelve a intentar en un momento."
+          >
+            <Pressable style={styles.irAMisHojas} onPress={refrescar}>
+              <Text style={styles.irAMisHojasTexto}>Reintentar</Text>
+            </Pressable>
+          </EmptyState>
+        </PantallaConTabs>
+      );
+    }
     // 'hoja-vieja': la que estaba abierta ya no es de la ronda activa o se
     // reasignó — se saca de la vista con un aviso que dice qué pasó y a dónde
     // ir, en vez de dejar contar en el vacío (cada conteo daría 403).

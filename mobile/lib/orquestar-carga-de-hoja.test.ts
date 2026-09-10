@@ -148,6 +148,29 @@ describe('sin red: sigue con lo último bueno, nunca se cuelga ni borra nada', (
   });
 });
 
+describe('BUG REAL (2026-09-10): mias() revienta sin catch, cuelga la pantalla de Contar', () => {
+  // `activo()` ya estaba protegido por el try/catch de arriba (cae a
+  // sin red). `mias()` NO lo estaba: si el backend está caído, activo()
+  // agota su reintento y tira, PERO acá activo() puede resolver bien
+  // (por ejemplo desde SQLite/caché) y ser `mias()` la que revienta
+  // después -- y esa excepción escapaba SIN CONTROL. En contar.tsx eso
+  // dejaba `cargando` en true para siempre: la pantalla donde la persona
+  // cuenta quedaba con el spinner girando, sin forma de salir salvo la
+  // navegación de OTRO tab (si es que esta screen no bloqueaba eso también).
+  it('mias() revienta -> NO debe escapar: motivo "error", nunca una excepción sin atrapar', async () => {
+    const acc = acciones({
+      activo: vi.fn(async () => ({ inventarioId: 5, rondaActiva: 1 })),
+      mias: vi.fn(async () => {
+        throw new Error('timeout');
+      }),
+    });
+
+    const r = await cargarHojaActiva({ ronda: null, hojaId: null }, acc);
+
+    expect(r).toMatchObject({ inventarioId: 5, ronda: 1, hoja: null, hojaId: null, motivo: 'error' });
+  });
+});
+
 describe('textoHojaVieja: el aviso que ve la persona', () => {
   it('ronda distinta: nombra la que cerró y a cuál volver', () => {
     expect(textoHojaVieja(2, 3)).toBe('Esta hoja es del 2do conteo, que ya cerró. Vuelve a Mis hojas para tomar una del 3er.');

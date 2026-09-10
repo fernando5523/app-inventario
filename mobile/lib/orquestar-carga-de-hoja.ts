@@ -40,8 +40,12 @@ export interface AccionesCargaHoja {
  *   'sin-hoja'        hay ronda, pero a esta persona no le asignaron ninguna.
  *   'hoja-vieja'      la que estaba abierta ya no es de la ronda activa (o se
  *                     reasignó): se saca de la vista con un aviso.
+ *   'error'           `mias()` reventó (backend caído/timeout) DESPUÉS de que
+ *                     `activo()` resolvió bien -- bug real (2026-09-10): sin
+ *                     este motivo, la excepción escapaba sin control y dejaba
+ *                     la pantalla de Contar con el spinner girando para siempre.
  */
-export type MotivoSinHoja = 'sin-inventario' | 'sin-hoja' | 'hoja-vieja';
+export type MotivoSinHoja = 'sin-inventario' | 'sin-hoja' | 'hoja-vieja' | 'error';
 
 export interface EstadoCargaHoja {
   inventarioId: number | null;
@@ -99,7 +103,17 @@ export async function cargarHojaActiva(
 
   // Se resuelve SIEMPRE contra `mias()` de la ronda ACTIVA. El número de hoja
   // no sirve para resolver: se repite en cada ronda. El id, sí.
-  const mias = await acciones.mias(inventarioId, ronda);
+  //
+  // A DIFERENCIA de `activo()` arriba, acá no hay a qué caer sin red -- si
+  // revienta, se devuelve el motivo 'error' en vez de dejar la excepción
+  // escapar (bug real 2026-09-10: sin este catch, un backend caído colgaba
+  // la pantalla de Contar para siempre, sin ni un mensaje).
+  let mias: HojaConteo[];
+  try {
+    mias = await acciones.mias(inventarioId, ronda);
+  } catch {
+    return { inventarioId, ronda, hojaId: null, hoja: null, motivo: 'error', rondaVieja: null };
+  }
 
   if (estadoActual.hojaId !== null) {
     const abierta = mias.find((h) => h.id === estadoActual.hojaId);

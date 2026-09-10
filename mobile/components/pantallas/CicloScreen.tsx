@@ -3,6 +3,7 @@ import { AlertTriangle, ArrowRightCircle, Check, FileText, Lock } from 'lucide-r
 import { useCallback, useEffect, useState, type JSX } from 'react';
 import { ActivityIndicator, Alert, Pressable, StyleSheet, Text, View } from 'react-native';
 
+import { cargarSeguro } from '../../lib/adaptadores/_http';
 import { repositorioHistorial, repositorioInventario } from '../../lib/contenedor';
 import { comparativoDeRonda } from '../../lib/dominio/comparativo-ronda';
 import { inventarioDelCiclo } from '../../lib/dominio/inventario-del-ciclo';
@@ -176,6 +177,12 @@ export interface CicloScreenProps {
 export function CicloScreen({ rol }: CicloScreenProps): JSX.Element {
   const { sesion, cerrar } = useSesion();
   const [cargando, setCargando] = useState(true);
+  // Bug real (2026-09-10): `cargar()` de más abajo no tenía try/catch --
+  // si `activo()`/`resumenRonda()` revientan (backend caído), la excepción
+  // escapaba sin control y `setCargando(false)` no se ejecutaba nunca: el
+  // spinner de esta pantalla quedaba girando para siempre.
+  const [errorCarga, setErrorCarga] = useState<string | null>(null);
+  const [intentoNumero, setIntentoNumero] = useState(0);
   const [items, setItems] = useState<number | null>(null);
   // El tamaño de hoja REAL del 1er conteo -- null hasta que se crean las
   // hojas (mismo momento que `totalHojas: null` en el puerto). Antes el
@@ -234,34 +241,40 @@ export function CicloScreen({ rol }: CicloScreenProps): JSX.Element {
   useEffect(() => {
     if (!sesion) return;
     let vigente = true;
+    setCargando(true);
+    setErrorCarga(null);
 
     async function cargar(): Promise<void> {
-      // `activo()` filtra `estado: en_curso`: para un inventario YA cerrado
-      // devuelve null. Ahí el ciclo es el ÚLTIMO cerrado de la sucursal, que
-      // sale del historial. Sin este fallback la pantalla quedaba en blanco
-      // sobre un ciclo que en realidad terminó con sus 3 pasadas contadas.
-      const activo = await repositorioInventario.activo(sesion!.sucursal!.id);
-      const historial = activo
-        ? []
-        : (await repositorioHistorial.listar({ sucursalId: sesion!.sucursal!.id })).inventarios;
-      if (!vigente) return;
+      const error = await cargarSeguro(async () => {
+        // `activo()` filtra `estado: en_curso`: para un inventario YA cerrado
+        // devuelve null. Ahí el ciclo es el ÚLTIMO cerrado de la sucursal, que
+        // sale del historial. Sin este fallback la pantalla quedaba en blanco
+        // sobre un ciclo que en realidad terminó con sus 3 pasadas contadas.
+        const activo = await repositorioInventario.activo(sesion!.sucursal!.id);
+        const historial = activo
+          ? []
+          : (await repositorioHistorial.listar({ sucursalId: sesion!.sucursal!.id })).inventarios;
+        if (!vigente) return;
 
-      const delCiclo = inventarioDelCiclo(activo, historial);
-      setItems(delCiclo?.items ?? null);
-      setTamanoHoja(delCiclo?.tamanoHoja ?? null);
-      setInventarioId(delCiclo?.inventarioId ?? null);
-      setRondaActiva(delCiclo?.rondaActiva ?? null);
-      if (!delCiclo) {
-        setResumenPorRonda({});
-        setCargando(false);
-        return;
-      }
+        const delCiclo = inventarioDelCiclo(activo, historial);
+        setItems(delCiclo?.items ?? null);
+        setTamanoHoja(delCiclo?.tamanoHoja ?? null);
+        setInventarioId(delCiclo?.inventarioId ?? null);
+        setRondaActiva(delCiclo?.rondaActiva ?? null);
+        if (!delCiclo) {
+          setResumenPorRonda({});
+          return;
+        }
 
-      // El embudo de las 3 rondas, del servidor. Lo ven los DOS roles: es el
-      // ciclo del inventario, no una herramienta de cierre. El preview del
-      // cierre sale de este mismo objeto (resumenPorRonda[rondaActiva]).
-      await cargarResumenDeRondas(delCiclo.inventarioId);
+        // El embudo de las 3 rondas, del servidor. Lo ven los DOS roles: es el
+        // ciclo del inventario, no una herramienta de cierre. El preview del
+        // cierre sale de este mismo objeto (resumenPorRonda[rondaActiva]).
+        await cargarResumenDeRondas(delCiclo.inventarioId);
+      });
       if (!vigente) return;
+      // INCONDICIONAL: con cargarSeguro, `error` nunca deja escapar una
+      // excepción -- este `setCargando(false)` SIEMPRE se ejecuta.
+      if (error) setErrorCarga(error.message);
       setCargando(false);
     }
 
@@ -269,7 +282,7 @@ export function CicloScreen({ rol }: CicloScreenProps): JSX.Element {
     return () => {
       vigente = false;
     };
-  }, [sesion, cargarResumenDeRondas]);
+  }, [sesion, cargarResumenDeRondas, intentoNumero]);
 
   if (!sesion) return <View />;
 
@@ -352,6 +365,11 @@ export function CicloScreen({ rol }: CicloScreenProps): JSX.Element {
 
       {cargando ? (
         <ActivityIndicator color={colors.rojo} style={styles.cargando} />
+      ) : errorCarga ? (
+        <View style={styles.errorCarga}>
+          <Text style={styles.errorCargaTexto}>{errorCarga}</Text>
+          <Button label="Reintentar" size="sm" onPress={() => setIntentoNumero((n) => n + 1)} />
+        </View>
       ) : (
         <>
           <PasoCiclo
@@ -497,6 +515,8 @@ export function CicloScreen({ rol }: CicloScreenProps): JSX.Element {
 const styles = StyleSheet.create({
   contenido: { paddingHorizontal: spacing.lg, paddingTop: spacing.sm, gap: spacing.md + 3 },
   cargando: { marginTop: spacing.xxxl },
+  errorCarga: { marginTop: spacing.xxxl, gap: spacing.md, alignItems: 'flex-start' },
+  errorCargaTexto: { fontSize: 13, color: colors.gris, fontFamily: fonts.regular },
 
   tarjeta: {
     gap: spacing.md,
