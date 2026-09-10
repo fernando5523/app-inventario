@@ -1,15 +1,18 @@
 import { router } from 'expo-router';
 import { Check, Cloud, Lock, ShieldCheck } from 'lucide-react-native';
-import { useCallback, useState, type JSX } from 'react';
+import { useCallback, useEffect, useState, type JSX } from 'react';
 import { ActivityIndicator, Alert, Modal, RefreshControl, StyleSheet, Text, View } from 'react-native';
 
 import { useRefrescoAlEnfocar } from '../../components/hooks/useRefrescoAlEnfocar';
 import { PantallaConTabs } from '../../components/navegacion/PantallaConTabs';
 import { BandaSync, Badge, BarraApp, Button, formatoFechaHora, formatoMiles } from '../../components/ui';
 import { repositorioHistorial, repositorioLacrado, repositorioSesion } from '../../lib/contenedor';
-import type { Colaborador } from '../../lib/dominio/tipos';
+import { sucursalEnFoco } from '../../lib/dominio/sucursal-en-foco';
+import { textoAuditoresInsuficientes } from '../../lib/dominio/texto-firmas';
+import type { Colaborador, Sucursal } from '../../lib/dominio/tipos';
 import type { EstadoLacrado } from '../../lib/puertos/repositorios';
 import { useSesion } from '../../lib/sesion-contexto';
+import { useSucursalAuditada } from '../../lib/sucursal-auditada-contexto';
 import { colors, fonts, spacing } from '../../lib/theme';
 
 /**
@@ -36,21 +39,43 @@ export default function LacradoScreen(): JSX.Element {
   const [auditores, setAuditores] = useState<Colaborador[]>([]);
   const [estado, setEstado] = useState<EstadoLacrado | null>(null);
 
+  // Sigue la sucursal COMPARTIDA que el auditor eligió en Auditoría/Ciclo/
+  // Historial (contexto), NO la de su ficha: audita toda la cadena. El padrón
+  // resuelve el nombre para la barra y la confirmación de lacrado.
+  const { elegida } = useSucursalAuditada();
+  const [padronSucursales, setPadronSucursales] = useState<Sucursal[]>([]);
+  useEffect(() => {
+    repositorioSesion.sucursales().then(setPadronSucursales);
+  }, []);
+  const sucursalId = sucursalEnFoco({
+    rol: sesion?.colaborador.rol ?? 'auditor',
+    sucursalDeSesion: sesion?.sucursal?.id ?? null,
+    elegida,
+  });
+  const nombreSucursal = padronSucursales.find((s) => s.id === sucursalId)?.nombre ?? sesion?.sucursal?.nombre;
+
   const [aprobando, setAprobando] = useState(false);
   const [lacrando, setLacrando] = useState(false);
   const [registrando, setRegistrando] = useState(false);
   const [modalVisible, setModalVisible] = useState(false);
 
   const cargar = useCallback(async () => {
-    if (!sesion) return;
+    if (!sesion || sucursalId === null) {
+      setCargando(false);
+      return;
+    }
     setError(null);
     try {
-      const [pagina, colaboradores] = await Promise.all([
-        repositorioHistorial.listar({ sucursalId: sesion.sucursal!.id }),
-        repositorioSesion.colaboradores(sesion.sucursal!.id),
+      const [pagina, sinTienda] = await Promise.all([
+        repositorioHistorial.listar({ sucursalId }),
+        // Los firmantes son los auditores DEL SISTEMA (auditan toda la cadena),
+        // NO los de la tienda: contar "los de esta sucursal" da 0 desde que el
+        // auditor dejó de pertenecer a una sucursal. Vienen del grupo
+        // "administradores" del login, filtrado a rol auditor.
+        repositorioSesion.administradores(),
       ]);
 
-      setAuditores(colaboradores.filter((c) => c.rol === 'auditor'));
+      setAuditores(sinTienda.filter((c) => c.rol === 'auditor'));
 
       /**
        * El inventario A LACRAR sale del historial, no de
@@ -83,7 +108,22 @@ export default function LacradoScreen(): JSX.Element {
     } finally {
       setCargando(false);
     }
-  }, [sesion]);
+  }, [sesion, sucursalId]);
+
+  // Cambió la tienda elegida (o la sesión): `cargar` cambia de identidad, pero
+  // useRefrescoAlEnfocar NO recarga por eso (solo al enfocar/volver a primer
+  // plano -- guarda `cargar` en un ref a propósito). Así que acá se dispara la
+  // recarga, Y se limpia lo que se ve ANTES: la barra ya dice el nombre nuevo,
+  // mostrar el inventario de la tienda anterior sería un número con el apellido
+  // equivocado (skill, Honestidad de los datos en pantalla).
+  useEffect(() => {
+    setInventarioId(null);
+    setItems(null);
+    setPeriodo(null);
+    setEstado(null);
+    setCargando(true);
+    void cargar();
+  }, [cargar]);
 
   // Volver a esta pantalla (por ejemplo, después de que la otra persona firme
   // desde su sesión) tiene que reflejar el estado real, no el que había al
@@ -183,7 +223,7 @@ export default function LacradoScreen(): JSX.Element {
     : estado.lacrado
       ? null
       : auditoresInsuficientes
-        ? `Esta sucursal tiene ${auditores.length === 1 ? 'una sola cuenta de Auditor cargada' : `solo ${auditores.length} cuentas de Auditor cargadas`}, y el lacrado exige ${aprobacionesRequeridas}. Hace falta dar de alta ${aprobacionesRequeridas - auditores.length === 1 ? 'una cuenta más' : `${aprobacionesRequeridas - auditores.length} cuentas más`} de Auditor (en Usuarios): tienen que ser personas distintas, no toques repetidos.`
+        ? textoAuditoresInsuficientes(auditores.length, aprobacionesRequeridas)
         : todasAprobadas
           ? aprobacionesRequeridas === 1
             ? 'Tu firma quedó registrada. Ya se puede ejecutar el lacrado.'
@@ -214,7 +254,7 @@ export default function LacradoScreen(): JSX.Element {
     >
       <BarraApp
         rotulo="Auditoría · Lacrado digital"
-        sede={sesion.sucursal!.nombre}
+        sede={nombreSucursal}
         // "ítems del inventario", no "ítems auditados": `items` es el total
         // del snapshot (repositorioInventario.activo()), no la cantidad
         // que de verdad se comparó contra Dynamics -- eso lo dice
@@ -363,7 +403,7 @@ export default function LacradoScreen(): JSX.Element {
           <View style={styles.modalCaja}>
             <Text style={styles.modalTitulo}>Confirmar lacrado</Text>
             <Text style={styles.modalTexto}>
-              Se va a lacrar el inventario de <Text style={styles.negrita}>{sesion.sucursal!.nombre}</Text>
+              Se va a lacrar el inventario de <Text style={styles.negrita}>{nombreSucursal}</Text>
               {items ? ` (${formatoMiles(items)} ítems)` : ''}. A partir de este momento el inventario del mes queda{' '}
               <Text style={styles.negrita}>congelado de forma inmutable</Text>: no hay forma de deshacerlo ni de
               editar los conteos. Cualquier ajuste posterior entra en el período siguiente.

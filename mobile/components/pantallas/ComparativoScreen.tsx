@@ -1,12 +1,14 @@
 import { TrendingDown, TrendingUp } from 'lucide-react-native';
-import { useCallback, useEffect, useState, type JSX } from 'react';
+import { useCallback, useEffect, useRef, useState, type JSX } from 'react';
 import { ActivityIndicator, RefreshControl, ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import { useRefrescoAlEnfocar } from '../hooks/useRefrescoAlEnfocar';
 import { repositorioHistorial, repositorioSesion } from '../../lib/contenedor';
 import type { Rol, Sucursal } from '../../lib/dominio/tipos';
 import type { ComparativoMensual, PuntoComparativoMensual } from '../../lib/puertos/repositorios';
+import { sucursalEnFoco } from '../../lib/dominio/sucursal-en-foco';
 import { useSesion } from '../../lib/sesion-contexto';
+import { useSucursalAuditada } from '../../lib/sucursal-auditada-contexto';
 import { colors, fonts } from '../../lib/theme';
 import { PantallaConTabs } from '../navegacion/PantallaConTabs';
 import { BarraApp, ChipsFiltro, EmptyState, formatoMiles, formatoMoneda, formatoPct, MESES_CORTOS, type OpcionChip } from '../ui';
@@ -49,54 +51,61 @@ export function ComparativoScreen({ rol }: ComparativoScreenProps): JSX.Element 
   const [comparativo, setComparativo] = useState<ComparativoMensual | null>(null);
 
   const [sucursales, setSucursales] = useState<Sucursal[]>([]);
-  // `null` = todavía no se eligió ninguna -- nunca "todas" (ver comentario
-  // de arriba). El Administrador arranca en `null` (elige explícitamente);
-  // el Auditor arranca en la suya por el efecto de abajo.
+  // El Administrador elige explícitamente (arranca en `null`, sin "Todas"). El
+  // Auditor usa la sucursal COMPARTIDA con sus otras pantallas (contexto):
+  // cambiarla acá la cambia en Auditoría/Ciclo/Historial/Inicio, y al revés.
   const [filtroSucursalId, setFiltroSucursalId] = useState<number | null>(null);
+  const { elegida, elegir } = useSucursalAuditada();
 
-  // El padrón lo necesitan los dos roles ahora (antes solo el Administrador
-  // podía elegir). Es el mismo endpoint del login (`GET /api/sesion/sucursales`),
-  // sin gate de permiso.
+  // El padrón lo necesitan los dos roles. Mismo endpoint del login
+  // (`GET /api/sesion/sucursales`), sin gate de permiso.
   useEffect(() => {
     repositorioSesion.sucursales().then(setSucursales);
   }, []);
 
-  // Default del Auditor: SU sucursal, para no abrir la pantalla vacía --
-  // pero queda como una selección más, que puede cambiar (ya no es un
-  // recorte fijo). Solo la primera vez: si ya eligió otra, no se la pisa.
-  useEffect(() => {
-    if (rol === 'auditor' && sesion?.sucursal && filtroSucursalId === null) {
-      setFiltroSucursalId(sesion.sucursal.id);
-    }
-  }, [rol, sesion, filtroSucursalId]);
+  // La sucursal EFECTIVA: para el Auditor, la del contexto (o su ficha como
+  // default inicial); para el Administrador, su elección local. `null` = todavía
+  // no hay ninguna -> la pantalla pide elegir, nunca "todas" mezcladas.
+  const filtroActivo =
+    rol === 'auditor'
+      ? sucursalEnFoco({ rol, sucursalDeSesion: sesion?.sucursal?.id ?? null, elegida })
+      : filtroSucursalId;
 
   const cargar = useCallback(async () => {
-    if (!sesion || filtroSucursalId === null) {
+    if (!sesion || filtroActivo === null) {
       // Sin tienda elegida no hay nada honesto que pedir: mostrar "todas"
       // mezcladas es exactamente el dato que miente que esto vino a evitar.
       setCargando(false);
       return;
     }
     setError(null);
-    // El spinner de pantalla completa SOLO en la primera carga (el
-    // `useState(true)` de arriba lo deja prendido hasta que termine). En un
-    // refresco posterior se mantiene la tabla que ya se ve mientras llega el
-    // dato nuevo -- taparla con un spinner cada vez que se vuelve a esta
-    // pestaña se siente peor que el dato viejo que el refresco viene a
-    // arreglar. Ver useRefrescoAlEnfocar.
     try {
-      setComparativo(await repositorioHistorial.comparativo({ sucursalId: filtroSucursalId }));
+      setComparativo(await repositorioHistorial.comparativo({ sucursalId: filtroActivo }));
     } catch (e) {
       setError(e instanceof Error ? e.message : 'No se pudo cargar el comparativo.');
     } finally {
       setCargando(false);
     }
-  }, [sesion, filtroSucursalId]);
+  }, [sesion, filtroActivo]);
 
-  // Al enfocar Y al volver la app a primer plano — "cualquier dato
-  // actualizado no debe depender de cerrar sesión y volver" (pedido del
-  // cliente). Ver components/hooks/useRefrescoAlEnfocar.ts.
+  // Al enfocar Y al volver la app a primer plano — "cualquier dato actualizado
+  // no debe depender de cerrar sesión y volver". Ver useRefrescoAlEnfocar.
   const { refrescando, refrescar } = useRefrescoAlEnfocar(cargar);
+
+  // Cambió la tienda (`cargar` cambia con `filtroActivo`): recargar YA
+  // -useRefrescoAlEnfocar solo recarga al enfocar- y limpiar la tabla ANTES de
+  // que llegue lo nuevo, para no mostrar la serie de otra tienda bajo el nombre
+  // nuevo (skill, Honestidad de los datos). El 1er render lo hace el hook.
+  const primerRender = useRef(true);
+  useEffect(() => {
+    if (primerRender.current) {
+      primerRender.current = false;
+      return;
+    }
+    setComparativo(null);
+    setCargando(true);
+    void cargar();
+  }, [cargar]);
 
   if (!sesion) return <View />;
 
@@ -105,10 +114,10 @@ export function ComparativoScreen({ rol }: ComparativoScreenProps): JSX.Element 
   // rótulo tiene que decir exactamente qué se está viendo (skill
   // trujillo-ui, "Honestidad de los datos en pantalla").
   const nombreSeleccionada =
-    filtroSucursalId === null
+    filtroActivo === null
       ? null
-      : (sucursales.find((s) => s.id === filtroSucursalId)?.nombre ??
-        (filtroSucursalId === sesion.sucursal?.id ? sesion.sucursal.nombre : null));
+      : (sucursales.find((s) => s.id === filtroActivo)?.nombre ??
+        (filtroActivo === sesion.sucursal?.id ? sesion.sucursal.nombre : null));
 
   return (
     <PantallaConTabs
@@ -119,7 +128,7 @@ export function ComparativoScreen({ rol }: ComparativoScreenProps): JSX.Element 
       <BarraApp
         rotulo="Comparativo mensual"
         sede={nombreSeleccionada ?? undefined}
-        cifras={cargando || filtroSucursalId === null ? undefined : `${comparativo?.serie.length ?? 0} período${comparativo?.serie.length === 1 ? '' : 's'} con datos completos`}
+        cifras={cargando || filtroActivo === null ? undefined : `${comparativo?.serie.length ?? 0} período${comparativo?.serie.length === 1 ? '' : 's'} con datos completos`}
       />
 
       <Text style={styles.ayuda}>
@@ -132,8 +141,8 @@ export function ComparativoScreen({ rol }: ComparativoScreenProps): JSX.Element 
         <Text style={styles.filtroLabel}>Sucursal</Text>
         <ChipsFiltro
           opciones={opcionesSucursal}
-          activo={filtroSucursalId === null ? '' : String(filtroSucursalId)}
-          onCambiar={(id) => setFiltroSucursalId(Number(id))}
+          activo={filtroActivo === null ? '' : String(filtroActivo)}
+          onCambiar={(id) => (rol === 'auditor' ? elegir(Number(id)) : setFiltroSucursalId(Number(id)))}
         />
       </View>
 
@@ -144,7 +153,7 @@ export function ComparativoScreen({ rol }: ComparativoScreenProps): JSX.Element 
           <Text style={styles.tarjetaTitulo}>No se pudo cargar el comparativo</Text>
           <Text style={styles.ayuda}>{error}</Text>
         </View>
-      ) : filtroSucursalId === null ? (
+      ) : filtroActivo === null ? (
         <EmptyState
           icon={TrendingUp}
           title="Elige una tienda"

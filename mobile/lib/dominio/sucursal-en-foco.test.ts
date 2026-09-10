@@ -23,4 +23,10 @@ describe('sucursalEnFoco: qué sucursal opera una pantalla de inventario único'
   it('auditor sin sucursal en la ficha y sin elegir: null (no hay foco, la pantalla pide elegir)', () => {
     expect(sucursalEnFoco({ rol: 'auditor', sucursalDeSesion: null, elegida: null })).toBeNull();
   });
+
+  it('LACRADO: el auditor con ficha Bolívar (31) elige Carhuaz (2) -> el foco es 2, no su ficha', () => {
+    // Es la decisión que usa lacrado.tsx para saber qué inventario mostrar:
+    // el de la tienda elegida en el contexto compartido, no el de la ficha.
+    expect(sucursalEnFoco({ rol: 'auditor', sucursalDeSesion: 31, elegida: 2 })).toBe(2);
+  });
 });
