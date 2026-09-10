@@ -3,6 +3,7 @@ import {
   armarContenidoLacrado,
   armarFolio,
   calcularHash,
+  parsearAprobacionesRequeridas,
   serializarCanonico,
   siglaSucursal,
   verificarLacrado,
@@ -228,5 +229,56 @@ describe('verificarLacrado', () => {
     const viejo = { ...contenido, version: 0 } as unknown as Record<string, unknown>;
     const v = verificarLacrado(viejo, hash, contenido as ContenidoLacrado);
     expect(v.versionDistinta).toBe(true);
+  });
+});
+
+/**
+ * CONFIGURABLE (decision del cliente 2026-09-10): "por ahora" el lacrado se
+ * firma con UNA sola firma -- hoy hay un solo auditor real (Gilmer) y exigir
+ * dos bloqueaba el cierre para siempre. Pura, sin tocar `process.env`: lo
+ * unico que hace `APROBACIONES_REQUERIDAS` (el valor real que usa
+ * historial.service.ts) es llamar a esto con
+ * `process.env.LACRADO_APROBACIONES_REQUERIDAS`.
+ */
+describe('parsearAprobacionesRequeridas', () => {
+  it('sin la variable seteada (undefined), el default es 1 -- el proceso real de hoy', () => {
+    expect(parsearAprobacionesRequeridas(undefined)).toBe(1);
+  });
+
+  it('vacia o solo espacios, mismo default que undefined', () => {
+    expect(parsearAprobacionesRequeridas('')).toBe(1);
+    expect(parsearAprobacionesRequeridas('   ')).toBe(1);
+  });
+
+  it('"1" explicito da 1', () => {
+    expect(parsearAprobacionesRequeridas('1')).toBe(1);
+  });
+
+  it('"2" explicito da 2 -- el dia que entre una segunda cuenta de auditor, alcanza con este numero', () => {
+    expect(parsearAprobacionesRequeridas('2')).toBe(2);
+  });
+
+  it('acepta cualquier entero positivo, no solo 1 o 2', () => {
+    expect(parsearAprobacionesRequeridas('5')).toBe(5);
+  });
+
+  it('rechaza 0: hace falta AL MENOS una firma, siempre', () => {
+    expect(() => parsearAprobacionesRequeridas('0')).toThrow(/LACRADO_APROBACIONES_REQUERIDAS invalido/);
+  });
+
+  it('rechaza negativos', () => {
+    expect(() => parsearAprobacionesRequeridas('-1')).toThrow(/LACRADO_APROBACIONES_REQUERIDAS invalido/);
+  });
+
+  it('rechaza no-enteros', () => {
+    expect(() => parsearAprobacionesRequeridas('1.5')).toThrow(/LACRADO_APROBACIONES_REQUERIDAS invalido/);
+  });
+
+  it('rechaza texto que no es un numero', () => {
+    expect(() => parsearAprobacionesRequeridas('dos')).toThrow(/LACRADO_APROBACIONES_REQUERIDAS invalido/);
+  });
+
+  it('el mensaje de error cita el valor invalido tal cual vino, para poder corregirlo en el .env', () => {
+    expect(() => parsearAprobacionesRequeridas('abc')).toThrow(/"abc"/);
   });
 });

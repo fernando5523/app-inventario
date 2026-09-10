@@ -27,6 +27,7 @@ import {
 } from './historial.exportar';
 import {
   ALGORITMO_HASH,
+  APROBACIONES_REQUERIDAS,
   armarContenidoLacrado,
   armarFolio,
   calcularHash,
@@ -36,7 +37,6 @@ import {
   type ResultadoVerificacion,
 } from './historial.lacrado';
 import {
-  APROBACIONES_REQUERIDAS,
   resolverSucursalConsultable,
   resolverSucursalesConsultables,
   validarAccesoAInventario,
@@ -780,7 +780,7 @@ export interface AprobacionDto {
   aprobadoEn: string;
   nota: string | null;
   aprobacionesTotales: number;
-  /** true = ya se puede lacrar (dos firmas de personas distintas). */
+  /** true = ya se llego a APROBACIONES_REQUERIDAS firmas de personas distintas. */
   listoParaLacrar: boolean;
 }
 
@@ -807,6 +807,7 @@ export async function aprobarCierre(
     actor,
     { sucursalId: inv.sucursalId, estado: inv.estado as EstadoInventario },
     inv.aprobaciones,
+    APROBACIONES_REQUERIDAS,
   );
 
   const aprobacion = await prisma.aprobacionCierre.create({
@@ -844,7 +845,7 @@ export async function aprobarCierre(
     aprobadoEn: aprobacion.aprobadoEn.toISOString(),
     nota: aprobacion.nota,
     aprobacionesTotales: distintos,
-    listoParaLacrar: distintos >= 2,
+    listoParaLacrar: distintos >= APROBACIONES_REQUERIDAS,
   };
 }
 
@@ -891,6 +892,7 @@ export async function lacrar(actor: ColaboradorAutenticado, id: number): Promise
       hojasSinFinalizar,
     },
     inv.aprobaciones,
+    APROBACIONES_REQUERIDAS,
   );
 
   const contenido = armarContenidoLacrado(armarDatosLacrado(inv));

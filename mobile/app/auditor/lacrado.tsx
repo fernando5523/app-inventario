@@ -164,35 +164,47 @@ export default function LacradoScreen(): JSX.Element {
   const pendientes = otrosAuditores.filter((a) => !estado?.aprobaciones.some((x) => x.colaboradorId === a.id));
   const nombresPendientes = pendientes.map((a) => a.nombre).join(' y ');
 
+  // Cuantas cuentas de Auditor hacen falta ADEMÁS de las que ya hay para
+  // poder alguna vez llegar al mínimo -- generaliza el viejo
+  // "otrosAuditores.length === 0" (que solo contemplaba el caso de 2).
+  const auditoresInsuficientes = auditores.length < aprobacionesRequeridas;
+
   /**
-   * El aviso más importante de la pantalla: dice con todas las letras que
-   * la segunda firma la tiene que poner OTRA persona en OTRA sesión. Sin
-   * esto, el auditor logueado ve una fila que no puede tocar y no sabe si
-   * está roto o si le falta un permiso.
+   * El aviso más importante de la pantalla: dice con todas las letras qué
+   * falta y quién lo tiene que poner. Sin esto, el auditor logueado ve una
+   * fila que no puede tocar y no sabe si está roto o si le falta un
+   * permiso. Todo el texto sale de `aprobacionesRequeridas` (que a su vez
+   * sale de `estado.aprobacionesRequeridas`, ver EstadoLacradoDto en el
+   * backend) -- nunca de un "dos" escrito a mano, para que un cambio en la
+   * configuración del servidor se refleje solo, sin tocar esta pantalla.
    */
   const avisoFirmas = !estado
     ? null
     : estado.lacrado
       ? null
-      : otrosAuditores.length === 0
-        ? 'Esta sucursal tiene una sola cuenta de Auditor cargada, así que la doble validación no se puede completar: hace falta una segunda cuenta de Auditor (se da de alta en Usuarios). El lacrado necesita dos personas distintas, no dos toques.'
+      : auditoresInsuficientes
+        ? `Esta sucursal tiene ${auditores.length === 1 ? 'una sola cuenta de Auditor cargada' : `solo ${auditores.length} cuentas de Auditor cargadas`}, y el lacrado exige ${aprobacionesRequeridas}. Hace falta dar de alta ${aprobacionesRequeridas - auditores.length === 1 ? 'una cuenta más' : `${aprobacionesRequeridas - auditores.length} cuentas más`} de Auditor (en Usuarios): tienen que ser personas distintas, no toques repetidos.`
         : todasAprobadas
-          ? 'Las dos firmas quedaron registradas. Ya se puede ejecutar el lacrado.'
-          : !miFirma && pendientes.length === otrosAuditores.length
-            ? `Todavía no hay ninguna firma. Puedes registrar la tuya ahora; la segunda la tiene que registrar ${nombresPendientes}, ingresando con su propio PIN.`
+          ? aprobacionesRequeridas === 1
+            ? 'Tu firma quedó registrada. Ya se puede ejecutar el lacrado.'
+            : `Las ${aprobacionesRequeridas} firmas quedaron registradas. Ya se puede ejecutar el lacrado.`
+          : !miFirma && aprobacionesHechas === 0
+            ? aprobacionesRequeridas === 1
+              ? 'Puedes registrar tu firma ahora: con esa alcanza para habilitar el lacrado.'
+              : `Todavía no hay ninguna firma. Puedes registrar la tuya ahora; ${pendientes.length === 1 ? 'la siguiente la tiene que registrar' : 'las siguientes las tienen que registrar'} ${nombresPendientes}, ingresando con su propio PIN.`
             : !miFirma
-              ? 'La otra firma ya está registrada. Falta la tuya para completar la doble validación.'
-              : `Tu firma ya quedó registrada. Falta la de ${nombresPendientes}, y solo esa persona puede ponerla: tiene que ingresar con su propio PIN, desde otro equipo o cerrando esta sesión con el botón de arriba a la derecha.`;
+              ? `Ya hay ${aprobacionesHechas === 1 ? 'una firma registrada' : `${aprobacionesHechas} firmas registradas`}. Falta la tuya para completar la validación.`
+              : `Tu firma ya quedó registrada. ${pendientes.length === 1 ? 'Falta la de' : 'Faltan las de'} ${nombresPendientes}, y solo esa persona puede ponerla: tiene que ingresar con su propio PIN, desde otro equipo o cerrando esta sesión con el botón de arriba a la derecha.`;
 
   const textoLacrado = !estado
     ? ''
     : estado.lacrado
       ? undefined // se muestra el resultado, no este texto
       : !todasAprobadas
-        ? `Faltan firmas de auditoría (${aprobacionesHechas} de ${aprobacionesRequeridas}). El lacrado se habilita recién con las dos, y también hace falta sincronización con Dynamics.`
+        ? `Faltan firmas de auditoría (${aprobacionesHechas} de ${aprobacionesRequeridas}). El lacrado se habilita recién con ${aprobacionesRequeridas === 1 ? 'esa firma' : 'todas ellas'}, y también hace falta sincronización con Dynamics.`
         : !estado.todoSincronizado
-          ? 'Las dos firmas están registradas, pero falta sincronización con Dynamics (WiFi de tienda) para poder lacrar.'
-          : 'Todo listo: las dos firmas están registradas y hay sincronización con Dynamics.';
+          ? `${aprobacionesRequeridas === 1 ? 'La firma está registrada' : 'Las firmas están registradas'}, pero falta sincronización con Dynamics (WiFi de tienda) para poder lacrar.`
+          : `Todo listo: ${aprobacionesRequeridas === 1 ? 'la firma está registrada' : 'las firmas están registradas'} y hay sincronización con Dynamics.`;
 
   return (
     <PantallaConTabs
@@ -245,14 +257,22 @@ export default function LacradoScreen(): JSX.Element {
           <View style={styles.tarjeta}>
             <View style={styles.tarjetaCabecera}>
               <ShieldCheck size={18} color={colors.rojo} />
-              <Text style={styles.tarjetaTitulo}>Doble validación</Text>
+              <Text style={styles.tarjetaTitulo}>{aprobacionesRequeridas === 1 ? 'Validación de auditoría' : 'Doble validación'}</Text>
               <Badge label={`${aprobacionesHechas} / ${aprobacionesRequeridas} firmado`} variant={todasAprobadas ? 'ok' : 'default'} />
             </View>
 
             <Text style={styles.tarjetaTexto}>
-              Hacen falta las firmas de <Text style={styles.negrita}>dos auditores distintos</Text>, cada uno desde su
-              propia sesión. Nadie puede aprobar en nombre de otro: la única fila con botón es la de quien está
-              logueado.
+              {aprobacionesRequeridas === 1 ? (
+                <>
+                  Hace falta la firma de <Text style={styles.negrita}>un auditor</Text>, desde su propia sesión.
+                </>
+              ) : (
+                <>
+                  Hacen falta las firmas de <Text style={styles.negrita}>{aprobacionesRequeridas} auditores distintos</Text>, cada uno
+                  desde su propia sesión.
+                </>
+              )}{' '}
+              Nadie puede aprobar en nombre de otro: la única fila con botón es la de quien está logueado.
             </Text>
 
             {auditores.map((auditor) => {
@@ -273,8 +293,8 @@ export default function LacradoScreen(): JSX.Element {
                     <Button label="Aprobar" size="sm" loading={aprobando} disabled={!!estado?.lacrado} onPress={aprobar} />
                   ) : (
                     // Sin botón, y a propósito: la fila se ve para que se
-                    // entienda que faltan dos firmas, pero esta no es
-                    // tocable por quien no es esa persona.
+                    // entienda quién falta, pero esta no es tocable por
+                    // quien no es esa persona.
                     <Badge label="Falta su firma" variant="default" />
                   )}
                 </View>

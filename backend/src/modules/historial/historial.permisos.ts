@@ -8,11 +8,6 @@
 
 import { Conflicto, Prohibido, SolicitudInvalida } from '../../shared/errores';
 import type { ColaboradorAutenticado, Rol } from '../../shared/tipos';
-// Una sola fuente para "cuantas firmas" -- vive con el resto de las
-// constantes del sello para que nadie la cambie en un archivo y no en el otro.
-import { APROBACIONES_REQUERIDAS } from './historial.lacrado';
-
-export { APROBACIONES_REQUERIDAS };
 
 /** Estados del inventario (prisma/schema.prisma#EstadoInventario). */
 export type EstadoInventario = 'en_curso' | 'conteo_cerrado' | 'liquidado' | 'lacrado' | 'anulado';
@@ -183,6 +178,15 @@ export function validarPuedeAprobar(
   actor: ColaboradorAutenticado,
   inventario: { sucursalId: number; estado: EstadoInventario },
   aprobacionesExistentes: AprobacionExistente[],
+  /**
+   * Cuantas firmas DISTINTAS hacen falta -- nunca un 2 fijo aca adentro.
+   * Quien llama de verdad (historial.service.ts) siempre lo pasa explicito,
+   * leido de `historial.lacrado.ts#APROBACIONES_REQUERIDAS` (configurable
+   * por entorno). El default de 2 en esta firma es solo para no obligar a
+   * todos los tests existentes a repetirlo -- la produccion nunca depende
+   * de el.
+   */
+  aprobacionesRequeridas: number = 2,
 ): void {
   validarAccesoAInventario(actor, inventario);
 
@@ -223,12 +227,14 @@ export function validarPuedeAprobar(
     );
   }
 
-  if (aprobacionesExistentes.length >= APROBACIONES_REQUERIDAS) {
+  if (aprobacionesExistentes.length >= aprobacionesRequeridas) {
     // No es un error: es que el paso siguiente ya esta habilitado. Decirlo
     // es la diferencia entre un rechazo util y uno que deja a la persona
     // preguntandose que hizo mal.
     throw new Conflicto(
-      'Ya estan las dos firmas: este inventario esta listo para lacrar. No hace falta una tercera aprobacion.',
+      aprobacionesRequeridas === 1
+        ? 'Ya hay una firma registrada: este inventario esta listo para lacrar. No hace falta una segunda aprobacion.'
+        : `Ya estan las ${aprobacionesRequeridas} firmas: este inventario esta listo para lacrar. No hace falta una aprobacion mas.`,
     );
   }
 }
@@ -308,6 +314,8 @@ export function validarPuedeLacrar(
     hojasSinFinalizar: HojaSinFinalizar[];
   },
   aprobaciones: AprobacionExistente[],
+  /** Mismo parametro y mismo criterio que `validarPuedeAprobar` de arriba. */
+  aprobacionesRequeridas: number = 2,
 ): void {
   validarAccesoAInventario(actor, inventario);
 
@@ -333,9 +341,9 @@ export function validarPuedeLacrar(
   }
 
   const aprobadoresDistintos = new Set(aprobaciones.map((a) => a.aprobadorId));
-  if (aprobadoresDistintos.size < APROBACIONES_REQUERIDAS) {
+  if (aprobadoresDistintos.size < aprobacionesRequeridas) {
     throw new Conflicto(
-      `Faltan aprobaciones: el lacrado exige ${APROBACIONES_REQUERIDAS} de personas distintas y hay ${aprobadoresDistintos.size}.`,
+      `Faltan aprobaciones: el lacrado exige ${aprobacionesRequeridas} de personas distintas y hay ${aprobadoresDistintos.size}.`,
     );
   }
 

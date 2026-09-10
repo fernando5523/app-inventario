@@ -20,8 +20,40 @@ export const VERSION_CONTENIDO_LACRADO = 1;
 
 export const ALGORITMO_HASH = 'sha256';
 
-/** Cuantas aprobaciones distintas habilitan el lacrado (Gilmer + Michell). */
-export const APROBACIONES_REQUERIDAS = 2;
+/**
+ * Cuantas aprobaciones DISTINTAS habilitan el lacrado.
+ *
+ * Decision del cliente (2026-09-10): "POR AHORA" se firma con UNA sola --
+ * hoy hay un solo auditor real (Gilmer) y exigir dos bloqueaba el cierre
+ * para siempre. El modelo de doble firma NO se toca -- la tabla
+ * `aprobaciones_cierre`, el `@@unique([inventarioId, aprobadorId])` y "no
+ * firmas dos veces" siguen intactos (ver historial.permisos.ts). Lo UNICO
+ * que cambia es este numero, y viaja como parametro explicito a
+ * `validarPuedeAprobar`/`validarPuedeLacrar` -- ninguna de las dos vuelve a
+ * leer un 2 (ni un 1) escrito a mano.
+ *
+ * Configurable por variable de entorno para no tener que tocar codigo el
+ * dia que entre una segunda cuenta de auditor: alcanza con subir
+ * `LACRADO_APROBACIONES_REQUERIDAS` a 2. Default 1 (el proceso real de
+ * hoy) si la variable no esta seteada.
+ */
+export const APROBACIONES_REQUERIDAS = parsearAprobacionesRequeridas(process.env.LACRADO_APROBACIONES_REQUERIDAS);
+
+/**
+ * Pura, aparte de `APROBACIONES_REQUERIDAS` (que se calcula una sola vez al
+ * cargar el modulo): asi se puede testear la validacion del valor sin tocar
+ * variables de entorno ni reiniciar el proceso.
+ */
+export function parsearAprobacionesRequeridas(crudo: string | undefined): number {
+  if (crudo === undefined || crudo.trim() === '') return 1;
+  const n = Number(crudo);
+  if (!Number.isInteger(n) || n < 1) {
+    throw new Error(
+      `LACRADO_APROBACIONES_REQUERIDAS invalido: "${crudo}" -- tiene que ser un numero entero >= 1.`,
+    );
+  }
+  return n;
+}
 
 // ---------------------------------------------------------------------------
 // Serializacion canonica

@@ -80,38 +80,47 @@ describe('POST /api/historial/inventarios/:id/aprobaciones: la misma persona no 
     expect(cuerpo.error).toContain('Ya aprobaste el cierre');
   });
 
-  it('una persona DISTINTA sí puede dar la segunda firma', async () => {
+  /**
+   * DECISION DEL CLIENTE (2026-09-10): "por ahora" el lacrado se firma con
+   * UNA sola firma -- hoy hay un solo auditor real (Gilmer) y exigir dos
+   * bloqueaba el cierre para siempre. `APROBACIONES_REQUERIDAS` (leida de
+   * `LACRADO_APROBACIONES_REQUERIDAS`, ver historial.lacrado.ts) sin la
+   * variable seteada -- que es como corre esta suite -- da 1. Con UNA firma
+   * ya registrada, una SEGUNDA persona que intente aprobar se encuentra el
+   * par ya completo: exactamente el mismo control de dos personas de
+   * siempre, con el minimo bajado a uno. La configurabilidad del NUMERO en
+   * si (1 vs 2 vs N) ya esta probada sin HTTP en historial.permisos.test.ts
+   * y historial.lacrado.test.ts -- esto solo confirma que la ruta real usa
+   * la constante configurada, no un 2 propio.
+   */
+  it('con el minimo de hoy (1, sin variable seteada): una SEGUNDA persona ya encuentra el par completo', async () => {
     vi.mocked(prisma.inventario.findUnique).mockResolvedValue(inventarioLiquidado([{ aprobadorId: AUDITOR.colaboradorId }]) as never);
-    vi.mocked(prisma.aprobacionCierre.create).mockResolvedValue({
-      id: 2,
-      inventarioId: 1,
-      aprobadorId: OTRO_AUDITOR.colaboradorId,
-      rolAlAprobar: 'auditor',
-      nota: null,
-      aprobadoEn: new Date(),
-      aprobador: { id: OTRO_AUDITOR.colaboradorId, nombre: 'Rosa Melgarejo' },
-    } as never);
-    vi.mocked(prisma.aprobacionCierre.findMany).mockResolvedValue([
-      { aprobadorId: AUDITOR.colaboradorId },
-      { aprobadorId: OTRO_AUDITOR.colaboradorId },
-    ] as never);
-    vi.mocked(prisma.registroAuditoria.create).mockResolvedValue({} as never);
 
     const r = await aprobar(OTRO_AUDITOR);
 
-    expect(r.status).toBe(201);
-  });
-
-  it('la tercera aprobación, 409 -- ya están las dos firmas que exige el lacrado', async () => {
-    vi.mocked(prisma.inventario.findUnique).mockResolvedValue(
-      inventarioLiquidado([{ aprobadorId: AUDITOR.colaboradorId }, { aprobadorId: OTRO_AUDITOR.colaboradorId }]) as never,
-    );
-
-    const TERCERO: ColaboradorAutenticado = { colaboradorId: 1000, sucursalId: null, rol: 'administrador' };
-    const r = await aprobar(TERCERO);
-
     expect(r.status).toBe(409);
     const cuerpo = (await r.json()) as { error: string };
-    expect(cuerpo.error).toContain('Ya estan las dos firmas');
+    expect(cuerpo.error).toContain('Ya hay una firma registrada');
+  });
+
+  it('con el minimo de hoy (1): la PRIMERA firma ya alcanza -- 201, sin esperar una segunda persona', async () => {
+    vi.mocked(prisma.inventario.findUnique).mockResolvedValue(inventarioLiquidado([]) as never);
+    vi.mocked(prisma.aprobacionCierre.create).mockResolvedValue({
+      id: 1,
+      inventarioId: 1,
+      aprobadorId: AUDITOR.colaboradorId,
+      rolAlAprobar: 'auditor',
+      nota: null,
+      aprobadoEn: new Date(),
+      aprobador: { id: AUDITOR.colaboradorId, nombre: 'Gilmer Quispe' },
+    } as never);
+    vi.mocked(prisma.aprobacionCierre.findMany).mockResolvedValue([{ aprobadorId: AUDITOR.colaboradorId }] as never);
+    vi.mocked(prisma.registroAuditoria.create).mockResolvedValue({} as never);
+
+    const r = await aprobar(AUDITOR);
+
+    expect(r.status).toBe(201);
+    const cuerpo = (await r.json()) as { listoParaLacrar: boolean };
+    expect(cuerpo.listoParaLacrar).toBe(true);
   });
 });

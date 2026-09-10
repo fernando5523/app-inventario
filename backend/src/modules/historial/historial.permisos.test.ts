@@ -228,6 +228,41 @@ describe('validarPuedeAprobar', () => {
       validarPuedeAprobar(admin, inventario('liquidado'), [{ aprobadorId: 12 }, { aprobadorId: 30 }]),
     ).toThrow(Conflicto);
   });
+
+  // ---------------------------------------------------------------------
+  // CONFIGURABLE (decision del cliente 2026-09-10): "por ahora" el lacrado
+  // se firma con UNA sola firma de auditor -- hoy hay un solo auditor real
+  // (Gilmer) y exigir dos bloqueaba el cierre para siempre. El modelo de
+  // doble firma no se toca (la tabla, el unique, "no firmas dos veces");
+  // lo unico que cambia es el minimo, y viaja como parametro explicito
+  // -- nunca un 2 (ni un 1) hardcodeado dentro de esta funcion.
+  // ---------------------------------------------------------------------
+  describe('el minimo de firmas es un parametro, no un 2 fijo', () => {
+    it('sin pasar el parametro, el comportamiento de siempre (2) sigue igual', () => {
+      expect(() => validarPuedeAprobar(gilmer, inventario('liquidado'), [])).not.toThrow();
+      expect(() =>
+        validarPuedeAprobar(admin, inventario('liquidado'), [{ aprobadorId: 12 }, { aprobadorId: 30 }]),
+      ).toThrow(/listo para lacrar/);
+    });
+
+    it('con el minimo en 1: una sola firma YA deja el par completo -- una segunda persona no puede sumar otra', () => {
+      expect(() =>
+        validarPuedeAprobar(gilmer, inventario('liquidado'), [{ aprobadorId: rosa.colaboradorId }], 1),
+      ).toThrow(/listo para lacrar/);
+    });
+
+    it('con el minimo en 1, el mensaje habla de UNA firma, no de "dos"', () => {
+      expect(() =>
+        validarPuedeAprobar(gilmer, inventario('liquidado'), [{ aprobadorId: rosa.colaboradorId }], 1),
+      ).toThrow(/Ya hay una firma/);
+    });
+
+    it('con el minimo en 2 explicito: una sola aprobacion existente todavia deja firmar a otra persona', () => {
+      expect(() =>
+        validarPuedeAprobar(gilmer, inventario('liquidado'), [{ aprobadorId: rosa.colaboradorId }], 2),
+      ).not.toThrow();
+    });
+  });
 });
 
 describe('validarPuedeLacrar', () => {
@@ -411,6 +446,43 @@ describe('validarPuedeLacrar', () => {
     expect(() =>
       validarPuedeLacrar(gilmer, { ...listo, todoSincronizado: false }, [{ aprobadorId: 12 }]),
     ).toThrow(/Faltan aprobaciones/);
+  });
+
+  // ---------------------------------------------------------------------
+  // CONFIGURABLE (decision del cliente 2026-09-10): mismo criterio que
+  // validarPuedeAprobar -- el minimo de firmas DISTINTAS es un parametro
+  // explicito, nunca un 2 fijo adentro de la funcion.
+  // ---------------------------------------------------------------------
+  describe('el minimo de firmas es un parametro, no un 2 fijo', () => {
+    it('sin pasar el parametro, el comportamiento de siempre (2) sigue igual', () => {
+      expect(() => validarPuedeLacrar(gilmer, listo, dosFirmas)).not.toThrow();
+      expect(() => validarPuedeLacrar(gilmer, listo, [{ aprobadorId: 12 }])).toThrow(Conflicto);
+    });
+
+    it('con el minimo en 1: UNA sola aprobacion ya alcanza para lacrar', () => {
+      expect(() => validarPuedeLacrar(gilmer, listo, [{ aprobadorId: 12 }], 1)).not.toThrow();
+    });
+
+    it('con el minimo en 1, CERO aprobaciones sigue sin alcanzar', () => {
+      expect(() => validarPuedeLacrar(gilmer, listo, [], 1)).toThrow(Conflicto);
+    });
+
+    it('con el minimo en 2 explicito, UNA sola aprobacion sigue sin alcanzar', () => {
+      expect(() => validarPuedeLacrar(gilmer, listo, [{ aprobadorId: 12 }], 2)).toThrow(Conflicto);
+    });
+
+    it('con el minimo en 2, dos firmas de LA MISMA persona siguen sin valer como par', () => {
+      // Ni bajando el minimo a lo que sea se salta el requisito de personas
+      // DISTINTAS -- ver el unique de la base y el Set de aprobadoresDistintos.
+      expect(() =>
+        validarPuedeLacrar(gilmer, listo, [{ aprobadorId: 12 }, { aprobadorId: 12 }], 2),
+      ).toThrow(Conflicto);
+    });
+
+    it('el mensaje de "faltan aprobaciones" dice el minimo que este configurado, no un 2 fijo', () => {
+      expect(() => validarPuedeLacrar(gilmer, listo, [], 1)).toThrow(/exige 1 de personas distintas/);
+      expect(() => validarPuedeLacrar(gilmer, listo, [{ aprobadorId: 12 }], 2)).toThrow(/exige 2 de personas distintas/);
+    });
   });
 });
 
