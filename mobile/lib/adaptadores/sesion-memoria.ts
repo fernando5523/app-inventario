@@ -77,6 +77,18 @@ const COLABORADORES: Record<number, Colaborador[]> = {
 const LARGO_PIN = 6;
 const DURACION_SESION_MS = 12 * 60 * 60 * 1000; // 12 horas
 
+/**
+ * Quién cuelga de una TIENDA (coordinador/conteo) y quién no. Paridad con
+ * sesion.service.ts del backend (regla del cliente 2026-09-10): el auditor no
+ * tiene tienda -audita toda la cadena-, así que va al grupo "administradores"
+ * del login, no bajo una sucursal.
+ */
+const esDeTienda = (c: Colaborador): boolean => c.rol === 'coordinador' || c.rol === 'conteo';
+/** Todos los auditores del padrón, sin importar de qué sucursal se los sembró. */
+const AUDITORES: Colaborador[] = Object.values(COLABORADORES)
+  .flat()
+  .filter((c) => c.rol === 'auditor');
+
 function buscarColaborador(colaboradorId: number): { colaborador: Colaborador; sucursal: Sucursal | null } | null {
   const administrador = ADMINISTRADORES.find((a) => a.id === colaboradorId);
   // sucursal: null de verdad (no una "sucursal de sistema" inventada) —
@@ -93,19 +105,25 @@ let sesionActual: Sesion | null = null;
 
 export const sesionMemoria: RepositorioSesion = {
   async sucursales() {
-    return SUCURSALES;
+    // El conteo de la tarjeta cuenta SOLO a los de tienda: el auditor sembrado
+    // en una sucursal no la infla (paridad con listarSucursales del backend).
+    return SUCURSALES.map((s) => ({ ...s, colaboradores: (COLABORADORES[s.id] ?? []).filter(esDeTienda).length }));
   },
 
   async colaboradores(sucursalId) {
-    return COLABORADORES[sucursalId] ?? [];
+    // Solo coordinador/conteo: el auditor no cuelga de una tienda, va en
+    // administradores() (paridad con listarColaboradores del backend).
+    return (COLABORADORES[sucursalId] ?? []).filter(esDeTienda);
   },
 
-  // Camino aparte para el Administrador (ver RepositorioSesion#administradores):
-  // no cuelga de ninguna sucursal, así que mezclarlo en colaboradores(sucursalId)
-  // lo haría aparecer en el padrón de las 4 tiendas a la vez — exactamente lo
-  // que se descartó al resolver el login del rol (2026-09-04).
+  // El grupo "administradores" del login: los usuarios SIN tienda propia. El
+  // administrador (del sistema) Y el auditor (audita toda la cadena). Mezclarlos
+  // en colaboradores(sucursalId) haría aparecer al auditor en el padrón de las 4
+  // tiendas a la vez — lo que el cliente descartó. Se agrupa por ROL, igual que
+  // listarAdministradores del backend; entrar por acá NO da permisos de admin:
+  // el rol viaja tal cual en la sesión (ver ingresar).
   async administradores() {
-    return ADMINISTRADORES;
+    return [...ADMINISTRADORES, ...AUDITORES];
   },
 
   async ingresar(colaboradorId, pin) {
