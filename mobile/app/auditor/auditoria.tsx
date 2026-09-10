@@ -1,6 +1,6 @@
 import { router } from 'expo-router';
 import { BarChart3 } from 'lucide-react-native';
-import { useCallback, useMemo, useState, type JSX } from 'react';
+import { useCallback, useEffect, useMemo, useState, type JSX } from 'react';
 import { ActivityIndicator, FlatList, Pressable, RefreshControl, StyleSheet, Text, View } from 'react-native';
 
 import { useRefrescoAlEnfocar } from '../../components/hooks/useRefrescoAlEnfocar';
@@ -14,9 +14,10 @@ import {
   formatoMoneda as formatoNumeroMoneda,
   type OpcionChip,
 } from '../../components/ui';
-import { repositorioAuditoria, repositorioInventario } from '../../lib/contenedor';
+import { repositorioAuditoria, repositorioInventario, repositorioSesion } from '../../lib/contenedor';
 import { resumirAuditoria } from '../../lib/dominio/auditoria';
-import type { ItemAuditoria, VeredictoAuditoria } from '../../lib/dominio/tipos';
+import { sucursalEnFoco } from '../../lib/dominio/sucursal-en-foco';
+import type { ItemAuditoria, Sucursal, VeredictoAuditoria } from '../../lib/dominio/tipos';
 import { useSesion } from '../../lib/sesion-contexto';
 import { colors, fonts, radius } from '../../lib/theme';
 
@@ -56,12 +57,36 @@ export default function AuditoriaScreen(): JSX.Element {
   const [items, setItems] = useState<ItemAuditoria[]>([]);
   const [filtro, setFiltro] = useState<FiltroId>('todos');
 
+  // El Auditor NO tiene tienda: audita toda la cadena y ELIGE cuál mirar. El
+  // padrón de sucursales es el mismo endpoint del login (`GET /api/sesion/
+  // sucursales`), sin gate de permiso. `sucursalElegida` null = todavía no
+  // eligió (arranca en la de su ficha, ver sucursalEnFoco), cambiable.
+  const [sucursales, setSucursales] = useState<Sucursal[]>([]);
+  const [sucursalElegida, setSucursalElegida] = useState<number | null>(null);
+  useEffect(() => {
+    repositorioSesion.sucursales().then(setSucursales);
+  }, []);
+
   const cargar = useCallback(async () => {
     if (!sesion) return;
+    const sucursalId = sucursalEnFoco({
+      rol: sesion.colaborador.rol,
+      sucursalDeSesion: sesion.sucursal?.id ?? null,
+      elegida: sucursalElegida,
+    });
+    // Sin sucursal elegida no hay inventario que pedir. Y al cambiar de
+    // sucursal se limpia lo anterior: la matriz de Market Bolívar no puede
+    // quedar en pantalla cuando ya se pidió la de Carhuaz.
+    if (sucursalId === null) {
+      setItems([]);
+      setCargando(false);
+      return;
+    }
     setError(null);
     try {
-      const activo = await repositorioInventario.activo(sesion.sucursal!.id);
+      const activo = await repositorioInventario.activo(sucursalId);
       if (!activo) {
+        setItems([]);
         setCargando(false);
         return;
       }
@@ -75,7 +100,7 @@ export default function AuditoriaScreen(): JSX.Element {
     } finally {
       setCargando(false);
     }
-  }, [sesion]);
+  }, [sesion, sucursalElegida]);
 
   // Los tabs quedan montados una vez visitados — sin esto, la matriz sigue
   // mostrando datos viejos si el ciclo de conteos avanzó mientras el Auditor
@@ -89,6 +114,17 @@ export default function AuditoriaScreen(): JSX.Element {
   const { refrescando, refrescar } = useRefrescoAlEnfocar(cargar);
 
   if (!sesion) return <View />;
+
+  // La sucursal EFECTIVA (la elegida, o la de la ficha como default): manda en
+  // la barra, en el chip activo y en lo que se pide. Ver sucursalEnFoco.
+  const sucursalId = sucursalEnFoco({
+    rol: sesion.colaborador.rol,
+    sucursalDeSesion: sesion.sucursal?.id ?? null,
+    elegida: sucursalElegida,
+  });
+  const nombreSucursal = sucursales.find((s) => s.id === sucursalId)?.nombre ?? sesion.sucursal?.nombre;
+  // Opciones del conjunto REAL (el padrón), en el orden del backend (id asc).
+  const opcionesSucursal: OpcionChip[] = sucursales.map((s) => ({ id: String(s.id), etiqueta: s.nombre }));
 
   async function salir(): Promise<void> {
     await cerrar();
@@ -155,12 +191,24 @@ export default function AuditoriaScreen(): JSX.Element {
     <PantallaConTabs contentStyle={styles.contenido}>
       <BarraApp
         rotulo="Auditoría · Panel de auditoría"
-        sede={sesion.sucursal!.nombre}
+        sede={nombreSucursal}
         cifras={cargando ? undefined : `${contados} de ${items.length} ítems contados · ${conDiferencia} con diferencia`}
         onSalir={salir}
       />
 
       <BandaSync estado="ok" mensaje="Sincronizado" />
+
+      {/* El Auditor no tiene tienda: elige la que audita. Siempre visible
+          (también con la matriz vacía), para poder cambiar de sucursal cuando
+          la actual no tiene inventario en curso. */}
+      <View style={styles.filtroSucursal}>
+        <Text style={styles.filtroSucursalLabel}>Sucursal a auditar</Text>
+        <ChipsFiltro
+          opciones={opcionesSucursal}
+          activo={sucursalId === null ? '' : String(sucursalId)}
+          onCambiar={(id) => setSucursalElegida(Number(id))}
+        />
+      </View>
 
       {cargando ? (
         <ActivityIndicator color={colors.rojo} style={styles.cargando} />
@@ -278,6 +326,8 @@ export default function AuditoriaScreen(): JSX.Element {
 
 const styles = StyleSheet.create({
   contenido: { paddingHorizontal: 14, paddingTop: 8, gap: 16 },
+  filtroSucursal: { gap: 6 },
+  filtroSucursalLabel: { fontSize: 11, letterSpacing: 0.5, color: colors.gris, fontFamily: fonts.semibold },
   cargando: { marginTop: 24 },
   tarjetaResumen: { padding: 15, gap: 10, borderRadius: 13, borderWidth: 1, borderColor: colors.borde, backgroundColor: colors.campo },
   resumenTitulo: { fontSize: 14.5, color: colors.tinta, fontFamily: fonts.bold },

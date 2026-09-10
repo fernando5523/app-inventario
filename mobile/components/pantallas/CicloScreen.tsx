@@ -4,9 +4,10 @@ import { useCallback, useEffect, useState, type JSX } from 'react';
 import { ActivityIndicator, Alert, Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { cargarSeguro } from '../../lib/adaptadores/_http';
-import { repositorioHistorial, repositorioInventario } from '../../lib/contenedor';
+import { repositorioHistorial, repositorioInventario, repositorioSesion } from '../../lib/contenedor';
 import { comparativoDeRonda } from '../../lib/dominio/comparativo-ronda';
 import { inventarioDelCiclo } from '../../lib/dominio/inventario-del-ciclo';
+import { sucursalEnFoco } from '../../lib/dominio/sucursal-en-foco';
 import {
   estadoDePaso,
   etiquetaARecontar,
@@ -17,12 +18,12 @@ import {
   type EstadoPaso,
 } from '../../lib/dominio/texto-cierre-ronda';
 import { partirEnHojas } from '../../lib/dominio/lote';
-import { type Rol, type TamanoHoja } from '../../lib/dominio/tipos';
+import { type Rol, type Sucursal, type TamanoHoja } from '../../lib/dominio/tipos';
 import type { ResumenRonda } from '../../lib/puertos/repositorios';
 import { useSesion } from '../../lib/sesion-contexto';
 import { colors, fonts, radius, spacing } from '../../lib/theme';
 import { PantallaConTabs } from '../navegacion/PantallaConTabs';
-import { BandaSync, Badge, BarraApp, Button, formatoMiles, formatoPct, type BadgeVariant } from '../ui';
+import { BandaSync, Badge, BarraApp, Button, ChipsFiltro, formatoMiles, formatoPct, type BadgeVariant, type OpcionChip } from '../ui';
 
 // formatoMiles/formatoPct, no Intl.NumberFormat('es-PE'): no está
 // garantizado que Hermes traiga los datos ICU de es-PE en el emulador —
@@ -202,6 +203,23 @@ export function CicloScreen({ rol }: CicloScreenProps): JSX.Element {
   const [rondaActiva, setRondaActiva] = useState<number | null>(null);
   const esCoordinador = rol === 'coordinador';
 
+  // El Auditor NO tiene tienda: elige la sucursal cuyo ciclo mira (el
+  // Coordinador sigue atado a la suya, no ve el selector). El padrón sale del
+  // mismo endpoint del login; se pide solo para el Auditor. `sucursalElegida`
+  // null = arranca en la de su ficha (default, cambiable). Ver sucursalEnFoco.
+  const [sucursales, setSucursales] = useState<Sucursal[]>([]);
+  const [sucursalElegida, setSucursalElegida] = useState<number | null>(null);
+  useEffect(() => {
+    if (esCoordinador) return;
+    repositorioSesion.sucursales().then(setSucursales);
+  }, [esCoordinador]);
+
+  const sucursalId = sucursalEnFoco({
+    rol,
+    sucursalDeSesion: sesion?.sucursal?.id ?? null,
+    elegida: sucursalElegida,
+  });
+
   /**
    * El comparativo contra Dynamics de CADA ronda -- LA ÚNICA fuente de las
    * cifras de los 3 pasos Y del preview de cierre. Es el mismo endpoint del
@@ -241,6 +259,17 @@ export function CicloScreen({ rol }: CicloScreenProps): JSX.Element {
   useEffect(() => {
     if (!sesion) return;
     let vigente = true;
+    // Auditor que todavía no eligió sucursal (y sin ficha): no hay ciclo que
+    // pedir -- la pantalla invita a elegir en vez de mostrar la de nadie.
+    if (sucursalId === null) {
+      setItems(null);
+      setInventarioId(null);
+      setRondaActiva(null);
+      setResumenPorRonda({});
+      setCargando(false);
+      setErrorCarga(null);
+      return;
+    }
     setCargando(true);
     setErrorCarga(null);
 
@@ -250,10 +279,10 @@ export function CicloScreen({ rol }: CicloScreenProps): JSX.Element {
         // devuelve null. Ahí el ciclo es el ÚLTIMO cerrado de la sucursal, que
         // sale del historial. Sin este fallback la pantalla quedaba en blanco
         // sobre un ciclo que en realidad terminó con sus 3 pasadas contadas.
-        const activo = await repositorioInventario.activo(sesion!.sucursal!.id);
+        const activo = await repositorioInventario.activo(sucursalId!);
         const historial = activo
           ? []
-          : (await repositorioHistorial.listar({ sucursalId: sesion!.sucursal!.id })).inventarios;
+          : (await repositorioHistorial.listar({ sucursalId: sucursalId! })).inventarios;
         if (!vigente) return;
 
         const delCiclo = inventarioDelCiclo(activo, historial);
@@ -282,7 +311,7 @@ export function CicloScreen({ rol }: CicloScreenProps): JSX.Element {
     return () => {
       vigente = false;
     };
-  }, [sesion, cargarResumenDeRondas, intentoNumero]);
+  }, [sesion, cargarResumenDeRondas, intentoNumero, sucursalId]);
 
   if (!sesion) return <View />;
 
@@ -316,7 +345,7 @@ export function CicloScreen({ rol }: CicloScreenProps): JSX.Element {
       // se acaba de cerrar. Si el ciclo terminó, activo() devuelve null y
       // `rondaActiva` pasa a null: el bloque de cierre desaparece solo, pero el
       // embudo de las 3 pasadas (resumenPorRonda) se recarga y se sigue viendo.
-      const activo = await repositorioInventario.activo(sesion!.sucursal!.id);
+      const activo = await repositorioInventario.activo(sucursalId!);
       setRondaActiva(activo?.rondaActiva ?? null);
       await cargarResumenDeRondas(inventarioId);
     } catch (error) {
@@ -352,16 +381,37 @@ export function CicloScreen({ rol }: CicloScreenProps): JSX.Element {
   // queda parcial, y no se inventa un tamaño para poder mostrar algo.
   const textoCalculoHojasT1 = tamanoHoja !== null ? textoCalculo(calcularHojas(totalT1, tamanoHoja), tamanoHoja) : null;
 
+  // La sucursal EFECTIVA: para el Auditor, la elegida (o su ficha por default);
+  // para el Coordinador, la suya de siempre. Ver sucursalEnFoco.
+  const nombreSucursal = esCoordinador
+    ? sesion.sucursal?.nombre
+    : (sucursales.find((s) => s.id === sucursalId)?.nombre ?? sesion.sucursal?.nombre);
+  const opcionesSucursal: OpcionChip[] = sucursales.map((s) => ({ id: String(s.id), etiqueta: s.nombre }));
+
   return (
     <PantallaConTabs scrollable contentStyle={styles.contenido}>
       <BarraApp
         rotulo={rol === 'auditor' ? 'Auditoría · Ciclo de conteos' : 'Gestión masiva'}
-        sede={sesion.sucursal!.nombre}
+        sede={nombreSucursal}
         cifras={items ? `${nf.format(items)} ítem${items === 1 ? '' : 's'} · 3 pasadas de cierre` : undefined}
         onSalir={salir}
       />
 
       <BandaSync estado="ok" mensaje="Sincronizado con Dynamics" />
+
+      {/* El Auditor elige la sucursal cuyo ciclo mira (el Coordinador está
+          atado a la suya y no ve esto). Siempre visible, para cambiarla aunque
+          la actual no tenga ciclo. */}
+      {rol === 'auditor' ? (
+        <View style={styles.filtroSucursal}>
+          <Text style={styles.filtroSucursalLabel}>Sucursal a auditar</Text>
+          <ChipsFiltro
+            opciones={opcionesSucursal}
+            activo={sucursalId === null ? '' : String(sucursalId)}
+            onCambiar={(id) => setSucursalElegida(Number(id))}
+          />
+        </View>
+      ) : null}
 
       {cargando ? (
         <ActivityIndicator color={colors.rojo} style={styles.cargando} />
@@ -514,6 +564,8 @@ export function CicloScreen({ rol }: CicloScreenProps): JSX.Element {
 
 const styles = StyleSheet.create({
   contenido: { paddingHorizontal: spacing.lg, paddingTop: spacing.sm, gap: spacing.md + 3 },
+  filtroSucursal: { gap: 6 },
+  filtroSucursalLabel: { fontSize: 11, letterSpacing: 0.5, color: colors.gris, fontFamily: fonts.semibold },
   cargando: { marginTop: spacing.xxxl },
   errorCarga: { marginTop: spacing.xxxl, gap: spacing.md, alignItems: 'flex-start' },
   errorCargaTexto: { fontSize: 13, color: colors.gris, fontFamily: fonts.regular },
