@@ -14,6 +14,20 @@ import type { Rol } from '../../shared/tipos';
 
 const DURACION_SESION_MS = 12 * 60 * 60 * 1000; // 12 horas, igual que sesion-memoria.ts
 
+/**
+ * Quién cuelga de una TIENDA y quién no. Regla del cliente (2026-09-10): el
+ * auditor y el administrador NO tienen tienda propia -- el auditor audita toda
+ * la cadena, el administrador es del sistema-- así que se eligen en el grupo
+ * "administradores" del login, nunca dentro de una sucursal.
+ *
+ * El agrupamiento es por ROL, no por `sucursalId`: un auditor sembrado con una
+ * sucursal asignada (dato viejo, Gilmer) igual va al grupo de arriba y deja de
+ * aparecer bajo su vieja tienda -- sin tocar su fila (no hace falta migrar dato,
+ * la columna ya es nullable y nada aquí la cambia).
+ */
+const ROLES_DE_TIENDA: Rol[] = ['coordinador', 'conteo'];
+const ROLES_SIN_TIENDA: Rol[] = ['administrador', 'auditor'];
+
 export interface SucursalDto {
   id: number;
   nombre: string;
@@ -40,7 +54,10 @@ export async function listarSucursales(): Promise<SucursalDto[]> {
   const sucursales = await prisma.sucursal.findMany({
     where: { activa: true },
     orderBy: { id: 'asc' },
-    include: { _count: { select: { colaboradores: true } } },
+    // El conteo de la tarjeta cuenta SOLO a los de tienda (coordinador/conteo):
+    // un auditor con sucursal asignada no debe inflar el número de una tienda a
+    // la que, por regla, no pertenece.
+    include: { _count: { select: { colaboradores: { where: { rol: { in: ROLES_DE_TIENDA }, activo: true } } } } },
   });
 
   return sucursales.map((s) => ({
@@ -50,10 +67,15 @@ export async function listarSucursales(): Promise<SucursalDto[]> {
   }));
 }
 
-/** Solo colaboradores activos: uno deshabilitado no aparece para elegir al ingresar. */
+/**
+ * Solo colaboradores activos y DE TIENDA (coordinador/conteo): uno
+ * deshabilitado no aparece para elegir al ingresar, y el auditor/administrador
+ * tampoco -- se eligen en el grupo "administradores" (ver listarAdministradores),
+ * no colgando de una sucursal.
+ */
 export async function listarColaboradores(sucursalId: number): Promise<ColaboradorDto[]> {
   const colaboradores = await prisma.colaborador.findMany({
-    where: { sucursalId, activo: true },
+    where: { sucursalId, activo: true, rol: { in: ROLES_DE_TIENDA } },
     orderBy: { id: 'asc' },
   });
 
@@ -61,15 +83,20 @@ export async function listarColaboradores(sucursalId: number): Promise<Colaborad
 }
 
 /**
- * Camino de login separado para el rol=administrador: no pertenece a
- * ninguna sucursal (sucursalId null a proposito, ver SesionDto#sucursal),
- * asi que no puede salir de `listarColaboradores(sucursalId)` como el resto.
- * Sin este endpoint, el rol existe en la base y en el codigo pero nadie
- * puede entrar por el.
+ * El grupo "administradores" del login: los usuarios SIN tienda propia. Es el
+ * camino separado para quienes no pertenecen a una sucursal -- el administrador
+ * (del sistema) y el AUDITOR (audita toda la cadena, entrega el informe
+ * consolidado). Se agrupa por ROL, no por `sucursalId null`: un auditor
+ * sembrado con sucursal (Gilmer) igual entra acá.
+ *
+ * ENTRAR POR ESTE GRUPO NO DA PERMISOS DE ADMINISTRADOR: `ingresar` emite la
+ * sesión con `rol` leído del padrón (colaborador.rol), no del grupo elegido, y
+ * TODA autorización se hace por ese rol (requiereRol / *.permisos.ts). El auditor
+ * conserva sus permisos de auditor; el grupo es solo dónde se lo elige.
  */
 export async function listarAdministradores(): Promise<ColaboradorDto[]> {
   const administradores = await prisma.colaborador.findMany({
-    where: { sucursalId: null, activo: true },
+    where: { rol: { in: ROLES_SIN_TIENDA }, activo: true },
     orderBy: { id: 'asc' },
   });
 
