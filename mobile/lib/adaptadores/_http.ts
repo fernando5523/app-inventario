@@ -609,6 +609,30 @@ export async function pedirSinCuerpo(ruta: string, opciones: OpcionesPedido = {}
   await pedir<unknown>(ruta, opciones);
 }
 
+/**
+ * Envuelve el `cargar()` de una pantalla para que NUNCA deje un estado de
+ * carga trabado. Bug real (2026-09-10): el backend estuvo caído y la app
+ * quedó colgada entera -- no porque `pedir()` no tenga timeout (SÍ lo
+ * tiene, ver arriba), sino porque varias pantallas tienen un `cargar()` con
+ * dos llamadas al backend, y solo la PRIMERA está en un try/catch (el
+ * fallback offline). Si la SEGUNDA revienta, la excepción escapa sin
+ * control y el `setCargando(false)` final nunca se ejecuta: el spinner
+ * queda girando para siempre, y ni un force-stop lo arregla porque el
+ * mismo camino roto se repite al relanzar.
+ *
+ * Uso: `const error = await cargarSeguro(cargar); setCargando(false); if
+ * (error) setError(error.message);` -- `setCargando(false)` queda
+ * INCONDICIONAL, sin un `finally` que alguien se pueda saltear.
+ */
+export async function cargarSeguro(cargar: () => Promise<void>): Promise<ErrorApi | null> {
+  try {
+    await cargar();
+    return null;
+  } catch (error) {
+    return error instanceof ErrorApi ? error : new ErrorApi('sin-red');
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Operaciones largas: sondeo con progreso
 // ---------------------------------------------------------------------------

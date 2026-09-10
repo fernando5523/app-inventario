@@ -24,6 +24,19 @@ import {
 import { repositorioSesion } from './contenedor';
 import type { Sesion } from './dominio/tipos';
 
+/**
+ * Alto impacto (2026-09-10): `RolTabsLayout` no monta `<Tabs>` (ninguna
+ * navegación, de ningún rol) mientras `cargando` sea `true` -- es el ÚNICO
+ * gate de arranque de la app entera. `sesionActiva()` hoy es puro SQLite
+ * (sin red), pero un `.then()` sin `.catch()` deja `cargando` trabado ante
+ * CUALQUIER falla (SQLite bloqueada, corrupta, sin espacio) para siempre --
+ * y como cada relanzamiento repite el mismo camino, "force-stop y volver a
+ * abrir" no arregla nada. Un timeout duro, además del catch: la garantía
+ * tiene que sostenerse sola, sin depender de que `sesionActiva()` se porte
+ * bien siempre.
+ */
+const TIMEOUT_ARRANQUE_MS = 5_000;
+
 export interface SesionContextoValor {
   sesion: Sesion | null;
   /** true mientras se revisa si hay una sesión guardada de un arranque anterior. */
@@ -40,13 +53,30 @@ export function SesionProvider({ children }: PropsWithChildren): JSX.Element {
 
   useEffect(() => {
     let vigente = true;
-    repositorioSesion.sesionActiva().then((activa) => {
+    const terminar = (activa: Sesion | null): void => {
       if (!vigente) return;
+      vigente = false;
       setSesion(activa);
       setCargando(false);
-    });
+    };
+    // El timeout es la RED DE SEGURIDAD, no el camino esperado: si
+    // `sesionActiva()` nunca resuelve ni rechaza, no puede dejar la app
+    // entera sin poder navegar. Sin sesión (null) es el estado seguro --
+    // manda al login, que siempre se puede reintentar desde ahí.
+    const reloj = setTimeout(() => terminar(null), TIMEOUT_ARRANQUE_MS);
+    repositorioSesion
+      .sesionActiva()
+      .then((activa) => {
+        clearTimeout(reloj);
+        terminar(activa);
+      })
+      .catch(() => {
+        clearTimeout(reloj);
+        terminar(null);
+      });
     return () => {
       vigente = false;
+      clearTimeout(reloj);
     };
   }, []);
 

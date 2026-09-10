@@ -18,6 +18,7 @@ vi.mock('react-native', () => ({ Platform: { OS: 'android' } }));
 vi.mock('expo-constants', () => ({ default: { expoConfig: { extra: {} } } }));
 
 import {
+  cargarSeguro,
   ErrorApi,
   esErrorApi,
   esFallaDeRed,
@@ -438,5 +439,65 @@ describe('sondear (operaciones largas: snapshot de Dynamics)', () => {
       msPresupuesto: 30,
     }).catch((e) => e)) as ErrorApi;
     expect(error.clase).toBe('timeout');
+  });
+});
+
+/**
+ * Bug real (2026-09-10, min-2 en el emulador): el backend estuvo caído y la
+ * app quedó COLGADA ENTERA -- ni la navegación local funcionaba. La causa no
+ * era la falta de timeout en el fetch (`pedir()` ya lo tiene, ver arriba):
+ * era que varias pantallas (InicioScreen, CicloScreen, coordinador/hojas.tsx)
+ * tienen un `cargar()` con DOS llamadas al backend, donde solo la PRIMERA
+ * está en un try/catch (el fallback offline) -- si la SEGUNDA revienta
+ * (`repositorioHojas.todas()`, después del timeout de la primera), la
+ * excepción escapa sin control y `setCargando(false)` nunca se ejecuta: el
+ * spinner de esa pantalla queda girando PARA SIEMPRE, y como el layout de
+ * tabs no depende de eso, "force-stop y relanzar" repite el mismo camino
+ * roto apenas el efecto de carga se vuelve a disparar.
+ *
+ * `cargarSeguro` es el patrón a prueba de olvidos: envuelve TODO el
+ * `cargar()` y devuelve el error en vez de dejarlo escapar, así el llamador
+ * puede hacer `const error = await cargarSeguro(cargar); setCargando(false);`
+ * sin un `finally` que alguien se pueda saltear.
+ */
+describe('cargarSeguro: un cargar() de pantalla nunca puede dejar "cargando" trabado', () => {
+  it('atrapa lo que reviente y lo devuelve, nunca lo deja escapar', async () => {
+    const error = await cargarSeguro(async () => {
+      throw new ErrorApi('timeout');
+    });
+    expect(error).toBeInstanceOf(ErrorApi);
+    expect(error?.clase).toBe('timeout');
+  });
+
+  it('un error que no es ErrorApi (un bug de la pantalla) también queda atrapado, nunca crudo', async () => {
+    const error = await cargarSeguro(async () => {
+      throw new TypeError('undefined no tiene la propiedad x');
+    });
+    expect(error).toBeInstanceOf(ErrorApi);
+  });
+
+  it('con éxito, no hay error que mostrar', async () => {
+    const error = await cargarSeguro(async () => {});
+    expect(error).toBeNull();
+  });
+
+  it('reproduce el bug real: dos llamadas, solo la 1ra protegida -- SIN cargarSeguro la 2da revienta y escapa', async () => {
+    const cargarComoEnInicioScreen = async () => {
+      try {
+        await Promise.resolve(); // equivalente a activo(), que sí está protegida hoy
+      } catch {
+        // fallback offline
+      }
+      // equivalente a repositorioHojas.todas() -- hoy SIN protección propia
+      throw new ErrorApi('timeout');
+    };
+
+    // Sin el wrapper, el error se propaga tal cual -- es EXACTAMENTE lo que
+    // hoy deja `setCargando(false)` sin ejecutarse en esas pantallas.
+    await expect(cargarComoEnInicioScreen()).rejects.toThrow(ErrorApi);
+
+    // Con el wrapper, el mismo `cargar()` NUNCA rechaza: el llamador siempre
+    // puede seguir a `setCargando(false)`.
+    await expect(cargarSeguro(cargarComoEnInicioScreen)).resolves.toBeInstanceOf(ErrorApi);
   });
 });
