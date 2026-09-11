@@ -49,6 +49,10 @@ export const ACCESOS_POR_ROL: Record<Rol, DefinicionAcceso[]> = {
     { titulo: 'Liquidación y nómina', sub: 'Cierre de fin de mes', ruta: '/auditor/liquidacion' },
     { titulo: 'Aprobación y lacrado', sub: 'Firma y cierre del inventario auditado', ruta: '/auditor/lacrado' },
     { titulo: 'Usuarios de mi sucursal', sub: 'Crear y habilitar cuentas', ruta: '/auditor/usuarios' },
+    // Excepciones a la clasificación de Dynamics, por código (las cervezas:
+    // van del empleado en D365 pero las asume la empresa). Se evalúa al
+    // liquidar, por eso es del Auditor y vive cerca del cierre.
+    { titulo: 'Clasificación de productos', sub: 'Marcar los que asume la empresa, no el empleado', ruta: '/auditor/clasificacion' },
     { titulo: 'Historial de inventarios', sub: 'Cierres de mi sucursal, período por período', ruta: '/auditor/historial' },
     { titulo: 'Mi cuenta', sub: 'Cambiar tu PIN', ruta: '/auditor/mi-cuenta' },
   ],

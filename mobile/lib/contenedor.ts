@@ -10,6 +10,7 @@
 import type {
   RepositorioAuditoria,
   RepositorioCatalogo,
+  RepositorioClasificacion,
   RepositorioConfig,
   RepositorioConfigDynamics,
   RepositorioHistorial,
@@ -39,6 +40,7 @@ import { tiendasMemoria } from './adaptadores/tiendas-memoria';
 import { usuariosMemoria } from './adaptadores/usuarios-memoria';
 
 import { catalogoApi } from './adaptadores/catalogo-api';
+import { clasificacionApi } from './adaptadores/clasificacion-api';
 import { configApi } from './adaptadores/config-api';
 import { historialApi } from './adaptadores/historial-api';
 import { hojasApi } from './adaptadores/hojas-api';
@@ -309,6 +311,18 @@ export const repositorioConfigDynamics: RepositorioConfigDynamics = elegir(
  * Por eso tampoco pasa por `elegir()`: no hay a qué caer.
  */
 export const repositorioHistorial: RepositorioHistorial = historialApi;
+
+/**
+ * ── CLASIFICACIÓN DE PRODUCTOS: solo HTTP, sin variante en memoria ──
+ *
+ * Mismo criterio que el histórico: la clasificación empresa/empleado es la
+ * excepción viva que mueve la liquidación, y un mock que la invente fabricaría
+ * justo el dato que nadie debería poder fabricar. Sin backend, la pantalla
+ * avisa que no pudo cargar — nunca muestra excepciones de mentira. Solo el
+ * Auditor entra (el backend responde 403 al resto). Por eso tampoco pasa por
+ * `elegir()`: no hay a qué caer.
+ */
+export const repositorioClasificacion: RepositorioClasificacion = clasificacionApi;
 
 /**
  * ── SINCRONIZADOR: el disparador de la cola de hojas ──

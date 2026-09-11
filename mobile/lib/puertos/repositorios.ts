@@ -449,6 +449,13 @@ export interface Liquidacion {
    */
   inventarioId: number;
   periodo: string;
+  /**
+   * El mismo período en números: el nombre del archivo del reporte a gerencia
+   * los necesita ("...-2026-08-inv45.xlsx"), y sacarlos de `periodo` sería
+   * parsear un texto escrito para personas.
+   */
+  periodoAnio: number;
+  periodoMes: number;
   faltanteBruto: number;
   /** null = todavía no se cargaron los ajustes del mes. Nunca 0 con ese significado — ver AdvertenciaLiquidacion. */
   negativosDelMes: number | null;
@@ -586,6 +593,35 @@ export interface DatosAjustes {
   nota: string;
 }
 
+/**
+ * Una fila del REPORTE A GERENCIA: un producto de la EMPRESA con diferencia.
+ * Espeja backend liquidacion.reporte-gerencia.ts#FilaReporteGerencia.
+ */
+export interface FilaReporteGerencia {
+  codigo: string;
+  descripcion: string;
+  /** Siempre positivo: el signo lo dice la lista en la que aparece. */
+  unidades: number;
+  /** null = sin precio de venta en Dynamics: la unidad es un hecho, el monto no. */
+  monto: number | null;
+}
+
+/**
+ * Los productos de la EMPRESA -- no entran a la planilla del personal -- con
+ * sus sobrantes y faltantes detallados, para presentar a gerencia. Solo existe
+ * con el inventario liquidado o lacrado: antes, qué es de la empresa todavía
+ * no quedó fijo. Espeja backend liquidacion.reporte-gerencia.ts#ReporteGerenciaDto.
+ */
+export interface ReporteGerencia {
+  inventarioId: number;
+  estado: string;
+  faltantes: FilaReporteGerencia[];
+  sobrantes: FilaReporteGerencia[];
+  /** Suma de los montos CON precio: los "sin precio" están en la lista pero no suman. */
+  totalFaltante: number;
+  totalSobrante: number;
+}
+
 export interface RepositorioLiquidacion {
   /** null si todavía no hay un ciclo cerrado para calcular sobre esa sucursal. */
   deSucursal(sucursalId: number): Promise<Liquidacion | null>;
@@ -615,6 +651,13 @@ export interface RepositorioLiquidacion {
    * si ya se liquidó. Esos mensajes se muestran tal cual: dicen qué falta.
    */
   liquidar(inventarioId: number): Promise<CierreLiquidacion>;
+  /**
+   * El reporte a gerencia del inventario. Rechaza (409) si todavía no se
+   * liquidó; ese mensaje dice por qué y se muestra tal cual.
+   */
+  reporteGerencia(inventarioId: number): Promise<ReporteGerencia>;
+  /** El mismo reporte en .xlsx: bytes crudos para compartir (ver dominio/reporte-gerencia.ts). */
+  exportarReporteGerencia(inventarioId: number): Promise<ArrayBuffer>;
 }
 
 /** Lo que devuelve `liquidar`: el resumen de lo que quedó firme. */
@@ -1378,4 +1421,73 @@ export interface FiltroExportConsolidado {
   sucursalIds?: number[];
   periodoAnio: number;
   periodoMes: number;
+}
+
+// ---------------------------------------------------------------------------
+// Clasificación de productos (rol Auditor)
+// ---------------------------------------------------------------------------
+
+/**
+ * El "responsable" que dice el ERP: `'empleado'` | `'empresa'` | `null`
+ * (`'None'` en D365, o un ítem que nunca sincronizó esa entidad). Es SOLO lo
+ * que dice Dynamics; la decisión del Auditor viaja aparte (ver `Clasificacion`).
+ */
+export type ResponsableDynamics = 'empleado' | 'empresa' | null;
+
+/** La excepción VIVA del Auditor sobre un código (backend: ClasificacionProducto). */
+export interface Clasificacion {
+  codigo: string;
+  /** `true` = lo asume la EMPRESA (excepción a Dynamics); `false` = del EMPLEADO. */
+  esEmpresa: boolean;
+  nota: string | null;
+  clasificadoPorId: number;
+  clasificadoEn: string;
+}
+
+/**
+ * Un producto del catálogo con los DOS datos separados: lo que dice Dynamics
+ * (`responsableDynamics`) y lo que decidió el Auditor (`clasificacion`).
+ * Ninguno pisa al otro — es la razón de ser de esta pantalla.
+ */
+export interface ProductoClasificable {
+  codigo: string;
+  descripcion: string;
+  categoria: string | null;
+  responsableDynamics: ResponsableDynamics;
+  /** `null` = sin excepción del Auditor: manda Dynamics. */
+  clasificacion: Clasificacion | null;
+}
+
+export interface FiltroClasificacion {
+  /** Texto libre: matchea código, descripción o categoría. */
+  q?: string;
+  /** Solo los que YA tienen excepción del Auditor (la lista de Gilmer). */
+  soloClasificados?: boolean;
+  limite?: number;
+  desplazamiento?: number;
+}
+
+export interface PaginaClasificacion {
+  total: number;
+  limite: number;
+  desplazamiento: number;
+  productos: ProductoClasificable[];
+}
+
+export interface DatosClasificar {
+  esEmpresa: boolean;
+  nota?: string;
+}
+
+/**
+ * SOLO el Auditor (el backend responde 403 al resto). Las excepciones viven
+ * por CÓDIGO, no por inventario: se clasifica una vez y vale mes a mes. Sin
+ * variante en memoria a propósito, igual que `RepositorioHistorial`: un mock
+ * que invente clasificaciones fabricaría el dato que mueve la liquidación.
+ */
+export interface RepositorioClasificacion {
+  buscar(filtro?: FiltroClasificacion): Promise<PaginaClasificacion>;
+  clasificar(codigo: string, datos: DatosClasificar): Promise<Clasificacion>;
+  /** Rechaza con 404 si el código no tenía clasificación. */
+  desclasificar(codigo: string): Promise<void>;
 }
