@@ -27,6 +27,7 @@
  */
 
 import type {
+  ListadoLineasAjustesNegativos,
   LineaAjusteNegativoRechazada,
   LineaAjusteNegativoValida,
   MotivoAdvertenciaLinea,
@@ -137,6 +138,10 @@ export const ajustesNegativosApi = {
       `${base(inventarioId)}/confirmar?nombreArchivo=${encodeURIComponent(nombreArchivo)}`,
       { metodo: 'POST', cuerpoBinario: archivo, tipoCuerpo: TIPO_XLSX },
     );
+  },
+
+  async listarLineas(inventarioId: number): Promise<ListadoLineasAjustesNegativos> {
+    return pedir<ListadoLineasAjustesNegativos>(`${base(inventarioId)}/lineas`);
   },
 
   async excluirLinea(inventarioId: number, lineaId: number, motivo: string): Promise<ResultadoAlternarLinea> {

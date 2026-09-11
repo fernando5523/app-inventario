@@ -117,6 +117,55 @@ describe('confirmar', () => {
   });
 });
 
+describe('listarLineas', () => {
+  it('GET .../ajustes-negativos/lineas', async () => {
+    const fn = stubFetch(json({ importacion: null, lineas: [], puedeEditar: true }));
+    await ajustesNegativosApi.listarLineas(9);
+    expect(fn.mock.calls[0]![0]).toBe(`${BASE}/api/liquidacion/inventarios/9/ajustes-negativos/lineas`);
+  });
+
+  it('SIN importación vigente: importacion null, lineas [] -- distinto de "0 líneas"', async () => {
+    stubFetch(json({ importacion: null, lineas: [], puedeEditar: true }));
+    const resultado = await ajustesNegativosApi.listarLineas(9);
+    expect(resultado.importacion).toBeNull();
+    expect(resultado.lineas).toEqual([]);
+  });
+
+  it('devuelve la importación, las líneas (con quién/cuándo excluyó) y puedeEditar tal cual', async () => {
+    stubFetch(
+      json({
+        importacion: { id: 42, nombreArchivo: 'ajustes.xlsx', importadoPor: { id: 5, nombre: 'Gilmer' }, importadoEn: '2026-09-14T10:00:00.000Z' },
+        lineas: [
+          { id: 100, fila: 2, codigo: '101131', descripcion: 'Ajuste', importe: 30, excluida: false, motivoExclusion: null, excluidaPor: null, excluidaEn: null },
+          {
+            id: 101,
+            fila: 3,
+            codigo: '101132',
+            descripcion: 'Ajuste 2',
+            importe: 15,
+            excluida: true,
+            motivoExclusion: 'El área se equivocó.',
+            excluidaPor: { id: 5, nombre: 'Gilmer' },
+            excluidaEn: '2026-09-14T11:00:00.000Z',
+          },
+        ],
+        puedeEditar: true,
+      }),
+    );
+    const resultado = await ajustesNegativosApi.listarLineas(9);
+    expect(resultado.importacion).toMatchObject({ id: 42, nombreArchivo: 'ajustes.xlsx' });
+    expect(resultado.lineas).toHaveLength(2);
+    expect(resultado.lineas[1]).toMatchObject({ id: 101, excluida: true, excluidaPor: { id: 5, nombre: 'Gilmer' } });
+    expect(resultado.puedeEditar).toBe(true);
+  });
+
+  it('inventario liquidado: puedeEditar false', async () => {
+    stubFetch(json({ importacion: null, lineas: [], puedeEditar: false }));
+    const resultado = await ajustesNegativosApi.listarLineas(9);
+    expect(resultado.puedeEditar).toBe(false);
+  });
+});
+
 describe('excluirLinea / incluirLinea', () => {
   it('excluirLinea: PATCH .../lineas/:id/excluir con { motivo }, devuelve montoNegativos recalculado', async () => {
     const fn = stubFetch(

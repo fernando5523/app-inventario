@@ -3,35 +3,40 @@ import { File } from 'expo-file-system';
 import { router, useLocalSearchParams } from 'expo-router';
 import {
   AlertTriangle,
-  CheckCircle2,
   ChevronLeft,
   FileSpreadsheet,
   FileX2,
+  MessageSquare,
   Upload,
+  X,
 } from 'lucide-react-native';
 import { useCallback, useState, type JSX } from 'react';
-import { ActivityIndicator, Alert, Pressable, RefreshControl, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Alert, Modal, Pressable, RefreshControl, StyleSheet, Text, View } from 'react-native';
 
 import { useRefrescoAlEnfocar } from '../hooks/useRefrescoAlEnfocar';
-import { ajustesNegativosApi, type ConfirmarAjustesNegativosResultado } from '../../lib/adaptadores/ajustes-negativos-api';
+import { ajustesNegativosApi } from '../../lib/adaptadores/ajustes-negativos-api';
+import { esErrorApi } from '../../lib/adaptadores/_http';
 import {
   estadoNegativos,
   textoMotivoAdvertencia,
   textoMotivoRechazo,
+  type ListadoLineasAjustesNegativos,
   type ResultadoPreviewAjustesNegativos,
 } from '../../lib/dominio/ajustes-negativos';
-import { esErrorApi } from '../../lib/adaptadores/_http';
-import { colors, fonts, fontSize, radius, spacing } from '../../lib/theme';
+import { colors, fonts, fontSize, radius, shadow, spacing } from '../../lib/theme';
 import { PantallaConTabs } from '../navegacion/PantallaConTabs';
-import { BarraApp, Badge, Button, Card, formatoFechaHora, formatoMoneda } from '../ui';
+import { BarraApp, Badge, Button, CampoTexto, Card, formatoFechaHora, formatoMoneda } from '../ui';
 
 const TIPO_XLSX = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
 
+type AccionLinea = 'excluir' | 'incluir';
+
 /**
  * Ajustes: Excel de Dynamics (Pantalla del Auditor, contra
- * backend/src/modules/liquidacion/liquidacion.ajustes-negativos.ts, e39b370).
- * Reemplaza el monto de negativos que se tipeaba a mano (liquidacion.ajustes.ts)
- * por la importación del archivo que ya arma el área de negativos.
+ * backend/src/modules/liquidacion/liquidacion.ajustes-negativos.ts, e39b370 +
+ * a9d92da + b83da86). Reemplaza el monto de negativos que se tipeaba a mano
+ * (liquidacion.ajustes.ts) por la importación del archivo que ya arma el área
+ * de negativos.
  *
  * Recibe `inventarioId` como parámetro de ruta (`router.push({ pathname:
  * '/auditor/ajustes-negativos', params: { inventarioId: String(id) } })`):
@@ -40,19 +45,20 @@ const TIPO_XLSX = 'application/vnd.openxmlformats-officedocument.spreadsheetml.s
  *
  * FLUJO: elegir archivo → vista previa (válidas/rechazadas/advertencias, sin
  * persistir nada) → confirmar (recién ahí se guarda y se recalcula
- * montoNegativos). Ver skill trujillo-ui, "Honestidad de los datos en
- * pantalla": `estadoNegativos()` distingue "todavía no se importó" (bloquea
- * liquidar) de "se importó y dio 0" (no bloquea nada) con DOS textos
- * distintos, nunca el mismo cartel para los dos.
+ * montoNegativos) → excluir/incluir líneas puntuales de lo YA guardado
+ * (GET .../ajustes-negativos/lineas), con motivo obligatorio.
  *
- * PENDIENTE, y no es de esta pantalla: excluir/incluir una línea puntual
- * necesita su `id` en la base, y hoy no existe un endpoint que LISTE las
- * líneas ya guardadas de la importación vigente (el backend solo expone
- * PATCH .../lineas/:id/excluir|incluir, que ya sabe usar
- * ajustes-negativos-api.ts). Mientras no exista ese GET, esta pantalla
- * muestra las líneas de la última vista previa como REVISIÓN de lo
- * importado, sin botones de acción -- fingir que andan sería peor que no
- * tenerlos (skill trujillo-ui, misma sección).
+ * Ver skill trujillo-ui, "Honestidad de los datos en pantalla":
+ * `estadoNegativos()` distingue "todavía no se importó" (bloquea liquidar)
+ * de "se importó y dio 0" (no bloquea nada) con DOS textos distintos, nunca
+ * el mismo cartel para los dos. Mismo criterio en el listado de líneas: una
+ * importación vigente con 0 líneas útiles SIGUE siendo una importación real
+ * (`listado.importacion` no es null), no "nada importado".
+ *
+ * `listado.puedeEditar` bloquea excluir/incluir EN LA PANTALLA (botones
+ * deshabilitados) apenas el inventario queda liquidado/lacrado -- el backend
+ * ya lo bloquea también (`validarEstadoParaAjustar`), así que esto es la
+ * capa "no dejar ni tocar el botón", no la única barrera.
  */
 export function AjustesNegativosScreen(): JSX.Element {
   const params = useLocalSearchParams<{ inventarioId?: string }>();
@@ -60,14 +66,17 @@ export function AjustesNegativosScreen(): JSX.Element {
 
   const [cargando, setCargando] = useState(true);
   const [montoNegativos, setMontoNegativos] = useState<number | null>(null);
+  const [listado, setListado] = useState<ListadoLineasAjustesNegativos | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const [archivo, setArchivo] = useState<{ nombre: string; bytes: Uint8Array } | null>(null);
   const [previsualizando, setPrevisualizando] = useState(false);
   const [preview, setPreview] = useState<ResultadoPreviewAjustesNegativos | null>(null);
-
   const [confirmando, setConfirmando] = useState(false);
-  const [confirmado, setConfirmado] = useState<ConfirmarAjustesNegativosResultado | null>(null);
+
+  const [modalLinea, setModalLinea] = useState<{ lineaId: number; accion: AccionLinea } | null>(null);
+  const [textoMotivo, setTextoMotivo] = useState('');
+  const [guardandoLineaId, setGuardandoLineaId] = useState<number | null>(null);
 
   const cargar = useCallback(async () => {
     if (inventarioId === null) {
@@ -76,8 +85,12 @@ export function AjustesNegativosScreen(): JSX.Element {
     }
     setError(null);
     try {
-      const estado = await ajustesNegativosApi.estado(inventarioId);
+      const [estado, lineas] = await Promise.all([
+        ajustesNegativosApi.estado(inventarioId),
+        ajustesNegativosApi.listarLineas(inventarioId),
+      ]);
       setMontoNegativos(estado.montoNegativos);
+      setListado(lineas);
     } catch (e) {
       setError(esErrorApi(e) ? e.message : 'No se pudo cargar el estado de los ajustes.');
     } finally {
@@ -96,7 +109,6 @@ export function AjustesNegativosScreen(): JSX.Element {
     if (resultado.canceled) return;
 
     const asset = resultado.assets[0]!;
-    setConfirmado(null);
     setPreview(null);
     setArchivo(null);
     setError(null);
@@ -118,10 +130,13 @@ export function AjustesNegativosScreen(): JSX.Element {
     setError(null);
     try {
       const resultado = await ajustesNegativosApi.confirmar(inventarioId, archivo.bytes, archivo.nombre);
-      setConfirmado(resultado);
-      setMontoNegativos(resultado.montoNegativos);
       setPreview(null);
       setArchivo(null);
+      await cargar(); // trae el listado de líneas ya persistidas -- una sola fuente de verdad.
+      Alert.alert(
+        'Importación confirmada',
+        `${resultado.nombreArchivo} · ${resultado.cantidadValidas} línea${resultado.cantidadValidas === 1 ? '' : 's'} válida${resultado.cantidadValidas === 1 ? '' : 's'} · S/ ${formatoMoneda(resultado.montoNegativos)}`,
+      );
     } catch (e) {
       setError(esErrorApi(e) ? e.message : 'No se pudo confirmar la importación.');
     } finally {
@@ -132,13 +147,44 @@ export function AjustesNegativosScreen(): JSX.Element {
   function elegirOtroArchivo(): void {
     setPreview(null);
     setArchivo(null);
-    setConfirmado(null);
     setError(null);
-    Alert.alert(
-      'Elegir otro archivo',
-      'La línea de "Elegir archivo" reemplaza la vista previa actual -- nada se pierde, todavía no se confirmó nada.',
-      [{ text: 'Entendido' }],
-    );
+  }
+
+  function abrirModalLinea(lineaId: number, accion: AccionLinea): void {
+    setTextoMotivo('');
+    setModalLinea({ lineaId, accion });
+  }
+
+  function cerrarModalLinea(): void {
+    setModalLinea(null);
+    setTextoMotivo('');
+  }
+
+  async function confirmarMotivoLinea(): Promise<void> {
+    if (inventarioId === null || modalLinea === null) return;
+    const motivo = textoMotivo.trim();
+    if (!motivo) return;
+
+    setGuardandoLineaId(modalLinea.lineaId);
+    setError(null);
+    try {
+      const resultado =
+        modalLinea.accion === 'excluir'
+          ? await ajustesNegativosApi.excluirLinea(inventarioId, modalLinea.lineaId, motivo)
+          : await ajustesNegativosApi.incluirLinea(inventarioId, modalLinea.lineaId, motivo);
+
+      setMontoNegativos(resultado.montoNegativos);
+      setListado((actual) =>
+        actual
+          ? { ...actual, lineas: actual.lineas.map((l) => (l.id === resultado.linea.id ? resultado.linea : l)) }
+          : actual,
+      );
+      cerrarModalLinea();
+    } catch (e) {
+      setError(esErrorApi(e) ? e.message : 'No se pudo guardar el cambio.');
+    } finally {
+      setGuardandoLineaId(null);
+    }
   }
 
   const estado = estadoNegativos(montoNegativos);
@@ -189,7 +235,7 @@ export function AjustesNegativosScreen(): JSX.Element {
             <Text style={styles.ayuda}>
               El archivo tiene que traer exactamente estos encabezados: Diario, Descripcion, Almacen, Codigo,
               Nombre2, Cantidad, Precio, Importe, Motivo de ajuste, Registrado en, Responsable. Columnas de más no
-              molestan.
+              molestan. Reimportar reemplaza la importación vigente -- la anterior queda registrada, no se borra.
             </Text>
             <Button
               label={previsualizando ? 'Leyendo archivo…' : 'Elegir archivo .xlsx'}
@@ -260,32 +306,90 @@ export function AjustesNegativosScreen(): JSX.Element {
             </Card>
           ) : null}
 
-          {confirmado ? (
+          {listado && listado.importacion !== null ? (
             <Card style={styles.tarjeta}>
               <View style={styles.filaCabecera}>
-                <CheckCircle2 size={18} color={colors.ok} />
-                <Text style={styles.tituloTarjeta}>Importación confirmada</Text>
+                <FileSpreadsheet size={18} color={colors.tinta} />
+                <Text style={styles.tituloTarjeta}>Líneas importadas</Text>
               </View>
               <Text style={styles.ayuda}>
-                {confirmado.nombreArchivo} · {formatoFechaHora(confirmado.importadoEn)}
+                {listado.importacion.nombreArchivo} · importado por {listado.importacion.importadoPor.nombre} el{' '}
+                {formatoFechaHora(listado.importacion.importadoEn)}.
               </Text>
-              <View style={styles.resumenFila}>
-                <ResumenDato etiqueta="Válidas guardadas" valor={String(confirmado.cantidadValidas)} />
-                <ResumenDato etiqueta="Rechazadas" valor={String(confirmado.cantidadRechazadas)} />
-                <ResumenDato etiqueta="Monto" valor={`S/ ${formatoMoneda(confirmado.montoNegativos)}`} />
-              </View>
-              <View style={styles.notaPendiente}>
-                <AlertTriangle size={14} color={colors.gris} />
-                <Text style={styles.notaPendienteTexto}>
-                  Excluir o volver a incluir una línea puntual todavía no está disponible acá: hace falta un
-                  endpoint del backend que liste las líneas ya guardadas con su identificador. Se puede reimportar
-                  un archivo corregido: la importación anterior queda registrada, no se borra.
-                </Text>
-              </View>
+
+              {!listado.puedeEditar ? (
+                <View style={styles.notaPendiente}>
+                  <AlertTriangle size={14} color={colors.gris} />
+                  <Text style={styles.notaPendienteTexto}>
+                    Este inventario ya se liquidó: excluir o volver a incluir una línea queda bloqueado, no se puede
+                    tocar la plata de algo que ya se cerró.
+                  </Text>
+                </View>
+              ) : null}
+
+              {listado.lineas.length === 0 ? (
+                <Text style={styles.ayuda}>No había ninguna línea útil en el archivo importado.</Text>
+              ) : (
+                listado.lineas.map((l) => (
+                  <View key={l.id} style={styles.filaLineaGuardada}>
+                    <View style={styles.filaLineaTexto}>
+                      <View style={styles.filaLineaCabecera}>
+                        <Text style={styles.filaLineaCodigo}>
+                          Fila {l.fila} · {l.codigo}
+                        </Text>
+                        <Text style={styles.filaLineaImporte}>S/ {formatoMoneda(l.importe)}</Text>
+                      </View>
+                      {l.excluida ? (
+                        <Text style={styles.filaLineaExcluida}>
+                          Excluida por {l.excluidaPor?.nombre ?? '—'}
+                          {l.excluidaEn ? ` el ${formatoFechaHora(l.excluidaEn)}` : ''}: {l.motivoExclusion}
+                        </Text>
+                      ) : null}
+                    </View>
+                    <Button
+                      label={l.excluida ? 'Volver a incluir' : 'Excluir'}
+                      variant={l.excluida ? 'outline' : 'ghost'}
+                      size="sm"
+                      onPress={() => abrirModalLinea(l.id, l.excluida ? 'incluir' : 'excluir')}
+                      disabled={!listado.puedeEditar || guardandoLineaId !== null}
+                      loading={guardandoLineaId === l.id}
+                    />
+                  </View>
+                ))
+              )}
             </Card>
           ) : null}
         </>
       )}
+
+      <Modal visible={modalLinea !== null} transparent animationType="fade" onRequestClose={cerrarModalLinea}>
+        <Pressable style={styles.fondoModal} onPress={cerrarModalLinea} accessibilityLabel="Cerrar" />
+        <View pointerEvents="box-none" style={styles.centradoModal}>
+          <View style={[styles.cajaModal, shadow.modal]}>
+            <View style={styles.filaCabecera}>
+              <Text style={styles.tituloTarjeta}>
+                {modalLinea?.accion === 'excluir' ? 'Excluir línea' : 'Volver a incluir línea'}
+              </Text>
+              <Pressable onPress={cerrarModalLinea} accessibilityLabel="Cerrar">
+                <X size={19} color={colors.gris} />
+              </Pressable>
+            </View>
+            <CampoTexto
+              label="Motivo (obligatorio)"
+              valor={textoMotivo}
+              onCambiar={setTextoMotivo}
+              icon={MessageSquare}
+              placeholder="Por qué se excluye o se vuelve a incluir esta línea"
+            />
+            <Button
+              label={guardandoLineaId !== null ? 'Guardando…' : 'Confirmar'}
+              onPress={confirmarMotivoLinea}
+              loading={guardandoLineaId !== null}
+              disabled={textoMotivo.trim().length === 0 || guardandoLineaId !== null}
+            />
+          </View>
+        </View>
+      </Modal>
     </PantallaConTabs>
   );
 }
@@ -327,11 +431,34 @@ const styles = StyleSheet.create({
   notaPendiente: {
     flexDirection: 'row',
     gap: spacing.xs,
-    marginTop: spacing.sm,
     padding: spacing.sm,
     borderRadius: radius.sm,
     backgroundColor: colors.esperaSuave,
   },
   notaPendienteTexto: { flex: 1, fontSize: fontSize.xs, color: colors.gris, lineHeight: 17 },
   aviso: { fontSize: fontSize.sm, color: colors.gris, lineHeight: 19 },
+  filaLineaGuardada: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: spacing.sm,
+    paddingVertical: spacing.sm,
+    borderTopWidth: 1,
+    borderTopColor: colors.borde,
+  },
+  filaLineaTexto: { flex: 1, gap: 2 },
+  filaLineaCabecera: { flexDirection: 'row', justifyContent: 'space-between', gap: spacing.sm },
+  filaLineaCodigo: { fontSize: fontSize.sm, color: colors.tinta, fontFamily: fonts.semibold },
+  filaLineaImporte: { fontSize: fontSize.sm, color: colors.tinta, fontFamily: fonts.semibold },
+  filaLineaExcluida: { fontSize: fontSize.xs, color: colors.falta, lineHeight: 16 },
+  fondoModal: { ...StyleSheet.absoluteFillObject, backgroundColor: colors.overlay },
+  centradoModal: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 14 },
+  cajaModal: {
+    width: '100%',
+    maxWidth: 420,
+    gap: spacing.md,
+    padding: 17,
+    backgroundColor: colors.campo,
+    borderRadius: radius.lg,
+  },
 });

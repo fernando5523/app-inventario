@@ -104,6 +104,37 @@ export function estadoNegativos(montoNegativos: number | null): EstadoNegativosV
 }
 
 // ---------------------------------------------------------------------------
+// Líneas de la importación VIGENTE (GET .../ajustes-negativos/lineas)
+// ---------------------------------------------------------------------------
+
+export interface LineaAjusteNegativoGuardada {
+  id: number;
+  fila: number;
+  codigo: string;
+  descripcion: string;
+  importe: number;
+  excluida: boolean;
+  motivoExclusion: string | null;
+  excluidaPor: { id: number; nombre: string } | null;
+  excluidaEn: string | null;
+}
+
+export interface ImportacionVigente {
+  id: number;
+  nombreArchivo: string;
+  importadoPor: { id: number; nombre: string };
+  importadoEn: string;
+}
+
+export interface ListadoLineasAjustesNegativos {
+  /** `null` = nadie importó nada todavía -- distinto de una importación real con `lineas: []`. */
+  importacion: ImportacionVigente | null;
+  lineas: readonly LineaAjusteNegativoGuardada[];
+  /** `false` con el inventario ya liquidado/lacrado: la pantalla bloquea excluir/incluir ANTES de intentar la llamada. */
+  puedeEditar: boolean;
+}
+
+// ---------------------------------------------------------------------------
 // El monto que se muestra
 // ---------------------------------------------------------------------------
 
