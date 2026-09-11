@@ -7,6 +7,7 @@
  * lado que persiste algo es Postgres, del lado de aca.
  */
 
+import { Prisma } from '@prisma/client';
 import { mensajeSinAlmacen } from '../tiendas/tiendas.almacen';
 import { factorDesdeSimbolo } from '../../dominio/empaque';
 import { prisma } from '../../config/database';
@@ -17,7 +18,7 @@ import {
   parsear as parsearAlmacenes,
 } from './d365.almacenes-inventario';
 import { registrarAuditoria } from '../../shared/auditoria';
-import { ErrorHttp } from '../../shared/errores';
+import { Conflicto, ErrorHttp } from '../../shared/errores';
 import { d365EntityService } from './d365-entity.service';
 import * as progreso from './d365.progreso';
 import type {
@@ -728,12 +729,90 @@ export interface SnapshotDto {
   criterios?: CriteriosSnapshot;
 }
 
+const NOMBRES_MES = [
+  'enero',
+  'febrero',
+  'marzo',
+  'abril',
+  'mayo',
+  'junio',
+  'julio',
+  'agosto',
+  'septiembre',
+  'octubre',
+  'noviembre',
+  'diciembre',
+];
+
+/** Estado del inventario -> texto legible para el Coordinador (no el enum crudo). */
+const ESTADO_INVENTARIO_LEGIBLE: Record<string, string> = {
+  en_curso: 'conteo en curso',
+  conteo_cerrado: 'conteo cerrado',
+  liquidado: 'liquidado',
+  lacrado: 'lacrado',
+  anulado: 'anulado',
+};
+
 /**
- * Idempotente: si la sucursal ya tiene un inventario, lo devuelve tal cual
- * en vez de crear uno nuevo (mismo contrato que el puerto del front) --
- * simplificacion documentada: como todavia no existe un modulo de
- * inventario/hojas en este backend, "ya tiene un inventario" se resuelve
- * como "existe al menos una fila", no "esta en curso sin cerrar".
+ * El mensaje HONESTO cuando la tienda ya tiene el inventario de ese tipo y
+ * periodo (regla de negocio, no error del servidor). Puro y exportado para
+ * poder fijarlo con un test: es la unica frase que ve el Coordinador y no
+ * puede volver a "El servidor tuvo un problema. Vuelve a intentar".
+ *
+ * Con `inventarioId`/`estado` da el dato completo ("... (#34, conteo
+ * cerrado).") -- lo tiene el pre-chequeo, que ya leyo la fila. La barrera del
+ * INSERT (P2002) no tiene la fila a mano y los omite: la frase queda mas
+ * corta pero igual de cierta.
+ */
+export function mensajeInventarioDuplicado(args: {
+  sucursalNombre: string;
+  tipo: TipoInventario;
+  periodoAnio: number;
+  periodoMes: number;
+  inventarioId?: number;
+  estado?: string;
+}): string {
+  const tipoTexto = args.tipo === 'anual' ? 'anual' : 'mensual';
+  const mes = NOMBRES_MES[args.periodoMes - 1] ?? `mes ${args.periodoMes}`;
+  const detalle =
+    args.inventarioId !== undefined && args.estado !== undefined
+      ? ` (#${args.inventarioId}, ${ESTADO_INVENTARIO_LEGIBLE[args.estado] ?? args.estado})`
+      : '';
+  return `${args.sucursalNombre} ya tiene su inventario ${tipoTexto} de ${mes} ${args.periodoAnio}${detalle}.`;
+}
+
+/**
+ * Traduce el P2002 del INSERT del inventario a un Conflicto (409) honesto,
+ * segun CUAL de los dos @@unique choco:
+ *   - `[sucursalId, periodoAnio, periodoMes, tipo]` -> "ya tiene su inventario
+ *     mensual de este mes" (el caso de BUG A que otro camino haya esquivado el
+ *     pre-chequeo: borde de fin de mes o dos coordinadores a la vez).
+ *   - `[sucursalId, abierto]` -> "ya hay un inventario abierto".
+ * En ningun caso es un error del servidor: un choque de unicidad es una regla
+ * de negocio, y devolver 500 mentiria igual que el bug que esto viene a sacar.
+ */
+function conflictoDesdeP2002(
+  err: Prisma.PrismaClientKnownRequestError,
+  ctx: { sucursalNombre: string; tipo: TipoInventario; periodoAnio: number; periodoMes: number },
+): Conflicto {
+  const objetivo = Array.isArray(err.meta?.target)
+    ? (err.meta.target as string[]).join(',')
+    : String(err.meta?.target ?? '');
+  if (objetivo.includes('abierto')) {
+    return new Conflicto(`${ctx.sucursalNombre} ya tiene un inventario abierto. Hay que cerrarlo antes de crear otro.`);
+  }
+  return new Conflicto(mensajeInventarioDuplicado(ctx));
+}
+
+/**
+ * Idempotente sobre el inventario EN CURSO (mismo contrato que el puerto del
+ * front): si la sucursal ya tiene uno `en_curso`, lo devuelve en vez de crear
+ * otro. Ademas hace cumplir la regla "un solo inventario de cada tipo por
+ * sucursal y periodo" ANTES de bajar el catalogo de Dynamics -- descargar
+ * 11.841 items para recien al final chocar contra el INSERT era esperar
+ * minutos para enterarse de algo que ya sabiamos --, y traduce el P2002 del
+ * @@unique de periodo a un 409 honesto por si el INSERT se alcanza por otro
+ * camino.
  */
 export async function crearSnapshot(
   sucursalId: number,
@@ -772,6 +851,37 @@ export async function crearSnapshot(
       items: enCurso.snapshotItems ?? 0,
       tomadoEn: (enCurso.snapshotTomadoEn ?? enCurso.createdAt).toISOString(),
     };
+  }
+
+  /**
+   * REGLA DE NEGOCIO, no error del servidor: un solo inventario de cada TIPO
+   * por sucursal y periodo (@@unique([sucursalId, periodoAnio, periodoMes,
+   * tipo]) en el schema). Se valida ACA, ANTES de arrancar la descarga de
+   * Dynamics: bajar 11.841 items para recien al final chocar contra el INSERT
+   * hacia esperar minutos por un "no" que ya se podia dar de entrada.
+   *
+   * El periodo se calcula como el default de la base -- el mes calendario de
+   * HOY (`EXTRACT(... FROM now())`). El unico hueco es el instante de cambio
+   * de mes entre el reloj de Node y el de Postgres; la barrera del INSERT
+   * (mas abajo, P2002) lo cubre.
+   */
+  const ahora = new Date();
+  const periodoAnio = ahora.getFullYear();
+  const periodoMes = ahora.getMonth() + 1;
+  const yaDelPeriodo = await prisma.inventario.findFirst({
+    where: { sucursalId, tipo, periodoAnio, periodoMes },
+  });
+  if (yaDelPeriodo) {
+    throw new Conflicto(
+      mensajeInventarioDuplicado({
+        sucursalNombre: sucursal.nombre,
+        tipo,
+        periodoAnio: yaDelPeriodo.periodoAnio,
+        periodoMes: yaDelPeriodo.periodoMes,
+        inventarioId: yaDelPeriodo.id,
+        estado: yaDelPeriodo.estado,
+      }),
+    );
   }
 
   /**
@@ -839,6 +949,15 @@ export async function crearSnapshot(
     // visible -- por eso se marca la fase en vez de seguir contando items.
     progreso.marcarGuardando(sucursalId);
     return await guardarSnapshot({ sucursalId, tipo, catalogo, descartes, criterios, actorId, almacen, modo });
+  } catch (error) {
+    // SEGUNDA BARRERA: si el INSERT se alcanzo pese al pre-chequeo (borde de
+    // fin de mes, o dos coordinadores llegando al create a la vez), el
+    // @@unique lo frena con P2002. Nunca es un error del servidor: se traduce
+    // al mismo 409 honesto, no al 500 generico que mentia.
+    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
+      throw conflictoDesdeP2002(error, { sucursalNombre: sucursal.nombre, tipo, periodoAnio, periodoMes });
+    }
+    throw error;
   } finally {
     progreso.terminar(sucursalId);
   }

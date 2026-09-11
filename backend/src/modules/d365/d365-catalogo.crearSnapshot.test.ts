@@ -12,6 +12,7 @@
  * Prisma se mockea, D365 no se toca: `modo: 'ejemplo'` no llama a Dynamics.
  */
 import { describe, expect, it, vi, beforeEach } from 'vitest';
+import { Prisma } from '@prisma/client';
 
 vi.mock('../../config/database', () => ({
   prisma: {
@@ -24,7 +25,7 @@ vi.mock('../../config/database', () => ({
 vi.mock('../../shared/auditoria', () => ({ registrarAuditoria: vi.fn().mockResolvedValue(undefined) }));
 
 import { prisma } from '../../config/database';
-import { crearSnapshot } from './d365-catalogo.service';
+import { crearSnapshot, mensajeInventarioDuplicado } from './d365-catalogo.service';
 
 const SUCURSAL = { id: 1, nombre: 'Market Bolívar', almacenId: null };
 
@@ -86,6 +87,9 @@ describe('crearSnapshot: idempotencia sobre el inventario EN CURSO, no sobre "ab
     const cerradoMigrado = { ...INVENTARIO_34_SIN_LACRAR, abierto: null };
     vi.mocked(prisma.inventario.findFirst).mockImplementation((async ({ where }: { where: Record<string, unknown> }) => {
       if (where.estado === 'en_curso') return null; // ningun conteo en curso
+      // El pre-chequeo de unicidad consulta por el periodo ACTUAL: el 34 es del
+      // mes ANTERIOR (agosto), asi que el mes de hoy no tiene inventario todavia.
+      if (where.periodoAnio !== undefined) return null;
       if (where.abierto === true) return null; // ya migrado: ninguna fila abierta
       return cerradoMigrado;
     }) as never);
@@ -94,5 +98,103 @@ describe('crearSnapshot: idempotencia sobre el inventario EN CURSO, no sobre "ab
 
     expect(resultado.inventarioId).toBe(99);
     expect(prisma.inventario.create).toHaveBeenCalled();
+  });
+});
+
+/**
+ * BUG A (caso end-to-end, 2026-09-10): armar un SEGUNDO inventario mensual en
+ * una tienda que ya tiene el de ese mes choca contra
+ * @@unique([sucursalId, periodoAnio, periodoMes, tipo]). El problema no era
+ * solo el 500 mentiroso ("El servidor tuvo un problema. Vuelve a intentar"),
+ * sino que el Coordinador esperaba la descarga COMPLETA de Dynamics (11.841
+ * items) para recien AL FINAL enterarse. La regla se valida ahora ANTES de
+ * bajar nada, y el P2002 queda como segunda barrera.
+ */
+describe('mensajeInventarioDuplicado: dice la verdad, sin "vuelve a intentar"', () => {
+  it('nombra tienda, tipo, mes/anio, id y estado real -- el ejemplo del cliente', () => {
+    const msg = mensajeInventarioDuplicado({
+      sucursalNombre: 'Market Bolívar',
+      tipo: 'mensual',
+      periodoAnio: 2026,
+      periodoMes: 9,
+      inventarioId: 34,
+      estado: 'conteo_cerrado',
+    });
+    expect(msg).toBe('Market Bolívar ya tiene su inventario mensual de septiembre 2026 (#34, conteo cerrado).');
+    // No miente: ni "servidor/problema" ni "vuelve a intentar".
+    expect(msg).not.toMatch(/servidor|problema|intent/i);
+  });
+
+  it('sin id/estado (barrera del INSERT) mantiene la verdad, mas corta', () => {
+    const msg = mensajeInventarioDuplicado({
+      sucursalNombre: 'Market Bolívar',
+      tipo: 'mensual',
+      periodoAnio: 2026,
+      periodoMes: 9,
+    });
+    expect(msg).toBe('Market Bolívar ya tiene su inventario mensual de septiembre 2026.');
+  });
+});
+
+describe('crearSnapshot: un solo inventario mensual por mes y tienda (BUG A)', () => {
+  it('si ya existe el del periodo actual, corta con Conflicto (409) ANTES de la descarga', async () => {
+    const ahora = new Date();
+    const yaExiste = {
+      id: 34,
+      estado: 'conteo_cerrado',
+      abierto: null,
+      tipo: 'mensual',
+      periodoAnio: ahora.getFullYear(),
+      periodoMes: ahora.getMonth() + 1,
+      snapshotItems: 6297,
+      snapshotTomadoEn: new Date(),
+      createdAt: new Date(),
+    };
+    vi.mocked(prisma.inventario.findFirst).mockImplementation((async ({ where }: { where: Record<string, unknown> }) => {
+      if (where.estado === 'en_curso') return null; // ningun conteo en curso
+      if (where.periodoAnio === ahora.getFullYear() && where.periodoMes === ahora.getMonth() + 1) return yaExiste;
+      return null;
+    }) as never);
+
+    await expect(crearSnapshot(1, 'ejemplo')).rejects.toMatchObject({ status: 409 });
+    // ANTES de la descarga: jamas se llega a crear el inventario ni a bajar el catalogo.
+    expect(prisma.inventario.create).not.toHaveBeenCalled();
+    expect(prisma.catalogoItem.create).not.toHaveBeenCalled();
+  });
+
+  it('el mensaje del Conflicto nombra la tienda y el inventario real', async () => {
+    const ahora = new Date();
+    const yaExiste = {
+      id: 34,
+      estado: 'conteo_cerrado',
+      abierto: null,
+      tipo: 'mensual',
+      periodoAnio: ahora.getFullYear(),
+      periodoMes: ahora.getMonth() + 1,
+      snapshotItems: 6297,
+      snapshotTomadoEn: new Date(),
+      createdAt: new Date(),
+    };
+    vi.mocked(prisma.inventario.findFirst).mockImplementation((async ({ where }: { where: Record<string, unknown> }) => {
+      if (where.estado === 'en_curso') return null;
+      if (where.periodoAnio !== undefined) return yaExiste;
+      return null;
+    }) as never);
+
+    await expect(crearSnapshot(1, 'ejemplo')).rejects.toThrow(/Market Bolívar ya tiene su inventario mensual .* \(#34, conteo cerrado\)\./);
+  });
+
+  it('SEGUNDA BARRERA: el P2002 del @@unique de periodo se traduce a 409, no a 500', async () => {
+    // Pasa el pre-chequeo (findFirst -> null) pero el INSERT choca: borde de fin
+    // de mes o carrera entre dos coordinadores llegando al create a la vez.
+    vi.mocked(prisma.inventario.findFirst).mockResolvedValue(null as never);
+    const p2002 = new Prisma.PrismaClientKnownRequestError('Unique constraint failed', {
+      code: 'P2002',
+      clientVersion: 'test',
+      meta: { target: ['sucursal_id', 'periodo_anio', 'periodo_mes', 'tipo'] },
+    });
+    vi.mocked(prisma.inventario.create).mockRejectedValue(p2002 as never);
+
+    await expect(crearSnapshot(1, 'ejemplo')).rejects.toMatchObject({ status: 409 });
   });
 });

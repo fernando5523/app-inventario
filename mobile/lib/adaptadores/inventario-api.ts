@@ -137,6 +137,18 @@ function comoErrorSnapshot(error: unknown): ErrorSnapshot {
   const directo = directos[error.clase];
   if (directo) return new ErrorSnapshot(directo, error.message);
 
+  // 409 = REGLA DE NEGOCIO del backend, no falla técnica: la tienda ya tiene
+  // su inventario de ese tipo y período (d365-catalogo.service.ts, el
+  // @@unique([sucursalId, periodoAnio, periodoMes, tipo])). Se decide por la
+  // CLASE, no por el texto: el backend ya redactó la verdad para el
+  // Coordinador ("... ya tiene su inventario mensual de septiembre 2026
+  // (#34, conteo cerrado).") y se muestra tal cual, sin "vuelve a intentar".
+  // Antes caía en `desconocido` y la pantalla lo pintaba como error de
+  // servidor con reintento — mentía dos veces.
+  if (error.clase === 'conflicto') {
+    return new ErrorSnapshot('inventario-ya-existe', error.message);
+  }
+
   // Se mira SIEMPRE el mensaje crudo del servidor, no `message`: en un 5xx
   // `message` ya fue reemplazado por el texto genérico y no queda rastro de
   // qué dijo el backend (ver _http.ts#mensajeServidor).

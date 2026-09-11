@@ -433,6 +433,14 @@ export default function ArmarHojasScreen(): JSX.Element {
       case 'timeout':
         Alert.alert('Se cortó a mitad de camino', 'Puedes reintentar: no quedó nada a medio hacer.');
         return;
+      case 'inventario-ya-existe':
+        // Regla de negocio, no falla técnica: la tienda ya tiene su inventario
+        // de este mes. Reintentar NUNCA va a funcionar, así que no se ofrece —
+        // solo la verdad que ya redactó el backend, con el estado real del
+        // inventario ("... ya tiene su inventario mensual de septiembre 2026
+        // (#34, conteo cerrado).").
+        Alert.alert('Ese inventario ya existe', error.message);
+        return;
       default:
         Alert.alert('No se pudo traer el catálogo', error.message);
     }

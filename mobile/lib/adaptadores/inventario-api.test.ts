@@ -177,6 +177,22 @@ describe('traerSnapshot — cada falla con su código', () => {
     expect(error).toBeInstanceOf(ErrorSnapshot);
     expect((error as ErrorSnapshot).codigo).toBe('desconocido');
   });
+
+  it('un 409 es la regla de negocio "ya existe ese inventario", con el mensaje real del backend', async () => {
+    // BUG A (caso end-to-end): armar un segundo mensual del mismo mes chocaba
+    // contra el @@unique y llegaba a la pantalla como 500 genérico ("El
+    // servidor tuvo un problema. Vuelve a intentar"). Miente dos veces: no es
+    // el servidor, y reintentar nunca funciona. Es una regla de negocio ->
+    // código propio y el mensaje HONESTO del backend, intacto.
+    const mensaje = 'Market Bolívar ya tiene su inventario mensual de septiembre 2026 (#34, conteo cerrado).';
+    fetchPorRuta({ '/api/d365/estado': CONFIGURADO, '/api/d365/snapshot': json({ error: mensaje }, 409) });
+    const error = await inventarioApi.traerSnapshot(1).catch((e) => e);
+    expect(error).toBeInstanceOf(ErrorSnapshot);
+    expect((error as ErrorSnapshot).codigo).toBe('inventario-ya-existe');
+    // El texto del backend llega tal cual: ni genérico, ni "vuelve a intentar".
+    expect((error as ErrorSnapshot).message).toBe(mensaje);
+    expect((error as ErrorSnapshot).message).not.toMatch(/servidor|vuelve a intentar/i);
+  });
 });
 
 // La forma de estos cuerpos es la de rondas.service.ts (ResumenRondaDto y

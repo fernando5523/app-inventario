@@ -155,6 +155,9 @@ export type CodigoErrorSnapshot =
   | 'dynamics-no-configurado'
   | 'sin-almacen'
   | 'credenciales-rechazadas'
+  // Regla de negocio, no falla técnica: la tienda ya tiene su inventario de
+  // ese tipo y período (el @@unique del backend). No se reintenta.
+  | 'inventario-ya-existe'
   | 'timeout'
   | 'cancelado'
   | 'desconocido';
