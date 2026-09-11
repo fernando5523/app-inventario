@@ -297,6 +297,65 @@ export async function excluirLineaAjusteNegativo(
   return { montoNegativos, linea: mapLinea(actualizada) };
 }
 
+export interface ImportacionVigenteDto {
+  id: number;
+  nombreArchivo: string;
+  importadoPor: { id: number; nombre: string };
+  importadoEn: string;
+}
+
+export interface ListadoLineasAjustesNegativosDto {
+  /**
+   * `null` = nadie importó nada todavía para este inventario -- distinto de
+   * una importación con `lineas: []` (alguien importó un archivo válido sin
+   * líneas útiles). Misma regla NULL != 0 de siempre, aplicada acá al
+   * LISTADO en vez de al monto.
+   */
+  importacion: ImportacionVigenteDto | null;
+  lineas: readonly LineaAjusteNegativoDto[];
+}
+
+/**
+ * Lista las líneas de la importación VIGENTE de un inventario, para que el
+ * Auditor decida qué excluir. Es una LECTURA: a diferencia de
+ * preview/confirmar/excluir/incluir, no pasa por `validarEstadoParaAjustar`
+ * -- se puede revisar qué se importó aunque el inventario ya esté
+ * `liquidado` o `lacrado` (mismo criterio que `estadoDeAjustes` en
+ * liquidacion.ajustes.ts: leer siempre se puede, solo ESCRIBIR se bloquea).
+ */
+export async function listarLineasAjusteNegativo(
+  actor: ColaboradorAutenticado,
+  inventarioId: number,
+): Promise<ListadoLineasAjustesNegativosDto> {
+  validarAcceso(actor);
+
+  const inventario = await prisma.inventario.findUnique({ where: { id: inventarioId }, select: { id: true } });
+  if (inventario === null) throw new NoEncontrado('Ese inventario no existe.');
+
+  const importacion = await prisma.importacionAjustesDynamics.findFirst({
+    where: { inventarioId, vigente: true },
+    include: {
+      importadoPor: { select: { id: true, nombre: true } },
+      lineas: {
+        include: { excluidaPor: { select: { id: true, nombre: true } } },
+        orderBy: { fila: 'asc' },
+      },
+    },
+  });
+
+  if (importacion === null) return { importacion: null, lineas: [] };
+
+  return {
+    importacion: {
+      id: importacion.id,
+      nombreArchivo: importacion.nombreArchivo,
+      importadoPor: importacion.importadoPor,
+      importadoEn: importacion.importadoEn.toISOString(),
+    },
+    lineas: importacion.lineas.map(mapLinea),
+  };
+}
+
 /**
  * Paso 3, la vuelta: reincluir una línea que se había excluido por error. Los
  * campos de la exclusión se LIMPIAN (no describen nada del estado actual: la

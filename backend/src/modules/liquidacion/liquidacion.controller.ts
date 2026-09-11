@@ -81,6 +81,12 @@ export const confirmarAjustesNegativos = asyncHandler(async (req: RequestAutenti
     .json(await ajustesNegativos.confirmarAjustesNegativos(req.colaborador!, inventarioId, req.body as Buffer, nombreArchivo));
 });
 
+/** Las líneas de la importación vigente -- lectura, se puede consultar aunque el inventario ya esté liquidado. */
+export const listarLineasAjustesNegativos = asyncHandler(async (req: RequestAutenticado, res: Response) => {
+  const { inventarioId } = req.params as unknown as ParametrosInventario;
+  res.json(await ajustesNegativos.listarLineasAjusteNegativo(req.colaborador!, inventarioId));
+});
+
 export const excluirLineaAjusteNegativo = asyncHandler(async (req: RequestAutenticado, res: Response) => {
   const { inventarioId, lineaId } = req.params as unknown as ParametrosLineaAjuste;
   const { motivo } = req.body as MotivoLineaAjusteInput;

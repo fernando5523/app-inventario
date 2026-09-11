@@ -96,6 +96,17 @@ liquidacionRouter.post(
   controller.confirmarAjustesNegativos,
 );
 
+/**
+ * Las líneas de la importación VIGENTE, para que el Auditor elija cuál
+ * excluir. LECTURA: se puede consultar aunque el inventario ya esté
+ * liquidado o lacrado (liquidacion.ajustes-negativos.ts#listarLineasAjusteNegativo).
+ */
+liquidacionRouter.get(
+  '/inventarios/:inventarioId/ajustes-negativos/lineas',
+  validar(parametrosInventarioSchema, 'params'),
+  controller.listarLineasAjustesNegativos,
+);
+
 /** Excluir o reincluir una línea puntual de la importación vigente -- motivo obligatorio, recalcula montoNegativos. */
 liquidacionRouter.patch(
   '/inventarios/:inventarioId/ajustes-negativos/lineas/:lineaId/excluir',

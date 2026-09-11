@@ -18,7 +18,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const prismaMock = vi.hoisted(() => ({
   inventario: { findUnique: vi.fn() },
   resultadoInventario: { update: vi.fn() },
-  importacionAjustesDynamics: { updateMany: vi.fn(), create: vi.fn() },
+  importacionAjustesDynamics: { updateMany: vi.fn(), create: vi.fn(), findFirst: vi.fn() },
   lineaAjusteDynamics: { createMany: vi.fn(), findUnique: vi.fn(), update: vi.fn(), aggregate: vi.fn() },
   $transaction: vi.fn(),
 }));
@@ -34,6 +34,7 @@ import {
   confirmarAjustesNegativos,
   excluirLineaAjusteNegativo,
   incluirLineaAjusteNegativo,
+  listarLineasAjusteNegativo,
   previsualizarAjustesNegativos,
 } from './liquidacion.ajustes-negativos';
 
@@ -340,6 +341,25 @@ describe('excluirLineaAjusteNegativo / incluirLineaAjusteNegativo', () => {
     await expect(excluirLineaAjusteNegativo(AUDITOR, 9, 100, 'motivo')).rejects.toThrow(Conflicto);
   });
 
+  /**
+   * VERIFICACIÓN (2026-09-14, pedido del cliente): no se puede tocar la
+   * plata de un inventario ya cerrado. Ya lo bloqueaba `inventarioParaImportar`
+   * -> `validarEstadoParaAjustar` (liquidacion.ajustes.ts), la misma puerta
+   * que preview/confirmar -- este test lo deja PROBADO explícitamente para
+   * excluir/incluir, no solo inferido de la cadena de llamadas.
+   */
+  it.each([
+    ['liquidado', excluirLineaAjusteNegativo] as const,
+    ['lacrado', excluirLineaAjusteNegativo] as const,
+    ['liquidado', incluirLineaAjusteNegativo] as const,
+    ['lacrado', incluirLineaAjusteNegativo] as const,
+  ])('%s: BLOQUEADO -- no se toca la plata de un inventario ya cerrado', async (estado, accion) => {
+    mockInventario({ estado });
+    await expect(accion(AUDITOR, 9, 100, 'motivo')).rejects.toThrow(/ya se cerró/);
+    expect(prismaMock.lineaAjusteDynamics.update).not.toHaveBeenCalled();
+    expect(prismaMock.resultadoInventario.update).not.toHaveBeenCalled();
+  });
+
   it('excluir: marca excluida con quién, cuándo y el motivo, los cuatro juntos', async () => {
     await excluirLineaAjusteNegativo(AUDITOR, 9, 100, 'El área de negativos puso mal el motivo.');
 
@@ -425,5 +445,98 @@ describe('excluirLineaAjusteNegativo / incluirLineaAjusteNegativo', () => {
 
   it('incluir: el coordinador no accede', async () => {
     await expect(incluirLineaAjusteNegativo(COORDINADOR, 9, 100, 'motivo')).rejects.toThrow(Prohibido);
+  });
+});
+
+describe('listarLineasAjusteNegativo: NULL != 0 tambien en el listado', () => {
+  it('el coordinador no accede', async () => {
+    await expect(listarLineasAjusteNegativo(COORDINADOR, 9)).rejects.toThrow(Prohibido);
+    expect(prismaMock.inventario.findUnique).not.toHaveBeenCalled();
+  });
+
+  it('el inventario que no existe es 404', async () => {
+    prismaMock.inventario.findUnique.mockResolvedValue(null);
+    await expect(listarLineasAjusteNegativo(AUDITOR, 9)).rejects.toThrow(NoEncontrado);
+  });
+
+  it('SIN importación vigente: importacion null, lineas [] -- distinto de "0 líneas"', async () => {
+    prismaMock.importacionAjustesDynamics.findFirst.mockResolvedValue(null);
+    const resultado = await listarLineasAjusteNegativo(AUDITOR, 9);
+    expect(resultado.importacion).toBeNull();
+    expect(resultado.lineas).toEqual([]);
+  });
+
+  it('importación vigente CON 0 líneas útiles: importacion NO es null (el archivo se importó de verdad)', async () => {
+    prismaMock.importacionAjustesDynamics.findFirst.mockResolvedValue({
+      id: 42,
+      nombreArchivo: 'vacio.xlsx',
+      importadoEn: new Date('2026-09-14T10:00:00.000Z'),
+      importadoPor: { id: 5, nombre: 'Gilmer' },
+      lineas: [],
+    });
+    const resultado = await listarLineasAjusteNegativo(AUDITOR, 9);
+    expect(resultado.importacion).toMatchObject({ id: 42, nombreArchivo: 'vacio.xlsx' });
+    expect(resultado.lineas).toEqual([]);
+  });
+
+  it('devuelve cada línea con su id, fila, si está excluida, quién y cuándo', async () => {
+    prismaMock.importacionAjustesDynamics.findFirst.mockResolvedValue({
+      id: 42,
+      nombreArchivo: 'ajustes.xlsx',
+      importadoEn: new Date('2026-09-14T10:00:00.000Z'),
+      importadoPor: { id: 5, nombre: 'Gilmer' },
+      lineas: [
+        {
+          id: 100,
+          fila: 2,
+          codigo: '101131',
+          descripcion: 'Ajuste',
+          importe: decimal(30),
+          excluida: false,
+          motivoExclusion: null,
+          excluidaEn: null,
+          excluidaPor: null,
+        },
+        {
+          id: 101,
+          fila: 3,
+          codigo: '101132',
+          descripcion: 'Ajuste 2',
+          importe: decimal(15),
+          excluida: true,
+          motivoExclusion: 'El área de negativos puso mal el motivo.',
+          excluidaEn: new Date('2026-09-14T11:00:00.000Z'),
+          excluidaPor: { id: 5, nombre: 'Gilmer' },
+        },
+      ],
+    });
+
+    const resultado = await listarLineasAjusteNegativo(AUDITOR, 9);
+
+    expect(resultado.lineas).toHaveLength(2);
+    expect(resultado.lineas[0]).toMatchObject({ id: 100, fila: 2, excluida: false, importe: 30 });
+    expect(resultado.lineas[1]).toMatchObject({
+      id: 101,
+      excluida: true,
+      motivoExclusion: 'El área de negativos puso mal el motivo.',
+      excluidaPor: { id: 5, nombre: 'Gilmer' },
+    });
+  });
+
+  it('NO exige conteo_cerrado: se puede leer aunque el inventario ya esté liquidado o lacrado', async () => {
+    mockInventario({ estado: 'liquidado' });
+    prismaMock.importacionAjustesDynamics.findFirst.mockResolvedValue(null);
+    await expect(listarLineasAjusteNegativo(AUDITOR, 9)).resolves.toEqual({ importacion: null, lineas: [] });
+
+    mockInventario({ estado: 'lacrado' });
+    await expect(listarLineasAjusteNegativo(AUDITOR, 9)).resolves.toEqual({ importacion: null, lineas: [] });
+  });
+
+  it('pide la importación VIGENTE de ESTE inventario', async () => {
+    prismaMock.importacionAjustesDynamics.findFirst.mockResolvedValue(null);
+    await listarLineasAjusteNegativo(AUDITOR, 9);
+    expect(prismaMock.importacionAjustesDynamics.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { inventarioId: 9, vigente: true } }),
+    );
   });
 });

@@ -34,6 +34,7 @@ vi.mock('./liquidacion.controller', () =>
     'estadoAjustes',
     'previsualizarAjustesNegativos',
     'confirmarAjustesNegativos',
+    'listarLineasAjustesNegativos',
     'excluirLineaAjusteNegativo',
     'incluirLineaAjusteNegativo',
   ]),
@@ -89,6 +90,11 @@ const ENDPOINTS: Endpoint[] = [
     metodo: 'POST',
     ruta: '/api/liquidacion/inventarios/1/ajustes-negativos/confirmar?nombreArchivo=ajustes.xlsx',
     crudo: Buffer.from('excel falso'),
+  },
+  {
+    nombre: 'GET /inventarios/:id/ajustes-negativos/lineas',
+    metodo: 'GET',
+    ruta: '/api/liquidacion/inventarios/1/ajustes-negativos/lineas',
   },
   {
     nombre: 'PATCH /inventarios/:id/ajustes-negativos/lineas/:id/excluir',
