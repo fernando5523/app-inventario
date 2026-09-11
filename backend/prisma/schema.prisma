@@ -216,6 +216,11 @@ model Colaborador {
   /// Ajustes del mes que cargo -- plata que se decide NO descontarle al
   /// personal, asi que lleva firma (ver ResultadoInventario.ajustesPorId).
   ajustesRegistrados      ResultadoInventario[]    @relation("AjustesRegistrados")
+  /// Liquidacion v2 -- firmas de decisiones del Auditor que mueven plata o
+  /// cambian la clasificacion de un producto. Ver cada modelo.
+  clasificacionesProducto ClasificacionProducto[]      @relation("ClasificadoPor")
+  importacionesAjustes    ImportacionAjustesDynamics[] @relation("ImportadoPor")
+  lineasAjusteExcluidas   LineaAjusteDynamics[]        @relation("ExcluidaPor")
 
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
@@ -398,6 +403,10 @@ model Inventario {
   diferencias      DiferenciaItem[]
   aprobaciones     AprobacionCierre[]
   liquidaciones    LiquidacionColaborador[]
+  /// Excel de ajustes de Dynamics importados para este inventario. Pueden
+  /// ser varios (re-importar no borra), pero a lo sumo UNO vigente -- ver
+  /// ImportacionAjustesDynamics.vigente.
+  importacionesAjustes ImportacionAjustesDynamics[]
 
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
@@ -514,6 +523,21 @@ model CatalogoItem {
   /// null = D365 dijo 'None', o el item nunca sincronizo esta entidad.
   /// Aditiva: `esEmpresa` sigue existiendo tal cual, no se toca.
   responsable ResponsableItem? @map("responsable")
+
+  /// EXCEPCION del Auditor a `esEmpresa`, copiada de ClasificacionProducto
+  /// al traer el snapshot (d365-catalogo.service.ts#crearSnapshot).
+  ///
+  /// null = sin excepcion: manda `esEmpresa` (Dynamics). La clasificacion
+  /// efectiva de un item es SIEMPRE `esEmpresaManual ?? esEmpresa`, y la
+  /// arma el service que construye la matriz -- auditoria.calculos.ts sigue
+  /// recibiendo un booleano y no se entera de donde salio.
+  ///
+  /// CONGELADA en el snapshot, igual que stockErp y precioVenta: si el
+  /// Auditor reclasifica un codigo en octubre, septiembre no se reescribe.
+  /// Columna APARTE y no un pisado de `esEmpresa`, a proposito: "que dijo
+  /// el ERP" y "que decidio el Auditor" son dos datos, y fusionarlos borra
+  /// el primero.
+  esEmpresaManual Boolean? @map("es_empresa_manual")
 
   createdAt DateTime @default(now()) @map("created_at")
 
@@ -920,6 +944,25 @@ model ResultadoInventario {
   /// Faltante que absorbe la empresa y no se descuenta (las cervezas del
   /// ejemplo del cliente).
   montoFaltanteEmpresa Decimal @default(0) @map("monto_faltante_empresa") @db.Decimal(12, 2)
+  /// Sobrante que va A FAVOR del personal: valor de los sobrantes de
+  /// productos NO empresa (clasificacion efectiva `esEmpresaManual ??
+  /// esEmpresa` = false), a precio de venta -- misma valorizacion que
+  /// montoFaltanteBruto. NO es `unidadesSobrantes` (cantidad fisica, empresa
+  /// incluida) ni el `valorSobrante` de auditoria.calculos.ts (suma tambien
+  /// los de empresa, y los productos de empresa no entran a la liquidacion,
+  /// ni en contra ni a favor).
+  ///
+  /// Congelado al cerrar el conteo (rondas.service.ts#cerrar), en la misma
+  /// transaccion que el resto del resultado.
+  ///
+  /// NULLABLE y SIN relleno para atras: NULL = "este inventario cerro antes
+  /// de que existiera la regla". historial.service.ts#resumirResultado
+  /// RECALCULA el neto en cada lectura, asi que ponerle un valor a un
+  /// inventario ya liquidado cambiaria el neto que muestra el historico --
+  /// distinto del que se desconto de verdad. La formula tiene que leer NULL
+  /// como "sin compensacion de sobrantes", la regla con la que ese
+  /// inventario se liquido. Distinto de 0 = "se calculo y no hubo".
+  montoSobranteEmpleado Decimal? @map("monto_sobrante_empleado") @db.Decimal(12, 2)
 
   /// -- Reparto (Pantalla 6) --
   /// Entre CUANTA gente se divide el neto: todo el personal habilitado de
@@ -1039,6 +1082,23 @@ model DiferenciaItem {
   precioUnitario  Decimal? @map("precio_unitario")  @db.Decimal(12, 4)
   montoDiferencia Decimal? @map("monto_diferencia") @db.Decimal(12, 2)
 
+  /// Clasificacion EFECTIVA del item (`esEmpresaManual ?? esEmpresa` de su
+  /// CatalogoItem), CONGELADA al cerrar el conteo igual que `descripcion` y
+  /// `precioUnitario`. Es lo que filtra el reporte a gerencia (sobrantes y
+  /// faltantes de productos de empresa) sin volver a cruzar contra el
+  /// catalogo.
+  ///
+  /// Filas anteriores a esta columna: la migracion las rellena con el
+  /// `es_empresa` de su CatalogoItem (mismo inventario, mismo codigo), que
+  /// es EXACTAMENTE el valor que uso ese cierre (auditoria.service.ts arma
+  /// la matriz con CatalogoItem.esEmpresa). Asi este campo y
+  /// ResultadoInventario.montoFaltanteEmpresa no pueden discrepar.
+  ///
+  /// El @default(false) existe SOLO para que el createMany actual de
+  /// rondas.service.ts#cerrar siga compilando. No es una regla: quien cierra
+  /// el conteo TIENE que escribirlo siempre, explicito.
+  esEmpresa Boolean @default(false) @map("es_empresa")
+
   createdAt DateTime @default(now()) @map("created_at")
 
   /// Un item aparece una sola vez por inventario: la diferencia es el
@@ -1049,6 +1109,119 @@ model DiferenciaItem {
   @@index([codigo])
   @@index([inventarioId, diferencia])
   @@map("diferencias_item")
+}
+
+// ---------------------------------------------------------------------------
+// Liquidacion v2: clasificacion manual y ajustes importados de Dynamics
+// ---------------------------------------------------------------------------
+
+/// Excepcion PERMANENTE del Auditor a la clasificacion empresa/empleado de
+/// Dynamics, por CODIGO y no por inventario: el Auditor no quiere
+/// reclasificar lo mismo cada mes. Caso real: productos de empresa que en
+/// D365 figuran como Employee para forzar que entren al conteo.
+///
+/// Es la fuente VIVA; lo que usa cada inventario es la copia congelada en
+/// CatalogoItem.esEmpresaManual. Sin fila = sin excepcion, manda Dynamics.
+/// El historial de cambios vive en RegistroAuditoria: esta tabla dice lo
+/// que vale HOY.
+model ClasificacionProducto {
+  id        Int     @id @default(autoincrement())
+  /// ItemNumber de Dynamics -- la identidad estable entre periodos (ver
+  /// DiferenciaItem.codigo).
+  codigo    String  @unique
+  esEmpresa Boolean @map("es_empresa")
+  nota      String?
+
+  /// Quien y cuando, SIEMPRE juntos y explicitos (sin default): una
+  /// reclasificacion mueve plata de un lado a otro de la liquidacion.
+  clasificadoPorId Int         @map("clasificado_por_id")
+  clasificadoPor   Colaborador @relation("ClasificadoPor", fields: [clasificadoPorId], references: [id])
+  clasificadoEn    DateTime    @map("clasificado_en")
+
+  @@map("clasificaciones_producto")
+}
+
+/// CABECERA de una importacion del Excel de ajustes de Dynamics ("Ajuste
+/// por analisis de Inventarios / Sobrante unico por unidad", los manda el
+/// area de negativos). Reemplaza al monto que se tipeaba a mano en
+/// ResultadoInventario.montoNegativos.
+///
+/// EXISTE para sostener la regla NULL != 0 de liquidacion.ajustes.ts, que
+/// con solo las lineas no se puede expresar:
+///   - sin importacion vigente          -> montoNegativos NULL (bloquea liquidar)
+///   - importacion vigente con 0 lineas -> 0 EXPLICITO: alguien identificado
+///     subio el archivo y no habia nada.
+/// Si quien y cuando vivieran en las lineas, un Excel vacio no dejaria
+/// ninguna fila donde anotarlos, y "importe 0" seria indistinguible de
+/// "nunca se importo".
+model ImportacionAjustesDynamics {
+  id           Int        @id @default(autoincrement())
+  inventarioId Int        @map("inventario_id")
+  inventario   Inventario @relation(fields: [inventarioId], references: [id])
+
+  nombreArchivo  String      @map("nombre_archivo")
+  importadoPorId Int         @map("importado_por_id")
+  importadoPor   Colaborador @relation("ImportadoPor", fields: [importadoPorId], references: [id])
+  importadoEn    DateTime    @default(now()) @map("importado_en")
+
+  /// true = la importacion que cuenta; NULL = reemplazada por una posterior.
+  /// NUNCA false -- mismo patron que Inventario.abierto: con el @@unique de
+  /// abajo, a lo sumo UNA vigente por inventario. Re-importar un Excel
+  /// corregido pasa la anterior a NULL en vez de borrarla, y sus lineas
+  /// excluidas siguen existiendo con su firma.
+  vigente Boolean? @default(true)
+
+  lineas LineaAjusteDynamics[]
+
+  @@unique([inventarioId, vigente])
+  @@map("importaciones_ajustes_dynamics")
+}
+
+/// Una fila del Excel de ajustes, TAL CUAL vino (importe con su signo).
+///
+/// Obligatorio solo lo que la formula necesita (`importe`), lo que
+/// identifica el articulo (`codigo`) y lo que ubica la fila en el archivo
+/// (`fila`). El resto es nullable porque esto es un espejo del Excel: una
+/// celda vacia es un dato (NULL), y que se rechaza al importar lo decide el
+/// parser, no el esquema.
+model LineaAjusteDynamics {
+  id            Int                        @id @default(autoincrement())
+  importacionId Int                        @map("importacion_id")
+  importacion   ImportacionAjustesDynamics @relation(fields: [importacionId], references: [id])
+
+  /// Numero de fila en la hoja, como la ve Excel -- para poder decirle al
+  /// area de negativos "la fila 14 tiene mal el motivo".
+  fila Int
+
+  diario       String?
+  descripcion  String?
+  almacen      String?
+  codigo       String
+  nombre2      String?
+  /// 4 decimales, igual que precioVenta: el ERP puede traer fracciones (kg).
+  cantidad     Decimal?  @db.Decimal(12, 4)
+  precio       Decimal?  @db.Decimal(12, 4)
+  importe      Decimal   @db.Decimal(12, 2)
+  motivoAjuste String?   @map("motivo_ajuste")
+  registradoEn DateTime? @map("registrado_en")
+  responsable  String?
+
+  /// El Auditor puede QUITAR una linea antes de liquidar ("el area de
+  /// negativos se equivoca en poner el motivo", Gilmer). Se marca, no se
+  /// borra: la linea sigue a la vista, con quien la saco y por que. Los
+  /// cuatro campos se escriben JUNTOS -- una exclusion sin firma es plata
+  /// que alguien dejo de reconocerle al personal sin explicacion.
+  /// montoNegativos suma solo las NO excluidas.
+  excluida        Boolean      @default(false)
+  excluidaPorId   Int?         @map("excluida_por_id")
+  excluidaPor     Colaborador? @relation("ExcluidaPor", fields: [excluidaPorId], references: [id])
+  excluidaEn      DateTime?    @map("excluida_en")
+  motivoExclusion String?      @map("motivo_exclusion")
+
+  /// Una fila del archivo aparece una sola vez por importacion. Tambien es
+  /// el indice de "las lineas de esta importacion" (prefijo izquierdo).
+  @@unique([importacionId, fila])
+  @@map("lineas_ajuste_dynamics")
 }
 
 /// La planilla de descuentos de la Pantalla 6, una fila por colaborador.
