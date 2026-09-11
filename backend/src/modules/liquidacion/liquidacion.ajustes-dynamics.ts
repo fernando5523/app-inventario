@@ -1,8 +1,9 @@
 /**
  * EL LECTOR DEL EXCEL DE AJUSTES DE DYNAMICS.
  *
- * Reemplaza el monto de "negativos" que hoy se carga a mano
- * (liquidacion.ajustes.ts#AjustesInput.montoNegativos) por la suma de
+ * Reemplaza el monto de "negativos" que antes se cargaba a mano en
+ * `ResultadoInventario.montoNegativos` (el PUT /ajustes que lo hacía se sacó
+ * en a1501dd) por la suma de
  * sobrantes que Jocelyn ya registró en el ERP durante el mes ('Ajuste por
  * análisis de Inventarios', motivo 'Sobrante único por unidad', responsable
  * Empleado) -- corte del 29 del mes anterior al 28 de este.
