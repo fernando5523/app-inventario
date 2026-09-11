@@ -197,7 +197,24 @@ export function AjustesNegativosScreen(): JSX.Element {
     >
       <BarraApp rotulo="Liquidación · Ajustes" sede="Excel de Dynamics" />
 
-      <Pressable style={styles.volver} onPress={() => router.back()} accessibilityRole="button">
+      {/*
+       * `router.replace`, NUNCA `router.back()`: esta pantalla y Liquidación
+       * son rutas de archivo dentro del MISMO <Tabs> plano de RolTabsLayout
+       * (ninguna de las dos está en TABS_POR_ROL.auditor) -- un Tab Navigator
+       * no lleva una pila lineal como un Stack, así que `back()` desde una
+       * pantalla que no es un tab declarado puede resolver a la pestaña
+       * INICIAL (Inicio) en vez de a la pantalla anterior real. Se vio en
+       * vivo en la prueba end-to-end de liquidación (2026-09-11): "Volver a
+       * Liquidación" saltaba a Inicio. `replace` a la ruta explícita es
+       * determinístico pase lo que pase con el historial de navegación, y
+       * no necesita `inventarioId`: Liquidación lo vuelve a calcular de la
+       * sucursal compartida (SucursalAuditadaProvider), no de un parámetro.
+       */}
+      <Pressable
+        style={styles.volver}
+        onPress={() => router.replace('/auditor/liquidacion')}
+        accessibilityRole="button"
+      >
         <ChevronLeft size={15} color={colors.rojo} />
         <Text style={styles.volverTexto}>Volver a Liquidación</Text>
       </Pressable>
