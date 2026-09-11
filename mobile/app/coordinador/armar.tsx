@@ -9,6 +9,7 @@ import { inventarioIdSinRed } from '../../lib/adaptadores/hojas-sqlite';
 import { repositorioHojas, repositorioInventario, repositorioSesion } from '../../lib/contenedor';
 import { avanceParaMostrar } from '../../lib/dominio/avance-snapshot';
 import { textoDeCriterios } from '../../lib/dominio/criterios-snapshot';
+import { rotuloHojasCreadas } from '../../lib/dominio/rotulo-armado';
 import { partirEnHojas } from '../../lib/dominio/lote';
 import { TAMANOS_HOJA, type Colaborador, type HojaConteo, type TamanoHoja } from '../../lib/dominio/tipos';
 import {
@@ -238,7 +239,11 @@ export default function ArmarHojasScreen(): JSX.Element {
   const [items, setItems] = useState<number | null>(null);
   const [tomadoEn, setTomadoEn] = useState<string | null>(null);
   const [hojas, setHojas] = useState<HojaConteo[]>([]);
-  const [tamanoCreado, setTamanoCreado] = useState<TamanoHoja | null>(null);
+  // La ronda a la que pertenecen `hojas` (el reconteo es 2 y 3). El rótulo del
+  // paso 2 la NECESITA: sin ella un "1 hoja creada" no dice de qué ronda es, y
+  // ese número sin apellido mostraba las cifras de la ronda 1 en las rondas
+  // 2 y 3 (BUG B).
+  const [ronda, setRonda] = useState(1);
   const [contadores, setContadores] = useState<Colaborador[]>([]);
 
   const [tipoElegido, setTipoElegido] = useState<TipoInventario>('mensual');
@@ -266,7 +271,6 @@ export default function ArmarHojasScreen(): JSX.Element {
     let inventarioActivo: number | null;
     let itemsSnapshot: number | null = null;
     let tomadoEnSnapshot: string | null = null;
-    let tamanoSnapshot: TamanoHoja | null = null;
     let rondaActiva = 1;
     // Distingue "el servidor contestó y no hay inventario todavía" (estado
     // normal: hay que tomar el snapshot en el paso 1) de "no se pudo ni
@@ -278,7 +282,6 @@ export default function ArmarHojasScreen(): JSX.Element {
       inventarioActivo = activo?.inventarioId ?? null;
       itemsSnapshot = activo?.items ?? null;
       tomadoEnSnapshot = activo?.tomadoEn ?? null;
-      tamanoSnapshot = activo?.tamanoHoja ?? null;
       rondaActiva = activo?.rondaActiva ?? 1;
     } catch {
       activoFallo = true;
@@ -300,7 +303,7 @@ export default function ArmarHojasScreen(): JSX.Element {
       setInventarioId(inventarioActivo);
       setItems(itemsSnapshot);
       setTomadoEn(tomadoEnSnapshot);
-      setTamanoCreado(tamanoSnapshot);
+      setRonda(rondaActiva);
       try {
         // Las hojas de la ronda activa (`?? 1`: si todavía no hay hojas,
         // rondaActiva es null y no hay ninguna que traer de ninguna ronda —
@@ -491,7 +494,6 @@ export default function ArmarHojasScreen(): JSX.Element {
     try {
       const nuevas = await repositorioInventario.crearHojas(inventarioId, tamanoElegido);
       setHojas(nuevas);
-      setTamanoCreado(tamanoElegido);
     } catch (error) {
       Alert.alert('No se pudieron crear las hojas', error instanceof Error ? error.message : 'Intenta de nuevo.');
     } finally {
@@ -614,11 +616,7 @@ export default function ArmarHojasScreen(): JSX.Element {
               !paso1Hecho
                 ? 'Trae primero el catálogo de Dynamics para poder crear las hojas.'
                 : paso2Hecho
-                  ? `${formatoMiles(hojas.length)} hojas creadas de ${tamanoCreado} ítems (${formatoMiles(items ?? 0)} ítems en total)${
-                      hojas[hojas.length - 1] && hojas[hojas.length - 1].tamano !== tamanoCreado
-                        ? ` · la última con ${hojas[hojas.length - 1].tamano} ítems`
-                        : ''
-                    }.`
+                  ? rotuloHojasCreadas(hojas, ronda, formatoMiles)
                   : 'Elige cuántos ítems por hoja quieres y mira cuántas hojas salen antes de crearlas.'
             }
           >
