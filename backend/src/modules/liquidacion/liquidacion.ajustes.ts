@@ -19,9 +19,27 @@
  * Los inventarios YA liquidados con un monto tipeado a mano en su momento
  * siguen leyéndose igual (`estadoDeAjustes` no cambia): no se reprocesan.
  *
- * Este archivo se queda con lo que sigue siendo manual: `montoFaltanteEmpresa`
- * (una corrección sobre el calculado al cerrar el conteo) y la nota que
- * documenta esa corrección.
+ * ---------------------------------------------------------------------------
+ * MONTOEMPRESA TAMPOCO SE CARGA ACÁ (2026-09-14)
+ * ---------------------------------------------------------------------------
+ * Nació como el mismo tipo de monto agregado que `montoNegativos`: un número
+ * que el Coordinador (después el Auditor) tipeaba a mano encima del calculado
+ * al cerrar el conteo. Dejó de tener sentido el mismo día que
+ * `liquidacion.cierre.ts#liquidar` empezó a RECALCULAR `montoFaltanteEmpresa`
+ * a partir de la clasificación vigente (`ClasificacionProducto`, ver
+ * liquidacion.reclasificacion.ts) -- decisión del cliente: el Auditor
+ * clasifica PRODUCTOS, no corrige un total. Con las dos fuentes activas a la
+ * vez, `liquidar()` pisaba en silencio cualquier monto tipeado acá: un dato
+ * que se acepta y después se ignora es peor que un dato que no se acepta.
+ *
+ * Los inventarios YA LIQUIDADOS con un `montoFaltanteEmpresa` tipeado a mano
+ * en su momento (antes de este cambio) NO se reprocesan: `liquidar()` nunca
+ * vuelve a tocar un inventario que ya está `liquidado`/`lacrado` (ver la
+ * guarda al principio de esa función), así que ese valor histórico queda
+ * exactamente como se firmó.
+ *
+ * Este archivo se queda con lo único que sigue siendo manual: la nota y el
+ * registro de quién/cuándo tocó los ajustes del mes.
  *
  * ---------------------------------------------------------------------------
  * EL 0 EXPLICITO SIGUE SIENDO EL PUNTO -- ahora en el Excel, no acá
@@ -41,15 +59,6 @@ import type { ColaboradorAutenticado } from '../../shared/tipos';
 import { validarAcceso } from './liquidacion.permisos';
 
 export interface AjustesInput {
-  /**
-   * Faltante que absorbe la empresa. Opcional: si no viene, no se pisa el
-   * calculado al cerrar el conteo.
-   *
-   * `| undefined` explícito, no solo `?`: el proyecto corre con
-   * `exactOptionalPropertyTypes`, y el body validado por Zod llega con la
-   * clave presente en `undefined`.
-   */
-  montoEmpresa?: number | undefined;
   nota: string;
 }
 
@@ -161,10 +170,9 @@ export async function registrarAjustes(
   const actualizado = await prisma.resultadoInventario.update({
     where: { inventarioId },
     data: {
-      // Solo se pisa si vino: el calculado al cerrar el conteo sale de la
-      // matriz real (categorías marcadas como `esEmpresa`), y sobrescribirlo
-      // con un 0 por omisión borraría ese cálculo sin que nadie lo pida.
-      ...(datos.montoEmpresa !== undefined ? { montoFaltanteEmpresa: datos.montoEmpresa } : {}),
+      // `montoFaltanteEmpresa` NO se toca desde acá -- lo recalcula
+      // `liquidar()` a partir de la clasificación vigente al momento de
+      // liquidar (ver el comentario de cabecera de este archivo).
       ajustesPorId: actor.colaboradorId,
       ajustesEn: registradoEn,
       ajustesNota: datos.nota,
@@ -177,10 +185,7 @@ export async function registrarAjustes(
     accion: 'inventario.ajustes_registrados',
     entidad: 'inventario',
     entidadId: inventarioId,
-    detalle: {
-      ...(datos.montoEmpresa !== undefined ? { montoEmpresa: datos.montoEmpresa } : {}),
-      nota: datos.nota,
-    },
+    detalle: { nota: datos.nota },
   });
 
   return {

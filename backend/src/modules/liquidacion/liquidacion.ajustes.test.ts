@@ -1,8 +1,12 @@
 /**
- * Los ajustes del mes que siguen siendo manuales tras el cableado del Excel
- * de negativos (2026-09-11, ver liquidacion.ajustes-negativos.ts): el monto
- * de empresa y la nota. `montoNegativos` ya NO se carga por acá -- esos casos
+ * Los ajustes del mes. `montoNegativos` ya NO se carga por acá -- esos casos
  * (el 0 explícito incluido) se mudaron a `liquidacion.ajustes-negativos.test.ts`.
+ *
+ * `montoEmpresa` TAMPOCO se carga más por acá (2026-09-14): la fuente de
+ * verdad del faltante de empresa pasó a ser la clasificación que evalúa
+ * `liquidacion.cierre.ts#liquidar` (ClasificacionProducto vigente), no un
+ * monto tipeado a mano. Un monto manual que `liquidar()` ignora en silencio
+ * es peor que no tener el campo -- ver liquidacion.reclasificacion.ts.
  *
  * Lo que este archivo sigue protegiendo: quién puede tocar los ajustes del
  * mes, y las dos fronteras de estado (`conteo_cerrado` únicamente).
@@ -76,48 +80,39 @@ describe('registrarAjustes: quién y cuándo', () => {
 
   it('el auditor los carga en cualquier sucursal: audita toda la cadena', async () => {
     mockInventario({ sucursalId: 2 });
-    await expect(registrarAjustes(AUDITOR, 9, { montoEmpresa: 170, nota: 'Mermas.' })).resolves.toMatchObject({
-      montoFaltanteEmpresa: 170,
-    });
+    await expect(registrarAjustes(AUDITOR, 9, { nota: 'Mermas.' })).resolves.toMatchObject({ inventarioId: 9 });
   });
 
-  it('guarda quién, cuándo y la nota, no solo el monto de empresa', async () => {
-    // Un monto que baja el descuento de once personas no puede quedar sin
-    // firma: la pregunta "¿por qué se corrigió el monto de empresa?" se
-    // contesta con esto.
-    await registrarAjustes(AUDITOR, 9, { montoEmpresa: 170, nota: 'Mermas documentadas de agosto.' });
+  it('guarda quién, cuándo y la nota -- montoFaltanteEmpresa ya no se toca desde acá', async () => {
+    await registrarAjustes(AUDITOR, 9, { nota: 'Mermas documentadas de agosto.' });
 
     expect(prismaMock.resultadoInventario.update).toHaveBeenCalledWith(
       expect.objectContaining({
         where: { inventarioId: 9 },
         data: expect.objectContaining({
-          montoFaltanteEmpresa: 170,
           ajustesPorId: 5,
           ajustesNota: 'Mermas documentadas de agosto.',
           ajustesEn: expect.any(Date),
         }),
       }),
     );
-    // montoNegativos ya NO lo escribe este endpoint: lo escribe la
-    // importación del Excel (liquidacion.ajustes-negativos.ts).
+    // Ni montoNegativos (lo escribe el Excel) ni montoFaltanteEmpresa (lo
+    // recalcula liquidar() desde la clasificación) se tocan desde acá.
     const { data } = prismaMock.resultadoInventario.update.mock.calls[0]![0] as { data: Record<string, unknown> };
     expect(data).not.toHaveProperty('montoNegativos');
+    expect(data).not.toHaveProperty('montoFaltanteEmpresa');
   });
 
-  it('la nota queda en el registro de auditoría, sin montoNegativos', async () => {
-    await registrarAjustes(AUDITOR, 9, { montoEmpresa: 170, nota: 'Mermas.' });
+  it('la nota queda en el registro de auditoría, sin montoNegativos ni montoEmpresa', async () => {
+    await registrarAjustes(AUDITOR, 9, { nota: 'Mermas.' });
 
     const { registrarAuditoria } = await import('../../shared/auditoria');
     expect(registrarAuditoria).toHaveBeenCalledWith(
       expect.objectContaining({
         accion: 'inventario.ajustes_registrados',
-        detalle: expect.objectContaining({ montoEmpresa: 170, nota: 'Mermas.' }),
+        detalle: { nota: 'Mermas.' },
       }),
     );
-    const { detalle } = (
-      (await import('../../shared/auditoria')).registrarAuditoria as unknown as { mock: { calls: unknown[][] } }
-    ).mock.calls[0]![0] as { detalle: Record<string, unknown> };
-    expect(detalle).not.toHaveProperty('montoNegativos');
   });
 });
 
@@ -130,29 +125,29 @@ describe('estadoDeAjustes lee montoNegativos igual, venga de donde venga', () =>
   });
 });
 
-describe('montoEmpresa: solo se pisa si viene', () => {
-  it('sin mandarlo, NO se toca el calculado al cerrar el conteo', async () => {
-    // Sale de la matriz real (categorías marcadas `esEmpresa`). Pisarlo con
-    // un 0 por omisión borraría ese cálculo sin que nadie lo pida.
-    await registrarAjustes(AUDITOR, 9, { nota: 'x' });
+/**
+ * MONTOEMPRESA YA NO EXISTE COMO ENTRADA (2026-09-14): la fuente de verdad
+ * del faltante de empresa pasó a ser la clasificación que evalúa
+ * `liquidacion.cierre.ts#liquidar` (ClasificacionProducto vigente), no un
+ * monto tipeado acá. `AjustesInput` ya no tiene el campo -- estos tests
+ * prueban que, aunque alguien lo cuele con un cast (un cliente viejo que
+ * todavía lo mande), `registrarAjustes` jamás lo escribe.
+ */
+describe('montoEmpresa: ya no se acepta, nunca se escribe', () => {
+  it('un montoEmpresa colado (cast, cliente viejo) se ignora: nunca llega a la escritura', async () => {
+    const conCampoViejo = { montoEmpresa: 170, nota: 'x' } as unknown as Parameters<typeof registrarAjustes>[2];
+    await registrarAjustes(AUDITOR, 9, conCampoViejo);
 
     const { data } = prismaMock.resultadoInventario.update.mock.calls[0]![0] as { data: Record<string, unknown> };
     expect(data).not.toHaveProperty('montoFaltanteEmpresa');
   });
 
-  it('mandándolo, se guarda', async () => {
-    await registrarAjustes(AUDITOR, 9, { montoEmpresa: 170, nota: 'x' });
-
-    const { data } = prismaMock.resultadoInventario.update.mock.calls[0]![0] as { data: Record<string, unknown> };
-    expect(data.montoFaltanteEmpresa).toBe(170);
-  });
-
-  it('un montoEmpresa en 0 SÍ se guarda: es distinto de omitirlo', async () => {
-    await registrarAjustes(AUDITOR, 9, { montoEmpresa: 0, nota: 'x' });
-
-    const { data } = prismaMock.resultadoInventario.update.mock.calls[0]![0] as { data: Record<string, unknown> };
-    expect(data.montoFaltanteEmpresa).toBe(0);
-  });
+  // Los inventarios YA LIQUIDADOS con un monto tipeado a mano en su momento
+  // no se reprocesan: liquidar() (liquidacion.cierre.ts) ya rechaza
+  // reliquidar un inventario `liquidado`/`lacrado` -- ver esa guarda y su
+  // test ('no se reliquida...') en liquidacion.cierre.test.ts. El valor
+  // histórico queda intacto por construcción, sin que este archivo tenga
+  // que hacer nada especial.
 });
 
 /**
@@ -185,8 +180,8 @@ describe('solo en conteo_cerrado', () => {
   it('se puede CORREGIR mientras siga en conteo_cerrado', async () => {
     // Una nota mal tipeada antes de liquidar tiene que poder arreglarse; la
     // corrección pisa la firma anterior y queda en auditoría.
-    await registrarAjustes(AUDITOR, 9, { montoEmpresa: 170, nota: 'primera carga' });
-    await registrarAjustes(AUDITOR, 9, { montoEmpresa: 200, nota: 'corregido: faltaba una merma' });
+    await registrarAjustes(AUDITOR, 9, { nota: 'primera carga' });
+    await registrarAjustes(AUDITOR, 9, { nota: 'corregido: faltaba una merma' });
 
     expect(prismaMock.resultadoInventario.update).toHaveBeenCalledTimes(2);
   });

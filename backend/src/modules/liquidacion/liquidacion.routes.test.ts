@@ -75,7 +75,7 @@ const ENDPOINTS: Endpoint[] = [
     nombre: 'PUT /inventarios/:id/ajustes',
     metodo: 'PUT',
     ruta: '/api/liquidacion/inventarios/1/ajustes',
-    cuerpo: { montoEmpresa: 170, nota: 'Mermas.' },
+    cuerpo: { nota: 'Mermas.' },
   },
   { nombre: 'POST /inventarios/:id/liquidar', metodo: 'POST', ruta: '/api/liquidacion/inventarios/1/liquidar' },
   {
@@ -154,17 +154,25 @@ describe('PUT /api/liquidacion/inventarios/:id/ajustes: el cuerpo', () => {
 
   it('sin nota, 400 -- un ajuste sin explicación no se puede auditar después', async () => {
     await iniciar();
-    expect((await pedir(ajustes, AUDITOR, { montoEmpresa: 170 })).status).toBe(400);
+    expect((await pedir(ajustes, AUDITOR, {})).status).toBe(400);
   });
 
   it('con nota vacía, 400', async () => {
     await iniciar();
-    expect((await pedir(ajustes, AUDITOR, { montoEmpresa: 170, nota: '   ' })).status).toBe(400);
+    expect((await pedir(ajustes, AUDITOR, { nota: '   ' })).status).toBe(400);
   });
 
-  it('montoEmpresa negativo, 400', async () => {
+  /**
+   * montoEmpresa YA NO se acepta (2026-09-14): la fuente de verdad del
+   * faltante de empresa pasó a ser la clasificación que evalúa
+   * `liquidacion.cierre.ts#liquidar` (ClasificacionProducto), no un monto
+   * tipeado acá -- ver liquidacion.ajustes.ts. Sin `.strict()` a propósito:
+   * un cliente viejo (mobile todavía sin actualizar) que lo siga mandando no
+   * se tiene que romper -- Zod lo descarta solo, y el 200 lo prueba.
+   */
+  it('montoEmpresa YA NO se acepta: viaja igual (cliente viejo) pero el servidor lo ignora en silencio', async () => {
     await iniciar();
-    expect((await pedir(ajustes, AUDITOR, { montoEmpresa: -100, nota: 'x' })).status).toBe(400);
+    expect((await pedir(ajustes, AUDITOR, { montoEmpresa: -100, nota: 'x' })).status).toBe(200);
   });
 
   it('solo nota, sin montoEmpresa, pasa: montoNegativos ya no se carga acá', async () => {
