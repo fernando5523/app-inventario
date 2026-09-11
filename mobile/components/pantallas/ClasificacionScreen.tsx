@@ -11,6 +11,7 @@ import {
   soloConClasificacion,
   textoResponsableDynamics,
 } from '../../lib/dominio/clasificacion';
+import { pluralizar } from '../../lib/dominio/plural';
 import type { ProductoClasificable } from '../../lib/puertos/repositorios';
 import { colors, fonts, fontSize, radius, spacing } from '../../lib/theme';
 import { useRefrescoAlEnfocar } from '../hooks/useRefrescoAlEnfocar';
@@ -170,7 +171,7 @@ export function ClasificacionScreen(): JSX.Element {
     }
   }
 
-  const cifras = `${formatoMiles(total)} ${soloClasificados ? 'excepciones' : 'productos'}`;
+  const cifras = `${formatoMiles(total)} ${soloClasificados ? pluralizar(total, 'excepción', 'excepciones') : pluralizar(total, 'producto', 'productos')}`;
   const { refrescando, refrescar } = useRefrescoAlEnfocar(cargar, { pausado: seleccionado !== null });
 
   return (

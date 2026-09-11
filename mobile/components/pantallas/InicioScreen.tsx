@@ -7,6 +7,7 @@ import { inventarioIdSinRed, rondaActivaSinRed, ultimaDescarga, type ResultadoDe
 import { repositorioHojas, repositorioInventario, repositorioSesion, repositorioTiendas, repositorioUsuarios, sincronizador } from '../../lib/contenedor';
 import { cifraMisHojas, cifraOSinRed, filaPct, motivoCorto } from '../../lib/dominio/cifra-sin-red';
 import { avance, avanceConjunto, estadoConjunto } from '../../lib/dominio/hoja';
+import { pluralizar } from '../../lib/dominio/plural';
 import { sucursalEnFoco } from '../../lib/dominio/sucursal-en-foco';
 import type { HojaConteo, Rol, Sucursal } from '../../lib/dominio/tipos';
 import { useSesion } from '../../lib/sesion-contexto';
@@ -357,7 +358,7 @@ export function InicioScreen(): JSX.Element {
       // inventario ni una cifra que venga del ERP.
       cifras = hojaActual
         ? `Hoja #${hojaActual.numero} · Lote de ${totalHojaActual} ítems`
-        : `${cifraOSinRed(asignadas)} hojas asignadas${asignadas === null ? ` (${motivoCorto(resultadoMias?.ok === false ? resultadoMias.motivo : undefined)})` : ''}`;
+        : `${cifraOSinRed(asignadas)} ${pluralizar(asignadas ?? 0, 'hoja asignada', 'hojas asignadas')}${asignadas === null ? ` (${motivoCorto(resultadoMias?.ok === false ? resultadoMias.motivo : undefined)})` : ''}`;
       filasEstado = hojaActual
         ? [
             {

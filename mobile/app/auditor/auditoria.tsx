@@ -16,6 +16,7 @@ import {
 } from '../../components/ui';
 import { repositorioAuditoria, repositorioInventario, repositorioSesion } from '../../lib/contenedor';
 import { resumirAuditoria } from '../../lib/dominio/auditoria';
+import { pluralizar } from '../../lib/dominio/plural';
 import { sucursalEnFoco } from '../../lib/dominio/sucursal-en-foco';
 import type { ItemAuditoria, Sucursal, VeredictoAuditoria } from '../../lib/dominio/tipos';
 import { useSesion } from '../../lib/sesion-contexto';
@@ -324,7 +325,7 @@ export default function AuditoriaScreen(): JSX.Element {
 
               <View style={styles.seccion}>
                 <Text style={styles.seccionTitulo}>Matriz comparativa</Text>
-                <Text style={styles.seccionTotal}>{conDiferencia} ítems con diferencia</Text>
+                <Text style={styles.seccionTotal}>{conDiferencia} {pluralizar(conDiferencia, 'ítem', 'ítems')} con diferencia</Text>
               </View>
 
               <ChipsFiltro opciones={opciones} activo={filtro} onCambiar={(id) => setFiltro(id as FiltroId)} />

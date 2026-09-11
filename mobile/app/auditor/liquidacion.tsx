@@ -11,6 +11,7 @@ import { PantallaConTabs } from '../../components/navegacion/PantallaConTabs';
 import { BarraApp, Badge, Button, formatoFechaHora, formatoMiles } from '../../components/ui';
 import { repositorioLiquidacion, repositorioSesion } from '../../lib/contenedor';
 import { estadoAjustesNegativos, notaFaltanteEmpresa } from '../../lib/dominio/ajustes-formulario';
+import { pluralizar } from '../../lib/dominio/plural';
 import { asistentesConCentavoExtra, resumirAsistencia } from '../../lib/dominio/reparto-visible';
 import {
   nombreArchivoReporteGerencia,
@@ -816,7 +817,11 @@ function TarjetaReporteGerencia({
       <View style={styles.tarjetaCabecera}>
         <Building2 size={18} color={colors.rojo} />
         <Text style={styles.tarjetaTitulo}>Reporte a gerencia</Text>
-        {vista.tipo === 'con-datos' ? <Badge label={`${vista.faltantes.length + vista.sobrantes.length} productos`} /> : null}
+        {vista.tipo === 'con-datos' ? (
+          <Badge
+            label={`${vista.faltantes.length + vista.sobrantes.length} ${pluralizar(vista.faltantes.length + vista.sobrantes.length, 'producto', 'productos')}`}
+          />
+        ) : null}
       </View>
       <Text style={styles.tarjetaTexto}>
         Productos de la empresa: no entran a la planilla del personal. Aquí están sus faltantes y sobrantes, producto por

@@ -8,6 +8,7 @@ import { PantallaConTabs } from '../../components/navegacion/PantallaConTabs';
 import { AvanceFila, BandaSync, BarraApp, Button, EmptyState, TarjetaHoja, sincronizacionDeHojas } from '../../components/ui';
 import { cargarSeguro } from '../../lib/adaptadores/_http';
 import { inventarioIdSinRed, rondaActivaSinRed, ultimaDescarga } from '../../lib/adaptadores/hojas-sqlite';
+import { pluralizar } from '../../lib/dominio/plural';
 import { ORDINAL } from '../../lib/dominio/texto-cierre-ronda';
 import { repositorioHojas, repositorioInventario, sincronizador } from '../../lib/contenedor';
 import type { HojaConteo } from '../../lib/dominio/tipos';
@@ -196,7 +197,7 @@ export default function MisHojasScreen(): JSX.Element {
         <BarraApp
           rotulo={`Mis hojas · ${ORDINAL[rondaActual ?? 1]} conteo`}
           sede={sesion.sucursal!.nombre}
-          cifras={`${hojas.length} hojas · ${totalItemsBloque} ítems · ${enProceso} en proceso`}
+          cifras={`${hojas.length} ${pluralizar(hojas.length, 'hoja', 'hojas')} · ${totalItemsBloque} ítems · ${enProceso} en proceso`}
           onSalir={salir}
           sinBorde
         />
