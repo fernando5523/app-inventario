@@ -128,6 +128,47 @@ describe('camino feliz', () => {
   });
 });
 
+describe('cuerpoBinario: el .xlsx de ajustes-negativos-api.ts, no JSON', () => {
+  it('viaja tal cual (el mismo Uint8Array), sin pasar por JSON.stringify', async () => {
+    const fn = fetchFalso(respuestaJson({ ok: true }));
+    const bytes = new Uint8Array([80, 75, 3, 4]); // firma de un .xlsx real (ZIP)
+    await pedir('/api/liquidacion/inventarios/9/ajustes-negativos/preview', {
+      metodo: 'POST',
+      cuerpoBinario: bytes,
+    });
+    const [, init] = fn.mock.calls[0]!;
+    expect(init.body).toBe(bytes);
+  });
+
+  it('Content-Type es application/octet-stream por default', async () => {
+    const fn = fetchFalso(respuestaJson({ ok: true }));
+    await pedir('/api/x', { metodo: 'POST', cuerpoBinario: new Uint8Array([1]) });
+    const [, init] = fn.mock.calls[0]!;
+    expect((init.headers as Record<string, string>)['Content-Type']).toBe('application/octet-stream');
+  });
+
+  it('tipoCuerpo pisa el Content-Type por default', async () => {
+    const fn = fetchFalso(respuestaJson({ ok: true }));
+    await pedir('/api/x', {
+      metodo: 'POST',
+      cuerpoBinario: new Uint8Array([1]),
+      tipoCuerpo: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    });
+    const [, init] = fn.mock.calls[0]!;
+    expect((init.headers as Record<string, string>)['Content-Type']).toBe(
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    );
+  });
+
+  it('un POST con cuerpoBinario sigue sin reintentarse solo ante un fallo de red (misma regla que toda escritura)', async () => {
+    const fn = fetchFalso(new TypeError('network'), respuestaJson({ ok: true }));
+    await expect(
+      pedir('/api/x', { metodo: 'POST', cuerpoBinario: new Uint8Array([1]) }),
+    ).rejects.toThrow(ErrorApi);
+    expect(fn).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe('token de sesión', () => {
   it('lo inyecta como Bearer cuando hay sesión', async () => {
     recordarToken('abc123');

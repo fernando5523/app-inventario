@@ -346,8 +346,18 @@ export const TIMEOUT_MS = 15_000;
 
 export interface OpcionesPedido {
   metodo?: 'GET' | 'HEAD' | 'POST' | 'PATCH' | 'PUT' | 'DELETE';
-  /** Se serializa a JSON. `undefined` = sin cuerpo. */
+  /** Se serializa a JSON. `undefined` = sin cuerpo. Ignorado si viene `cuerpoBinario`. */
   cuerpo?: unknown;
+  /**
+   * El cuerpo es binario CRUDO (ej. el .xlsx que sube
+   * ajustes-negativos-api.ts): viaja TAL CUAL, sin pasar por
+   * `JSON.stringify` -- para un backend que lo lee con `express.raw()` en
+   * vez de `express.json()` (ver liquidacion.routes.ts#cuerpoExcel). Gana
+   * sobre `cuerpo` si vinieran los dos.
+   */
+  cuerpoBinario?: Uint8Array;
+  /** Content-Type de `cuerpoBinario`. Default: `application/octet-stream`. */
+  tipoCuerpo?: string;
   /**
    * Marca las rutas que NO requieren sesión (login, padrón de sucursales).
    * Cambia cómo se lee un 401: en una ruta pública significa "PIN
@@ -413,10 +423,14 @@ async function intentarUnaVez<T>(
   opciones: OpcionesPedido,
   msTimeoutEfectivo: number,
 ): Promise<T> {
-  const { metodo = 'GET', cuerpo, sinSesion = false, senal, binario = false } = opciones;
+  const { metodo = 'GET', cuerpo, cuerpoBinario, tipoCuerpo, sinSesion = false, senal, binario = false } = opciones;
 
   const encabezados: Record<string, string> = { Accept: binario ? '*/*' : 'application/json' };
-  if (cuerpo !== undefined) encabezados['Content-Type'] = 'application/json';
+  if (cuerpoBinario !== undefined) {
+    encabezados['Content-Type'] = tipoCuerpo ?? 'application/octet-stream';
+  } else if (cuerpo !== undefined) {
+    encabezados['Content-Type'] = 'application/json';
+  }
 
   if (!sinSesion) {
     // `tokenActual()` puede tocar SQLite (lector persistido de sesion-api.ts)
@@ -467,12 +481,23 @@ async function intentarUnaVez<T>(
   senal?.addEventListener('abort', cancelarExterno);
   if (senal?.aborted) control.abort();
 
+  // `as BodyInit`: el `Uint8Array<ArrayBufferLike>` genérico de @types/node no
+  // matchea estructuralmente el `Uint8Array` no genérico que espera `BodyInit`
+  // en lib.dom.d.ts -- incompatibilidad de TIPOS entre paquetes, no del dato
+  // (mismo caso que el cast de exceljs en liquidacion.ajustes-dynamics.ts).
+  const cuerpoDeFetch: BodyInit | undefined =
+    cuerpoBinario !== undefined
+      ? (cuerpoBinario as BodyInit)
+      : cuerpo === undefined
+        ? undefined
+        : JSON.stringify(cuerpo);
+
   let respuesta: Response;
   try {
     respuesta = await fetch(`${urlBase()}${ruta}`, {
       method: metodo,
       headers: encabezados,
-      body: cuerpo === undefined ? undefined : JSON.stringify(cuerpo),
+      body: cuerpoDeFetch,
       signal: control.signal,
     });
   } catch {
