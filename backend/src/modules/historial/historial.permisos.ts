@@ -207,7 +207,7 @@ export function validarPuedeAprobar(
     // es un valor de Postgres, no algo que la persona pueda accionar.
     if (inventario.estado === 'conteo_cerrado') {
       throw new Conflicto(
-        'El inventario todavia no esta liquidado: el coordinador tiene que cerrar la planilla ' +
+        'El inventario todavia no esta liquidado: un auditor tiene que cerrar la planilla en Liquidación y nómina ' +
           'antes de que se pueda firmar el lacrado. El sello incluye lo que se le descuenta a cada ' +
           'persona, asi que firmarlo antes seria sellar una planilla vacia.',
       );

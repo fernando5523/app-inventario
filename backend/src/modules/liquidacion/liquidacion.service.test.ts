@@ -23,10 +23,15 @@ const prismaMock = vi.hoisted(() => ({
 }));
 vi.mock('../../config/database', () => ({ prisma: prismaMock }));
 
+import { Prohibido } from '../../shared/errores';
 import type { ColaboradorAutenticado } from '../../shared/tipos';
+import { calcularTotalDescuento } from '../historial/historial.calculos';
 import { conciliacion, deSucursal } from './liquidacion.service';
 
-const COORD: ColaboradorAutenticado = { colaboradorId: 5, sucursalId: 1, rol: 'coordinador' };
+// La liquidación es del auditor desde 2026-09-11 (liquidacion.permisos.ts).
+// Sin tienda en la ficha: entra por "administradores" y audita toda la cadena.
+const AUDITOR: ColaboradorAutenticado = { colaboradorId: 5, sucursalId: null, rol: 'auditor' };
+const COORDINADOR: ColaboradorAutenticado = { colaboradorId: 8, sucursalId: 1, rol: 'coordinador' };
 
 const decimal = (n: number) => ({ toNumber: () => n });
 
@@ -60,13 +65,58 @@ beforeEach(() => {
 describe('deSucursal', () => {
   it('sin inventario con conteo cerrado, null -- no un objeto en cero', async () => {
     prismaMock.inventario.findFirst.mockResolvedValue(null);
-    expect(await deSucursal(COORD, 1)).toBeNull();
+    expect(await deSucursal(AUDITOR, 1)).toBeNull();
+  });
+
+  it('el coordinador recibe 403 y NO llega a la base, ni para la de su propia tienda', async () => {
+    await expect(deSucursal(COORDINADOR, 1)).rejects.toThrow(Prohibido);
+    expect(prismaMock.inventario.findFirst).not.toHaveBeenCalled();
+  });
+
+  /**
+   * LOS YA LIQUIDADOS SE SIGUEN LEYENDO IGUAL. Los que cerró un coordinador
+   * antes del 2026-09-11 tienen sus filas firmadas en LiquidacionColaborador:
+   * el auditor las ve tal cual se firmaron -- nombre y rol CONGELADOS, sin
+   * recalcular nada con el padrón de hoy.
+   */
+  it('un inventario ya liquidado se lee de sus filas firmadas, tal cual se firmaron', async () => {
+    prismaMock.inventario.findFirst.mockResolvedValue({
+      ...inventarioCon(resultadoCompleto()),
+      liquidaciones: [
+        {
+          colaboradorId: 1,
+          nombreAlLiquidar: 'Nancy Quispe',
+          rolAlLiquidar: 'coordinador',
+          asistio: true,
+          cuotaBase: decimal(40),
+          multaInasistencia: decimal(0),
+          bonoAsistencia: decimal(2.5),
+          // El padrón de HOY: otro nombre, otro rol. No es lo que dice el recibo.
+          colaborador: { id: 1, nombre: 'Nancy Quispe Rojas', rol: 'auditor' },
+        },
+      ],
+    });
+
+    const r = await deSucursal(AUDITOR, 1);
+
+    expect(r!.proyectada).toBe(false);
+    expect(r!.planilla).toEqual([
+      {
+        colaboradorId: 1,
+        nombre: 'Nancy Quispe',
+        rol: 'coordinador',
+        asistio: true,
+        monto: calcularTotalDescuento({ cuotaBase: 40, multaInasistencia: 0, bonoAsistencia: 2.5 }),
+      },
+    ]);
+    // Nada se proyecta: mandan las filas firmadas.
+    expect(prismaMock.colaborador.findMany).not.toHaveBeenCalled();
   });
 
   it('con asistencia y ajustes capturados, calcula el neto normalmente', async () => {
     prismaMock.inventario.findFirst.mockResolvedValue(inventarioCon(resultadoCompleto()));
 
-    const r = await deSucursal(COORD, 1);
+    const r = await deSucursal(AUDITOR, 1);
 
     expect(r!.faltanteNeto).not.toBeNull();
     expect(r!.cuotaBase).not.toBeNull();
@@ -88,7 +138,7 @@ describe('deSucursal', () => {
       inventarioCon({ ...resultadoCompleto(), colaboradoresAsistieron: null }),
     );
 
-    const r = await deSucursal(COORD, 1);
+    const r = await deSucursal(AUDITOR, 1);
 
     expect(r!.faltanteNeto).toBeNull();
     expect(r!.cuotaBase).toBeNull();
@@ -108,7 +158,7 @@ describe('deSucursal', () => {
       inventarioCon({ ...resultadoCompleto(), montoNegativos: null }),
     );
 
-    const r = await deSucursal(COORD, 1);
+    const r = await deSucursal(AUDITOR, 1);
 
     expect(r!.faltanteNeto).toBeNull();
     expect(r!.negativosDelMes).toBeNull();
@@ -117,12 +167,17 @@ describe('deSucursal', () => {
 });
 
 describe('conciliacion', () => {
+  it('el coordinador tampoco la ve: es el mismo resultado, con más detalle', async () => {
+    await expect(conciliacion(COORDINADOR, 1)).rejects.toThrow(Prohibido);
+    expect(prismaMock.inventario.findFirst).not.toHaveBeenCalled();
+  });
+
   it('sin datos completos, devuelve calculable:false en vez de dividir por un null', async () => {
     prismaMock.inventario.findFirst.mockResolvedValue(
       inventarioCon({ ...resultadoCompleto(), colaboradoresAsistieron: null }),
     );
 
-    const r = await conciliacion(COORD, 1);
+    const r = await conciliacion(AUDITOR, 1);
 
     expect(r).toEqual(
       expect.objectContaining({
@@ -137,7 +192,7 @@ describe('conciliacion', () => {
   it('con datos completos, calcula la conciliación entera', async () => {
     prismaMock.inventario.findFirst.mockResolvedValue(inventarioCon(resultadoCompleto()));
 
-    const r = await conciliacion(COORD, 1);
+    const r = await conciliacion(AUDITOR, 1);
 
     expect(r).toEqual(expect.objectContaining({ calculable: true }));
     expect((r as { fondoDeMultas: unknown }).fondoDeMultas).toBeDefined();

@@ -129,7 +129,10 @@ describe('validarPuedeAprobar', () => {
       // Decirle al auditor "no se puede" sin decirle que falta ni a quien
       // pedirselo lo deja mirando la pantalla.
       expect(() => validarPuedeAprobar(gilmer, inventario('conteo_cerrado'), [])).toThrow(/no esta liquidado/);
-      expect(() => validarPuedeAprobar(gilmer, inventario('conteo_cerrado'), [])).toThrow(/coordinador/);
+      // Quien la cierra es el AUDITOR desde 2026-09-11 (liquidacion.permisos.ts):
+      // mandarlo a pedírsela al coordinador lo manda a alguien que ya no puede.
+      expect(() => validarPuedeAprobar(gilmer, inventario('conteo_cerrado'), [])).toThrow(/auditor/);
+      expect(() => validarPuedeAprobar(gilmer, inventario('conteo_cerrado'), [])).not.toThrow(/coordinador/);
       expect(() => validarPuedeAprobar(gilmer, inventario('conteo_cerrado'), [])).toThrow(/cerrar la planilla/);
     });
 

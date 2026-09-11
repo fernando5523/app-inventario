@@ -64,7 +64,7 @@ import {
   redondear,
   type EntradaLiquidacion,
 } from '../historial/historial.calculos';
-import { validarPuedeLiquidar } from './liquidacion.permisos';
+import { validarAcceso } from './liquidacion.permisos';
 import { armarAdvertencia } from './liquidacion.service';
 
 // ---------------------------------------------------------------------------
@@ -231,13 +231,15 @@ export async function liquidar(
   actor: ColaboradorAutenticado,
   inventarioId: number,
 ): Promise<CierreLiquidacionDto> {
+  // Del auditor (liquidacion.permisos.ts), y ANTES de tocar la base: a quien no
+  // tiene acceso no se le dice ni si el inventario existe.
+  validarAcceso(actor);
+
   const inventario = await prisma.inventario.findUnique({
     where: { id: inventarioId },
     select: { id: true, sucursalId: true, estado: true, resultado: true },
   });
   if (inventario === null) throw new NoEncontrado('Ese inventario no existe.');
-
-  validarPuedeLiquidar(actor, inventario.sucursalId);
 
   if (inventario.estado === 'liquidado' || inventario.estado === 'lacrado') {
     // No se reliquida: el recibo de sueldo de ese mes ya salio. Un segundo

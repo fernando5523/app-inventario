@@ -1,77 +1,51 @@
 /**
- * Quien ve la liquidacion de una sucursal. PUROS -- sin Prisma, sin Express
- * -- para testearlos sin base (mismo criterio que auditoria.permisos.ts).
+ * Quien accede a la liquidacion. PURO -- sin Prisma, sin Express -- para
+ * testearlo sin base (mismo criterio que auditoria.permisos.ts).
  */
 
 import { Prohibido } from '../../shared/errores';
-import type { ColaboradorAutenticado, Rol } from '../../shared/tipos';
+import type { ColaboradorAutenticado } from '../../shared/tipos';
 
 /**
- * EL COORDINADOR SI ENTRA ACA, y es la contracara exacta de la regla de
- * auditoria.permisos.ts -- conviene leer las dos juntas porque parecen
- * contradecirse y no lo hacen.
+ * LA LIQUIDACION ES DEL AUDITOR: verla Y ejecutarla (leer la planilla y la
+ * conciliacion, cargar los ajustes del mes, liquidar). Decision del cliente,
+ * 2026-09-11, textual: "el Coordinador deja de ver la liquidacion y
+ * ejecutarlo, ahora lo realiza el auditor". Es lo que Gilmer (el auditor,
+ * dueno del proceso) dijo de los coordinadores en la reunion de requisitos:
+ * "ellos no van a poder ver el resultado del inventario, eso netamente nos
+ * corresponde a mi persona y a Michell".
  *
- * La matriz de auditoria contiene `stockErp`: el numero que los 3 conteos
- * cruzados existen para no conocer. La liquidacion NO lo contiene. Es plata
- * y nomina -- faltante neto, cuota por persona, multas de asistencia -- y
- * nada de eso le dice a nadie cuanto stock espera el ERP de un articulo.
- * No hay conteo ciego que romper.
+ * Por eso UN solo permiso para mirar y para ejecutar. Hasta ese dia eran dos:
+ * el coordinador cerraba la planilla y el auditor solo la miraba.
  *
- * Por eso el mockup le da al coordinador la Pantalla 6 (esta) y no la
- * Pantalla 5 (la matriz), y por eso el puerto del front dice textual "solo
- * lo usa el Coordinador (cierre de fin de mes, pantalla 6)". Las dos
- * fuentes que parecian chocar hablaban de pantallas distintas.
+ * Afuera, y a proposito:
+ *  - `coordinador`: ni para mirar. Lo que pidio Gilmer es que no vea el
+ *    resultado, no solo que no lo ejecute.
+ *  - `administrador`: es tecnico (cuentas, tiendas, credenciales de
+ *    Dynamics) y no participa del proceso de inventario. No tiene la
+ *    pantalla en la app; solo le quedaba el acceso por API.
+ *  - `conteo`: el descuento de cada companero no es asunto de quien cuenta.
+ *    Cada persona ve el suyo en el recibo, no la planilla de los once.
  *
- * `conteo` no esta: el descuento de cada companero no es asunto de quien
- * cuenta. Cada persona vera el suyo en el recibo, no la planilla de los once.
+ * Sin recorte por sucursal: el auditor audita toda la cadena (correccion del
+ * cliente, 2026-09-09), asi que ninguna tienda le es ajena.
+ *
+ * ---------------------------------------------------------------------------
+ * LO QUE ESTA DECISION DEJA ABIERTO -- no se decide aca
+ * ---------------------------------------------------------------------------
+ * El control de dos personas del lacrado (historial.permisos.ts) se apoyaba en
+ * que quien cierra la planilla no la firma: el auditor quedaba afuera de
+ * liquidar justamente por eso. Ahora un mismo auditor puede liquidar Y ser una
+ * de las firmas. Lo que sigue exigiendo a otra persona es el minimo de firmas
+ * DISTINTAS (`APROBACIONES_REQUERIDAS`, configurable): con ese minimo en 1, una
+ * sola persona liquida y lacra. Impedir que quien liquido firme seria una
+ * regla nueva, y la tiene que pedir el cliente.
  */
-const ROLES_CON_ACCESO: readonly Rol[] = ['administrador', 'auditor', 'coordinador'];
-
-export function validarAcceso(actor: ColaboradorAutenticado, sucursalId: number): void {
-  if (!ROLES_CON_ACCESO.includes(actor.rol)) {
-    throw new Prohibido('Tu rol no tiene acceso a la liquidacion de la sucursal.');
-  }
-  // El administrador no pertenece a ninguna tienda: ve todas. El auditor
-  // TAMBIEN ve cualquiera -- corregido por el cliente (2026-09-09): audita
-  // toda la cadena, no una tienda. Solo el coordinador queda atado a la
-  // suya -- si no, cualquiera leeria la nomina de otra sucursal cambiando
-  // un id en la URL.
-  if (actor.rol !== 'administrador' && actor.rol !== 'auditor' && actor.sucursalId !== sucursalId) {
-    throw new Prohibido('Esa sucursal no es la tuya.');
-  }
-}
-
-/**
- * Quien CIERRA la planilla, que no es lo mismo que quien la mira.
- *
- * EL AUDITOR SALE DE ESTA LISTA, y esa es toda la razon de que esta funcion
- * exista aparte de `validarAcceso`. El auditor es quien FIRMA el lacrado
- * (historial.permisos.ts#validarPuedeAprobar), y el sello incluye la
- * planilla: si la misma persona pudiera cerrar la planilla y despues
- * firmarla, el control de dos personas se completa solo. Es exactamente el
- * agujero que ese control existe para tapar -- y no alcanza con que sean dos
- * pasos, tienen que ser dos personas.
- *
- * El coordinador si: es quien cierra las rondas (inventarios.routes.ts) y
- * quien tiene la Pantalla 6. El administrador tambien, por la misma razon
- * que entra a todo lo demas.
- *
- * `conteo` no aparece por lo mismo que en `validarAcceso`: el descuento de
- * los companeros no es asunto de quien cuenta.
- */
-const ROLES_QUE_LIQUIDAN: readonly Rol[] = ['administrador', 'coordinador'];
-
-export function validarPuedeLiquidar(actor: ColaboradorAutenticado, sucursalId: number): void {
-  if (!ROLES_QUE_LIQUIDAN.includes(actor.rol)) {
-    // Decir quien SI puede: quien lee esto tiene que saber a quien pedirselo,
-    // no quedarse mirando la pantalla (mismo criterio que
+export function validarAcceso(actor: ColaboradorAutenticado): void {
+  if (actor.rol !== 'auditor') {
+    // Decir quien SI: quien lee esto tiene que saber a quien pedirselo, no
+    // quedarse mirando la pantalla (mismo criterio que
     // historial.permisos.ts#validarPuedeAprobar).
-    throw new Prohibido(
-      'Cerrar la planilla lo hace el coordinador de la tienda o el administrador. ' +
-        'El auditor no la cierra: es quien despues la firma, y la misma persona no puede hacer las dos cosas.',
-    );
-  }
-  if (actor.rol !== 'administrador' && actor.sucursalId !== sucursalId) {
-    throw new Prohibido('Esa sucursal no es la tuya.');
+    throw new Prohibido('La liquidación la revisa y la cierra el auditor: tu rol no tiene acceso a la planilla.');
   }
 }

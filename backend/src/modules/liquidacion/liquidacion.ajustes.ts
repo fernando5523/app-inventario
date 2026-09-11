@@ -33,7 +33,7 @@ import { registrarAuditoria } from '../../shared/auditoria';
 
 import { Conflicto, NoEncontrado } from '../../shared/errores';
 import type { ColaboradorAutenticado } from '../../shared/tipos';
-import { validarPuedeLiquidar } from './liquidacion.permisos';
+import { validarAcceso } from './liquidacion.permisos';
 
 export interface AjustesInput {
   /** Ajustes a favor del personal. `0` explícito es válido y significativo. */
@@ -77,19 +77,19 @@ export interface EstadoAjustesDto {
   registradoEn: string | null;
 }
 
-/** El inventario con lo necesario para decidir, validando sucursal y estado. */
+/** El inventario con lo necesario para decidir, validando permiso y estado. */
 async function inventarioParaAjustar(actor: ColaboradorAutenticado, inventarioId: number) {
+  // Mismo permiso que el resto de la liquidación: quien carga los ajustes
+  // está decidiendo cuánta plata NO se descuenta, y eso es del auditor (ver
+  // liquidacion.permisos.ts). ANTES de tocar la base: a quien no tiene acceso
+  // no se le dice ni si el inventario existe.
+  validarAcceso(actor);
+
   const inventario = await prisma.inventario.findUnique({
     where: { id: inventarioId },
-    select: { id: true, sucursalId: true, estado: true, resultado: { select: { id: true } } },
+    select: { id: true, estado: true, resultado: { select: { id: true } } },
   });
   if (inventario === null) throw new NoEncontrado('Ese inventario no existe.');
-
-  // Mismo permiso que cerrar la planilla, y por la misma razón: quien carga
-  // los ajustes está decidiendo cuánta plata NO se descuenta. El auditor
-  // queda afuera -- es quien después firma el lacrado, y el sello incluye
-  // esos montos (ver liquidacion.permisos.ts#validarPuedeLiquidar).
-  validarPuedeLiquidar(actor, inventario.sucursalId);
 
   return inventario;
 }

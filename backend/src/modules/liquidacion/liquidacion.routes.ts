@@ -8,19 +8,19 @@ import { parametrosInventarioSchema, parametrosSucursalSchema, registrarAjustesS
 /**
  * Liquidacion y nomina (pantalla 6).
  *
- * El `coordinador` SI entra -- al reves que en /api/auditoria, y a
- * proposito: la liquidacion es plata y nomina, no contiene `stockErp` y por
- * lo tanto no hay conteo ciego que romper. El razonamiento completo esta en
- * liquidacion.permisos.ts; vale la pena leerlo junto con el de auditoria.
+ * SOLO el `auditor`, en TODOS los endpoints: leer la planilla y la
+ * conciliacion, cargar los ajustes y cerrarla. Decision del cliente
+ * (2026-09-11); el razonamiento -- y lo que deja abierto sobre el control de
+ * dos personas -- esta en liquidacion.permisos.ts.
  *
- * El rol `conteo` no entra: el descuento de cada companero no es asunto de
- * quien cuenta. Cada persona ve el suyo en el recibo, no la planilla de los once.
- *
- * El recorte por sucursal vive en liquidacion.permisos.ts, no aca.
+ * Una sola barrera para todo el router y no un `requiereRol` por ruta: con un
+ * permiso unico, uno propio en cada ruta es una copia mas que alguien se
+ * olvida de actualizar. El service vuelve a chequear (`validarAcceso`): este
+ * `requiereRol` es la primera barrera, no la unica.
  */
 export const liquidacionRouter = Router();
 
-liquidacionRouter.use(requiereSesion, requiereRol('administrador', 'auditor', 'coordinador'));
+liquidacionRouter.use(requiereSesion, requiereRol('auditor'));
 
 liquidacionRouter.get(
   '/sucursales/:sucursalId',
@@ -34,36 +34,20 @@ liquidacionRouter.get(
   controller.conciliacion,
 );
 
-/**
- * Cerrar la planilla del inventario y dejarlo en `liquidado`.
- *
- * SIN el auditor, al reves que los dos GET de arriba: el auditor es quien
- * FIRMA el lacrado, y el sello incluye la planilla. Si pudiera cerrarla y
- * despues firmarla, el control de dos personas se completa solo. El recorte
- * fino vive en liquidacion.permisos.ts#validarPuedeLiquidar; este
- * `requiereRol` es la primera barrera, no la unica.
- */
+/** Cerrar la planilla del inventario y dejarlo en `liquidado`. */
 liquidacionRouter.post(
   '/inventarios/:inventarioId/liquidar',
-  requiereRol('administrador', 'coordinador'),
   validar(parametrosInventarioSchema, 'params'),
   controller.liquidar,
 );
 
 /**
- * Los ajustes del mes: el paso que faltaba para poder liquidar.
- *
- * MISMOS roles que liquidar y por la misma razón -- cargar los ajustes es
- * decidir cuánta plata NO se le descuenta al personal, y el auditor queda
- * afuera porque es quien después firma el sello que incluye esos montos.
- *
- * El GET también: quien no puede cargarlos tampoco necesita verlos, y el
- * estado ya viaja dentro de `GET /liquidacion/sucursales/:id` para las
- * pantallas que solo miran.
+ * Los ajustes del mes: el paso que faltaba para poder liquidar. Cargarlos es
+ * decidir cuanta plata NO se le descuenta al personal -- es parte de la
+ * liquidacion, asi que el mismo permiso.
  */
 liquidacionRouter.put(
   '/inventarios/:inventarioId/ajustes',
-  requiereRol('administrador', 'coordinador'),
   validar(parametrosInventarioSchema, 'params'),
   validar(registrarAjustesSchema, 'body'),
   controller.registrarAjustes,
@@ -71,7 +55,6 @@ liquidacionRouter.put(
 
 liquidacionRouter.get(
   '/inventarios/:inventarioId/ajustes',
-  requiereRol('administrador', 'coordinador'),
   validar(parametrosInventarioSchema, 'params'),
   controller.estadoAjustes,
 );

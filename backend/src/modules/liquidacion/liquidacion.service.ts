@@ -204,7 +204,7 @@ function nombreDePeriodo(anio: number, mes: number): string {
  * nada que liquidar".
  */
 export async function deSucursal(actor: ColaboradorAutenticado, sucursalId: number): Promise<LiquidacionDto | null> {
-  validarAcceso(actor, sucursalId);
+  validarAcceso(actor);
 
   const inventario = await prisma.inventario.findFirst({
     where: {

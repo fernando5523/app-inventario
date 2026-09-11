@@ -1,13 +1,15 @@
 /**
- * `liquidacionRouter` tiene DOS niveles de rol distintos, y es justo la
- * asimetría que un test a nivel de router no vería (liquidacion.routes.ts):
- *   - los GET (deSucursal, conciliación) los ven administrador, auditor Y
- *     coordinador -- es plata y nómina, no contiene `stockErp`, no hay
- *     conteo ciego que romper.
- *   - POST /inventarios/:id/liquidar tiene un `requiereRol` PROPIO, más
- *     estricto, SIN el auditor: el auditor es quien firma el lacrado
- *     después, y si pudiera liquidar y lacrar el control de dos personas
- *     se completaría solo.
+ * `liquidacionRouter` ENTERO es del auditor -- decisión del cliente
+ * (2026-09-11): "el Coordinador deja de ver la liquidacion y ejecutarlo, ahora
+ * lo realiza el auditor".
+ *
+ * Antes había dos niveles (los GET para administrador/auditor/coordinador, las
+ * escrituras sin el auditor). Ahora hay uno solo, y se prueba ENDPOINT POR
+ * ENDPOINT: un `requiereRol` propio que quedó colgado en una ruta es justo lo
+ * que un test a nivel de router no vería.
+ *
+ * El coordinador recibe 403 TAMBIÉN en las lecturas: lo que pidió Gilmer es
+ * que no vea el resultado, no solo que no lo ejecute.
  */
 
 import type { ColaboradorAutenticado } from '../../shared/tipos';
@@ -46,159 +48,86 @@ afterEach(async () => {
   await cerrar?.();
 });
 
-describe('GET /api/liquidacion/sucursales/:id: administrador, auditor y coordinador ven la liquidación', () => {
+interface Endpoint {
+  nombre: string;
+  metodo: 'GET' | 'PUT' | 'POST';
+  ruta: string;
+  cuerpo?: unknown;
+}
+
+const ENDPOINTS: Endpoint[] = [
+  { nombre: 'GET /sucursales/:id', metodo: 'GET', ruta: '/api/liquidacion/sucursales/1' },
+  { nombre: 'GET /sucursales/:id/conciliacion', metodo: 'GET', ruta: '/api/liquidacion/sucursales/1/conciliacion' },
+  { nombre: 'GET /inventarios/:id/ajustes', metodo: 'GET', ruta: '/api/liquidacion/inventarios/1/ajustes' },
+  {
+    nombre: 'PUT /inventarios/:id/ajustes',
+    metodo: 'PUT',
+    ruta: '/api/liquidacion/inventarios/1/ajustes',
+    cuerpo: { montoNegativos: 380, nota: 'Mermas.' },
+  },
+  { nombre: 'POST /inventarios/:id/liquidar', metodo: 'POST', ruta: '/api/liquidacion/inventarios/1/liquidar' },
+];
+
+function pedir(e: Endpoint, actor?: ColaboradorAutenticado, cuerpo: unknown = e.cuerpo): Promise<Response> {
+  return fetch(`${baseUrl}${e.ruta}`, {
+    method: e.metodo,
+    headers: {
+      ...(actor ? autorizacion(actor) : {}),
+      ...(cuerpo !== undefined ? { 'Content-Type': 'application/json' } : {}),
+    },
+    ...(cuerpo !== undefined ? { body: JSON.stringify(cuerpo) } : {}),
+  });
+}
+
+describe.each(ENDPOINTS)('$nombre: solo el auditor', (e) => {
   it('sin sesión, 401', async () => {
     await iniciar();
-    const r = await fetch(`${baseUrl}/api/liquidacion/sucursales/1`);
-    expect(r.status).toBe(401);
-  });
-
-  it('conteo, 403 -- el descuento de cada compañero no es asunto de quien cuenta', async () => {
-    await iniciar();
-    const r = await fetch(`${baseUrl}/api/liquidacion/sucursales/1`, { headers: autorizacion(CONTEO) });
-    expect(r.status).toBe(403);
-  });
-
-  it('coordinador, pasa el middleware', async () => {
-    await iniciar();
-    const r = await fetch(`${baseUrl}/api/liquidacion/sucursales/1`, { headers: autorizacion(COORDINADOR) });
-    expect(r.status).toBe(200);
+    expect((await pedir(e)).status).toBe(401);
   });
 
   it('auditor, pasa el middleware', async () => {
     await iniciar();
-    const r = await fetch(`${baseUrl}/api/liquidacion/sucursales/1`, { headers: autorizacion(AUDITOR) });
-    expect(r.status).toBe(200);
+    expect((await pedir(e, AUDITOR)).status).toBe(200);
+  });
+
+  it('coordinador, 403 -- tampoco para mirar: el resultado del inventario no es asunto suyo', async () => {
+    await iniciar();
+    expect((await pedir(e, COORDINADOR)).status).toBe(403);
+  });
+
+  it('administrador, 403 -- es técnico, no participa del proceso de inventario', async () => {
+    await iniciar();
+    expect((await pedir(e, ADMIN)).status).toBe(403);
+  });
+
+  it('conteo, 403 -- el descuento de cada compañero no es asunto de quien cuenta', async () => {
+    await iniciar();
+    expect((await pedir(e, CONTEO)).status).toBe(403);
   });
 });
 
-describe('POST /api/liquidacion/inventarios/:id/liquidar: quién puede cerrar la planilla', () => {
-  it('auditor, 403 -- si pudiera liquidar Y lacrar, el control de dos personas se completa solo', async () => {
-    await iniciar();
-    const r = await fetch(`${baseUrl}/api/liquidacion/inventarios/1/liquidar`, {
-      method: 'POST',
-      headers: autorizacion(AUDITOR),
-    });
-    expect(r.status).toBe(403);
-  });
-
-  it('conteo, 403', async () => {
-    await iniciar();
-    const r = await fetch(`${baseUrl}/api/liquidacion/inventarios/1/liquidar`, {
-      method: 'POST',
-      headers: autorizacion(CONTEO),
-    });
-    expect(r.status).toBe(403);
-  });
-
-  it('coordinador, pasa el middleware', async () => {
-    await iniciar();
-    const r = await fetch(`${baseUrl}/api/liquidacion/inventarios/1/liquidar`, {
-      method: 'POST',
-      headers: autorizacion(COORDINADOR),
-    });
-    expect(r.status).toBe(200);
-  });
-
-  it('administrador, pasa el middleware', async () => {
-    await iniciar();
-    const r = await fetch(`${baseUrl}/api/liquidacion/inventarios/1/liquidar`, {
-      method: 'POST',
-      headers: autorizacion(ADMIN),
-    });
-    expect(r.status).toBe(200);
-  });
-});
-
-/**
- * LOS AJUSTES DEL MES: mismos roles que liquidar, y por la misma razón.
- * Cargar los ajustes es decidir cuánta plata NO se le descuenta al personal;
- * el auditor queda afuera porque es quien después firma el sello que incluye
- * esos montos.
- */
-describe('PUT /api/liquidacion/inventarios/:id/ajustes: quién carga los ajustes', () => {
-  const cargar = (actor?: ColaboradorAutenticado, cuerpo: unknown = { montoNegativos: 380, nota: 'Mermas.' }) => ({
-    method: 'PUT',
-    headers: {
-      ...(actor ? autorizacion(actor) : {}),
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify(cuerpo),
-  });
-
-  it('sin sesión, 401', async () => {
-    await iniciar();
-    expect((await fetch(`${baseUrl}/api/liquidacion/inventarios/1/ajustes`, cargar())).status).toBe(401);
-  });
-
-  it('auditor, 403 -- firma el sello que incluye estos montos', async () => {
-    await iniciar();
-    expect((await fetch(`${baseUrl}/api/liquidacion/inventarios/1/ajustes`, cargar(AUDITOR))).status).toBe(403);
-  });
-
-  it('conteo, 403', async () => {
-    await iniciar();
-    expect((await fetch(`${baseUrl}/api/liquidacion/inventarios/1/ajustes`, cargar(CONTEO))).status).toBe(403);
-  });
-
-  it('coordinador, pasa el middleware', async () => {
-    await iniciar();
-    expect((await fetch(`${baseUrl}/api/liquidacion/inventarios/1/ajustes`, cargar(COORDINADOR))).status).toBe(200);
-  });
-
-  it('administrador, pasa el middleware', async () => {
-    await iniciar();
-    expect((await fetch(`${baseUrl}/api/liquidacion/inventarios/1/ajustes`, cargar(ADMIN))).status).toBe(200);
-  });
+describe('PUT /api/liquidacion/inventarios/:id/ajustes: el cuerpo', () => {
+  const ajustes = ENDPOINTS.find((e) => e.metodo === 'PUT')!;
 
   /** EL CASO QUE DESTRABA EL MES: 0 es un monto válido, no un campo vacío. */
   it('montoNegativos en 0 pasa la validación: "alguien miró y no había"', async () => {
     await iniciar();
-    const r = await fetch(
-      `${baseUrl}/api/liquidacion/inventarios/1/ajustes`,
-      cargar(COORDINADOR, { montoNegativos: 0, nota: 'Revisado con Jocelyn: no hubo ajustes.' }),
-    );
+    const r = await pedir(ajustes, AUDITOR, { montoNegativos: 0, nota: 'Revisado con Jocelyn: no hubo ajustes.' });
     expect(r.status).toBe(200);
   });
 
   it('sin nota, 400 -- un ajuste sin explicación no se puede auditar después', async () => {
     await iniciar();
-    const r = await fetch(
-      `${baseUrl}/api/liquidacion/inventarios/1/ajustes`,
-      cargar(COORDINADOR, { montoNegativos: 380 }),
-    );
-    expect(r.status).toBe(400);
+    expect((await pedir(ajustes, AUDITOR, { montoNegativos: 380 })).status).toBe(400);
   });
 
   it('con nota vacía, 400', async () => {
     await iniciar();
-    const r = await fetch(
-      `${baseUrl}/api/liquidacion/inventarios/1/ajustes`,
-      cargar(COORDINADOR, { montoNegativos: 380, nota: '   ' }),
-    );
-    expect(r.status).toBe(400);
+    expect((await pedir(ajustes, AUDITOR, { montoNegativos: 380, nota: '   ' })).status).toBe(400);
   });
 
   it('monto negativo, 400 -- un ajuste que sube el faltante no es un ajuste', async () => {
     await iniciar();
-    const r = await fetch(
-      `${baseUrl}/api/liquidacion/inventarios/1/ajustes`,
-      cargar(COORDINADOR, { montoNegativos: -100, nota: 'x' }),
-    );
-    expect(r.status).toBe(400);
-  });
-});
-
-describe('GET /api/liquidacion/inventarios/:id/ajustes: ver qué hay cargado', () => {
-  it('conteo, 403', async () => {
-    await iniciar();
-    const r = await fetch(`${baseUrl}/api/liquidacion/inventarios/1/ajustes`, { headers: autorizacion(CONTEO) });
-    expect(r.status).toBe(403);
-  });
-
-  it('coordinador, pasa el middleware', async () => {
-    await iniciar();
-    const r = await fetch(`${baseUrl}/api/liquidacion/inventarios/1/ajustes`, { headers: autorizacion(COORDINADOR) });
-    expect(r.status).toBe(200);
+    expect((await pedir(ajustes, AUDITOR, { montoNegativos: -100, nota: 'x' })).status).toBe(400);
   });
 });

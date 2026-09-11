@@ -23,11 +23,15 @@ vi.mock('../../config/database', () => ({ prisma: prismaMock }));
 vi.mock('../../shared/auditoria', () => ({ registrarAuditoria: vi.fn() }));
 
 import { calcularTotalDescuento } from '../historial/historial.calculos';
+import { Prohibido } from '../../shared/errores';
 import type { ColaboradorAutenticado } from '../../shared/tipos';
 import { armarPlanilla, liquidar, proyectarPlanilla, type ColaboradorParaLiquidar } from './liquidacion.cierre';
 
-const COORD: ColaboradorAutenticado = { colaboradorId: 5, sucursalId: 1, rol: 'coordinador' };
-const AUDITOR: ColaboradorAutenticado = { colaboradorId: 8, sucursalId: 1, rol: 'auditor' };
+// La liquidación es del auditor desde 2026-09-11 (liquidacion.permisos.ts).
+// Sin tienda en la ficha: entra por "administradores" y audita toda la cadena.
+const AUDITOR: ColaboradorAutenticado = { colaboradorId: 5, sucursalId: null, rol: 'auditor' };
+const COORDINADOR: ColaboradorAutenticado = { colaboradorId: 8, sucursalId: 1, rol: 'coordinador' };
+const ADMIN: ColaboradorAutenticado = { colaboradorId: 1000, sucursalId: null, rol: 'administrador' };
 
 const decimal = (valor: number) => ({ toNumber: () => valor });
 
@@ -208,39 +212,50 @@ describe('liquidar', () => {
 
   it('el inventario que no existe es 404', async () => {
     prismaMock.inventario.findUnique.mockResolvedValue(null);
-    await expect(liquidar(COORD, 9)).rejects.toThrow('no existe');
+    await expect(liquidar(AUDITOR, 9)).rejects.toThrow('no existe');
   });
 
   /**
-   * EL AUDITOR NO LIQUIDA. Es quien firma el lacrado, y el sello incluye la
-   * planilla: si cerrara la planilla y después la firmara, el control de dos
-   * personas se completa solo.
+   * DECISIÓN DEL CLIENTE (2026-09-11): liquidar pasa al AUDITOR -- "el
+   * Coordinador deja de ver la liquidacion y ejecutarlo, ahora lo realiza el
+   * auditor". Ver liquidacion.permisos.ts.
    */
-  it('el auditor NO puede liquidar, y el mensaje dice quién sí', async () => {
-    await expect(liquidar(AUDITOR, 9)).rejects.toThrow(/coordinador/);
+  it('el coordinador YA NO liquida, y el mensaje dice quién sí', async () => {
+    await expect(liquidar(COORDINADOR, 9)).rejects.toThrow(/auditor/);
     expect(prismaMock.liquidacionColaborador.createMany).not.toHaveBeenCalled();
   });
 
-  it('el coordinador de otra sucursal no puede', async () => {
-    await expect(liquidar({ ...COORD, sucursalId: 2 }, 9)).rejects.toThrow('no es la tuya');
+  it('se corta ANTES de tocar la base: al coordinador no le dice ni si el inventario existe', async () => {
+    await expect(liquidar(COORDINADOR, 9)).rejects.toThrow(Prohibido);
+    expect(prismaMock.inventario.findUnique).not.toHaveBeenCalled();
+  });
+
+  it('el administrador tampoco: es técnico, no participa del proceso de inventario', async () => {
+    await expect(liquidar(ADMIN, 9)).rejects.toThrow(Prohibido);
+    expect(prismaMock.liquidacionColaborador.createMany).not.toHaveBeenCalled();
+  });
+
+  it('el auditor liquida el inventario de cualquier sucursal: audita toda la cadena', async () => {
+    mockInventario({ sucursalId: 2 });
+    await expect(liquidar(AUDITOR, 9)).resolves.toMatchObject({ estado: 'liquidado' });
   });
 
   it('con el conteo todavía abierto rechaza y dice qué falta', async () => {
     mockInventario({ estado: 'en_curso' });
-    await expect(liquidar(COORD, 9)).rejects.toThrow(/cerrar la ultima ronda/);
+    await expect(liquidar(AUDITOR, 9)).rejects.toThrow(/cerrar la ultima ronda/);
   });
 
   it('no se reliquida: un inventario ya liquidado da 409', async () => {
     // El recibo de sueldo de ese mes ya salió. Recalcular con el padrón de
     // hoy daría otro número para un pago que ya se hizo.
     mockInventario({ estado: 'liquidado' });
-    await expect(liquidar(COORD, 9)).rejects.toThrow(/ya se cerro/);
+    await expect(liquidar(AUDITOR, 9)).rejects.toThrow(/ya se cerro/);
     expect(prismaMock.liquidacionColaborador.createMany).not.toHaveBeenCalled();
   });
 
   it('un inventario lacrado tampoco se reliquida', async () => {
     mockInventario({ estado: 'lacrado' });
-    await expect(liquidar(COORD, 9)).rejects.toThrow(/ya se cerro/);
+    await expect(liquidar(AUDITOR, 9)).rejects.toThrow(/ya se cerro/);
   });
 
   /**
@@ -252,7 +267,7 @@ describe('liquidar', () => {
     it('sin asistencia registrada NO escribe la planilla', async () => {
       mockInventario({ resultado: { ...resultadoCompleto, colaboradoresAsistieron: null } });
 
-      await expect(liquidar(COORD, 9)).rejects.toThrow(/asistencia/);
+      await expect(liquidar(AUDITOR, 9)).rejects.toThrow(/asistencia/);
       expect(prismaMock.liquidacionColaborador.createMany).not.toHaveBeenCalled();
       expect(prismaMock.inventario.update).not.toHaveBeenCalled();
     });
@@ -260,18 +275,18 @@ describe('liquidar', () => {
     it('sin los ajustes del mes tampoco', async () => {
       mockInventario({ resultado: { ...resultadoCompleto, montoNegativos: null } });
 
-      await expect(liquidar(COORD, 9)).rejects.toThrow(/ajustes del mes/);
+      await expect(liquidar(AUDITOR, 9)).rejects.toThrow(/ajustes del mes/);
       expect(prismaMock.liquidacionColaborador.createMany).not.toHaveBeenCalled();
     });
 
     it('el mensaje explica la consecuencia, no solo que no se puede', async () => {
       mockInventario({ resultado: { ...resultadoCompleto, colaboradoresAsistieron: null } });
-      await expect(liquidar(COORD, 9)).rejects.toThrow(/nadie cargo/);
+      await expect(liquidar(AUDITOR, 9)).rejects.toThrow(/nadie cargo/);
     });
 
     it('sin resultado calculado avisa antes de firmar nada', async () => {
       mockInventario({ resultado: null });
-      await expect(liquidar(COORD, 9)).rejects.toThrow(/no tiene resultado/);
+      await expect(liquidar(AUDITOR, 9)).rejects.toThrow(/no tiene resultado/);
     });
   });
 
@@ -297,20 +312,20 @@ describe('liquidar', () => {
     });
 
     it('rechaza en vez de escribir una planilla de multas para todos', async () => {
-      await expect(liquidar(COORD, 9)).rejects.toThrow(/Ningún colaborador registró conteos/);
+      await expect(liquidar(AUDITOR, 9)).rejects.toThrow(/Ningún colaborador registró conteos/);
       expect(prismaMock.liquidacionColaborador.createMany).not.toHaveBeenCalled();
       expect(prismaMock.inventario.update).not.toHaveBeenCalled();
     });
 
     it('el mensaje dice la causa Y qué mirar', async () => {
-      const error = await liquidar(COORD, 9).catch((e) => e);
+      const error = await liquidar(AUDITOR, 9).catch((e) => e);
       expect(error.message).toContain('no hay asistencia deducible ni a quién repartir el faltante');
       expect(error.message).toMatch(/hojas tengan conteos cargados/);
     });
 
     it('sin ninguna hoja tampoco liquida', async () => {
       prismaMock.hojaConteo.findMany.mockResolvedValue([]);
-      await expect(liquidar(COORD, 9)).rejects.toThrow(/Ningún colaborador registró conteos/);
+      await expect(liquidar(AUDITOR, 9)).rejects.toThrow(/Ningún colaborador registró conteos/);
     });
 
     /**
@@ -319,7 +334,7 @@ describe('liquidar', () => {
      */
     it('aunque el resultado diga que asistieron 7, si las hojas dicen 0 no liquida', async () => {
       mockInventario({ resultado: { ...resultadoCompleto, colaboradoresAsistieron: 7 } });
-      await expect(liquidar(COORD, 9)).rejects.toThrow(/Ningún colaborador registró conteos/);
+      await expect(liquidar(AUDITOR, 9)).rejects.toThrow(/Ningún colaborador registró conteos/);
     });
   });
 
@@ -332,7 +347,7 @@ describe('liquidar', () => {
     });
 
     it('escribe una fila por colaborador alcanzado', async () => {
-      await liquidar(COORD, 9);
+      await liquidar(AUDITOR, 9);
 
       const { data } = prismaMock.liquidacionColaborador.createMany.mock.calls[0]![0] as { data: unknown[] };
       expect(data).toHaveLength(11);
@@ -341,7 +356,7 @@ describe('liquidar', () => {
     it('el universo es el MISMO que colaboradoresAlcanzados', async () => {
       // Si estas dos consultas no coinciden, la cuota por persona no cierra
       // contra el faltante neto y nadie entiende por qué.
-      await liquidar(COORD, 9);
+      await liquidar(AUDITOR, 9);
 
       expect(prismaMock.colaborador.findMany).toHaveBeenCalledWith(
         expect.objectContaining({ where: { sucursalId: 1, activo: true } }),
@@ -349,7 +364,7 @@ describe('liquidar', () => {
     });
 
     it('deja el inventario en liquidado', async () => {
-      await liquidar(COORD, 9);
+      await liquidar(AUDITOR, 9);
 
       expect(prismaMock.inventario.update).toHaveBeenCalledWith({
         where: { id: 9 },
@@ -363,7 +378,7 @@ describe('liquidar', () => {
      * sellaría la planilla vacía que este cambio existe para impedir.
      */
     it('planilla y estado van en la MISMA transacción', async () => {
-      await liquidar(COORD, 9);
+      await liquidar(AUDITOR, 9);
 
       const [arg] = prismaMock.$transaction.mock.calls[0] as [unknown];
       expect(Array.isArray(arg)).toBe(true);
@@ -373,7 +388,7 @@ describe('liquidar', () => {
     it('si la transacción falla no queda nada, ni el registro de auditoría', async () => {
       prismaMock.$transaction.mockRejectedValue(new Error('conexión caída'));
 
-      await expect(liquidar(COORD, 9)).rejects.toThrow('conexión caída');
+      await expect(liquidar(AUDITOR, 9)).rejects.toThrow('conexión caída');
       const { registrarAuditoria } = await import('../../shared/auditoria');
       expect(registrarAuditoria).not.toHaveBeenCalled();
     });
@@ -386,7 +401,7 @@ describe('liquidar', () => {
      * alguien.
      */
     it('la cantidad de asistio:true coincide con colaboradoresAsistieron', async () => {
-      await liquidar(COORD, 9);
+      await liquidar(AUDITOR, 9);
 
       const { data } = prismaMock.liquidacionColaborador.createMany.mock.calls[0]![0] as {
         data: Array<{ asistio: boolean }>;
@@ -396,7 +411,7 @@ describe('liquidar', () => {
 
     describe('la regla del cliente, fila por fila', () => {
       it('quien contó tiene asistio: true y no paga multa', async () => {
-        await liquidar(COORD, 9);
+        await liquidar(AUDITOR, 9);
         const { data } = prismaMock.liquidacionColaborador.createMany.mock.calls[0]![0] as {
           data: Array<{ colaboradorId: number; asistio: boolean; multaInasistencia: number }>;
         };
@@ -407,7 +422,7 @@ describe('liquidar', () => {
 
       /** El costo aceptado: vino, no llegó a contar, se le descuenta igual. */
       it('quien tuvo hoja asignada pero no contó figura como AUSENTE', async () => {
-        await liquidar(COORD, 9);
+        await liquidar(AUDITOR, 9);
         const { data } = prismaMock.liquidacionColaborador.createMany.mock.calls[0]![0] as {
           data: Array<{ colaboradorId: number; asistio: boolean; multaInasistencia: number }>;
         };
@@ -419,7 +434,7 @@ describe('liquidar', () => {
       it('quien nunca recibió hoja TAMBIEN tiene fila, con asistio: false', async () => {
         // El universo es "colaboradores activos de la sucursal", no "los que
         // recibieron hoja". Dejarlo afuera sería no cobrarle la multa.
-        await liquidar(COORD, 9);
+        await liquidar(AUDITOR, 9);
         const { data } = prismaMock.liquidacionColaborador.createMany.mock.calls[0]![0] as {
           data: Array<{ colaboradorId: number; asistio: boolean }>;
         };
@@ -432,7 +447,7 @@ describe('liquidar', () => {
         // Dos queries distintas se desincronizan el día que una filtra por
         // ronda y la otra no. Por eso `SELECT_ASISTENCIA` vive en un solo
         // lugar y no filtra ni por ronda ni por estado de hoja.
-        await liquidar(COORD, 9);
+        await liquidar(AUDITOR, 9);
         expect(prismaMock.hojaConteo.findMany).toHaveBeenCalledWith(
           expect.objectContaining({ where: { inventarioId: 9 } }),
         );
@@ -459,7 +474,7 @@ describe('liquidar', () => {
         multaInasistencia: 20,
       });
 
-      await liquidar(COORD, 9);
+      await liquidar(AUDITOR, 9);
       const { data: persistida } = prismaMock.liquidacionColaborador.createMany.mock.calls[0]![0] as {
         data: Array<Record<string, unknown>>;
       };
@@ -470,7 +485,7 @@ describe('liquidar', () => {
     });
 
     it('el total descontado cuadra con la suma de la planilla', async () => {
-      const cierre = await liquidar(COORD, 9);
+      const cierre = await liquidar(AUDITOR, 9);
 
       const { data } = prismaMock.liquidacionColaborador.createMany.mock.calls[0]![0] as {
         data: Array<{ cuotaBase: number; multaInasistencia: number; bonoAsistencia: number }>;
