@@ -31,7 +31,7 @@
  * conteo guardado sin su fila de cola, por ejemplo).
  */
 
-import { buscarHojaPorId, finalizarDominio, obtenerInventario, puedeEditar } from './_compartido';
+import { buscarHojaPorId, finalizarDominio, obtenerInventario, puedeEditar, puedeFinalizarDominio } from './_compartido';
 import { obtenerDb } from './_sqlite';
 import { aplicarResultadoEnvio, ordenarCola, estadoSyncDeHoja, type ItemCola, type ResultadoEnvio } from './sqlite-cola';
 import { catalogoApi } from './catalogo-api';
@@ -1017,44 +1017,29 @@ export const hojasSqlite: RepositorioHojas = {
     if (!hojaBase) throw new Error(`Hoja ${hojaId} no encontrada.`);
 
     const actual = await hojaConEstadoLocal(hojaBase);
+
+    // DECISIÓN DEL CLIENTE (2026-09-11, reemplaza el relleno de fb2e224):
+    // un 0 es la afirmación de quien contó ("miré, no había"), no algo que
+    // el sistema decide por nadie. La UI ya bloquea el botón "Finalizar"
+    // hasta que todo tenga valor (puedeFinalizar()/76394fd) -- esta es la
+    // última barrera, mismo criterio y mismo motivo de mensaje que
+    // hojas.service.ts#finalizar en el backend: si algo llega hasta acá con
+    // productos sin contar, RECHAZA, no inventa.
+    const { puede, faltantes } = puedeFinalizarDominio(actual);
+    if (!puede && faltantes > 0) {
+      throw new Error(
+        `Todavía falta contar ${faltantes} producto${faltantes === 1 ? '' : 's'} de esta hoja. ` +
+          'Cada producto necesita un valor antes de finalizar -- si no había nada, se carga 0 a mano.',
+      );
+    }
+
     // finalizarDominio es pura y lanza si ya estaba finalizada — mismo
     // punto de no retorno que hojas-memoria.ts, no se relaja acá.
     const finalizada = finalizarDominio(actual);
 
-    // DECISIÓN DEL CLIENTE (2026-09-05): al finalizar, un renglón SIN CONTAR
-    // no queda en "faltan N" — se registra un Conteo en 0 explícito ("si no
-    // hay el producto, es 0"). Espeja hojas.service.ts#finalizar del backend.
-    // Cada 0 se ENCOLA como un conteo más (no solo se escribe local): así,
-    // sin red, la cola manda primero los 0 y recién después el finalizar
-    // (procesarColaDeSincronizacion retiene 'finalizar' mientras la hoja
-    // tenga items 'conteo'), y el servidor nunca ve un conteo tardío sobre
-    // una hoja ya finalizada. Es la afirmación de quien finaliza ("miré, no
-    // hay"), no el cero automático que dominio/ciclo-conteos.ts prohíbe para
-    // lo que NADIE miró.
     const ahora = new Date().toISOString();
-    const contados = new Set(actual.conteos.map((c) => c.productoId));
-    const ceros: Conteo[] = actual.productos
-      .filter((p) => !contados.has(p.id))
-      .map((p) => ({ productoId: p.id, empaques: [], sueltas: 0, confirmadoPorEscaner: false, contadoEn: ahora }));
-
     const db = await obtenerDb();
     await db.withTransactionAsync(async () => {
-      // Los 0 primero, con el MISMO INSERT OR REPLACE + cola 'conteo' que
-      // guardarConteo: así el envío y la dedup por (hoja, tipo, producto)
-      // funcionan igual que un conteo cargado a mano.
-      for (const cero of ceros) {
-        await db.runAsync(
-          'INSERT OR REPLACE INTO conteos (hoja_id, producto_id, lineas, sueltas, confirmado_por_escaner, contado_en) VALUES (?, ?, ?, ?, ?, ?)',
-          [hojaId, cero.productoId, '[]', 0, 0, ahora],
-        );
-        await db.runAsync(
-          `INSERT INTO cola_sync (hoja_id, tipo, producto_id, creado_en, intentos, estado)
-           VALUES (?, 'conteo', ?, ?, 0, 'pendiente')
-           ON CONFLICT(hoja_id, tipo, producto_id)
-           DO UPDATE SET creado_en = excluded.creado_en, intentos = 0, estado = 'pendiente', razon = NULL`,
-          [hojaId, cero.productoId, ahora],
-        );
-      }
       await db.runAsync('UPDATE hoja_estado_local SET estado = ?, sync = ? WHERE hoja_id = ?', ['finalizada', 'local', hojaId]);
       await db.runAsync(
         `INSERT INTO cola_sync (hoja_id, tipo, producto_id, creado_en, intentos, estado)
@@ -1068,9 +1053,8 @@ export const hojasSqlite: RepositorioHojas = {
     // sync: 'local', NO 'sincronizado' — finalizar también es una
     // escritura que tiene que llegar al servidor. Decir "sincronizado"
     // acá sería la misma promesa incumplida que este adaptador existe
-    // para dejar de hacer. Los ceros se devuelven en la hoja para que la
-    // pantalla muestre el avance completo (N/N) sin volver a leer.
-    return { ...finalizada, conteos: [...finalizada.conteos, ...ceros], sync: 'local' };
+    // para dejar de hacer.
+    return { ...finalizada, sync: 'local' };
   },
 };
 

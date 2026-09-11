@@ -719,10 +719,10 @@ describe('ARREGLADO (2026-09-05): una hoja no se declara finalizada ante el serv
       confirmadoPorEscaner: false,
       contadoEn: 't-riesgo-conteo',
     });
-    // finalizar() no exige que la hoja esté completa (puedeFinalizar solo
-    // mira si YA estaba finalizada, nunca si faltan renglones) — mismo
-    // criterio que el backend, ver hojas.service.ts#finalizar. El punto
-    // de este test es que la cola SÍ lo frena, aunque el dominio no.
+    // El único producto de esta hoja ya está contado (arriba): la regla de
+    // completitud (2026-09-11, ver el describe de más abajo) no entra en
+    // juego acá. El punto de ESTE test es otro: que la cola frena el
+    // finalizar por el rechazo de un conteo, no que el dominio lo permita.
     await hojasSqlite.finalizar(hojaId);
 
     let seLlamoAFinalizar = false;
@@ -815,11 +815,14 @@ describe('ARREGLADO (2026-09-05): una hoja no se declara finalizada ante el serv
   });
 });
 
-describe('finalizar registra un 0 por cada producto sin contar y lo encola (decisión del cliente 2026-09-05)', () => {
-  // "Si no hay el producto, es 0": al finalizar, cada renglón sin Conteo se
-  // guarda en 0 explícito y se encola como un conteo más — así, sin red, el
-  // estado local queda completo (N/N) y la cola manda primero los 0 y recién
-  // después el finalizar. Espeja hojas.service.ts#finalizar del backend.
+describe('finalizar RECHAZA si quedan productos sin contar (decisión del cliente 2026-09-11): nada de rellenar con 0', () => {
+  // Reemplaza la regla de fb2e224 (2026-09-05): ya NO se rellena con 0 lo
+  // que falta contar. Un 0 es la afirmación de quien contó ("miré, no
+  // había"), no algo que el sistema puede decidir por nadie — mismo
+  // criterio, y mismo motivo de mensaje, que hojas.service.ts#finalizar en
+  // el backend (2026-09-11) y que puedeFinalizar()/76394fd en la UI. Este
+  // adaptador es la última barrera: la UI ya bloquea el botón, pero si algo
+  // llega hasta acá con productos sin contar, tiene que fallar, no inventar.
   // Inventario propio por test, por lo mismo que `hojaDeRiesgo` (ver arriba).
   function hojaConProductos(inventarioId: number, id: number, numero: string, productoIds: number[]) {
     return {
@@ -845,7 +848,7 @@ describe('finalizar registra un 0 por cada producto sin contar y lo encola (deci
     };
   }
 
-  it('3 productos, 1 contado: quedan 3 conteos (dos en 0) y los 0 se encolan junto al finalizar', async () => {
+  it('3 productos, 1 contado: RECHAZA, dice cuántos faltan, y no escribe ni encola nada', async () => {
     const INV = 556301;
     const [p1, p2, p3] = [8801, 8802, 8803];
     vi.mocked(hojasApi.mias).mockResolvedValueOnce([hojaConProductos(INV, 5563001, '001', [p1, p2, p3])]);
@@ -861,39 +864,43 @@ describe('finalizar registra un 0 por cada producto sin contar y lo encola (deci
       contadoEn: 't-tres-conteo',
     });
 
-    const finalizada = await hojasSqlite.finalizar(hojaId);
-    // La hoja que devuelve finalizar ya trae los 3 conteos: la pantalla
-    // muestra el avance completo sin volver a leer.
-    expect(finalizada.conteos).toHaveLength(3);
+    await expect(hojasSqlite.finalizar(hojaId)).rejects.toThrow(/falta.*contar/i);
+    await expect(hojasSqlite.finalizar(hojaId)).rejects.toThrow(/2 producto/);
 
     const db = await obtenerDbDeTest();
-    const conteos = await db.getAllAsync<{ producto_id: number; sueltas: number; lineas: string }>(
-      'SELECT producto_id, sueltas, lineas FROM conteos WHERE hoja_id = ? ORDER BY producto_id ASC',
-      [hojaId],
-    );
-    expect(conteos).toHaveLength(3);
-    // Los dos que faltaban quedaron en 0: sueltas 0 y SIN líneas de empaque.
-    expect(conteos.find((c) => c.producto_id === p2)).toMatchObject({ sueltas: 0, lineas: '[]' });
-    expect(conteos.find((c) => c.producto_id === p3)).toMatchObject({ sueltas: 0, lineas: '[]' });
-    // El contado real (8801) NO se pisó: conserva su caja, no es un 0.
-    expect(conteos.find((c) => c.producto_id === p1)?.lineas).not.toBe('[]');
+    // Ningún 0 inventado: sigue habiendo un solo conteo, el real.
+    const conteos = await db.getAllAsync('SELECT producto_id FROM conteos WHERE hoja_id = ?', [hojaId]);
+    expect(conteos).toHaveLength(1);
 
-    // Los 0 están en la cola como 'conteo' (para sincronizarse), más el
-    // 'finalizar'. Que la cola frene el finalizar hasta que salgan los
-    // conteos ya se prueba en el describe ARREGLADO (2026-09-05).
-    const cola = await db.getAllAsync<{ tipo: string; producto_id: number }>(
-      'SELECT tipo, producto_id FROM cola_sync WHERE hoja_id = ?',
-      [hojaId],
-    );
-    const conteosEnCola = cola
-      .filter((c) => c.tipo === 'conteo')
-      .map((c) => c.producto_id)
-      .sort((a, b) => a - b);
-    expect(conteosEnCola).toEqual([p1, p2, p3]);
-    expect(cola.some((c) => c.tipo === 'finalizar')).toBe(true);
+    // Nada NUEVO se encoló: ni los 0 que ya no se inventan, ni el finalizar
+    // -- solo sigue el 'conteo' real de p1, que ya estaba antes de llamar a finalizar.
+    const cola = await db.getAllAsync<{ tipo: string }>('SELECT tipo FROM cola_sync WHERE hoja_id = ?', [hojaId]);
+    expect(cola).toEqual([{ tipo: 'conteo' }]);
+
+    // La hoja sigue como estaba: nunca pasó a 'finalizada'.
+    const hojaLocal = await hojasSqlite.porNumero(INV, '001', 1);
+    expect(hojaLocal!.estado).not.toBe('finalizada');
   });
 
-  it('con todo contado no inventa ceros: solo se encola el finalizar (más los conteos reales)', async () => {
+  it('1 solo producto sin contar: el mensaje dice "1 producto", no "1 productos"', async () => {
+    const INV = 556303;
+    const [p1, p2] = [8821, 8822];
+    vi.mocked(hojasApi.mias).mockResolvedValueOnce([hojaConProductos(INV, 5563003, '003', [p1, p2])]);
+    const [hoja] = await hojasSqlite.mias(INV, 1);
+    const hojaId = hoja!.id;
+
+    await hojasSqlite.guardarConteo(hojaId, {
+      productoId: p1,
+      empaques: [{ empaqueNombre: 'Caja', cantidad: 1 }],
+      sueltas: 0,
+      confirmadoPorEscaner: false,
+      contadoEn: 't-singular',
+    });
+
+    await expect(hojasSqlite.finalizar(hojaId)).rejects.toThrow(/1 producto de esta hoja/);
+  });
+
+  it('con todo contado no rechaza: se encola el finalizar (más los conteos reales), sin inventar nada', async () => {
     const INV = 556302;
     const [p1, p2] = [8811, 8812];
     vi.mocked(hojasApi.mias).mockResolvedValueOnce([hojaConProductos(INV, 5563002, '002', [p1, p2])]);

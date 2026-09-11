@@ -16,7 +16,7 @@
  * de rellenarlo con datos inventados.
  */
 
-import { finalizar as finalizarDominio, puedeEditar } from '../dominio/hoja';
+import { finalizar as finalizarDominio, puedeEditar, puedeFinalizar as puedeFinalizarDominio } from '../dominio/hoja';
 import { partirEnHojas, repartir } from '../dominio/lote';
 import type { Colaborador, Conteo, Empaque, HojaConteo, Producto, TamanoHoja } from '../dominio/tipos';
 import { sesionMemoria } from './sesion-memoria';
@@ -394,4 +394,4 @@ export async function reemplazarHoja(hoja: HojaConteo): Promise<void> {
 }
 
 // Re-exportadas para que los adaptadores no dupliquen el import del dominio.
-export { finalizarDominio, puedeEditar };
+export { finalizarDominio, puedeEditar, puedeFinalizarDominio };
