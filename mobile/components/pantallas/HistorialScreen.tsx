@@ -40,6 +40,7 @@ import {
   formatoPct,
   MESES_CORTOS,
   ModalExportarConsolidado,
+  SelectorSucursal,
   type OpcionChip,
 } from '../ui';
 
@@ -927,14 +928,12 @@ export function HistorialScreen({ rol }: HistorialScreenProps): JSX.Element {
               />
             </View>
           ) : rol === 'auditor' ? (
-            <View style={styles.filtroBloque}>
-              <Text style={styles.filtroLabel}>Sucursal a auditar</Text>
-              <ChipsFiltro
-                opciones={sucursales.map((s) => ({ id: String(s.id), etiqueta: s.nombre }))}
-                activo={sucursalAuditor === null ? '' : String(sucursalAuditor)}
-                onCambiar={(id) => elegirSucursal(Number(id))}
-              />
-            </View>
+            <SelectorSucursal
+              label="Sucursal a auditar"
+              sucursales={sucursales}
+              sucursalId={sucursalAuditor}
+              onElegir={elegirSucursal}
+            />
           ) : null}
 
           <View style={styles.filtroBloque}>

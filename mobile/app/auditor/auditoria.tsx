@@ -10,6 +10,7 @@ import {
   BarraApp,
   ChipsFiltro,
   EmptyState,
+  SelectorSucursal,
   TarjetaItemAuditoria,
   formatoMoneda as formatoNumeroMoneda,
   type OpcionChip,
@@ -144,7 +145,6 @@ export default function AuditoriaScreen(): JSX.Element {
   });
   const nombreSucursal = sucursales.find((s) => s.id === sucursalId)?.nombre ?? sesion.sucursal?.nombre;
   // Opciones del conjunto REAL (el padrón), en el orden del backend (id asc).
-  const opcionesSucursal: OpcionChip[] = sucursales.map((s) => ({ id: String(s.id), etiqueta: s.nombre }));
 
   async function salir(): Promise<void> {
     await cerrar();
@@ -221,14 +221,12 @@ export default function AuditoriaScreen(): JSX.Element {
       {/* El Auditor no tiene tienda: elige la que audita. Siempre visible
           (también con la matriz vacía), para poder cambiar de sucursal cuando
           la actual no tiene inventario en curso. */}
-      <View style={styles.filtroSucursal}>
-        <Text style={styles.filtroSucursalLabel}>Sucursal a auditar</Text>
-        <ChipsFiltro
-          opciones={opcionesSucursal}
-          activo={sucursalId === null ? '' : String(sucursalId)}
-          onCambiar={(id) => setSucursalElegida(Number(id))}
-        />
-      </View>
+      <SelectorSucursal
+        label="Sucursal a auditar"
+        sucursales={sucursales}
+        sucursalId={sucursalId}
+        onElegir={setSucursalElegida}
+      />
 
       {cargando ? (
         <ActivityIndicator color={colors.rojo} style={styles.cargando} />
@@ -353,8 +351,6 @@ export default function AuditoriaScreen(): JSX.Element {
 
 const styles = StyleSheet.create({
   contenido: { paddingHorizontal: 14, paddingTop: 8, gap: 16 },
-  filtroSucursal: { gap: 6 },
-  filtroSucursalLabel: { fontSize: 11, letterSpacing: 0.5, color: colors.gris, fontFamily: fonts.semibold },
   cargando: { marginTop: 24 },
   tarjetaResumen: { padding: 15, gap: 10, borderRadius: 13, borderWidth: 1, borderColor: colors.borde, backgroundColor: colors.campo },
   resumenTitulo: { fontSize: 14.5, color: colors.tinta, fontFamily: fonts.bold },

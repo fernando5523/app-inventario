@@ -24,7 +24,7 @@ import { useSesion } from '../../lib/sesion-contexto';
 import { useSucursalAuditada } from '../../lib/sucursal-auditada-contexto';
 import { colors, fonts, radius, spacing } from '../../lib/theme';
 import { PantallaConTabs } from '../navegacion/PantallaConTabs';
-import { BandaSync, Badge, BarraApp, Button, ChipsFiltro, formatoMiles, formatoPct, type BadgeVariant, type OpcionChip } from '../ui';
+import { BandaSync, Badge, BarraApp, Button, SelectorSucursal, formatoMiles, formatoPct, type BadgeVariant } from '../ui';
 
 // formatoMiles/formatoPct, no Intl.NumberFormat('es-PE'): no está
 // garantizado que Hermes traiga los datos ICU de es-PE en el emulador —
@@ -390,7 +390,6 @@ export function CicloScreen({ rol }: CicloScreenProps): JSX.Element {
   const nombreSucursal = esCoordinador
     ? sesion.sucursal?.nombre
     : (sucursales.find((s) => s.id === sucursalId)?.nombre ?? sesion.sucursal?.nombre);
-  const opcionesSucursal: OpcionChip[] = sucursales.map((s) => ({ id: String(s.id), etiqueta: s.nombre }));
 
   return (
     <PantallaConTabs scrollable contentStyle={styles.contenido}>
@@ -407,14 +406,12 @@ export function CicloScreen({ rol }: CicloScreenProps): JSX.Element {
           atado a la suya y no ve esto). Siempre visible, para cambiarla aunque
           la actual no tenga ciclo. */}
       {rol === 'auditor' ? (
-        <View style={styles.filtroSucursal}>
-          <Text style={styles.filtroSucursalLabel}>Sucursal a auditar</Text>
-          <ChipsFiltro
-            opciones={opcionesSucursal}
-            activo={sucursalId === null ? '' : String(sucursalId)}
-            onCambiar={(id) => setSucursalElegida(Number(id))}
-          />
-        </View>
+        <SelectorSucursal
+          label="Sucursal a auditar"
+          sucursales={sucursales}
+          sucursalId={sucursalId}
+          onElegir={setSucursalElegida}
+        />
       ) : null}
 
       {cargando ? (
@@ -568,8 +565,6 @@ export function CicloScreen({ rol }: CicloScreenProps): JSX.Element {
 
 const styles = StyleSheet.create({
   contenido: { paddingHorizontal: spacing.lg, paddingTop: spacing.sm, gap: spacing.md + 3 },
-  filtroSucursal: { gap: 6 },
-  filtroSucursalLabel: { fontSize: 11, letterSpacing: 0.5, color: colors.gris, fontFamily: fonts.semibold },
   cargando: { marginTop: spacing.xxxl },
   errorCarga: { marginTop: spacing.xxxl, gap: spacing.md, alignItems: 'flex-start' },
   errorCargaTexto: { fontSize: 13, color: colors.gris, fontFamily: fonts.regular },

@@ -11,7 +11,7 @@ import { useSesion } from '../../lib/sesion-contexto';
 import { useSucursalAuditada } from '../../lib/sucursal-auditada-contexto';
 import { colors, fonts } from '../../lib/theme';
 import { PantallaConTabs } from '../navegacion/PantallaConTabs';
-import { BarraApp, ChipsFiltro, EmptyState, formatoMiles, formatoMoneda, formatoPct, MESES_CORTOS, type OpcionChip } from '../ui';
+import { BarraApp, EmptyState, formatoMiles, formatoMoneda, formatoPct, MESES_CORTOS, SelectorSucursal } from '../ui';
 
 export interface ComparativoScreenProps {
   rol: Extract<Rol, 'administrador' | 'auditor'>;
@@ -109,7 +109,6 @@ export function ComparativoScreen({ rol }: ComparativoScreenProps): JSX.Element 
 
   if (!sesion) return <View />;
 
-  const opcionesSucursal: OpcionChip[] = sucursales.map((s) => ({ id: String(s.id), etiqueta: s.nombre }));
   // El nombre de la tienda EFECTIVAMENTE mostrada -- nunca "todas": el
   // rótulo tiene que decir exactamente qué se está viendo (skill
   // trujillo-ui, "Honestidad de los datos en pantalla").
@@ -137,14 +136,12 @@ export function ComparativoScreen({ rol }: ComparativoScreenProps): JSX.Element 
         no se ocultan.
       </Text>
 
-      <View style={styles.filtroBloque}>
-        <Text style={styles.filtroLabel}>Sucursal</Text>
-        <ChipsFiltro
-          opciones={opcionesSucursal}
-          activo={filtroActivo === null ? '' : String(filtroActivo)}
-          onCambiar={(id) => (rol === 'auditor' ? elegir(Number(id)) : setFiltroSucursalId(Number(id)))}
-        />
-      </View>
+      <SelectorSucursal
+        label="Sucursal"
+        sucursales={sucursales}
+        sucursalId={filtroActivo}
+        onElegir={(id) => (rol === 'auditor' ? elegir(id) : setFiltroSucursalId(id))}
+      />
 
       {cargando ? (
         <ActivityIndicator color={colors.rojo} style={styles.cargando} />
@@ -244,8 +241,6 @@ const styles = StyleSheet.create({
   ayuda: { fontSize: 12.5, lineHeight: 17.5, color: colors.gris, fontFamily: fonts.regular },
   cargando: { marginTop: 24 },
 
-  filtroBloque: { gap: 6 },
-  filtroLabel: { fontSize: 11, letterSpacing: 0.5, color: colors.gris, fontFamily: fonts.semibold },
 
   tarjeta: { gap: 8, padding: 15, backgroundColor: colors.campo, borderWidth: 1, borderColor: colors.borde, borderRadius: 13 },
   tarjetaTitulo: { fontSize: 14.5, color: colors.tinta, fontFamily: fonts.bold },

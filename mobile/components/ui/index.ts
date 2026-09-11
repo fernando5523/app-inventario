@@ -43,6 +43,8 @@ export { CampoTexto } from './CampoTexto';
 export type { CampoTextoProps } from './CampoTexto';
 export { SelectBuscable } from './SelectBuscable';
 export type { SelectBuscableProps } from './SelectBuscable';
+export { SelectorSucursal } from './SelectorSucursal';
+export type { SelectorSucursalProps } from './SelectorSucursal';
 export { ModalFiltrosProductos } from './ModalFiltrosProductos';
 export type { ModalFiltrosProductosProps } from './ModalFiltrosProductos';
 export { ModalFiltrosHojas } from './ModalFiltrosHojas';

@@ -39,6 +39,15 @@ export interface SelectBuscableProps {
    * mismas reglas en los dos filtros con este diseño.
    */
   flotante?: boolean;
+  /**
+   * Si se ofrece la opción "sin filtro" (`etiquetaVacia`, valor `null`) y la
+   * cruz para limpiar. Por defecto `true` -- los filtros de Contar/Coordinador
+   * la necesitan ("Todas las categorías"). El selector de sucursal del Auditor
+   * la pone en `false`: siempre hay UNA sucursal elegida, "todas" no es una
+   * opción (una pantalla de auditoría mira UN inventario). Opt-in con default
+   * igual al de siempre, para no cambiarles el comportamiento a las otras.
+   */
+  permitirVacio?: boolean;
 }
 
 /**
@@ -60,6 +69,7 @@ export function SelectBuscable({
   onCambiarAbierto,
   autoFocusBusqueda = true,
   flotante = false,
+  permitirVacio = true,
 }: SelectBuscableProps): JSX.Element {
   const [busqueda, setBusqueda] = useState('');
   const visibles = filtrarOpciones(opciones, busqueda);
@@ -84,7 +94,7 @@ export function SelectBuscable({
         <Text style={[styles.valor, valor === null && styles.valorVacio]} numberOfLines={1} ellipsizeMode="tail">
           {valor ?? etiquetaVacia}
         </Text>
-        {valor !== null ? (
+        {permitirVacio && valor !== null ? (
           <Pressable hitSlop={8} onPress={() => onCambiar(null)} accessibilityLabel={`Quitar el filtro de ${label}`}>
             <X size={16} color={colors.gris} />
           </Pressable>
@@ -112,10 +122,12 @@ export function SelectBuscable({
             keyboardShouldPersistTaps="handled"
             showsVerticalScrollIndicator={false}
           >
-            <Pressable style={styles.opcion} onPress={() => elegir(null)}>
-              <Text style={[styles.opcionTexto, valor === null && styles.opcionElegida]}>{etiquetaVacia}</Text>
-              {valor === null ? <Check size={16} color={colors.rojo} /> : null}
-            </Pressable>
+            {permitirVacio ? (
+              <Pressable style={styles.opcion} onPress={() => elegir(null)}>
+                <Text style={[styles.opcionTexto, valor === null && styles.opcionElegida]}>{etiquetaVacia}</Text>
+                {valor === null ? <Check size={16} color={colors.rojo} /> : null}
+              </Pressable>
+            ) : null}
             {visibles.map((op) => {
               const elegida = op === valor;
               return (
