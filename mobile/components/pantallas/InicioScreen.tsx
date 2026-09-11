@@ -3,9 +3,9 @@ import { useCallback, useEffect, useRef, useState, type JSX } from 'react';
 import { ActivityIndicator, StyleSheet, Text, View } from 'react-native';
 
 import { cargarSeguro } from '../../lib/adaptadores/_http';
-import { inventarioIdSinRed, rondaActivaSinRed } from '../../lib/adaptadores/hojas-sqlite';
+import { inventarioIdSinRed, rondaActivaSinRed, ultimaDescarga, type ResultadoDescarga } from '../../lib/adaptadores/hojas-sqlite';
 import { repositorioHojas, repositorioInventario, repositorioSesion, repositorioTiendas, repositorioUsuarios, sincronizador } from '../../lib/contenedor';
-import { cifraOSinRed, filaPct } from '../../lib/dominio/cifra-sin-red';
+import { cifraMisHojas, cifraOSinRed, filaPct, motivoCorto } from '../../lib/dominio/cifra-sin-red';
 import { avance, avanceConjunto, estadoConjunto } from '../../lib/dominio/hoja';
 import { sucursalEnFoco } from '../../lib/dominio/sucursal-en-foco';
 import type { HojaConteo, Rol, Sucursal } from '../../lib/dominio/tipos';
@@ -97,6 +97,10 @@ export function InicioScreen(): JSX.Element {
   // por el `ronda !== null ? ... : []` de más abajo.
   const [sinDatosDeRonda, setSinDatosDeRonda] = useState(false);
   const [misHojas, setMisHojas] = useState<HojaConteo[] | null>(null);
+  // Qué pasó la última vez que se intentó bajar `misHojas` de esta ronda --
+  // sin esto, un `[]` por descarga fallida/en curso es indistinguible de un
+  // 0 real (bug real 2026-09-10, ver lib/dominio/cifra-sin-red.ts#cifraMisHojas).
+  const [resultadoMias, setResultadoMias] = useState<ResultadoDescarga | null>(null);
   const [estadoSistema, setEstadoSistema] = useState<EstadoSistema | null>(null);
 
   // Toda la carga de las 4 ramas (administrador/coordinador/conteo/
@@ -204,6 +208,10 @@ export function InicioScreen(): JSX.Element {
         // mias(), NUNCA todas(): un Contador no puede ver el lote entero.
         const mias = rondaActiva !== null ? await repositorioHojas.mias(idInventario, rondaActiva) : [];
         setMisHojas(mias);
+        // Se consulta DESPUÉS de `mias()` (que ya esperó su propio intento
+        // de descarga adentro): dice si ese resultado es de fiar o si la
+        // descarga de esta ronda todavía no se pudo completar.
+        setResultadoMias(rondaActiva !== null ? ultimaDescarga(idInventario, 'mias', rondaActiva) : null);
       }
     });
     if (error) setErrorSistema(error.message);
@@ -230,6 +238,7 @@ export function InicioScreen(): JSX.Element {
     setInventario(null);
     setHojasRonda1(null);
     setMisHojas(null);
+    setResultadoMias(null);
     setEstadoSistema(null);
     setCargando(true);
     void cargar();
@@ -311,9 +320,16 @@ export function InicioScreen(): JSX.Element {
       // productos tiene ESTA — la última hoja de un inventario real queda
       // parcial, y mostrar el nominal ahí infla el total que ve quien cuenta.
       const totalHojaActual = hojaActual ? avance(hojaActual).total : 0;
+      // `null` cuando el `[]` de `misHojas` viene de una descarga que
+      // todavía no terminó o falló -- ver cifra-sin-red.ts#cifraMisHojas.
+      // Con `hojaActual` presente ya hay al menos una hoja de verdad, así
+      // que esa rama nunca necesita esta distinción.
+      const asignadas = cifraMisHojas(misHojas, resultadoMias);
       // Conteo ciego: SOLO sus hojas y sus ítems. Nunca el total del
       // inventario ni una cifra que venga del ERP.
-      cifras = hojaActual ? `Hoja #${hojaActual.numero} · Lote de ${totalHojaActual} ítems` : `${misHojas.length} hojas asignadas`;
+      cifras = hojaActual
+        ? `Hoja #${hojaActual.numero} · Lote de ${totalHojaActual} ítems`
+        : `${cifraOSinRed(asignadas)} hojas asignadas${asignadas === null ? ` (${motivoCorto(resultadoMias?.ok === false ? resultadoMias.motivo : undefined)})` : ''}`;
       filasEstado = hojaActual
         ? [
             {
@@ -324,7 +340,13 @@ export function InicioScreen(): JSX.Element {
             },
             { etiqueta: 'Tus hojas sin empezar', valor: String(pendientes), pct: `de ${misHojas.length}` },
           ]
-        : [{ etiqueta: 'Hojas asignadas', valor: String(misHojas.length), pct: pendientes === misHojas.length ? 'todas pendientes' : '' }];
+        : [
+            {
+              etiqueta: 'Hojas asignadas',
+              valor: cifraOSinRed(asignadas),
+              pct: asignadas === null ? motivoCorto(resultadoMias?.ok === false ? resultadoMias.motivo : undefined) : pendientes === misHojas.length ? 'todas pendientes' : '',
+            },
+          ];
       sync = resumenParaTablero(misHojas);
     }
   } else if (rol === 'auditor') {
