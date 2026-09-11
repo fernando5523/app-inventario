@@ -20,10 +20,9 @@
  * no al revés. Un adaptador que no traduce nada es la señal de que el
  * contrato está bien puesto, no de que sobre.
  *
- * Detrás de `requiereSesion` + `requiereRol('administrador', 'auditor',
- * 'coordinador')`. El Contador recibe 403: la planilla dice cuánto se le
- * descuenta a cada uno, y el conteo ciego no sobrevive a que quien cuenta
- * vea el resultado.
+ * Detrás de `requiereSesion` + `requiereRol('auditor')`: la liquidación es
+ * del Auditor desde el 2026-09-11 (backend liquidacion.permisos.ts). Los demás
+ * roles reciben 403.
  *
  * EL `null` NO ES UN ERROR, en NINGUNO de los dos métodos. El servidor
  * responde `200` con body `null` cuando la sucursal todavía no tiene ningún
@@ -40,6 +39,7 @@ import type {
   Conciliacion,
   DatosAjustes,
   Liquidacion,
+  ReporteGerencia,
   RepositorioLiquidacion,
 } from '../puertos/repositorios';
 import { ErrorApi, pedir } from './_http';
@@ -122,6 +122,22 @@ export const liquidacionApi: RepositorioLiquidacion = {
   async liquidar(inventarioId) {
     return await pedir<CierreLiquidacion>(`/api/liquidacion/inventarios/${inventarioId}/liquidar`, {
       metodo: 'POST',
+    });
+  },
+
+  /**
+   * `GET /api/liquidacion/inventarios/:id/reporte-gerencia` → `ReporteGerencia`,
+   * sin traducir nada (el DTO calza con el puerto). El 409 de "todavía no se
+   * liquidó" NO se traduce: su mensaje dice por qué no hay reporte.
+   */
+  async reporteGerencia(inventarioId) {
+    return await pedir<ReporteGerencia>(`/api/liquidacion/inventarios/${inventarioId}/reporte-gerencia`);
+  },
+
+  /** El .xlsx crudo: mismo camino que historial-api.ts#exportarDiferencias. */
+  async exportarReporteGerencia(inventarioId): Promise<ArrayBuffer> {
+    return await pedir<ArrayBuffer>(`/api/liquidacion/inventarios/${inventarioId}/reporte-gerencia/exportar`, {
+      binario: true,
     });
   },
 };

@@ -19,8 +19,13 @@ import type {
   DatosAjustes,
   DetalleLiquidacion,
   Liquidacion,
+  ReporteGerencia,
   RepositorioLiquidacion,
 } from '../puertos/repositorios';
+
+/** Ver `reporteGerencia` abajo: sin servidor no hay diferencias reales de las que armarlo. */
+const SIN_SERVIDOR_REPORTE =
+  'El reporte a gerencia sale de las diferencias reales del inventario: se necesita conexión con el servidor para verlo.';
 
 /** Espeja historial.calculos.ts#redondear (2 decimales) -- no existe una lib compartida entre backend y mobile. */
 function redondear(n: number): number {
@@ -77,6 +82,8 @@ const INVENTARIO_LUZURIAGA_ID = 1;
 
 const DATOS_LUZURIAGA = {
   periodo: 'Agosto 2026',
+  periodoAnio: 2026,
+  periodoMes: 8,
   faltanteBruto: 2200.0,
   negativosDelMes: 380.0,
   faltanteEmpresa: 170.0,
@@ -90,7 +97,7 @@ export const liquidacionMemoria: RepositorioLiquidacion = {
     if (sucursalId !== SUCURSAL_LUZURIAGA_ID) return null;
 
     const colaboradores = await sesionMemoria.colaboradores(sucursalId);
-    const { periodo, faltanteBruto, negativosDelMes, faltanteEmpresa, multaInasistencia } = DATOS_LUZURIAGA;
+    const { periodo, periodoAnio, periodoMes, faltanteBruto, negativosDelMes, faltanteEmpresa, multaInasistencia } = DATOS_LUZURIAGA;
 
     const faltanteNeto = faltanteBruto - negativosDelMes - faltanteEmpresa;
     const cuotaBase = faltanteNeto / colaboradores.length;
@@ -112,6 +119,8 @@ export const liquidacionMemoria: RepositorioLiquidacion = {
       // Espeja al backend: proyectada hasta que se liquide.
       proyectada: !liquidados.has(INVENTARIO_LUZURIAGA_ID),
       periodo,
+      periodoAnio,
+      periodoMes,
       faltanteBruto,
       negativosDelMes,
       faltanteEmpresa,
@@ -237,5 +246,27 @@ export const liquidacionMemoria: RepositorioLiquidacion = {
       faltantes: liquidacion?.totalFaltas ?? 0,
       totalDescontado: redondear(planilla.reduce((total, p) => total + p.monto, 0)),
     };
+  },
+
+  /**
+   * SIN DATOS INVENTADOS: el reporte a gerencia sale de las diferencias reales
+   * del inventario, y acá no hay ninguna. Una lista de cervezas de maqueta se
+   * leería como un faltante de verdad. Se reproduce la guarda del backend
+   * (sin liquidar no hay reporte) y, pasada esa, se dice que hace falta el
+   * servidor -- mismo criterio que RepositorioHistorial, que no tiene memoria.
+   */
+  async reporteGerencia(inventarioId): Promise<ReporteGerencia> {
+    await simularLatencia();
+    if (!liquidados.has(inventarioId)) {
+      throw new Error(
+        'Este inventario todavía no se liquidó: la clasificación empresa/empleado recién queda fija al liquidar.',
+      );
+    }
+    throw new Error(SIN_SERVIDOR_REPORTE);
+  },
+
+  async exportarReporteGerencia(): Promise<ArrayBuffer> {
+    await simularLatencia();
+    throw new Error(SIN_SERVIDOR_REPORTE);
   },
 };

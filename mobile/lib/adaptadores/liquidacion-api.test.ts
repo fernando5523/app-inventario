@@ -421,3 +421,49 @@ describe('planilla proyectada vs firme', () => {
     expect(l?.proyectada).toBe(false);
   });
 });
+
+/**
+ * EL REPORTE A GERENCIA (backend liquidacion.reporte-gerencia.ts): los
+ * productos de EMPRESA con sus sobrantes y faltantes. El JSON calza con el
+ * puerto; el .xlsx viaja como bytes crudos, igual que el export de diferencias.
+ */
+describe('liquidacionApi.reporteGerencia / exportarReporteGerencia', () => {
+  it('reporteGerencia pega contra /inventarios/:id/reporte-gerencia y pasa el DTO tal cual', async () => {
+    const dto = {
+      inventarioId: 45,
+      estado: 'liquidado',
+      faltantes: [{ codigo: 'CERV620', descripcion: 'Cerveza 620ml', unidades: 10, monto: 100 }],
+      sobrantes: [],
+      totalFaltante: 100,
+      totalSobrante: 0,
+    };
+    const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => json(dto));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const r = await liquidacionApi.reporteGerencia(45);
+
+    expect(String(fetchMock.mock.calls[0]![0])).toContain('/api/liquidacion/inventarios/45/reporte-gerencia');
+    expect(r).toEqual(dto);
+  });
+
+  it('el 409 de "todavía no se liquidó" sube como error: la pantalla muestra el motivo', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => json({ error: 'Este inventario todavía no se liquidó.' }, 409)));
+
+    await expect(liquidacionApi.reporteGerencia(45)).rejects.toThrow();
+  });
+
+  it('exportarReporteGerencia devuelve los bytes CRUDOS de /reporte-gerencia/exportar, sin JSON.parse', async () => {
+    const bytesXlsx = new Uint8Array([0x50, 0x4b, 0x03, 0x04]).buffer; // firma ZIP de un .xlsx real
+    const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => ({
+      ok: true,
+      status: 200,
+      arrayBuffer: async () => bytesXlsx,
+    }));
+    vi.stubGlobal('fetch', fetchMock as unknown as typeof fetch);
+
+    const bytes = await liquidacionApi.exportarReporteGerencia(45);
+
+    expect(String(fetchMock.mock.calls[0]![0])).toContain('/api/liquidacion/inventarios/45/reporte-gerencia/exportar');
+    expect(new Uint8Array(bytes)).toEqual(new Uint8Array(bytesXlsx));
+  });
+});

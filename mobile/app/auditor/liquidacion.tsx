@@ -1,15 +1,25 @@
+import { File, Paths } from 'expo-file-system';
 import { router } from 'expo-router';
-import { AlertTriangle, Check, ClipboardEdit, Layers, Scale, Wallet } from 'lucide-react-native';
+import * as Sharing from 'expo-sharing';
+import { AlertTriangle, Building2, Check, ClipboardEdit, FileSpreadsheet, Layers, Scale, Wallet } from 'lucide-react-native';
 import { useCallback, useEffect, useMemo, useRef, useState, type JSX } from 'react';
 import { ActivityIndicator, Alert, Pressable, RefreshControl, StyleSheet, Text, TextInput, View } from 'react-native';
 
 import { useRefrescoAlEnfocar } from '../../components/hooks/useRefrescoAlEnfocar';
 
 import { PantallaConTabs } from '../../components/navegacion/PantallaConTabs';
-import { BarraApp, Badge, Button, formatoFechaHora } from '../../components/ui';
+import { BarraApp, Badge, Button, formatoFechaHora, formatoMiles } from '../../components/ui';
 import { repositorioLiquidacion, repositorioSesion } from '../../lib/contenedor';
 import { textoDeAjustes, validarAjustes } from '../../lib/dominio/ajustes-formulario';
 import { asistentesConCentavoExtra, resumirAsistencia } from '../../lib/dominio/reparto-visible';
+import {
+  nombreArchivoReporteGerencia,
+  textoMontoReporte,
+  textoSinPrecioReporte,
+  textoUnidadesReporte,
+  vistaReporteGerencia,
+  type VistaReporteGerencia,
+} from '../../lib/dominio/reporte-gerencia';
 import { sucursalEnFoco } from '../../lib/dominio/sucursal-en-foco';
 import type { Sucursal } from '../../lib/dominio/tipos';
 import type {
@@ -18,7 +28,9 @@ import type {
   Conciliacion,
   DatosAjustes,
   DetalleLiquidacion,
+  FilaReporteGerencia,
   Liquidacion,
+  ReporteGerencia,
 } from '../../lib/puertos/repositorios';
 import { useSesion } from '../../lib/sesion-contexto';
 import { useSucursalAuditada } from '../../lib/sucursal-auditada-contexto';
@@ -105,6 +117,10 @@ export default function LiquidacionScreen(): JSX.Element {
   const [liquidando, setLiquidando] = useState(false);
   /** Lo que devolvió `liquidar` en ESTA sesión: alimenta el cartel de "ya está cerrada". */
   const [cerrado, setCerrado] = useState<CierreLiquidacion | null>(null);
+  /** El reporte a gerencia: solo se pide con la planilla ya cerrada (ver `cargar`). */
+  const [reporte, setReporte] = useState<ReporteGerencia | null>(null);
+  const [errorReporte, setErrorReporte] = useState<string | null>(null);
+  const [exportando, setExportando] = useState(false);
 
   // La sucursal COMPARTIDA (contexto), no la de la ficha: mismo criterio que
   // lacrado.tsx. El padrón resuelve el nombre para la barra.
@@ -142,6 +158,23 @@ export default function LiquidacionScreen(): JSX.Element {
       // de la liquidación que se acaba de traer. Sin ciclo cerrado no hay
       // inventario del que cargar ajustes.
       setAjustes(resultadoLiq === null ? null : await repositorioLiquidacion.ajustes(resultadoLiq.inventarioId));
+
+      // EL REPORTE A GERENCIA, con su propio try: si falla, su tarjeta dice por
+      // qué y el resto de la liquidación se sigue viendo. Y solo con la planilla
+      // cerrada -- antes ni se pide: la tarjeta ya sabe explicar por qué no hay
+      // (dominio/reporte-gerencia.ts#vistaReporteGerencia).
+      if (resultadoLiq === null || resultadoLiq.proyectada) {
+        setReporte(null);
+        setErrorReporte(null);
+      } else {
+        try {
+          setReporte(await repositorioLiquidacion.reporteGerencia(resultadoLiq.inventarioId));
+          setErrorReporte(null);
+        } catch (e) {
+          setReporte(null);
+          setErrorReporte(e instanceof Error ? e.message : 'No se pudo cargar el reporte a gerencia.');
+        }
+      }
     } catch (e) {
       // Sin esto, un fallo sin red dejaba el spinner girando para siempre
       // (mismo bug que f558689 arregló), y `useEffect` con deps `[sesion]`
@@ -180,6 +213,8 @@ export default function LiquidacionScreen(): JSX.Element {
     setConciliacion(null);
     setAjustes(null);
     setCerrado(null);
+    setReporte(null);
+    setErrorReporte(null);
     setError(null);
     setCargando(true);
     void cargar();
@@ -256,6 +291,42 @@ export default function LiquidacionScreen(): JSX.Element {
       );
     } finally {
       setGuardandoAjustes(false);
+    }
+  }
+
+  /**
+   * El .xlsx del reporte a gerencia: se baja a un archivo TEMPORAL (caché del
+   * teléfono) y se abre el selector nativo para compartir -- mismo flujo que el
+   * export de diferencias del Historial (HistorialScreen#exportarDiferencias):
+   * el destino es WhatsApp o el correo, no el teléfono.
+   */
+  async function exportarReporte(): Promise<void> {
+    if (!liquidacion) return;
+    setExportando(true);
+    try {
+      if (!(await Sharing.isAvailableAsync())) {
+        Alert.alert('No se puede compartir', 'Este dispositivo no tiene disponible el selector nativo para compartir archivos.');
+        return;
+      }
+      const bytes = await repositorioLiquidacion.exportarReporteGerencia(liquidacion.inventarioId);
+      const nombre = nombreArchivoReporteGerencia(
+        nombreSucursal ?? '',
+        liquidacion.periodoAnio,
+        liquidacion.periodoMes,
+        liquidacion.inventarioId,
+      );
+      const archivo = new File(Paths.cache, nombre);
+      if (archivo.exists) archivo.delete();
+      archivo.write(new Uint8Array(bytes));
+      await Sharing.shareAsync(archivo.uri, {
+        mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        dialogTitle: 'Compartir reporte a gerencia',
+        UTI: 'org.openxmlformats.spreadsheetml.sheet',
+      });
+    } catch (e) {
+      Alert.alert('No se pudo exportar', e instanceof Error ? e.message : 'Intenta de nuevo.');
+    } finally {
+      setExportando(false);
     }
   }
 
@@ -610,6 +681,18 @@ export default function LiquidacionScreen(): JSX.Element {
               onLiquidar={liquidarAhora}
             />
           )}
+
+          {/*
+            EL REPORTE A GERENCIA va después del cierre: sale de la planilla
+            cerrada (qué es de la empresa recién queda fijo al liquidar), así que
+            es lo último que se mira. Antes de liquidar la tarjeta está igual y
+            dice por qué todavía no hay reporte -- nunca se muestra vacía.
+          */}
+          <TarjetaReporteGerencia
+            vista={vistaReporteGerencia({ proyectada: liquidacion.proyectada, reporte, error: errorReporte })}
+            exportando={exportando}
+            onExportar={exportarReporte}
+          />
         </>
       )}
     </PantallaConTabs>
@@ -818,6 +901,127 @@ function TarjetaAjustes({
   );
 }
 
+/**
+ * EL REPORTE A GERENCIA: los productos de la EMPRESA -- no entran a la
+ * planilla del personal -- con sus faltantes y sobrantes, producto por
+ * producto (pedido del cliente: "listar detallado, tanto sobrante como
+ * faltante"). Qué mostrar lo decide `vistaReporteGerencia`; acá solo se dibuja.
+ *
+ * Faltantes y sobrantes van en DOS listas, y cada fila lleva la señal por tres
+ * vías: la lista en la que está, el color del borde y el signo de las unidades.
+ */
+function TarjetaReporteGerencia({
+  vista,
+  exportando,
+  onExportar,
+}: {
+  vista: VistaReporteGerencia;
+  exportando: boolean;
+  onExportar: () => void;
+}): JSX.Element {
+  return (
+    <View style={styles.tarjeta}>
+      <View style={styles.tarjetaCabecera}>
+        <Building2 size={18} color={colors.rojo} />
+        <Text style={styles.tarjetaTitulo}>Reporte a gerencia</Text>
+        {vista.tipo === 'con-datos' ? <Badge label={`${vista.faltantes.length + vista.sobrantes.length} productos`} /> : null}
+      </View>
+      <Text style={styles.tarjetaTexto}>
+        Productos de la empresa: no entran a la planilla del personal. Aquí están sus faltantes y sobrantes, producto por
+        producto, para presentar a gerencia.
+      </Text>
+
+      {vista.tipo === 'cargando' ? (
+        <ActivityIndicator color={colors.rojo} />
+      ) : vista.tipo !== 'con-datos' ? (
+        // El motivo REAL: "todavía no se liquidó", "no hubo productos de la
+        // empresa" o el error del servidor. Nunca dos listas vacías.
+        <Text style={[styles.tarjetaTexto, vista.tipo === 'error' && styles.reporteError]}>{vista.motivo}</Text>
+      ) : (
+        <>
+          <View style={styles.resumen}>
+            <View style={styles.resumenFila}>
+              <Text style={styles.resumenEtiqueta}>Faltante de la empresa ({vista.faltantes.length})</Text>
+              <Text style={[styles.resumenValor, styles.reporteMontoFalta]}>{soles(vista.totalFaltante)}</Text>
+            </View>
+            <View style={styles.resumenFila}>
+              <Text style={styles.resumenEtiqueta}>Sobrante de la empresa ({vista.sobrantes.length})</Text>
+              <Text style={[styles.resumenValor, styles.reporteMontoSobra]}>{soles(vista.totalSobrante)}</Text>
+            </View>
+          </View>
+
+          {/* Pegado a los totales: el que los lee tiene que saber que no incluyen todo. */}
+          {vista.sinPrecio > 0 ? (
+            <View style={styles.aviso}>
+              <AlertTriangle size={16} color={colors.proceso} />
+              <Text style={styles.avisoTexto}>{textoSinPrecioReporte(vista.sinPrecio)}</Text>
+            </View>
+          ) : null}
+
+          <ListaReporteGerencia titulo="Faltantes" tipo="faltante" filas={vista.faltantes} />
+          <ListaReporteGerencia titulo="Sobrantes" tipo="sobrante" filas={vista.sobrantes} />
+
+          <Button
+            label="Exportar a Excel y compartir"
+            icon={FileSpreadsheet}
+            onPress={onExportar}
+            loading={exportando}
+            disabled={exportando}
+          />
+        </>
+      )}
+    </View>
+  );
+}
+
+function ListaReporteGerencia({
+  titulo,
+  tipo,
+  filas,
+}: {
+  titulo: string;
+  tipo: 'faltante' | 'sobrante';
+  filas: FilaReporteGerencia[];
+}): JSX.Element {
+  return (
+    <View style={styles.reporteLista}>
+      <View style={styles.seccion}>
+        <Text style={styles.seccionTitulo}>{titulo}</Text>
+        <Text style={styles.seccionTotal}>
+          {filas.length} {filas.length === 1 ? 'producto' : 'productos'}
+        </Text>
+      </View>
+      {filas.length === 0 ? (
+        <Text style={styles.tarjetaTexto}>
+          {tipo === 'faltante' ? 'Ningún producto de la empresa con faltante.' : 'Ningún producto de la empresa con sobrante.'}
+        </Text>
+      ) : (
+        filas.map((f) => (
+          <View key={f.codigo} style={[styles.reporteFila, tipo === 'faltante' ? styles.reporteFilaFalta : styles.reporteFilaSobra]}>
+            <View style={styles.personaDatos}>
+              {/* Trunca al final: el producto se reconoce por cómo empieza el nombre. */}
+              <Text style={styles.personaNombre} numberOfLines={1} ellipsizeMode="tail">
+                {f.descripcion}
+              </Text>
+              <Text style={styles.personaSub}>
+                Código {f.codigo} · {textoUnidadesReporte(tipo, f.unidades, formatoMiles)}
+              </Text>
+            </View>
+            <Text
+              style={[
+                styles.personaMontoValor,
+                f.monto === null ? styles.reporteSinPrecio : tipo === 'faltante' ? styles.reporteMontoFalta : styles.reporteMontoSobra,
+              ]}
+            >
+              {textoMontoReporte(f.monto, soles)}
+            </Text>
+          </View>
+        ))
+      )}
+    </View>
+  );
+}
+
 const styles = StyleSheet.create({
   contenido: { paddingHorizontal: spacing.lg, paddingTop: spacing.sm, gap: spacing.md + 3 },
   cargando: { marginTop: spacing.xxxl },
@@ -940,4 +1144,25 @@ const styles = StyleSheet.create({
   },
   pieListaTexto: { fontSize: fontSize.sm - 0.5, color: colors.gris, fontFamily: fonts.regular },
   pieListaFuerte: { color: colors.tinta, fontFamily: fonts.bold },
+
+  // Reporte a gerencia. Faltante con la paleta `falta` y sobrante con `ok`: son
+  // datos del inventario, no avisos (el aviso de "sin precio" sí usa `proceso`).
+  reporteLista: { gap: 9 },
+  reporteFila: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: spacing.sm,
+    padding: 12,
+    borderWidth: 1,
+    borderRadius: 12,
+    backgroundColor: colors.campo,
+  },
+  reporteFilaFalta: { borderColor: 'rgba(162,59,46,0.32)' },
+  reporteFilaSobra: { borderColor: 'rgba(10,107,87,0.32)' },
+  reporteMontoFalta: { color: colors.falta },
+  reporteMontoSobra: { color: colors.ok },
+  /** "Sin precio" es texto, no cifra: menor y sin negrita para no leerse como un monto. */
+  reporteSinPrecio: { fontSize: 12, fontFamily: fonts.regular, color: colors.gris },
+  reporteError: { color: colors.falta },
 });
