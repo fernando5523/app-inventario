@@ -33,8 +33,8 @@
  * conteo -- no representa, ni tiene que representar, como cuenta una
  * persona de verdad.
  *
- *   npx tsx scripts/sembrar-inventario-prueba.ts --dry-run   [--sucursal <id>] [--items <n>] [--asignar <colaboradorId>] [--cuadrados <n>] [--sobrantes <n>] [--faltantes <n>] [--finalizar]
- *   npx tsx scripts/sembrar-inventario-prueba.ts --confirmar [--sucursal <id>] [--items <n>] [--asignar <colaboradorId>] [--cuadrados <n>] [--sobrantes <n>] [--faltantes <n>] [--finalizar]
+ *   npx tsx scripts/sembrar-inventario-prueba.ts --dry-run   [--sucursal <id>] [--items <n>] [--asignar <colaboradorId>] [--cuadrados <n>] [--sobrantes <n>] [--faltantes <n>] [--finalizar] [--periodo AAAA-MM]
+ *   npx tsx scripts/sembrar-inventario-prueba.ts --confirmar [--sucursal <id>] [--items <n>] [--asignar <colaboradorId>] [--cuadrados <n>] [--sobrantes <n>] [--faltantes <n>] [--finalizar] [--periodo AAAA-MM]
  *
  *   --sucursal   Id de la sucursal. Si se omite y hay UNA sola en la base, se
  *                usa esa; con cero o mas de una, el script se niega y lista
@@ -54,6 +54,14 @@
  *   --finalizar  Ademas deja la hoja FINALIZADA, para probar el cierre de
  *                ronda de una. Default: NO (la hoja queda en-proceso, como
  *                cualquier hoja a medio contar).
+ *   --periodo    AAAA-MM (ej. 2026-11). Fija el periodo del inventario en vez
+ *                de tomar el mes de HOY -- para armar uno de PRUEBA en una
+ *                tienda que ya tiene el mensual de este mes, sin tocarlo.
+ *                Default: el mes calendario de hoy (`crearSnapshot#periodoOverride`
+ *                ausente, mismo comportamiento de siempre). Si la tienda YA
+ *                tiene el mensual de ESE periodo (el elegido o el de hoy),
+ *                el script se niega con un mensaje claro, ANTES de tocar
+ *                Dynamics -- mismo criterio que la validacion de sucursal.
  *
  * cuadrados+sobrantes+faltantes no puede superar --items -- el script se
  * niega antes de tocar Dynamics si no cierra la cuenta.
@@ -203,12 +211,25 @@ async function main(): Promise<number> {
   if (modo !== '--dry-run' && modo !== '--confirmar') {
     console.error(
       'Uso: npx tsx scripts/sembrar-inventario-prueba.ts --dry-run|--confirmar [--sucursal <id>] [--items <n>] ' +
-        '[--asignar <colaboradorId>] [--cuadrados <n>] [--sobrantes <n>] [--faltantes <n>] [--finalizar]',
+        '[--asignar <colaboradorId>] [--cuadrados <n>] [--sobrantes <n>] [--faltantes <n>] [--finalizar] [--periodo AAAA-MM]',
     );
     return 1;
   }
   const dryRun = modo === '--dry-run';
   const finalizarHoja = process.argv.includes('--finalizar');
+
+  const periodoArg = leerArg('--periodo');
+  let periodoOverride: { anio: number; mes: number } | undefined;
+  if (periodoArg !== undefined) {
+    const m = /^(\d{4})-(\d{2})$/.exec(periodoArg);
+    const anio = m ? Number(m[1]) : NaN;
+    const mes = m ? Number(m[2]) : NaN;
+    if (!m || mes < 1 || mes > 12) {
+      console.error(`--periodo invalido: "${periodoArg}". Formato esperado: AAAA-MM (ej. 2026-11), mes entre 01 y 12.`);
+      return 1;
+    }
+    periodoOverride = { anio, mes };
+  }
 
   const itemsArg = leerArg('--items');
   const items = itemsArg !== undefined ? Number(itemsArg) : 10;
@@ -345,6 +366,28 @@ async function main(): Promise<number> {
     );
   }
 
+  // El periodo elegido (--periodo, o el mes de HOY si no se paso) tiene que
+  // estar libre para esta tienda -- se valida ACA, con el mismo criterio que
+  // `crearSnapshot` usa internamente (@@unique([sucursalId, periodoAnio,
+  // periodoMes, tipo])), para dar el mensaje claro ANTES de bajar Dynamics
+  // (o de que --confirmar reciba el mismo 409 sin haber avisado antes en el
+  // dry-run).
+  const ahora = new Date();
+  const periodoAValidar = periodoOverride ?? { anio: ahora.getFullYear(), mes: ahora.getMonth() + 1 };
+  const yaDelPeriodo = await prisma.inventario.findFirst({
+    where: { sucursalId, tipo: 'mensual', periodoAnio: periodoAValidar.anio, periodoMes: periodoAValidar.mes },
+    select: { id: true, estado: true },
+  });
+  if (yaDelPeriodo) {
+    const periodoTexto = `${periodoAValidar.anio}-${String(periodoAValidar.mes).padStart(2, '0')}`;
+    console.error(
+      `SE NIEGA: "${sucursal.nombre}" ya tiene su inventario mensual de ${periodoTexto} ` +
+        `(#${yaDelPeriodo.id}, ${yaDelPeriodo.estado}). Elegi otra tienda o un --periodo distinto.`,
+    );
+    return 1;
+  }
+  console.log(`Periodo: ${periodoAValidar.anio}-${String(periodoAValidar.mes).padStart(2, '0')}${periodoOverride ? ' (--periodo)' : ' (mes de hoy)'} -- libre para esta tienda.`);
+
   const existente = await prisma.inventario.findFirst({ where: { sucursalId, abierto: true } });
   if (existente) {
     console.log(
@@ -366,7 +409,7 @@ async function main(): Promise<number> {
   const actorAdmin: ColaboradorAutenticado = { colaboradorId: admin.id, sucursalId: null, rol: 'administrador' };
 
   console.log('\nTrayendo catalogo real de Dynamics (la primera vez puede tardar)...');
-  const snapshot = await crearSnapshot(sucursalId, 'real', 'mensual', undefined, admin.id, items);
+  const snapshot = await crearSnapshot(sucursalId, 'real', 'mensual', undefined, admin.id, items, periodoOverride);
   console.log(`Inventario ${snapshot.inventarioId}: ${snapshot.items} item(s) con existencia.`);
   if (snapshot.items === 0) {
     console.error('Dynamics no devolvio ningun item con existencia en ese almacen. No se pueden crear hojas.');
