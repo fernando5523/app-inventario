@@ -165,6 +165,132 @@ export async function clasificacionManualVigente(): Promise<Map<string, boolean>
   return new Map(filas.map((f) => [f.codigo, f.esEmpresa]));
 }
 
+export interface MontosDeClasificacion {
+  montoFaltanteEmpresa: number;
+  montoSobranteEmpleado: number;
+  /**
+   * codigo -> clasificacion efectiva, SOLO en el regimen VIGENTE (recien
+   * recalculado). `null` en el regimen CONGELADO: ya esta escrito en
+   * `DiferenciaItem`, no hay nada que volver a escribir. `liquidar()` es el
+   * unico llamador que lee este campo (siempre en regimen vigente, por las
+   * guardas que lo preceden) para armar
+   * `operacionesDeEscrituraClasificacion`.
+   */
+  esEmpresaPorCodigo: Map<string, boolean> | null;
+}
+
+export interface ResultadoCongelado {
+  montoFaltanteEmpresa: number;
+  /** `null` = inventario liquidado antes de que existiera esta regla. */
+  montoSobranteEmpleado: number | null;
+}
+
+/**
+ * LA UNICA FUENTE de `montoFaltanteEmpresa`/`montoSobranteEmpleado` para
+ * CUALQUIER lugar del backend que arme un `EntradaLiquidacion` -- historial
+ * (listado, detalle, comparativo), la pantalla de liquidacion (antes Y
+ * despues de liquidar) y `liquidacion.cierre.ts#liquidar`. Ningun llamador
+ * tiene permitido leer `ResultadoInventario.montoFaltanteEmpresa` directo
+ * para esto: pasa por aca, siempre.
+ *
+ * BUG QUE ESTA FUNCION EXISTE PARA QUE NO VUELVA A PASAR (2026-09-14,
+ * reportado por min-3 con numeros): antes de esta funcion, cada lugar que
+ * mostraba el faltante neto armaba su propio `EntradaLiquidacion` a mano, y
+ * varios de ellos NUNCA se enteraron de que existia `montoSobranteEmpleado`
+ * ni de que `montoFaltanteEmpresa` podia cambiar con la clasificacion vigente
+ * ANTES de liquidar. Resultado real: con bruto 130, negativos 40 por Excel,
+ * una cerveza de faltante 30 reclasificada como empresa y un sobrante de
+ * empleado de 50 -- la pantalla ANTES de liquidar mostraba neto 90 (ni
+ * empresa ni sobrante), el ENCABEZADO despues de liquidar mostraba 60 (sin
+ * el sobrante) mientras la PLANILLA (que si pasaba por
+ * `reclasificarAlLiquidar`) usaba el correcto, 10. Se mostraba un numero y
+ * se firmaba otro.
+ *
+ * DOS REGIMENES, la decision del cliente:
+ *   - `liquidado` / `lacrado`: CONGELADO. Lo que `liquidar()` escribio es lo
+ *     que se firmo -- se lee tal cual, NUNCA se recalcula (ni si la
+ *     clasificacion cambia despues).
+ *   - cualquier otro estado (en la practica, `conteo_cerrado`, que es el
+ *     unico con `ResultadoInventario`): VIGENTE. Se recalcula con la
+ *     clasificacion de HOY (`ClasificacionProducto`), en modo LECTURA -- es
+ *     EXACTAMENTE la misma cuenta que hara `liquidar()` al cerrar la
+ *     planilla, para que la vista previa nunca mienta sobre lo que se va a
+ *     firmar.
+ */
+export async function resolverMontosDeClasificacion(
+  inventarioId: number,
+  estado: string,
+  congelado: ResultadoCongelado,
+): Promise<MontosDeClasificacion> {
+  if (estado === 'liquidado' || estado === 'lacrado') {
+    return {
+      montoFaltanteEmpresa: congelado.montoFaltanteEmpresa,
+      montoSobranteEmpleado: congelado.montoSobranteEmpleado ?? 0,
+      esEmpresaPorCodigo: null,
+    };
+  }
+
+  const [filas, clasificacionManual] = await Promise.all([
+    datosParaReclasificar(inventarioId),
+    clasificacionManualVigente(),
+  ]);
+  const r = reclasificarAlLiquidar(filas, clasificacionManual);
+  return {
+    montoFaltanteEmpresa: r.montoFaltanteEmpresa,
+    montoSobranteEmpleado: r.montoSobranteEmpleado,
+    esEmpresaPorCodigo: r.esEmpresaPorCodigo,
+  };
+}
+
+export interface ItemParaClasificar {
+  codigo: string;
+  /** `CatalogoItem.esEmpresa` (Dynamics) -- lo que ya trae `armarMatriz`. */
+  esEmpresa: boolean;
+}
+
+/**
+ * Aplica el MISMO regimen vigente/congelado que `resolverMontosDeClasificacion`
+ * -- pero por ITEM, no en un total -- a cualquier lista que tenga `codigo` y
+ * `esEmpresa` (hoy: la matriz de auditoria, `auditoria.service.ts#matriz`/
+ * `#resumen`, ANTES de calcular veredicto/resumen sobre ella).
+ *
+ * BUG que esto corrige (2026-09-14, reportado por min-4): la matriz leia
+ * `CatalogoItem.esEmpresa` (Dynamics) directo y nunca la excepcion del
+ * Auditor -- una cerveza que Gilmer clasifica como empresa seguia apareciendo
+ * en la matriz como faltante del empleado, mientras la liquidacion (que SI
+ * pasaba por `resolverMontosDeClasificacion`) ya la sacaba. Dos pantallas de
+ * la misma app diciendo cosas distintas -- la misma familia de bug que el
+ * del neto, y la misma solucion: una sola fuente para la decision
+ * vigente/congelada (`estado === 'liquidado' || 'lacrado'`), reusada aca en
+ * vez de copiada.
+ *
+ *   - VIGENTE (`conteo_cerrado` o antes): `esEmpresaEfectivo` contra
+ *     `ClasificacionProducto` -- la MISMA funcion que usa
+ *     `reclasificarAlLiquidar`.
+ *   - CONGELADO (`liquidado`/`lacrado`): lo que `liquidar()` ya escribio en
+ *     `DiferenciaItem.esEmpresa`. Los items SIN fila ahi (los que cuadraron,
+ *     diferencia 0 -- ver `diferenciasParaPersistir`) conservan el
+ *     `esEmpresa` de Dynamics: no importa cual sea, `veredicto()` los marca
+ *     `cuadrado` ANTES de mirar `esEmpresa` (auditoria.calculos.ts).
+ */
+export async function aplicarClasificacionVigente<T extends ItemParaClasificar>(
+  inventarioId: number,
+  estado: string,
+  items: readonly T[],
+): Promise<T[]> {
+  if (estado === 'liquidado' || estado === 'lacrado') {
+    const filas = await prisma.diferenciaItem.findMany({
+      where: { inventarioId },
+      select: { codigo: true, esEmpresa: true },
+    });
+    const esEmpresaPorCodigo = new Map(filas.map((f) => [f.codigo, f.esEmpresa]));
+    return items.map((item) => ({ ...item, esEmpresa: esEmpresaPorCodigo.get(item.codigo) ?? item.esEmpresa }));
+  }
+
+  const clasificacionManual = await clasificacionManualVigente();
+  return items.map((item) => ({ ...item, esEmpresa: esEmpresaEfectivo(item.codigo, item.esEmpresa, clasificacionManual) }));
+}
+
 /**
  * Las operaciones de escritura de `DiferenciaItem.esEmpresa`, UNA por
  * codigo, listas para entrar al `$transaction` de `liquidar()` junto con el

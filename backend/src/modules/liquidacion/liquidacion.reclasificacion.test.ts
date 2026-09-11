@@ -10,11 +10,13 @@ vi.mock('../../config/database', () => ({
 
 import { prisma } from '../../config/database';
 import {
+  aplicarClasificacionVigente,
   clasificacionManualVigente,
   datosParaReclasificar,
   esEmpresaEfectivo,
   operacionesDeEscrituraClasificacion,
   reclasificarAlLiquidar,
+  resolverMontosDeClasificacion,
   type FilaDiferenciaParaReclasificar,
 } from './liquidacion.reclasificacion';
 
@@ -126,6 +128,144 @@ describe('clasificacionManualVigente (Prisma mockeado)', () => {
     expect(mapa.get('CERVEZA')).toBe(true);
     expect(mapa.get('GALLETA')).toBe(false);
     expect(mapa.has('SIN-CLASIFICAR')).toBe(false);
+  });
+});
+
+/**
+ * REGRESION del bug reportado por min-3 con numeros (2026-09-14): con bruto
+ * 130, negativos 40 (Excel), un sobrante de empleado de 50 y una cerveza de
+ * faltante 30 -- antes de esta funcion, la vista previa (antes de liquidar)
+ * mostraba 90 y el encabezado post-liquidar mostraba 60, mientras la
+ * planilla usaba el correcto, 10. `resolverMontosDeClasificacion` es la
+ * UNICA fuente que consumen historial, la pantalla de liquidacion (antes y
+ * despues) y liquidar() -- estos tests fijan los montos que le entran a la
+ * formula (`historial.calculos.ts#calcularResumenLiquidacion` hace el resto,
+ * y ya esta probado por separado).
+ */
+describe('resolverMontosDeClasificacion', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  const CERVEZA = 'CERVEZA';
+  const OTRO = 'OTRO-SOBRANTE';
+
+  function mockearDatosDelInventario(): void {
+    vi.mocked(prisma.diferenciaItem.findMany).mockResolvedValue([
+      { codigo: CERVEZA, diferencia: -1, montoDiferencia: { toNumber: () => -30 } },
+      { codigo: OTRO, diferencia: 1, montoDiferencia: { toNumber: () => 50 } },
+    ] as never);
+    vi.mocked(prisma.catalogoItem.findMany).mockResolvedValue([
+      { codigo: CERVEZA, esEmpresa: false }, // EMPLEADO en Dynamics al cerrar
+      { codigo: OTRO, esEmpresa: false },
+    ] as never);
+  }
+
+  it('ANTES de liquidar (conteo_cerrado), CON la cerveza clasificada como empresa: 30 de empresa, 50 de sobrante', async () => {
+    mockearDatosDelInventario();
+    vi.mocked(prisma.clasificacionProducto.findMany).mockResolvedValue([{ codigo: CERVEZA, esEmpresa: true }] as never);
+
+    const montos = await resolverMontosDeClasificacion(45, 'conteo_cerrado', {
+      montoFaltanteEmpresa: 0, // el congelado al cerrar (Dynamics, sin la cerveza) -- NO se usa en este regimen
+      montoSobranteEmpleado: null,
+    });
+
+    expect(montos.montoFaltanteEmpresa).toBe(30);
+    expect(montos.montoSobranteEmpleado).toBe(50);
+    // El regimen VIGENTE si trae el mapa (lo necesita liquidar() para
+    // escribir DiferenciaItem.esEmpresa).
+    expect(montos.esEmpresaPorCodigo?.get(CERVEZA)).toBe(true);
+  });
+
+  it('ANTES de liquidar, SIN clasificar la cerveza: la empresa da 0 (sigue en la cuenta del personal)', async () => {
+    mockearDatosDelInventario();
+    vi.mocked(prisma.clasificacionProducto.findMany).mockResolvedValue([]);
+
+    const montos = await resolverMontosDeClasificacion(45, 'conteo_cerrado', {
+      montoFaltanteEmpresa: 0,
+      montoSobranteEmpleado: null,
+    });
+
+    expect(montos.montoFaltanteEmpresa).toBe(0);
+    expect(montos.montoSobranteEmpleado).toBe(50);
+  });
+
+  it('DESPUES de liquidar (liquidado): CONGELADO -- ignora la clasificacion vigente, ni toca Prisma', async () => {
+    const montos = await resolverMontosDeClasificacion(45, 'liquidado', {
+      montoFaltanteEmpresa: 30,
+      montoSobranteEmpleado: 50,
+    });
+
+    expect(montos).toEqual({ montoFaltanteEmpresa: 30, montoSobranteEmpleado: 50, esEmpresaPorCodigo: null });
+    expect(prisma.diferenciaItem.findMany).not.toHaveBeenCalled();
+    expect(prisma.clasificacionProducto.findMany).not.toHaveBeenCalled();
+  });
+
+  it('lacrado: mismo regimen congelado que liquidado', async () => {
+    const montos = await resolverMontosDeClasificacion(45, 'lacrado', {
+      montoFaltanteEmpresa: 30,
+      montoSobranteEmpleado: 50,
+    });
+    expect(montos).toEqual({ montoFaltanteEmpresa: 30, montoSobranteEmpleado: 50, esEmpresaPorCodigo: null });
+  });
+
+  it('inventario YA liquidado antes de esta regla (montoSobranteEmpleado NULL en la base): da 0, no null ni error', async () => {
+    const montos = await resolverMontosDeClasificacion(9, 'liquidado', {
+      montoFaltanteEmpresa: 10,
+      montoSobranteEmpleado: null,
+    });
+    expect(montos).toEqual({ montoFaltanteEmpresa: 10, montoSobranteEmpleado: 0, esEmpresaPorCodigo: null });
+  });
+});
+
+/**
+ * REGRESION reportada por min-4 (2026-09-14): la matriz de auditoria leia
+ * `CatalogoItem.esEmpresa` (Dynamics) directo, sin la excepcion del Auditor
+ * -- una cerveza clasificada como empresa seguia apareciendo como faltante
+ * del empleado en la matriz mientras la liquidacion ya la sacaba. Misma
+ * fuente que `resolverMontosDeClasificacion`, aplicada por item.
+ */
+describe('aplicarClasificacionVigente', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  const CERVEZA = { codigo: 'CERVEZA', esEmpresa: false }; // Dynamics: EMPLEADO
+  const ARROZ = { codigo: 'ARROZ', esEmpresa: false };
+
+  it('VIGENTE (conteo_cerrado): aplica ClasificacionProducto por encima de Dynamics', async () => {
+    vi.mocked(prisma.clasificacionProducto.findMany).mockResolvedValue([{ codigo: 'CERVEZA', esEmpresa: true }] as never);
+
+    const resultado = await aplicarClasificacionVigente(45, 'conteo_cerrado', [CERVEZA, ARROZ]);
+
+    expect(resultado.find((i) => i.codigo === 'CERVEZA')?.esEmpresa).toBe(true);
+    expect(resultado.find((i) => i.codigo === 'ARROZ')?.esEmpresa).toBe(false);
+    expect(prisma.diferenciaItem.findMany).not.toHaveBeenCalled();
+  });
+
+  it('VIGENTE sin ninguna excepcion: queda igual a Dynamics', async () => {
+    vi.mocked(prisma.clasificacionProducto.findMany).mockResolvedValue([]);
+
+    const resultado = await aplicarClasificacionVigente(45, 'conteo_cerrado', [CERVEZA]);
+
+    expect(resultado[0]!.esEmpresa).toBe(false);
+  });
+
+  it('CONGELADO (liquidado): lee DiferenciaItem.esEmpresa, ignora la clasificacion vigente', async () => {
+    vi.mocked(prisma.diferenciaItem.findMany).mockResolvedValue([{ codigo: 'CERVEZA', esEmpresa: true }] as never);
+
+    const resultado = await aplicarClasificacionVigente(45, 'liquidado', [CERVEZA, ARROZ]);
+
+    expect(resultado.find((i) => i.codigo === 'CERVEZA')?.esEmpresa).toBe(true);
+    // ARROZ no tiene fila en DiferenciaItem (por ej. si cuadro, diferencia 0)
+    // -- conserva el valor de Dynamics, que no cambia el veredicto para un
+    // item cuadrado (auditoria.calculos.ts#veredicto revisa cuadrado antes).
+    expect(resultado.find((i) => i.codigo === 'ARROZ')?.esEmpresa).toBe(false);
+    expect(prisma.clasificacionProducto.findMany).not.toHaveBeenCalled();
+  });
+
+  it('lacrado: mismo regimen congelado que liquidado', async () => {
+    vi.mocked(prisma.diferenciaItem.findMany).mockResolvedValue([{ codigo: 'CERVEZA', esEmpresa: true }] as never);
+
+    const resultado = await aplicarClasificacionVigente(45, 'lacrado', [CERVEZA]);
+
+    expect(resultado[0]!.esEmpresa).toBe(true);
   });
 });
 

@@ -19,6 +19,7 @@ import type { ColaboradorAutenticado, Rol } from '../../shared/tipos';
 import { calcularResumenLiquidacion, calcularTotalDescuento, redondear } from '../historial/historial.calculos';
 import { proyectarPlanilla } from './liquidacion.cierre';
 import { validarAcceso } from './liquidacion.permisos';
+import { resolverMontosDeClasificacion } from './liquidacion.reclasificacion';
 
 /** Espeja tipos del puerto: mobile/lib/puertos/repositorios.ts#DetalleLiquidacion. */
 export interface DetalleLiquidacionDto {
@@ -246,11 +247,26 @@ export async function deSucursal(actor: ColaboradorAutenticado, sucursalId: numb
   const ajustesSinRegistrar = r.montoNegativos === null;
   const datosCompletos = !asistenciaSinRegistrar && !ajustesSinRegistrar;
 
+  /**
+   * LA UNICA FUENTE de empresa/sobrante (liquidacion.reclasificacion.ts):
+   * NUNCA se lee `r.montoFaltanteEmpresa` directo para armar un
+   * `EntradaLiquidacion` -- ver el comentario de esa funcion sobre el bug
+   * real que costó (encabezado y planilla mostrando dos netos distintos).
+   * Se resuelve UNA vez y se usa para el resumen (`calcularResumenLiquidacion`
+   * de abajo) Y para la proyección de la planilla (`proyectarPlanilla`, mas
+   * abajo): si vinieran de dos cálculos podrían volver a discrepar.
+   */
+  const montos = await resolverMontosDeClasificacion(inventario.id, inventario.estado, {
+    montoFaltanteEmpresa: r.montoFaltanteEmpresa.toNumber(),
+    montoSobranteEmpleado: r.montoSobranteEmpleado === null ? null : r.montoSobranteEmpleado.toNumber(),
+  });
+
   const resumen = datosCompletos
     ? calcularResumenLiquidacion({
         montoFaltanteBruto: r.montoFaltanteBruto.toNumber(),
         montoNegativos: r.montoNegativos!.toNumber(),
-        montoFaltanteEmpresa: r.montoFaltanteEmpresa.toNumber(),
+        montoFaltanteEmpresa: montos.montoFaltanteEmpresa,
+        montoSobranteEmpleado: montos.montoSobranteEmpleado,
         colaboradoresAlcanzados: r.colaboradoresAlcanzados,
         colaboradoresAsistieron: r.colaboradoresAsistieron!,
         multaInasistencia: r.multaInasistencia.toNumber(),
@@ -283,7 +299,8 @@ export async function deSucursal(actor: ColaboradorAutenticado, sucursalId: numb
       : await proyectarPlanilla(inventario.id, inventario.sucursalId, {
           montoFaltanteBruto: r.montoFaltanteBruto.toNumber(),
           montoNegativos: r.montoNegativos!.toNumber(),
-          montoFaltanteEmpresa: r.montoFaltanteEmpresa.toNumber(),
+          montoFaltanteEmpresa: montos.montoFaltanteEmpresa,
+          montoSobranteEmpleado: montos.montoSobranteEmpleado,
           colaboradoresAlcanzados: r.colaboradoresAlcanzados,
           colaboradoresAsistieron: r.colaboradoresAsistieron!,
           multaInasistencia: r.multaInasistencia.toNumber(),
@@ -320,7 +337,10 @@ export async function deSucursal(actor: ColaboradorAutenticado, sucursalId: numb
     periodoMes: inventario.periodoMes,
     faltanteBruto: r.montoFaltanteBruto.toNumber(),
     negativosDelMes: r.montoNegativos?.toNumber() ?? null,
-    faltanteEmpresa: r.montoFaltanteEmpresa.toNumber(),
+    // La clasificacion VIGENTE (o la congelada, si ya se liquido) -- nunca
+    // el valor crudo de `ResultadoInventario`, para que este numero sume
+    // contra `faltanteNeto` de abajo (misma fuente para los dos).
+    faltanteEmpresa: montos.montoFaltanteEmpresa,
     faltanteNeto: resumen?.montoFaltanteNeto ?? null,
     cuotaBase: resumen?.cuotaBase ?? null,
     multaInasistencia: r.multaInasistencia.toNumber(),

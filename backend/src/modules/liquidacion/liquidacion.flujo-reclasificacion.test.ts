@@ -63,6 +63,7 @@ describe('flujo punta a punta: reclasificar despues del cierre -> liquidar -> re
         // por eso este valor (el viejo, congelado) NO tiene el faltante de
         // CERVEZA adentro. `liquidar()` lo reemplaza por el recalculado.
         montoFaltanteEmpresa: decimal(0),
+        montoSobranteEmpleado: null,
         colaboradoresAlcanzados: 2,
         colaboradoresAsistieron: 2,
         multaInasistencia: decimal(20),

@@ -13,7 +13,15 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const prismaMock = vi.hoisted(() => ({
   inventario: { findFirst: vi.fn() },
-  diferenciaItem: { count: vi.fn() },
+  diferenciaItem: { count: vi.fn(), findMany: vi.fn(async () => []) },
+  // Los usa `resolverMontosDeClasificacion` (liquidacion.reclasificacion.ts)
+  // cuando el inventario TODAVÍA no está liquidado: `deSucursal` recalcula
+  // empresa/sobrante con la clasificación vigente, en vez de leer el
+  // congelado -- ver esa función para el bug que existe para evitar. Vacíos
+  // por defecto: sin filas de catálogo/clasificación, el recalculo da 0 en
+  // ambos montos, que es lo que ya asumían estos tests.
+  catalogoItem: { findMany: vi.fn(async () => []) },
+  clasificacionProducto: { findMany: vi.fn(async () => []) },
   // Los usa `proyectarPlanilla`: `deSucursal` proyecta la planilla cuando
   // todavía no se liquidó, con la misma función que después persiste
   // `liquidar()`. Por defecto vacíos -- cada test que le importe la
@@ -40,16 +48,24 @@ function resultadoCompleto() {
   return {
     montoFaltanteBruto: decimal(500),
     montoNegativos: decimal(50),
+    // CONGELADO al cerrar el conteo -- solo se lee tal cual si el inventario
+    // ya está `liquidado`/`lacrado`. Mientras siga `conteo_cerrado` (el
+    // default de `inventarioCon`), `resolverMontosDeClasificacion` lo
+    // IGNORA y recalcula con la clasificación vigente (mockeada vacía más
+    // abajo, así que da 0) -- es a propósito: ningún test de este archivo
+    // depende del valor exacto de `faltanteEmpresa`.
     montoFaltanteEmpresa: decimal(100),
+    montoSobranteEmpleado: null,
     colaboradoresAlcanzados: 10,
     colaboradoresAsistieron: 8,
     multaInasistencia: decimal(20),
   };
 }
 
-function inventarioCon(resultado: unknown) {
+function inventarioCon(resultado: unknown, estado: string = 'conteo_cerrado') {
   return {
     id: 9,
+    estado,
     periodoAnio: 2026,
     periodoMes: 8,
     resultado,
@@ -81,7 +97,7 @@ describe('deSucursal', () => {
    */
   it('un inventario ya liquidado se lee de sus filas firmadas, tal cual se firmaron', async () => {
     prismaMock.inventario.findFirst.mockResolvedValue({
-      ...inventarioCon(resultadoCompleto()),
+      ...inventarioCon(resultadoCompleto(), 'liquidado'),
       liquidaciones: [
         {
           colaboradorId: 1,
@@ -111,6 +127,12 @@ describe('deSucursal', () => {
     ]);
     // Nada se proyecta: mandan las filas firmadas.
     expect(prismaMock.colaborador.findMany).not.toHaveBeenCalled();
+    // Y `faltanteEmpresa`/`faltanteNeto` NUNCA se recalculan con la
+    // clasificación de hoy para un inventario ya liquidado -- congelado
+    // manda, ni una consulta a `ClasificacionProducto`/`CatalogoItem`.
+    expect(r!.faltanteEmpresa).toBe(100);
+    expect(prismaMock.catalogoItem.findMany).not.toHaveBeenCalled();
+    expect(prismaMock.clasificacionProducto.findMany).not.toHaveBeenCalled();
   });
 
   it('con asistencia y ajustes capturados, calcula el neto normalmente', async () => {
@@ -171,6 +193,90 @@ describe('deSucursal', () => {
     expect(r!.faltanteNeto).toBeNull();
     expect(r!.negativosDelMes).toBeNull();
     expect(r!.advertencia.ajustesSinRegistrar).toBe(true);
+  });
+
+  /**
+   * REGRESION del bug reportado por min-3 con numeros exactos (2026-09-14):
+   * bruto 130, negativos 40 (Excel), un sobrante de empleado de 50 y una
+   * cerveza de faltante 30. ANTES de este fix, esta pantalla (la vista previa
+   * ANTES de liquidar) mostraba 90 clasificaras o no la cerveza -- no restaba
+   * ni la empresa ni el sobrante. Ahora tiene que dar 10 (clasificada) o 40
+   * (sin clasificar), usando la MISMA fuente que liquidar() -- ver
+   * liquidacion.reclasificacion.ts#resolverMontosDeClasificacion.
+   */
+  describe('bug min-3: bruto 130, negativos 40, sobrante 50, cerveza 30', () => {
+    const CERVEZA = 'CERVEZA';
+    const OTRO = 'OTRO-SOBRANTE';
+
+    function resultadoDelCaso() {
+      return {
+        montoFaltanteBruto: decimal(130),
+        montoNegativos: decimal(40),
+        // Congelado al CERRAR el conteo: la cerveza todavia era EMPLEADO en
+        // Dynamics, asi que este valor viejo NO la tiene adentro. Antes del
+        // fix, `deSucursal` leia esto directo -- ahora se ignora mientras
+        // el inventario siga `conteo_cerrado`.
+        montoFaltanteEmpresa: decimal(0),
+        montoSobranteEmpleado: null,
+        colaboradoresAlcanzados: 10,
+        colaboradoresAsistieron: 8,
+        multaInasistencia: decimal(20),
+      };
+    }
+
+    beforeEach(() => {
+      prismaMock.diferenciaItem.findMany.mockResolvedValue([
+        { codigo: CERVEZA, diferencia: -1, montoDiferencia: { toNumber: () => -30 } },
+        { codigo: OTRO, diferencia: 1, montoDiferencia: { toNumber: () => 50 } },
+      ] as never);
+      prismaMock.catalogoItem.findMany.mockResolvedValue([
+        { codigo: CERVEZA, esEmpresa: false },
+        { codigo: OTRO, esEmpresa: false },
+      ] as never);
+    });
+
+    it('ANTES de liquidar, CON la cerveza clasificada como empresa: neto 10 (no 90)', async () => {
+      prismaMock.clasificacionProducto.findMany.mockResolvedValue([{ codigo: CERVEZA, esEmpresa: true }] as never);
+      prismaMock.inventario.findFirst.mockResolvedValue(inventarioCon(resultadoDelCaso(), 'conteo_cerrado'));
+
+      const r = await deSucursal(AUDITOR, 1);
+
+      expect(r!.faltanteNeto).toBe(10);
+      // El desglose tiene que sumar contra el total mostrado.
+      expect(r!.faltanteEmpresa).toBe(30);
+    });
+
+    it('ANTES de liquidar, SIN clasificar la cerveza: neto 40 (bruto - negativos - sobrante, sin empresa)', async () => {
+      prismaMock.clasificacionProducto.findMany.mockResolvedValue([]);
+      prismaMock.inventario.findFirst.mockResolvedValue(inventarioCon(resultadoDelCaso(), 'conteo_cerrado'));
+
+      const r = await deSucursal(AUDITOR, 1);
+
+      expect(r!.faltanteNeto).toBe(40);
+      expect(r!.faltanteEmpresa).toBe(0);
+    });
+
+    it('DESPUES de liquidar (congelado con 30/50 ya escritos por liquidar()): neto 10, no 60', async () => {
+      prismaMock.inventario.findFirst.mockResolvedValue(
+        inventarioCon(
+          {
+            ...resultadoDelCaso(),
+            // Lo que liquidar() YA escribió (ver liquidacion.cierre.ts): el
+            // encabezado tiene que leer esto tal cual, no recalcular.
+            montoFaltanteEmpresa: decimal(30),
+            montoSobranteEmpleado: decimal(50),
+          },
+          'liquidado',
+        ),
+      );
+
+      const r = await deSucursal(AUDITOR, 1);
+
+      expect(r!.faltanteNeto).toBe(10);
+      expect(r!.faltanteEmpresa).toBe(30);
+      // Congelado: ni una consulta a la clasificación vigente.
+      expect(prismaMock.clasificacionProducto.findMany).not.toHaveBeenCalled();
+    });
   });
 });
 

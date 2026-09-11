@@ -174,6 +174,7 @@ const resultadoCompleto = {
   montoFaltanteBruto: decimal(1500),
   montoNegativos: decimal(100),
   montoFaltanteEmpresa: decimal(10),
+  montoSobranteEmpleado: null,
   colaboradoresAlcanzados: 11,
   colaboradoresAsistieron: 7,
   multaInasistencia: decimal(20),

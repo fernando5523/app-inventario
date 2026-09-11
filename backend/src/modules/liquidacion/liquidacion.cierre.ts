@@ -67,10 +67,8 @@ import {
 import { validarAcceso } from './liquidacion.permisos';
 import { armarAdvertencia } from './liquidacion.service';
 import {
-  clasificacionManualVigente,
-  datosParaReclasificar,
   operacionesDeEscrituraClasificacion,
-  reclasificarAlLiquidar,
+  resolverMontosDeClasificacion,
 } from './liquidacion.reclasificacion';
 
 // ---------------------------------------------------------------------------
@@ -301,26 +299,33 @@ export async function liquidar(
    * tenia Dynamics cuando se cerro el conteo. `montoFaltanteEmpresa` de acá
    * REEMPLAZA al que quedo congelado en `ResultadoInventario` al cerrar
    * (ese usaba solo Dynamics); `montoSobranteEmpleado` es nuevo. Ver
-   * liquidacion.reclasificacion.ts para el detalle y por que
+   * `liquidacion.reclasificacion.ts#resolverMontosDeClasificacion` -- LA
+   * UNICA FUENTE de estos dos montos en todo el backend (historial, la
+   * vista previa de esta misma pantalla, y aca) -- para el detalle y por que
    * `montoFaltanteBruto` NO se toca (ya incluye el faltante de empresa;
    * restarlo aca de nuevo lo descontaria dos veces).
+   *
+   * `inventario.estado` en este punto es SIEMPRE `conteo_cerrado` (las
+   * guardas de arriba ya lo garantizan), asi que esto siempre cae en el
+   * regimen VIGENTE y `esEmpresaPorCodigo` siempre viene con el mapa.
    *
    * Se lee y calcula ANTES de la transaccion (son lecturas), pero se ESCRIBE
    * dentro de ella, mas abajo -- junto con la planilla y el estado, para que
    * no pueda quedar la clasificacion congelada sin la liquidacion hecha, ni
    * al reves.
    */
-  const filasParaReclasificar = await datosParaReclasificar(inventarioId);
-  const clasificacionManual = await clasificacionManualVigente();
-  const reclasificacion = reclasificarAlLiquidar(filasParaReclasificar, clasificacionManual);
+  const montos = await resolverMontosDeClasificacion(inventarioId, inventario.estado, {
+    montoFaltanteEmpresa: r.montoFaltanteEmpresa.toNumber(),
+    montoSobranteEmpleado: r.montoSobranteEmpleado === null ? null : r.montoSobranteEmpleado.toNumber(),
+  });
 
   const { planilla, resumen, asistentes } = await proyectarPlanilla(inventarioId, inventario.sucursalId, {
     montoFaltanteBruto: r.montoFaltanteBruto.toNumber(),
     // Lo escribe el Excel de ajustes (liquidacion.ajustes.ts) antes de
     // liquidar -- se sigue leyendo tal cual quedo en el resultado, sin tocar.
     montoNegativos: r.montoNegativos!.toNumber(),
-    montoFaltanteEmpresa: reclasificacion.montoFaltanteEmpresa,
-    montoSobranteEmpleado: reclasificacion.montoSobranteEmpleado,
+    montoFaltanteEmpresa: montos.montoFaltanteEmpresa,
+    montoSobranteEmpleado: montos.montoSobranteEmpleado,
     colaboradoresAlcanzados: r.colaboradoresAlcanzados,
     colaboradoresAsistieron: r.colaboradoresAsistieron!,
     multaInasistencia: r.multaInasistencia.toNumber(),
@@ -371,11 +376,12 @@ export async function liquidar(
     prisma.resultadoInventario.update({
       where: { inventarioId },
       data: {
-        montoFaltanteEmpresa: reclasificacion.montoFaltanteEmpresa,
-        montoSobranteEmpleado: reclasificacion.montoSobranteEmpleado,
+        montoFaltanteEmpresa: montos.montoFaltanteEmpresa,
+        montoSobranteEmpleado: montos.montoSobranteEmpleado,
       },
     }),
-    ...operacionesDeEscrituraClasificacion(inventarioId, reclasificacion.esEmpresaPorCodigo),
+    // `esEmpresaPorCodigo` nunca es null aca: ver el comentario de arriba.
+    ...operacionesDeEscrituraClasificacion(inventarioId, montos.esEmpresaPorCodigo!),
   ]);
 
   await registrarAuditoria({

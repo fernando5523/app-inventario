@@ -24,6 +24,7 @@ import {
 } from './auditoria.calculos';
 import { puedeVerLaMatriz, validarAccesoALaMatriz, validarSucursal } from './auditoria.permisos';
 import type { ListarAuditablesQuery, MatrizQuery } from './auditoria.schema';
+import { aplicarClasificacionVigente } from '../liquidacion/liquidacion.reclasificacion';
 
 // ---------------------------------------------------------------------------
 // Armado de la matriz
@@ -211,7 +212,11 @@ export async function matriz(
   const inv = await traerInventarioOFallar(inventarioId);
   validarAccesoALaMatriz(actor, inv);
 
-  const completa = await armarMatriz(inventarioId);
+  // LA MISMA fuente que usa la liquidacion para decidir empresa/empleado
+  // (liquidacion.reclasificacion.ts) -- ver esa funcion para el bug real que
+  // existe para evitar: la matriz no puede seguir mostrando la clasificacion
+  // de Dynamics cuando el Auditor ya la cambio.
+  const completa = await aplicarClasificacionVigente(inventarioId, inv.estado, await armarMatriz(inventarioId));
 
   let filtrada = aplicarFiltro(completa, query.filtro);
   if (query.zona !== undefined) {
@@ -261,7 +266,7 @@ export async function resumen(actor: ColaboradorAutenticado, inventarioId: numbe
   const inv = await traerInventarioOFallar(inventarioId);
   validarAccesoALaMatriz(actor, inv);
 
-  const completa = await armarMatriz(inventarioId);
+  const completa = await aplicarClasificacionVigente(inventarioId, inv.estado, await armarMatriz(inventarioId));
   const zonas = [...new Set(completa.map((i) => i.zona).filter((z) => z !== ''))].sort();
 
   return {

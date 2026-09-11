@@ -19,6 +19,7 @@ import {
   resumirHistoricoItem,
   type PuntoComparativoConSucursal,
 } from './historial.calculos';
+import { resolverMontosDeClasificacion } from '../liquidacion/liquidacion.reclasificacion';
 import {
   armarLibroDiferencias,
   nombreArchivoExportConsolidado,
@@ -155,7 +156,17 @@ const INCLUDE_LISTADO = {
 
 type InventarioConIncludes = Prisma.InventarioGetPayload<{ include: typeof INCLUDE_LISTADO }>;
 
-function resumirResultado(r: InventarioConIncludes['resultado']): ResultadoResumenDto | null {
+/**
+ * `estado` viaja aparte porque no vive en `ResultadoInventario`: es del
+ * `Inventario` padre. Sin él, `resolverMontosDeClasificacion` no puede saber
+ * si este resultado esta CONGELADO (liquidado/lacrado) o VIGENTE
+ * (conteo_cerrado) -- ver esa funcion para el bug real que existe para
+ * evitar (encabezado y planilla mostrando dos netos distintos).
+ */
+async function resumirResultado(
+  r: InventarioConIncludes['resultado'],
+  estado: string,
+): Promise<ResultadoResumenDto | null> {
   if (r === null) return null;
 
   const embudo = calcularEmbudo(r);
@@ -164,14 +175,18 @@ function resumirResultado(r: InventarioConIncludes['resultado']): ResultadoResum
   // adivinanza con apariencia de dato. Ver ResultadoResumenDto.
   const asistenciaSinRegistrar = r.colaboradoresAsistieron === null;
   const ajustesSinRegistrar = r.montoNegativos === null;
+  const montos = await resolverMontosDeClasificacion(r.inventarioId, estado, {
+    montoFaltanteEmpresa: aNumeroObligatorio(r.montoFaltanteEmpresa),
+    montoSobranteEmpleado: aNumero(r.montoSobranteEmpleado),
+  });
   const liq =
     asistenciaSinRegistrar || ajustesSinRegistrar
       ? null
       : calcularResumenLiquidacion({
           montoFaltanteBruto: aNumeroObligatorio(r.montoFaltanteBruto),
           montoNegativos: aNumeroObligatorio(r.montoNegativos!),
-          montoFaltanteEmpresa: aNumeroObligatorio(r.montoFaltanteEmpresa),
-          montoSobranteEmpleado: aNumero(r.montoSobranteEmpleado),
+          montoFaltanteEmpresa: montos.montoFaltanteEmpresa,
+          montoSobranteEmpleado: montos.montoSobranteEmpleado,
           colaboradoresAlcanzados: r.colaboradoresAlcanzados,
           colaboradoresAsistieron: r.colaboradoresAsistieron!,
           multaInasistencia: aNumeroObligatorio(r.multaInasistencia),
@@ -201,7 +216,7 @@ function resumirLacrado(l: InventarioConIncludes['lacrado']): LacradoResumenDto 
   };
 }
 
-function aListadoDto(inv: InventarioConIncludes): InventarioListadoDto {
+async function aListadoDto(inv: InventarioConIncludes): Promise<InventarioListadoDto> {
   return {
     id: inv.id,
     sucursalId: inv.sucursalId,
@@ -215,7 +230,7 @@ function aListadoDto(inv: InventarioConIncludes): InventarioListadoDto {
     abiertoEn: inv.abiertoEn.toISOString(),
     cerradoEn: aIso(inv.cerradoEn),
     abierto: inv.abierto === true,
-    resultado: resumirResultado(inv.resultado),
+    resultado: await resumirResultado(inv.resultado, inv.estado),
     lacrado: resumirLacrado(inv.lacrado),
     aprobaciones: inv._count.aprobaciones,
     aprobacionesRequeridas: APROBACIONES_REQUERIDAS,
@@ -258,7 +273,7 @@ export async function listarInventarios(
     total,
     limite: query.limite,
     desplazamiento: query.desplazamiento,
-    inventarios: filas.map(aListadoDto),
+    inventarios: await Promise.all(filas.map(aListadoDto)),
   };
 }
 
@@ -324,14 +339,23 @@ export async function obtenerDetalle(actor: ColaboradorAutenticado, id: number):
   // resto del bloque `resultado` (itemsTotales, montoFaltanteBruto, el
   // embudo YA son reales): solo los campos derivados de asistencia quedan
   // en null, más abajo.
+  // LA UNICA FUENTE de empresa/sobrante -- ver el comentario largo de
+  // resolverMontosDeClasificacion sobre el bug real que existe para evitar.
+  const montos =
+    resultado === null
+      ? null
+      : await resolverMontosDeClasificacion(inv.id, inv.estado, {
+          montoFaltanteEmpresa: aNumeroObligatorio(resultado.montoFaltanteEmpresa),
+          montoSobranteEmpleado: aNumero(resultado.montoSobranteEmpleado),
+        });
   const liquidacion =
-    resultado === null || asistenciaSinRegistrar || ajustesSinRegistrar
+    resultado === null || montos === null || asistenciaSinRegistrar || ajustesSinRegistrar
       ? null
       : calcularResumenLiquidacion({
           montoFaltanteBruto: aNumeroObligatorio(resultado.montoFaltanteBruto),
           montoNegativos: aNumeroObligatorio(resultado.montoNegativos!),
-          montoFaltanteEmpresa: aNumeroObligatorio(resultado.montoFaltanteEmpresa),
-          montoSobranteEmpleado: aNumero(resultado.montoSobranteEmpleado),
+          montoFaltanteEmpresa: montos.montoFaltanteEmpresa,
+          montoSobranteEmpleado: montos.montoSobranteEmpleado,
           colaboradoresAlcanzados: resultado.colaboradoresAlcanzados,
           colaboradoresAsistieron: resultado.colaboradoresAsistieron!,
           multaInasistencia: aNumeroObligatorio(resultado.multaInasistencia),
@@ -371,7 +395,10 @@ export async function obtenerDetalle(actor: ColaboradorAutenticado, id: number):
             // un 0 real llevan a conclusiones opuestas, mismo criterio que
             // CatalogoItem.stockErp.
             montoNegativos: aNumero(resultado.montoNegativos),
-            montoFaltanteEmpresa: aNumeroObligatorio(resultado.montoFaltanteEmpresa),
+            // VIGENTE (o congelado si ya se liquidó), no el crudo de la
+            // columna -- para que este número sume contra `montoFaltanteNeto`
+            // de más abajo (misma fuente, ver resolverMontosDeClasificacion).
+            montoFaltanteEmpresa: montos!.montoFaltanteEmpresa,
             colaboradoresAlcanzados: resultado.colaboradoresAlcanzados,
             colaboradoresAsistieron: resultado.colaboradoresAsistieron,
             /**
@@ -649,19 +676,28 @@ export async function obtenerLiquidacion(actor: ColaboradorAutenticado, id: numb
   const r = inv.resultado;
   const asistenciaSinRegistrar = r !== null && r.colaboradoresAsistieron === null;
   const ajustesSinRegistrar = r !== null && r.montoNegativos === null;
+  // LA UNICA FUENTE de empresa/sobrante -- ver el comentario largo de
+  // resolverMontosDeClasificacion sobre el bug real que existe para evitar.
+  const montos =
+    r === null
+      ? null
+      : await resolverMontosDeClasificacion(inv.id, inv.estado, {
+          montoFaltanteEmpresa: aNumeroObligatorio(r.montoFaltanteEmpresa),
+          montoSobranteEmpleado: aNumero(r.montoSobranteEmpleado),
+        });
   // `resumen: null` -- no un objeto calculado con 0 de placeholder -- si
   // falta cualquiera de los dos datos. A diferencia de obtenerDetalle, acá
   // no hay otro bloque de cifras "sí reales" que deba sobrevivir: el único
   // propósito de este endpoint es el resumen de liquidación, así que si no
   // se puede calcular, no viene -- y los flags de abajo dicen por qué.
   const resumen =
-    r === null || asistenciaSinRegistrar || ajustesSinRegistrar
+    r === null || montos === null || asistenciaSinRegistrar || ajustesSinRegistrar
       ? null
       : calcularResumenLiquidacion({
           montoFaltanteBruto: aNumeroObligatorio(r.montoFaltanteBruto),
           montoNegativos: aNumeroObligatorio(r.montoNegativos!),
-          montoFaltanteEmpresa: aNumeroObligatorio(r.montoFaltanteEmpresa),
-          montoSobranteEmpleado: aNumero(r.montoSobranteEmpleado),
+          montoFaltanteEmpresa: montos.montoFaltanteEmpresa,
+          montoSobranteEmpleado: montos.montoSobranteEmpleado,
           colaboradoresAlcanzados: r.colaboradoresAlcanzados,
           colaboradoresAsistieron: r.colaboradoresAsistieron!,
           multaInasistencia: aNumeroObligatorio(r.multaInasistencia),
@@ -1278,11 +1314,18 @@ export async function comparativo(
       });
       continue;
     }
+    // LA UNICA FUENTE de empresa/sobrante -- esta serie incluye inventarios
+    // `conteo_cerrado` todavia sin liquidar (ver el `where` de arriba), asi
+    // que no alcanza con leer la columna: ver resolverMontosDeClasificacion.
+    const montos = await resolverMontosDeClasificacion(f.id, f.estado, {
+      montoFaltanteEmpresa: aNumeroObligatorio(f.resultado.montoFaltanteEmpresa),
+      montoSobranteEmpleado: aNumero(f.resultado.montoSobranteEmpleado),
+    });
     const liq = calcularResumenLiquidacion({
       montoFaltanteBruto: aNumeroObligatorio(f.resultado.montoFaltanteBruto),
       montoNegativos: aNumeroObligatorio(f.resultado.montoNegativos!),
-      montoFaltanteEmpresa: aNumeroObligatorio(f.resultado.montoFaltanteEmpresa),
-      montoSobranteEmpleado: aNumero(f.resultado.montoSobranteEmpleado),
+      montoFaltanteEmpresa: montos.montoFaltanteEmpresa,
+      montoSobranteEmpleado: montos.montoSobranteEmpleado,
       colaboradoresAlcanzados: f.resultado.colaboradoresAlcanzados,
       colaboradoresAsistieron: f.resultado.colaboradoresAsistieron!,
       multaInasistencia: aNumeroObligatorio(f.resultado.multaInasistencia),
