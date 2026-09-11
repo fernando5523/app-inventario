@@ -83,6 +83,13 @@ export interface LiquidacionDto {
   inventarioId: number;
   /** "Agosto 2026" -- legible, como lo muestra la pantalla. */
   periodo: string;
+  /**
+   * El mismo periodo en NUMEROS, para lo que no se lee sino que se ordena o se
+   * nombra: el archivo del reporte a gerencia ("...-2026-08-inv45.xlsx").
+   * Sacarlos de `periodo` seria parsear un texto escrito para personas.
+   */
+  periodoAnio: number;
+  periodoMes: number;
   faltanteBruto: number;
   /** null = todavía no se cargaron los ajustes del mes -- NUNCA 0 con ese significado (ver AdvertenciaLiquidacion). */
   negativosDelMes: number | null;
@@ -309,6 +316,8 @@ export async function deSucursal(actor: ColaboradorAutenticado, sucursalId: numb
   return {
     inventarioId: inventario.id,
     periodo: nombreDePeriodo(inventario.periodoAnio, inventario.periodoMes),
+    periodoAnio: inventario.periodoAnio,
+    periodoMes: inventario.periodoMes,
     faltanteBruto: r.montoFaltanteBruto.toNumber(),
     negativosDelMes: r.montoNegativos?.toNumber() ?? null,
     faltanteEmpresa: r.montoFaltanteEmpresa.toNumber(),

@@ -22,3 +22,14 @@ reporteGerenciaRouter.get(
   validar(parametrosInventarioSchema, 'params'),
   controller.reporteGerencia,
 );
+
+/**
+ * El MISMO reporte en .xlsx, para compartir por WhatsApp/correo. Mismos
+ * guardas (auditor; liquidado o lacrado) porque sale de la misma funcion --
+ * ver liquidacion.reporte-gerencia.exportar.ts.
+ */
+reporteGerenciaRouter.get(
+  '/inventarios/:inventarioId/reporte-gerencia/exportar',
+  validar(parametrosInventarioSchema, 'params'),
+  controller.exportarReporteGerencia,
+);

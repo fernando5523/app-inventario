@@ -127,6 +127,14 @@ describe('deSucursal', () => {
     expect(r!.advertencia.ajustesSinRegistrar).toBe(false);
   });
 
+  it('trae año y mes como NÚMEROS además del texto: el nombre del archivo del reporte a gerencia los necesita', async () => {
+    prismaMock.inventario.findFirst.mockResolvedValue(inventarioCon(resultadoCompleto()));
+
+    const r = await deSucursal(AUDITOR, 1);
+
+    expect(r).toMatchObject({ periodo: 'Agosto 2026', periodoAnio: 2026, periodoMes: 8 });
+  });
+
   /**
    * EL CASO QUE IMPORTA. `colaboradoresAsistieron: null` en la base --
    * nadie registró asistencia todavía. El neto/cuota/bono/faltas tienen
