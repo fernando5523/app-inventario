@@ -198,3 +198,75 @@ describe('crearSnapshot: un solo inventario mensual por mes y tienda (BUG A)', (
     await expect(crearSnapshot(1, 'ejemplo')).rejects.toMatchObject({ status: 409 });
   });
 });
+
+/**
+ * `periodoOverride`: SOLO lo usan los scripts de siembra (sembrar-inventario-prueba.ts
+ * --periodo) para armar un inventario de PRUEBA en un mes distinto al actual,
+ * en una tienda que ya tiene el mensual de HOY -- la app real nunca lo manda
+ * (nace `undefined`, mismo comportamiento de siempre con `now()`).
+ */
+describe('crearSnapshot: periodoOverride (solo scripts de siembra)', () => {
+  it('sin override, el pre-chequeo sigue consultando el período de HOY (now()) -- comportamiento intacto', async () => {
+    const ahora = new Date();
+    vi.mocked(prisma.inventario.findFirst).mockImplementation((async ({ where }: { where: Record<string, unknown> }) => {
+      if (where.estado === 'en_curso') return null;
+      expect(where.periodoAnio).toBe(ahora.getFullYear());
+      expect(where.periodoMes).toBe(ahora.getMonth() + 1);
+      return null;
+    }) as never);
+
+    await crearSnapshot(1, 'ejemplo');
+
+    // Sin override: el INSERT no fuerza periodoAnio/periodoMes -- sigue
+    // saliendo del default de la base (now()), como siempre.
+    const { data } = vi.mocked(prisma.inventario.create).mock.calls[0]![0] as { data: Record<string, unknown> };
+    expect(data).not.toHaveProperty('periodoAnio');
+    expect(data).not.toHaveProperty('periodoMes');
+  });
+
+  it('con override, el pre-chequeo consulta ESE período, no el de now()', async () => {
+    vi.mocked(prisma.inventario.findFirst).mockImplementation((async ({ where }: { where: Record<string, unknown> }) => {
+      if (where.estado === 'en_curso') return null;
+      expect(where.periodoAnio).toBe(2026);
+      expect(where.periodoMes).toBe(11);
+      return null;
+    }) as never);
+
+    await crearSnapshot(1, 'ejemplo', 'mensual', undefined, 0, undefined, { anio: 2026, mes: 11 });
+
+    expect(prisma.inventario.create).toHaveBeenCalled();
+  });
+
+  it('con override, el INSERT lo fija explícito -- no confía en el default de la base', async () => {
+    vi.mocked(prisma.inventario.findFirst).mockResolvedValue(null as never);
+
+    await crearSnapshot(1, 'ejemplo', 'mensual', undefined, 0, undefined, { anio: 2026, mes: 11 });
+
+    const { data } = vi.mocked(prisma.inventario.create).mock.calls[0]![0] as { data: Record<string, unknown> };
+    expect(data).toMatchObject({ periodoAnio: 2026, periodoMes: 11 });
+  });
+
+  it('con override, si ESE período ya está ocupado, corta con el mismo Conflicto (409)', async () => {
+    const yaExiste = {
+      id: 45,
+      estado: 'lacrado',
+      abierto: null,
+      tipo: 'mensual',
+      periodoAnio: 2026,
+      periodoMes: 11,
+      snapshotItems: 10,
+      snapshotTomadoEn: new Date(),
+      createdAt: new Date(),
+    };
+    vi.mocked(prisma.inventario.findFirst).mockImplementation((async ({ where }: { where: Record<string, unknown> }) => {
+      if (where.estado === 'en_curso') return null;
+      if (where.periodoAnio === 2026 && where.periodoMes === 11) return yaExiste;
+      return null;
+    }) as never);
+
+    await expect(crearSnapshot(1, 'ejemplo', 'mensual', undefined, 0, undefined, { anio: 2026, mes: 11 })).rejects.toMatchObject({
+      status: 409,
+    });
+    expect(prisma.inventario.create).not.toHaveBeenCalled();
+  });
+});

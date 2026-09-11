@@ -822,6 +822,15 @@ export async function crearSnapshot(
   actorId = 0,
   /** Ver el comentario de `limite` en `obtenerCatalogoReal`. Sin uso en la app real. */
   limite?: number,
+  /**
+   * SOLO para scripts de siembra (`sembrar-inventario-prueba.ts --periodo`):
+   * fija el período en vez de tomarlo de `now()`, para poder armar un
+   * inventario de PRUEBA en un mes distinto al actual en una tienda que ya
+   * tiene el mensual de HOY. La app real nunca lo manda -- nace `undefined`
+   * y el comportamiento es EXACTAMENTE el de siempre (period de `now()`,
+   * default de la base en el INSERT).
+   */
+  periodoOverride?: { anio: number; mes: number },
 ): Promise<SnapshotDto> {
   const sucursal = await prisma.sucursal.findUnique({
     where: { id: sucursalId },
@@ -861,13 +870,14 @@ export async function crearSnapshot(
    * hacia esperar minutos por un "no" que ya se podia dar de entrada.
    *
    * El periodo se calcula como el default de la base -- el mes calendario de
-   * HOY (`EXTRACT(... FROM now())`). El unico hueco es el instante de cambio
-   * de mes entre el reloj de Node y el de Postgres; la barrera del INSERT
-   * (mas abajo, P2002) lo cubre.
+   * HOY (`EXTRACT(... FROM now())`), salvo que venga `periodoOverride` (solo
+   * scripts de siembra). El unico hueco sin override es el instante de
+   * cambio de mes entre el reloj de Node y el de Postgres; la barrera del
+   * INSERT (mas abajo, P2002) lo cubre.
    */
   const ahora = new Date();
-  const periodoAnio = ahora.getFullYear();
-  const periodoMes = ahora.getMonth() + 1;
+  const periodoAnio = periodoOverride?.anio ?? ahora.getFullYear();
+  const periodoMes = periodoOverride?.mes ?? ahora.getMonth() + 1;
   const yaDelPeriodo = await prisma.inventario.findFirst({
     where: { sucursalId, tipo, periodoAnio, periodoMes },
   });
@@ -948,7 +958,7 @@ export async function crearSnapshot(
     // transaccion (ver abajo), asi que hasta el commit no hay ni una fila
     // visible -- por eso se marca la fase en vez de seguir contando items.
     progreso.marcarGuardando(sucursalId);
-    return await guardarSnapshot({ sucursalId, tipo, catalogo, descartes, criterios, actorId, almacen, modo });
+    return await guardarSnapshot({ sucursalId, tipo, catalogo, descartes, criterios, actorId, almacen, modo, periodoOverride });
   } catch (error) {
     // SEGUNDA BARRERA: si el INSERT se alcanzo pese al pre-chequeo (borde de
     // fin de mes, o dos coordinadores llegando al create a la vez), el
@@ -982,15 +992,31 @@ async function guardarSnapshot(args: {
   /** `undefined` explícito: el proyecto corre con `exactOptionalPropertyTypes`. */
   almacen: string | undefined;
   modo: ModoCatalogo;
+  /**
+   * Ver el comentario de `crearSnapshot#periodoOverride`. `undefined` =
+   * default de la base (`now()`), como siempre. `| undefined` explícito: el
+   * proyecto corre con `exactOptionalPropertyTypes`.
+   */
+  periodoOverride: { anio: number; mes: number } | undefined;
 }): Promise<SnapshotDto> {
-  const { sucursalId, tipo, catalogo, descartes, criterios, actorId, almacen } = args;
+  const { sucursalId, tipo, catalogo, descartes, criterios, actorId, almacen, periodoOverride } = args;
   const tomadoEn = new Date();
 
   const inventario = await prisma.inventario.create({
     // `tipo` se guarda en el inventario: es lo que define QUE universo se
     // conto, y sin el nadie puede saber despues si esos 6.297 items eran
     // "solo responsabilidad del empleado" o un anual incompleto.
-    data: { sucursalId, tipo, snapshotItems: catalogo.length, snapshotTomadoEn: tomadoEn },
+    //
+    // periodoAnio/periodoMes SOLO se fuerzan con `periodoOverride` (scripts
+    // de siembra): sin eso, ni la clave aparece -- el default de la base
+    // (`now()`) sigue siendo el camino real, intacto.
+    data: {
+      sucursalId,
+      tipo,
+      snapshotItems: catalogo.length,
+      snapshotTomadoEn: tomadoEn,
+      ...(periodoOverride ? { periodoAnio: periodoOverride.anio, periodoMes: periodoOverride.mes } : {}),
+    },
   });
 
   if (catalogo.length > 0) {
