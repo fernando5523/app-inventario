@@ -10,7 +10,7 @@ import { useRefrescoAlEnfocar } from '../../components/hooks/useRefrescoAlEnfoca
 import { PantallaConTabs } from '../../components/navegacion/PantallaConTabs';
 import { BarraApp, Badge, Button, formatoFechaHora, formatoMiles } from '../../components/ui';
 import { repositorioLiquidacion, repositorioSesion } from '../../lib/contenedor';
-import { textoDeAjustes, validarAjustes } from '../../lib/dominio/ajustes-formulario';
+import { notaFaltanteEmpresa, textoDeAjustes, validarAjustes } from '../../lib/dominio/ajustes-formulario';
 import { asistentesConCentavoExtra, resumirAsistencia } from '../../lib/dominio/reparto-visible';
 import {
   nombreArchivoReporteGerencia,
@@ -449,6 +449,10 @@ export default function LiquidacionScreen(): JSX.Element {
                 <Text style={styles.resumenEtiqueta}>(–) Faltante empresa</Text>
                 <Text style={styles.resumenValor}>-{soles(liquidacion.faltanteEmpresa)}</Text>
               </View>
+              {/* Dato CALCULADO y de solo lectura: ya no se tipea (backend
+                  48899bc). Se dice de dónde sale para que nadie busque dónde
+                  corregirlo. */}
+              <Text style={styles.notaReparto}>{notaFaltanteEmpresa(liquidacion.proyectada)}</Text>
               <View style={[styles.resumenFila, styles.resumenFilaSeparada]}>
                 <Text style={styles.resumenEtiqueta}>Faltante neto a descontar</Text>
                 <Text style={[styles.resumenValor, styles.resumenFalta, liquidacion.faltanteNeto === null && styles.resumenSinCalcular]}>
@@ -801,7 +805,6 @@ function TarjetaAjustes({
 }): JSX.Element | null {
   const [editando, setEditando] = useState(false);
   const [montoNegativos, setMontoNegativos] = useState('');
-  const [montoEmpresa, setMontoEmpresa] = useState('');
   const [nota, setNota] = useState('');
   const [errorCampos, setErrorCampos] = useState<string | null>(null);
 
@@ -813,7 +816,7 @@ function TarjetaAjustes({
   const mostrandoFormulario = !soloLectura && (editando || texto.bloqueaLiquidacion);
 
   async function guardar(): Promise<void> {
-    const validado = validarAjustes({ montoNegativos, montoEmpresa, nota });
+    const validado = validarAjustes({ montoNegativos, nota });
     if (!validado.ok) {
       setErrorCampos(validado.error);
       return;
@@ -847,18 +850,9 @@ function TarjetaAjustes({
             placeholderTextColor={colors.gris}
           />
 
-          <Text style={styles.ajustesEtiqueta}>Faltante que absorbe la empresa (S/) — opcional</Text>
-          <TextInput
-            style={styles.ajustesInput}
-            value={montoEmpresa}
-            onChangeText={setMontoEmpresa}
-            keyboardType="decimal-pad"
-            // Vacío NO es 0: dejarlo así conserva el monto que calculó el
-            // cierre del conteo desde las categorías de empresa.
-            placeholder="Déjalo vacío para conservar el calculado"
-            placeholderTextColor={colors.gris}
-          />
-
+          {/* Sin campo de faltante de empresa (backend 48899bc): lo calcula la
+              clasificación de productos y se muestra en el resumen, de solo
+              lectura. Un campo que el servidor ignora es un dato que miente. */}
           <Text style={styles.ajustesEtiqueta}>¿De dónde salen? (obligatorio)</Text>
           <TextInput
             style={[styles.ajustesInput, styles.ajustesInputNota]}
@@ -889,7 +883,6 @@ function TarjetaAjustes({
             // Se precargan los valores actuales: corregir es ajustar un
             // número, no volver a escribirlo todo de memoria.
             setMontoNegativos(estado.montoNegativos === null ? '' : String(estado.montoNegativos));
-            setMontoEmpresa(estado.montoFaltanteEmpresa === null ? '' : String(estado.montoFaltanteEmpresa));
             setNota(estado.nota ?? '');
             setEditando(true);
           }}

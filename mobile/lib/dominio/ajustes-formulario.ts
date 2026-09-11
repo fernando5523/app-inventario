@@ -11,17 +11,19 @@
  * mes, que es exactamente el tipo de dato falso que todo esto evita.
  */
 
+/**
+ * SIN monto de empresa (backend 48899bc): el faltante de empresa lo calcula
+ * la clasificación de productos al liquidar, y PUT /ajustes dejó de aceptarlo.
+ * Un campo que el servidor ignora es un dato que miente.
+ */
 export interface CamposAjustes {
   /** Tal como se tipeó. Se parsea acá, no en el componente. */
   montoNegativos: string;
-  montoEmpresa: string;
   nota: string;
 }
 
 export interface AjustesValidados {
   montoNegativos: number;
-  /** `undefined` = no se tocó, y el backend CONSERVA el calculado al cerrar. */
-  montoEmpresa?: number;
   nota: string;
 }
 
@@ -52,26 +54,24 @@ export function validarAjustes(campos: CamposAjustes): ResultadoValidacion {
     return { ok: false, error: 'Los ajustes no pueden ser negativos: son plata a favor del personal.' };
   }
 
-  // Vacío ≠ 0. Vacío conserva el calculado al cerrar el conteo (sale de las
-  // categorías de empresa de Dynamics); un 0 escrito lo pisa con cero.
-  const empresaTexto = campos.montoEmpresa.trim();
-  let empresa: number | undefined;
-  if (empresaTexto !== '') {
-    const n = aNumero(empresaTexto);
-    if (n === null) return { ok: false, error: 'El monto de empresa no es un número válido.' };
-    if (n < 0) return { ok: false, error: 'El monto de empresa no puede ser negativo.' };
-    empresa = n;
-  }
-
   const nota = campos.nota.trim();
   if (nota === '') {
     return { ok: false, error: 'Contá de dónde salen estos ajustes: sin nota nadie puede auditarlos después.' };
   }
 
-  return {
-    ok: true,
-    datos: { montoNegativos: negativos, ...(empresa !== undefined ? { montoEmpresa: empresa } : {}), nota },
-  };
+  return { ok: true, datos: { montoNegativos: negativos, nota } };
+}
+
+/**
+ * La aclaración pegada al faltante de empresa en el resumen. Ese monto YA NO
+ * SE TIPEA: lo calcula la clasificación de productos, y el definitivo es el
+ * que queda al liquidar. Mostrarlo sin decir de dónde sale invitaría a buscar
+ * dónde corregirlo.
+ */
+export function notaFaltanteEmpresa(proyectada: boolean): string {
+  return proyectada
+    ? 'Lo calcula la clasificación de productos; el monto definitivo queda fijo al liquidar.'
+    : 'Lo calculó la clasificación de productos al liquidar.';
 }
 
 /**

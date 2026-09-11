@@ -199,10 +199,9 @@ export const liquidacionMemoria: RepositorioLiquidacion = {
       inventarioId,
       registrado: true,
       montoNegativos: datos.montoNegativos,
-      // Omitirlo CONSERVA lo que había, igual que el backend: sale de las
-      // categorías de empresa del catálogo y pisarlo con 0 por omisión
-      // borraría ese cálculo.
-      montoFaltanteEmpresa: datos.montoEmpresa ?? previo?.montoFaltanteEmpresa ?? 170,
+      // No lo manda el formulario: igual que en el backend, lo calcula la
+      // clasificación de productos. Se conserva el que había.
+      montoFaltanteEmpresa: previo?.montoFaltanteEmpresa ?? 170,
       nota: datos.nota,
       registradoPor: { id: 101, nombre: 'Nancy Quispe' },
       registradoEn: new Date().toISOString(),

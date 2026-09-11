@@ -88,23 +88,18 @@ export const liquidacionApi: RepositorioLiquidacion = {
   },
 
   /**
-   * `PUT` y no `POST`: es idempotente. Cargar dos veces el mismo monto deja
-   * el mismo estado, y corregir uno mal tipeado antes de liquidar tiene que
-   * poder hacerse.
+   * `PUT` y no `POST`: es idempotente. Cargar dos veces lo mismo deja el mismo
+   * estado, y corregir antes de liquidar tiene que poder hacerse.
    *
-   * `montoEmpresa` se OMITE del cuerpo si no viene, en vez de mandarlo como
-   * `undefined` o `0`: el backend conserva el calculado cuando la clave no
-   * está, y lo pisa cuando llega en 0. Son dos cosas distintas y el
-   * adaptador no puede confundirlas (ver DatosAjustes en el puerto).
+   * `montoEmpresa` NO viaja nunca (backend 48899bc): el faltante de empresa lo
+   * calcula la clasificación de productos al liquidar. El cuerpo se arma campo
+   * por campo, en vez de reenviar `datos`, para que un llamador viejo que
+   * todavía lo mande no lo cuele.
    */
   async registrarAjustes(inventarioId, datos: DatosAjustes) {
     return await pedir<AjustesDelMes>(`/api/liquidacion/inventarios/${inventarioId}/ajustes`, {
       metodo: 'PUT',
-      cuerpo: {
-        montoNegativos: datos.montoNegativos,
-        ...(datos.montoEmpresa !== undefined ? { montoEmpresa: datos.montoEmpresa } : {}),
-        nota: datos.nota,
-      },
+      cuerpo: { montoNegativos: datos.montoNegativos, nota: datos.nota },
     });
   },
 

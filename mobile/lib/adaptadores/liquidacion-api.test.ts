@@ -177,10 +177,9 @@ describe('sin ciclo cerrado: null, no excepción', () => {
 });
 
 /**
- * LOS AJUSTES DEL MES. Lo que este adaptador no puede confundir:
- * `montoEmpresa` omitido CONSERVA el calculado al cerrar el conteo, y
- * `montoEmpresa: 0` lo pisa con cero. Son dos cosas distintas y las dos
- * mueven plata.
+ * LOS AJUSTES DEL MES. `montoEmpresa` ya NO viaja (backend 48899bc): el
+ * faltante de empresa lo calcula la clasificación de productos al liquidar, y
+ * PUT /ajustes dejó de aceptarlo.
  */
 describe('ajustes del mes', () => {
   const AJUSTES = {
@@ -236,28 +235,18 @@ describe('ajustes del mes', () => {
     expect(cuerpo.montoNegativos).toBe(0);
   });
 
-  it('sin montoEmpresa, la clave NO viaja -- así el backend conserva el calculado', async () => {
+  it('montoEmpresa NUNCA viaja: el faltante de empresa lo calcula la clasificación, no el formulario', async () => {
     // Con la firma de `fetch` declarada: sin los parámetros, `mock.calls` se
     // tipa como tupla vacía y `calls[0][1]` no compila.
     const fn = vi.fn(async (_url: string, _init: RequestInit) => json(AJUSTES));
     vi.stubGlobal('fetch', fn);
 
-    await liquidacionApi.registrarAjustes(29, { montoNegativos: 380, nota: 'x' });
+    // Un llamador viejo que todavía lo mande: el adaptador no lo reenvía.
+    const datosViejos = { montoNegativos: 380, montoEmpresa: 0, nota: 'x' };
+    await liquidacionApi.registrarAjustes(29, datosViejos);
 
     const cuerpo = JSON.parse(fn.mock.calls[0]![1].body as string);
     expect(cuerpo).not.toHaveProperty('montoEmpresa');
-  });
-
-  it('con montoEmpresa en 0, la clave SÍ viaja -- pisar con cero es distinto de omitir', async () => {
-    // Con la firma de `fetch` declarada: sin los parámetros, `mock.calls` se
-    // tipa como tupla vacía y `calls[0][1]` no compila.
-    const fn = vi.fn(async (_url: string, _init: RequestInit) => json(AJUSTES));
-    vi.stubGlobal('fetch', fn);
-
-    await liquidacionApi.registrarAjustes(29, { montoNegativos: 380, montoEmpresa: 0, nota: 'x' });
-
-    const cuerpo = JSON.parse(fn.mock.calls[0]![1].body as string);
-    expect(cuerpo.montoEmpresa).toBe(0);
   });
 
   it('la nota viaja tal cual', async () => {

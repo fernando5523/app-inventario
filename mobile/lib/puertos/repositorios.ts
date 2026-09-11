@@ -583,12 +583,8 @@ export interface AjustesDelMes {
 export interface DatosAjustes {
   /** `0` es un valor VÁLIDO y significativo: "alguien miró y no había". */
   montoNegativos: number;
-  /**
-   * Faltante que absorbe la empresa. Omitirlo CONSERVA el calculado al cerrar
-   * el conteo (sale de las categorías marcadas como de empresa en Dynamics);
-   * mandar `0` lo pisa con cero. No es lo mismo.
-   */
-  montoEmpresa?: number;
+  // Sin `montoEmpresa` (backend 48899bc): el faltante de empresa lo calcula la
+  // clasificación de productos al liquidar, y PUT /ajustes dejó de aceptarlo.
   /** Obligatoria: un ajuste sin explicación no se puede auditar después. */
   nota: string;
 }

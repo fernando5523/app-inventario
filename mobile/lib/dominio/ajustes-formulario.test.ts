@@ -7,9 +7,9 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { textoDeAjustes, validarAjustes } from './ajustes-formulario';
+import { notaFaltanteEmpresa, textoDeAjustes, validarAjustes } from './ajustes-formulario';
 
-const vacio = { montoNegativos: '', montoEmpresa: '', nota: '' };
+const vacio = { montoNegativos: '', nota: '' };
 
 describe('validarAjustes', () => {
   /**
@@ -70,30 +70,26 @@ describe('validarAjustes', () => {
   });
 
   /**
-   * VACÍO ≠ 0 en el monto de empresa, y la diferencia mueve plata: vacío
-   * conserva lo que calculó el cierre del conteo desde las categorías de
-   * empresa de Dynamics; un 0 escrito lo pisa con cero.
+   * EL FALTANTE DE EMPRESA YA NO SE TIPEA (backend 48899bc): lo calcula la
+   * clasificación de productos al liquidar, y PUT /ajustes dejó de aceptarlo.
+   * Un campo que el servidor ignora es un dato que miente.
    */
-  describe('montoEmpresa: vacío conserva, 0 pisa', () => {
-    it('vacío NO viaja: el backend conserva el calculado', () => {
-      const r = validarAjustes({ ...vacio, montoNegativos: '380', nota: 'x' });
-      if (r.ok) expect(r.datos.montoEmpresa).toBeUndefined();
-    });
+  it('el formulario ya no produce un monto de empresa: lo calcula la clasificación', () => {
+    const r = validarAjustes({ montoNegativos: '380', nota: 'x' });
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.datos).not.toHaveProperty('montoEmpresa');
+  });
+});
 
-    it('0 escrito SÍ viaja, y pisa con cero', () => {
-      const r = validarAjustes({ montoNegativos: '380', montoEmpresa: '0', nota: 'x' });
-      if (r.ok) expect(r.datos.montoEmpresa).toBe(0);
-    });
+describe('notaFaltanteEmpresa: el faltante de empresa se muestra, no se tipea', () => {
+  it('antes de liquidar: lo calcula la clasificación y el definitivo queda fijo al liquidar', () => {
+    expect(notaFaltanteEmpresa(true)).toMatch(/clasificación de productos/);
+    expect(notaFaltanteEmpresa(true)).toMatch(/queda fijo al liquidar/);
+  });
 
-    it('un monto de empresa negativo se rechaza', () => {
-      const r = validarAjustes({ montoNegativos: '380', montoEmpresa: '-5', nota: 'x' });
-      expect(r.ok).toBe(false);
-    });
-
-    it('un monto de empresa no numérico se rechaza', () => {
-      const r = validarAjustes({ montoNegativos: '380', montoEmpresa: 'mucho', nota: 'x' });
-      expect(r.ok).toBe(false);
-    });
+  it('ya liquidado: es el que calculó la clasificación al liquidar', () => {
+    expect(notaFaltanteEmpresa(false)).toMatch(/clasificación de productos/);
+    expect(notaFaltanteEmpresa(false)).toMatch(/calculó/);
   });
 });
 
