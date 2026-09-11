@@ -26,7 +26,17 @@ vi.mock('../sesion/sesion.service', () => ({
   },
 }));
 vi.mock('./liquidacion.controller', () =>
-  controllerFalso(['deSucursal', 'conciliacion', 'liquidar', 'registrarAjustes', 'estadoAjustes']),
+  controllerFalso([
+    'deSucursal',
+    'conciliacion',
+    'liquidar',
+    'registrarAjustes',
+    'estadoAjustes',
+    'previsualizarAjustesNegativos',
+    'confirmarAjustesNegativos',
+    'excluirLineaAjusteNegativo',
+    'incluirLineaAjusteNegativo',
+  ]),
 );
 
 import { liquidacionRouter } from './liquidacion.routes';
@@ -50,9 +60,11 @@ afterEach(async () => {
 
 interface Endpoint {
   nombre: string;
-  metodo: 'GET' | 'PUT' | 'POST';
+  metodo: 'GET' | 'PUT' | 'POST' | 'PATCH';
   ruta: string;
   cuerpo?: unknown;
+  /** El .xlsx crudo (bytes), no JSON -- ver `cuerpoExcel` en liquidacion.routes.ts. */
+  crudo?: Buffer;
 }
 
 const ENDPOINTS: Endpoint[] = [
@@ -63,12 +75,43 @@ const ENDPOINTS: Endpoint[] = [
     nombre: 'PUT /inventarios/:id/ajustes',
     metodo: 'PUT',
     ruta: '/api/liquidacion/inventarios/1/ajustes',
-    cuerpo: { montoNegativos: 380, nota: 'Mermas.' },
+    cuerpo: { montoEmpresa: 170, nota: 'Mermas.' },
   },
   { nombre: 'POST /inventarios/:id/liquidar', metodo: 'POST', ruta: '/api/liquidacion/inventarios/1/liquidar' },
+  {
+    nombre: 'POST /inventarios/:id/ajustes-negativos/preview',
+    metodo: 'POST',
+    ruta: '/api/liquidacion/inventarios/1/ajustes-negativos/preview',
+    crudo: Buffer.from('excel falso'),
+  },
+  {
+    nombre: 'POST /inventarios/:id/ajustes-negativos/confirmar',
+    metodo: 'POST',
+    ruta: '/api/liquidacion/inventarios/1/ajustes-negativos/confirmar?nombreArchivo=ajustes.xlsx',
+    crudo: Buffer.from('excel falso'),
+  },
+  {
+    nombre: 'PATCH /inventarios/:id/ajustes-negativos/lineas/:id/excluir',
+    metodo: 'PATCH',
+    ruta: '/api/liquidacion/inventarios/1/ajustes-negativos/lineas/1/excluir',
+    cuerpo: { motivo: 'El área de negativos puso mal el motivo.' },
+  },
+  {
+    nombre: 'PATCH /inventarios/:id/ajustes-negativos/lineas/:id/incluir',
+    metodo: 'PATCH',
+    ruta: '/api/liquidacion/inventarios/1/ajustes-negativos/lineas/1/incluir',
+    cuerpo: { motivo: 'Me equivoqué, sí corresponde.' },
+  },
 ];
 
 function pedir(e: Endpoint, actor?: ColaboradorAutenticado, cuerpo: unknown = e.cuerpo): Promise<Response> {
+  if (e.crudo !== undefined) {
+    return fetch(`${baseUrl}${e.ruta}`, {
+      method: e.metodo,
+      headers: { ...(actor ? autorizacion(actor) : {}) },
+      body: e.crudo,
+    });
+  }
   return fetch(`${baseUrl}${e.ruta}`, {
     method: e.metodo,
     headers: {
@@ -109,25 +152,59 @@ describe.each(ENDPOINTS)('$nombre: solo el auditor', (e) => {
 describe('PUT /api/liquidacion/inventarios/:id/ajustes: el cuerpo', () => {
   const ajustes = ENDPOINTS.find((e) => e.metodo === 'PUT')!;
 
-  /** EL CASO QUE DESTRABA EL MES: 0 es un monto válido, no un campo vacío. */
-  it('montoNegativos en 0 pasa la validación: "alguien miró y no había"', async () => {
-    await iniciar();
-    const r = await pedir(ajustes, AUDITOR, { montoNegativos: 0, nota: 'Revisado con Jocelyn: no hubo ajustes.' });
-    expect(r.status).toBe(200);
-  });
-
   it('sin nota, 400 -- un ajuste sin explicación no se puede auditar después', async () => {
     await iniciar();
-    expect((await pedir(ajustes, AUDITOR, { montoNegativos: 380 })).status).toBe(400);
+    expect((await pedir(ajustes, AUDITOR, { montoEmpresa: 170 })).status).toBe(400);
   });
 
   it('con nota vacía, 400', async () => {
     await iniciar();
-    expect((await pedir(ajustes, AUDITOR, { montoNegativos: 380, nota: '   ' })).status).toBe(400);
+    expect((await pedir(ajustes, AUDITOR, { montoEmpresa: 170, nota: '   ' })).status).toBe(400);
   });
 
-  it('monto negativo, 400 -- un ajuste que sube el faltante no es un ajuste', async () => {
+  it('montoEmpresa negativo, 400', async () => {
     await iniciar();
-    expect((await pedir(ajustes, AUDITOR, { montoNegativos: -100, nota: 'x' })).status).toBe(400);
+    expect((await pedir(ajustes, AUDITOR, { montoEmpresa: -100, nota: 'x' })).status).toBe(400);
+  });
+
+  it('solo nota, sin montoEmpresa, pasa: montoNegativos ya no se carga acá', async () => {
+    await iniciar();
+    expect((await pedir(ajustes, AUDITOR, { nota: 'Revisado, sin cambios en el monto de empresa.' })).status).toBe(
+      200,
+    );
+  });
+});
+
+describe('POST /ajustes-negativos/confirmar: falta nombreArchivo', () => {
+  it('sin el query nombreArchivo, 400', async () => {
+    await iniciar();
+    const r = await fetch(`${baseUrl}/api/liquidacion/inventarios/1/ajustes-negativos/confirmar`, {
+      method: 'POST',
+      headers: { ...autorizacion(AUDITOR) },
+      body: Buffer.from('excel falso'),
+    });
+    expect(r.status).toBe(400);
+  });
+});
+
+describe('PATCH .../lineas/:id/excluir|incluir: motivo obligatorio', () => {
+  it('sin motivo, 400', async () => {
+    await iniciar();
+    const r = await fetch(`${baseUrl}/api/liquidacion/inventarios/1/ajustes-negativos/lineas/1/excluir`, {
+      method: 'PATCH',
+      headers: { ...autorizacion(AUDITOR), 'Content-Type': 'application/json' },
+      body: JSON.stringify({}),
+    });
+    expect(r.status).toBe(400);
+  });
+
+  it('motivo vacío, 400', async () => {
+    await iniciar();
+    const r = await fetch(`${baseUrl}/api/liquidacion/inventarios/1/ajustes-negativos/lineas/1/incluir`, {
+      method: 'PATCH',
+      headers: { ...autorizacion(AUDITOR), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ motivo: '   ' }),
+    });
+    expect(r.status).toBe(400);
   });
 });

@@ -8,24 +8,29 @@
  *
  *   contar → cerrar rondas → conteo_cerrado ✅ → liquidar ❌ → lacrar ❌
  *
- * Esto es el eslabón que falta. Es MINIMO y reversible a propósito: dos
- * montos y una nota. Las reglas finas -- de dónde salen los ajustes, quién
- * los aprueba, si se cargan por ítem -- las define el cliente después, y
- * cuando lo haga esto se reemplaza sin tocar nada de lo que hay alrededor.
+ * ---------------------------------------------------------------------------
+ * MONTONEGATIVOS YA NO SE CARGA ACÁ (2026-09-11)
+ * ---------------------------------------------------------------------------
+ * Nació como un monto tipeado a mano porque no había otra fuente. Ahora la
+ * fuente real es el Excel de Dynamics que sube el Auditor -- ver
+ * `liquidacion.ajustes-negativos.ts`, que reemplaza por completo esta forma
+ * de cargarlo. Un número tipeado a mano por acá encima de líneas importadas y
+ * auditadles sería el mismo cero cómodo que este archivo existía para evitar.
+ * Los inventarios YA liquidados con un monto tipeado a mano en su momento
+ * siguen leyéndose igual (`estadoDeAjustes` no cambia): no se reprocesan.
+ *
+ * Este archivo se queda con lo que sigue siendo manual: `montoFaltanteEmpresa`
+ * (una corrección sobre el calculado al cerrar el conteo) y la nota que
+ * documenta esa corrección.
  *
  * ---------------------------------------------------------------------------
- * EL 0 EXPLICITO ES EL PUNTO
+ * EL 0 EXPLICITO SIGUE SIENDO EL PUNTO -- ahora en el Excel, no acá
  * ---------------------------------------------------------------------------
- * Cargar `montoNegativos: 0` por acá NO es lo mismo que el NULL que deja el
- * cierre del conteo, y esa diferencia es toda la regla:
- *
- *   NULL → "nadie miró"           → no se puede liquidar
+ *   NULL → "nadie miró"              → no se puede liquidar
  *   0    → "alguien miró y no había" → se liquida normalmente
  *
- * El 0 vale porque lo escribió una persona identificada, en una fecha, con
- * una nota. Sin esas tres cosas sería el mismo cero cómodo que veníamos
- * evitando -- por eso los tres campos se escriben JUNTOS y la nota es
- * obligatoria.
+ * `liquidacion.ajustes-negativos.ts` sostiene esa misma diferencia con la
+ * importación del Excel en vez de con un monto tipeado.
  */
 
 import { prisma } from '../../config/database';
@@ -36,8 +41,6 @@ import type { ColaboradorAutenticado } from '../../shared/tipos';
 import { validarAcceso } from './liquidacion.permisos';
 
 export interface AjustesInput {
-  /** Ajustes a favor del personal. `0` explícito es válido y significativo. */
-  montoNegativos: number;
   /**
    * Faltante que absorbe la empresa. Opcional: si no viene, no se pisa el
    * calculado al cerrar el conteo.
@@ -52,11 +55,47 @@ export interface AjustesInput {
 
 export interface AjustesDto {
   inventarioId: number;
-  montoNegativos: number;
+  /** Lo que haya en `ResultadoInventario` hoy -- lo escribe la importación del Excel, no este endpoint. `null` si todavía no se importó nada. */
+  montoNegativos: number | null;
   montoFaltanteEmpresa: number;
   nota: string;
   registradoPor: { id: number; nombre: string };
   registradoEn: string;
+}
+
+/**
+ * Las tres fronteras de estado para tocar los ajustes del mes, compartidas
+ * con `liquidacion.ajustes-negativos.ts` (la importación del Excel entra por
+ * la misma puerta que el monto de empresa: ambas son "ajustes del mes").
+ *
+ *  · antes del cierre, el faltante todavía puede cambiar en el 2do o 3er
+ *    conteo, así que un ajuste cargado ahí se calcularía contra un número
+ *    que no es el definitivo;
+ *  · después de liquidar, la planilla ya está firmada y el recibo de sueldo
+ *    salió -- cambiar los ajustes movería un descuento que ya se hizo.
+ */
+export function validarEstadoParaAjustar(inventario: {
+  estado: string;
+  resultado: { id: number } | null;
+}): void {
+  if (inventario.estado === 'liquidado' || inventario.estado === 'lacrado') {
+    throw new Conflicto(
+      'La planilla de este inventario ya se cerró: los ajustes no se pueden cambiar. ' +
+        'Lo que se descontó ya se descontó, y cualquier corrección entra en el periodo siguiente.',
+    );
+  }
+  if (inventario.estado !== 'conteo_cerrado') {
+    throw new Conflicto(
+      'Todavía no se pueden cargar los ajustes: el conteo sigue abierto. ' +
+        'El faltante puede cambiar en el 2do o 3er conteo, así que primero hay que cerrar la última ronda.',
+    );
+  }
+  if (inventario.resultado === null) {
+    throw new Conflicto(
+      'El inventario está cerrado pero no tiene resultado calculado. ' +
+        'Sin él no hay faltante sobre el que ajustar: avísale a soporte.',
+    );
+  }
 }
 
 /**
@@ -116,31 +155,12 @@ export async function registrarAjustes(
   datos: AjustesInput,
 ): Promise<AjustesDto> {
   const inventario = await inventarioParaAjustar(actor, inventarioId);
-
-  if (inventario.estado === 'liquidado' || inventario.estado === 'lacrado') {
-    throw new Conflicto(
-      'La planilla de este inventario ya se cerró: los ajustes no se pueden cambiar. ' +
-        'Lo que se descontó ya se descontó, y cualquier corrección entra en el periodo siguiente.',
-    );
-  }
-  if (inventario.estado !== 'conteo_cerrado') {
-    throw new Conflicto(
-      'Todavía no se pueden cargar los ajustes: el conteo sigue abierto. ' +
-        'El faltante puede cambiar en el 2do o 3er conteo, así que primero hay que cerrar la última ronda.',
-    );
-  }
-  if (inventario.resultado === null) {
-    throw new Conflicto(
-      'El inventario está cerrado pero no tiene resultado calculado. ' +
-        'Sin él no hay faltante sobre el que ajustar: avísale a soporte.',
-    );
-  }
+  validarEstadoParaAjustar(inventario);
 
   const registradoEn = new Date();
   const actualizado = await prisma.resultadoInventario.update({
     where: { inventarioId },
     data: {
-      montoNegativos: datos.montoNegativos,
       // Solo se pisa si vino: el calculado al cerrar el conteo sale de la
       // matriz real (categorías marcadas como `esEmpresa`), y sobrescribirlo
       // con un 0 por omisión borraría ese cálculo sin que nadie lo pida.
@@ -157,10 +177,7 @@ export async function registrarAjustes(
     accion: 'inventario.ajustes_registrados',
     entidad: 'inventario',
     entidadId: inventarioId,
-    // El monto queda en el registro: es plata que se decidió no descontar, y
-    // la pregunta "por qué agosto tuvo S/380 de ajustes" se contesta acá.
     detalle: {
-      montoNegativos: datos.montoNegativos,
       ...(datos.montoEmpresa !== undefined ? { montoEmpresa: datos.montoEmpresa } : {}),
       nota: datos.nota,
     },
@@ -168,7 +185,7 @@ export async function registrarAjustes(
 
   return {
     inventarioId,
-    montoNegativos: actualizado.montoNegativos?.toNumber() ?? datos.montoNegativos,
+    montoNegativos: actualizado.montoNegativos?.toNumber() ?? null,
     montoFaltanteEmpresa: actualizado.montoFaltanteEmpresa.toNumber(),
     nota: actualizado.ajustesNota ?? datos.nota,
     registradoPor: actualizado.ajustesPor ?? { id: actor.colaboradorId, nombre: '' },

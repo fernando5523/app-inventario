@@ -1,9 +1,11 @@
 /**
- * Los ajustes del mes: el eslabón que faltaba para poder cerrar el mes.
+ * Los ajustes del mes que siguen siendo manuales tras el cableado del Excel
+ * de negativos (2026-09-11, ver liquidacion.ajustes-negativos.ts): el monto
+ * de empresa y la nota. `montoNegativos` ya NO se carga por acá -- esos casos
+ * (el 0 explícito incluido) se mudaron a `liquidacion.ajustes-negativos.test.ts`.
  *
- * Lo que estos tests protegen, en una línea: que un `0` cargado por una
- * persona destrabe la liquidación, y que el `NULL` que deja el cierre del
- * conteo NO lo haga. Toda la regla vive en esa diferencia.
+ * Lo que este archivo sigue protegiendo: quién puede tocar los ajustes del
+ * mes, y las dos fronteras de estado (`conteo_cerrado` únicamente).
  */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -17,7 +19,7 @@ vi.mock('../../shared/auditoria', () => ({ registrarAuditoria: vi.fn() }));
 
 import { Prohibido } from '../../shared/errores';
 import type { ColaboradorAutenticado } from '../../shared/tipos';
-import { estadoDeAjustes, registrarAjustes } from './liquidacion.ajustes';
+import { estadoDeAjustes, registrarAjustes, validarEstadoParaAjustar } from './liquidacion.ajustes';
 
 // La liquidación es del auditor desde 2026-09-11 (liquidacion.permisos.ts).
 // Sin tienda en la ficha: entra por "administradores" y audita toda la cadena.
@@ -54,83 +56,77 @@ beforeEach(() => {
 describe('registrarAjustes: quién y cuándo', () => {
   it('el inventario que no existe es 404', async () => {
     prismaMock.inventario.findUnique.mockResolvedValue(null);
-    await expect(registrarAjustes(AUDITOR, 9, { montoNegativos: 0, nota: 'x' })).rejects.toThrow('no existe');
+    await expect(registrarAjustes(AUDITOR, 9, { nota: 'x' })).rejects.toThrow('no existe');
   });
 
   /**
    * DECISIÓN DEL CLIENTE (2026-09-11): la liquidación pasa al auditor, y
-   * cargar los ajustes es parte de ella -- es decidir cuánta plata NO se le
-   * descuenta al personal. Ver liquidacion.permisos.ts.
+   * cargar los ajustes es parte de ella. Ver liquidacion.permisos.ts.
    */
   it('el coordinador YA NO carga ajustes, ni los de su tienda, y se corta antes de tocar la base', async () => {
-    await expect(registrarAjustes(COORDINADOR, 9, { montoNegativos: 0, nota: 'x' })).rejects.toThrow(Prohibido);
+    await expect(registrarAjustes(COORDINADOR, 9, { nota: 'x' })).rejects.toThrow(Prohibido);
     expect(prismaMock.inventario.findUnique).not.toHaveBeenCalled();
     expect(prismaMock.resultadoInventario.update).not.toHaveBeenCalled();
   });
 
   it('el administrador tampoco: es técnico, no participa del proceso de inventario', async () => {
-    await expect(registrarAjustes(ADMIN, 9, { montoNegativos: 380, nota: 'Mermas.' })).rejects.toThrow(Prohibido);
+    await expect(registrarAjustes(ADMIN, 9, { nota: 'Mermas.' })).rejects.toThrow(Prohibido);
     expect(prismaMock.resultadoInventario.update).not.toHaveBeenCalled();
   });
 
   it('el auditor los carga en cualquier sucursal: audita toda la cadena', async () => {
     mockInventario({ sucursalId: 2 });
-    await expect(registrarAjustes(AUDITOR, 9, { montoNegativos: 380, nota: 'Mermas.' })).resolves.toMatchObject({
-      montoNegativos: 380,
+    await expect(registrarAjustes(AUDITOR, 9, { montoEmpresa: 170, nota: 'Mermas.' })).resolves.toMatchObject({
+      montoFaltanteEmpresa: 170,
     });
   });
 
-  it('guarda quién, cuándo y la nota, no solo el monto', async () => {
+  it('guarda quién, cuándo y la nota, no solo el monto de empresa', async () => {
     // Un monto que baja el descuento de once personas no puede quedar sin
-    // firma: la pregunta "¿por qué agosto tuvo S/380?" se contesta con esto.
-    await registrarAjustes(AUDITOR, 9, { montoNegativos: 380, nota: 'Mermas documentadas de agosto.' });
+    // firma: la pregunta "¿por qué se corrigió el monto de empresa?" se
+    // contesta con esto.
+    await registrarAjustes(AUDITOR, 9, { montoEmpresa: 170, nota: 'Mermas documentadas de agosto.' });
 
     expect(prismaMock.resultadoInventario.update).toHaveBeenCalledWith(
       expect.objectContaining({
         where: { inventarioId: 9 },
         data: expect.objectContaining({
-          montoNegativos: 380,
+          montoFaltanteEmpresa: 170,
           ajustesPorId: 5,
           ajustesNota: 'Mermas documentadas de agosto.',
           ajustesEn: expect.any(Date),
         }),
       }),
     );
+    // montoNegativos ya NO lo escribe este endpoint: lo escribe la
+    // importación del Excel (liquidacion.ajustes-negativos.ts).
+    const { data } = prismaMock.resultadoInventario.update.mock.calls[0]![0] as { data: Record<string, unknown> };
+    expect(data).not.toHaveProperty('montoNegativos');
   });
 
-  it('el monto queda en el registro de auditoría', async () => {
-    await registrarAjustes(AUDITOR, 9, { montoNegativos: 380, nota: 'Mermas.' });
+  it('la nota queda en el registro de auditoría, sin montoNegativos', async () => {
+    await registrarAjustes(AUDITOR, 9, { montoEmpresa: 170, nota: 'Mermas.' });
 
     const { registrarAuditoria } = await import('../../shared/auditoria');
     expect(registrarAuditoria).toHaveBeenCalledWith(
       expect.objectContaining({
         accion: 'inventario.ajustes_registrados',
-        detalle: expect.objectContaining({ montoNegativos: 380 }),
+        detalle: expect.objectContaining({ montoEmpresa: 170, nota: 'Mermas.' }),
       }),
     );
+    const { detalle } = (
+      (await import('../../shared/auditoria')).registrarAuditoria as unknown as { mock: { calls: unknown[][] } }
+    ).mock.calls[0]![0] as { detalle: Record<string, unknown> };
+    expect(detalle).not.toHaveProperty('montoNegativos');
   });
 });
 
-/**
- * EL CASO QUE DESTRABA TODO. `0` cargado por una persona identificada, con
- * fecha y nota, significa "alguien miró y no había" -- y eso es un dato
- * verificado, no el cero cómodo que veníamos evitando.
- */
-describe('el 0 explícito', () => {
-  it('se persiste como 0, no se ignora por falsy', async () => {
-    prismaMock.resultadoInventario.update.mockResolvedValue({ ...ACTUALIZADO, montoNegativos: decimal(0) });
-    await registrarAjustes(AUDITOR, 9, { montoNegativos: 0, nota: 'Revisado con Jocelyn: no hubo ajustes.' });
+describe('estadoDeAjustes lee montoNegativos igual, venga de donde venga', () => {
+  it('lo que haya importado el Excel se ve en estadoDeAjustes sin que este archivo lo escriba', async () => {
+    prismaMock.resultadoInventario.findUnique.mockResolvedValue({ ...ACTUALIZADO, montoNegativos: decimal(45) });
 
-    const { data } = prismaMock.resultadoInventario.update.mock.calls[0]![0] as { data: { montoNegativos: number } };
-    expect(data.montoNegativos).toBe(0);
-  });
-
-  it('deja el resultado con 0 y no con null: eso es lo que destraba liquidar', async () => {
-    prismaMock.resultadoInventario.update.mockResolvedValue({ ...ACTUALIZADO, montoNegativos: decimal(0) });
-    const dto = await registrarAjustes(AUDITOR, 9, { montoNegativos: 0, nota: 'No hubo.' });
-
-    expect(dto.montoNegativos).toBe(0);
-    expect(dto.montoNegativos).not.toBeNull();
+    const estado = await estadoDeAjustes(AUDITOR, 9);
+    expect(estado.montoNegativos).toBe(45);
   });
 });
 
@@ -138,21 +134,21 @@ describe('montoEmpresa: solo se pisa si viene', () => {
   it('sin mandarlo, NO se toca el calculado al cerrar el conteo', async () => {
     // Sale de la matriz real (categorías marcadas `esEmpresa`). Pisarlo con
     // un 0 por omisión borraría ese cálculo sin que nadie lo pida.
-    await registrarAjustes(AUDITOR, 9, { montoNegativos: 380, nota: 'x' });
+    await registrarAjustes(AUDITOR, 9, { nota: 'x' });
 
     const { data } = prismaMock.resultadoInventario.update.mock.calls[0]![0] as { data: Record<string, unknown> };
     expect(data).not.toHaveProperty('montoFaltanteEmpresa');
   });
 
   it('mandándolo, se guarda', async () => {
-    await registrarAjustes(AUDITOR, 9, { montoNegativos: 380, montoEmpresa: 170, nota: 'x' });
+    await registrarAjustes(AUDITOR, 9, { montoEmpresa: 170, nota: 'x' });
 
     const { data } = prismaMock.resultadoInventario.update.mock.calls[0]![0] as { data: Record<string, unknown> };
     expect(data.montoFaltanteEmpresa).toBe(170);
   });
 
   it('un montoEmpresa en 0 SÍ se guarda: es distinto de omitirlo', async () => {
-    await registrarAjustes(AUDITOR, 9, { montoNegativos: 380, montoEmpresa: 0, nota: 'x' });
+    await registrarAjustes(AUDITOR, 9, { montoEmpresa: 0, nota: 'x' });
 
     const { data } = prismaMock.resultadoInventario.update.mock.calls[0]![0] as { data: Record<string, unknown> };
     expect(data.montoFaltanteEmpresa).toBe(0);
@@ -161,36 +157,57 @@ describe('montoEmpresa: solo se pisa si viene', () => {
 
 /**
  * Las dos fronteras: después de que las cantidades quedaron fijas, y antes de
- * que la planilla se firme.
+ * que la planilla se firme. Compartidas con `liquidacion.ajustes-negativos.ts`
+ * vía `validarEstadoParaAjustar` -- se prueban acá A FONDO y allá solo se
+ * verifica que están conectadas.
  */
 describe('solo en conteo_cerrado', () => {
   it('con el conteo abierto rechaza: el faltante todavía puede cambiar', async () => {
     mockInventario({ estado: 'en_curso' });
-    await expect(registrarAjustes(AUDITOR, 9, { montoNegativos: 0, nota: 'x' })).rejects.toThrow(/conteo sigue abierto/);
+    await expect(registrarAjustes(AUDITOR, 9, { nota: 'x' })).rejects.toThrow(/conteo sigue abierto/);
   });
 
   it('ya liquidado rechaza: el recibo de sueldo ya salió', async () => {
     mockInventario({ estado: 'liquidado' });
-    await expect(registrarAjustes(AUDITOR, 9, { montoNegativos: 0, nota: 'x' })).rejects.toThrow(/ya se cerró/);
+    await expect(registrarAjustes(AUDITOR, 9, { nota: 'x' })).rejects.toThrow(/ya se cerró/);
   });
 
   it('lacrado rechaza', async () => {
     mockInventario({ estado: 'lacrado' });
-    await expect(registrarAjustes(AUDITOR, 9, { montoNegativos: 0, nota: 'x' })).rejects.toThrow(/ya se cerró/);
+    await expect(registrarAjustes(AUDITOR, 9, { nota: 'x' })).rejects.toThrow(/ya se cerró/);
   });
 
   it('sin resultado calculado rechaza: no hay faltante sobre el que ajustar', async () => {
     mockInventario({ resultado: null });
-    await expect(registrarAjustes(AUDITOR, 9, { montoNegativos: 0, nota: 'x' })).rejects.toThrow(/no tiene resultado/);
+    await expect(registrarAjustes(AUDITOR, 9, { nota: 'x' })).rejects.toThrow(/no tiene resultado/);
   });
 
   it('se puede CORREGIR mientras siga en conteo_cerrado', async () => {
-    // Un monto mal tipeado antes de liquidar tiene que poder arreglarse; la
+    // Una nota mal tipeada antes de liquidar tiene que poder arreglarse; la
     // corrección pisa la firma anterior y queda en auditoría.
-    await registrarAjustes(AUDITOR, 9, { montoNegativos: 380, nota: 'primera carga' });
-    await registrarAjustes(AUDITOR, 9, { montoNegativos: 420, nota: 'corregido: faltaba una merma' });
+    await registrarAjustes(AUDITOR, 9, { montoEmpresa: 170, nota: 'primera carga' });
+    await registrarAjustes(AUDITOR, 9, { montoEmpresa: 200, nota: 'corregido: faltaba una merma' });
 
     expect(prismaMock.resultadoInventario.update).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('validarEstadoParaAjustar: pura, sin Prisma', () => {
+  it('conteo_cerrado con resultado no tira nada', () => {
+    expect(() => validarEstadoParaAjustar({ estado: 'conteo_cerrado', resultado: { id: 1 } })).not.toThrow();
+  });
+
+  it('en_curso rechaza', () => {
+    expect(() => validarEstadoParaAjustar({ estado: 'en_curso', resultado: { id: 1 } })).toThrow(/conteo sigue abierto/);
+  });
+
+  it('liquidado y lacrado rechazan igual', () => {
+    expect(() => validarEstadoParaAjustar({ estado: 'liquidado', resultado: { id: 1 } })).toThrow(/ya se cerró/);
+    expect(() => validarEstadoParaAjustar({ estado: 'lacrado', resultado: { id: 1 } })).toThrow(/ya se cerró/);
+  });
+
+  it('sin resultado calculado rechaza', () => {
+    expect(() => validarEstadoParaAjustar({ estado: 'conteo_cerrado', resultado: null })).toThrow(/no tiene resultado/);
   });
 });
 
@@ -229,7 +246,8 @@ describe('estadoDeAjustes: qué muestra la pantalla antes de liquidar', () => {
   });
 
   it('un 0 cargado cuenta como REGISTRADO', async () => {
-    // Es el caso entero: 0 no es "sin registrar".
+    // Es el caso entero: 0 no es "sin registrar". Ahora el 0 lo carga el
+    // Excel (liquidacion.ajustes-negativos.ts), pero el criterio de lectura es el mismo.
     prismaMock.resultadoInventario.findUnique.mockResolvedValue({ ...ACTUALIZADO, montoNegativos: decimal(0) });
 
     const estado = await estadoDeAjustes(AUDITOR, 9);

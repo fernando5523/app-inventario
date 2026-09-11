@@ -2,9 +2,17 @@ import type { Response } from 'express';
 import { asyncHandler } from '../../shared/asyncHandler';
 import type { RequestAutenticado } from '../../shared/tipos';
 import * as ajustes from './liquidacion.ajustes';
+import * as ajustesNegativos from './liquidacion.ajustes-negativos';
 import * as cierre from './liquidacion.cierre';
 import * as service from './liquidacion.service';
-import type { ParametrosInventario, ParametrosSucursal, RegistrarAjustesInput } from './liquidacion.schema';
+import type {
+  ConfirmarAjustesNegativosQuery,
+  MotivoLineaAjusteInput,
+  ParametrosInventario,
+  ParametrosLineaAjuste,
+  ParametrosSucursal,
+  RegistrarAjustesInput,
+} from './liquidacion.schema';
 
 /**
  * Traduce req/res y nada mas (regla de capas, backend/README.md).
@@ -56,4 +64,31 @@ export const registrarAjustes = asyncHandler(async (req: RequestAutenticado, res
 export const estadoAjustes = asyncHandler(async (req: RequestAutenticado, res: Response) => {
   const { inventarioId } = req.params as unknown as ParametrosInventario;
   res.json(await ajustes.estadoDeAjustes(req.colaborador!, inventarioId));
+});
+
+/** Vista previa del Excel de ajustes: `req.body` es el archivo crudo (`express.raw`, ver liquidacion.routes.ts). Nunca persiste. */
+export const previsualizarAjustesNegativos = asyncHandler(async (req: RequestAutenticado, res: Response) => {
+  const { inventarioId } = req.params as unknown as ParametrosInventario;
+  res.json(await ajustesNegativos.previsualizarAjustesNegativos(req.colaborador!, inventarioId, req.body as Buffer));
+});
+
+/** 201: confirmar CREA la importación (y sus líneas) que pasa a ser la vigente. */
+export const confirmarAjustesNegativos = asyncHandler(async (req: RequestAutenticado, res: Response) => {
+  const { inventarioId } = req.params as unknown as ParametrosInventario;
+  const { nombreArchivo } = req.query as unknown as ConfirmarAjustesNegativosQuery;
+  res
+    .status(201)
+    .json(await ajustesNegativos.confirmarAjustesNegativos(req.colaborador!, inventarioId, req.body as Buffer, nombreArchivo));
+});
+
+export const excluirLineaAjusteNegativo = asyncHandler(async (req: RequestAutenticado, res: Response) => {
+  const { inventarioId, lineaId } = req.params as unknown as ParametrosLineaAjuste;
+  const { motivo } = req.body as MotivoLineaAjusteInput;
+  res.json(await ajustesNegativos.excluirLineaAjusteNegativo(req.colaborador!, inventarioId, lineaId, motivo));
+});
+
+export const incluirLineaAjusteNegativo = asyncHandler(async (req: RequestAutenticado, res: Response) => {
+  const { inventarioId, lineaId } = req.params as unknown as ParametrosLineaAjuste;
+  const { motivo } = req.body as MotivoLineaAjusteInput;
+  res.json(await ajustesNegativos.incluirLineaAjusteNegativo(req.colaborador!, inventarioId, lineaId, motivo));
 });
