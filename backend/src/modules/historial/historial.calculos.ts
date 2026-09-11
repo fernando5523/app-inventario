@@ -74,6 +74,19 @@ export interface EntradaLiquidacion {
   montoNegativos: number;
   /** Faltante que absorbe la empresa (las cervezas del ejemplo). */
   montoFaltanteEmpresa: number;
+  /**
+   * Sobrante de productos NO empresa, a favor del personal (decision del
+   * cliente: "si sobra, ira a su favor" -- Gilmer: "faltantes menos
+   * sobrantes y negativos"). Valorizado a precio de venta, misma regla que
+   * `montoFaltanteBruto`.
+   *
+   * `undefined`/`null` = SIN COMPENSACION, no cero: los inventarios
+   * liquidados antes de que existiera esta regla no tienen este dato, y la
+   * formula tiene que devolver el mismo neto de siempre para ellos (ver
+   * ResultadoInventario.montoSobranteEmpleado en schema.prisma). Un cero
+   * explicito significa "se calculo y no habia sobrante", que SI resta.
+   */
+  montoSobranteEmpleado?: number | null;
   /** TODO el personal habilitado de la tienda, no solo quien asistio. */
   colaboradoresAlcanzados: number;
   colaboradoresAsistieron: number;
@@ -112,7 +125,11 @@ export function resumirAsistencia(alcanzados: number, asistieron: number): Asist
 }
 
 export interface ResumenLiquidacion {
-  /** bruto - negativos - empresa. */
+  /**
+   * bruto - negativos - empresa - sobranteEmpleado. SIN RECORTAR a cero:
+   * decision del cliente -- si los sobrantes y negativos superan al
+   * faltante, el neto se muestra negativo tal cual da.
+   */
   montoFaltanteNeto: number;
   /** neto / colaboradoresAlcanzados. */
   cuotaBase: number;
@@ -144,7 +161,9 @@ export interface ResumenLiquidacion {
 }
 
 export function calcularResumenLiquidacion(e: EntradaLiquidacion): ResumenLiquidacion {
-  const montoFaltanteNeto = redondear(e.montoFaltanteBruto - e.montoNegativos - e.montoFaltanteEmpresa);
+  const montoFaltanteNeto = redondear(
+    e.montoFaltanteBruto - e.montoNegativos - e.montoFaltanteEmpresa - (e.montoSobranteEmpleado ?? 0),
+  );
 
   const cuotaBase = e.colaboradoresAlcanzados === 0 ? 0 : redondear(montoFaltanteNeto / e.colaboradoresAlcanzados);
 

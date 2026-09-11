@@ -171,6 +171,7 @@ function resumirResultado(r: InventarioConIncludes['resultado']): ResultadoResum
           montoFaltanteBruto: aNumeroObligatorio(r.montoFaltanteBruto),
           montoNegativos: aNumeroObligatorio(r.montoNegativos!),
           montoFaltanteEmpresa: aNumeroObligatorio(r.montoFaltanteEmpresa),
+          montoSobranteEmpleado: aNumero(r.montoSobranteEmpleado),
           colaboradoresAlcanzados: r.colaboradoresAlcanzados,
           colaboradoresAsistieron: r.colaboradoresAsistieron!,
           multaInasistencia: aNumeroObligatorio(r.multaInasistencia),
@@ -330,6 +331,7 @@ export async function obtenerDetalle(actor: ColaboradorAutenticado, id: number):
           montoFaltanteBruto: aNumeroObligatorio(resultado.montoFaltanteBruto),
           montoNegativos: aNumeroObligatorio(resultado.montoNegativos!),
           montoFaltanteEmpresa: aNumeroObligatorio(resultado.montoFaltanteEmpresa),
+          montoSobranteEmpleado: aNumero(resultado.montoSobranteEmpleado),
           colaboradoresAlcanzados: resultado.colaboradoresAlcanzados,
           colaboradoresAsistieron: resultado.colaboradoresAsistieron!,
           multaInasistencia: aNumeroObligatorio(resultado.multaInasistencia),
@@ -659,6 +661,7 @@ export async function obtenerLiquidacion(actor: ColaboradorAutenticado, id: numb
           montoFaltanteBruto: aNumeroObligatorio(r.montoFaltanteBruto),
           montoNegativos: aNumeroObligatorio(r.montoNegativos!),
           montoFaltanteEmpresa: aNumeroObligatorio(r.montoFaltanteEmpresa),
+          montoSobranteEmpleado: aNumero(r.montoSobranteEmpleado),
           colaboradoresAlcanzados: r.colaboradoresAlcanzados,
           colaboradoresAsistieron: r.colaboradoresAsistieron!,
           multaInasistencia: aNumeroObligatorio(r.multaInasistencia),
@@ -751,6 +754,7 @@ function armarDatosLacrado(inv: InventarioParaSello): DatosLacrado {
             // decir "no se sabía", no mentir con un cero prolijo.
             montoNegativos: aNumero(inv.resultado.montoNegativos),
             montoFaltanteEmpresa: aNumeroObligatorio(inv.resultado.montoFaltanteEmpresa),
+            montoSobranteEmpleado: aNumero(inv.resultado.montoSobranteEmpleado),
             colaboradoresAlcanzados: inv.resultado.colaboradoresAlcanzados,
             colaboradoresAsistieron: inv.resultado.colaboradoresAsistieron,
             multaInasistencia: aNumeroObligatorio(inv.resultado.multaInasistencia),
@@ -762,6 +766,7 @@ function armarDatosLacrado(inv: InventarioParaSello): DatosLacrado {
       diferencia: d.diferencia,
       resueltoEnConteo: d.resueltoEnConteo,
       montoDiferencia: aNumero(d.montoDiferencia),
+      esEmpresa: d.esEmpresa,
     })),
     liquidaciones: inv.liquidaciones.map((l) => ({
       colaboradorId: l.colaboradorId,
@@ -1086,8 +1091,15 @@ export async function verificarSello(actor: ColaboradorAutenticado, id: number):
     throw new Conflicto('El inventario todavia no esta lacrado: no hay sello que verificar.');
   }
 
-  const contenidoActual = armarContenidoLacrado(armarDatosLacrado(inv));
   const guardado = inv.lacrado.contenido as Record<string, unknown>;
+  // LA FORMA CON LA QUE SE SELLO, no la ultima: si esta funcion siempre
+  // armara el contenido ACTUAL (ultima version), un sello viejo (v1) jamas
+  // volveria a coincidir con su propio hash aunque nada se haya tocado --
+  // ver el comentario largo de `armarContenidoLacrado`. Sin `version`
+  // guardada (no deberia pasar, pero un dato corrupto no tiene que tirar
+  // un 500) se asume la primera.
+  const versionGuardada = typeof guardado['version'] === 'number' ? (guardado['version'] as number) : 1;
+  const contenidoActual = armarContenidoLacrado(armarDatosLacrado(inv), versionGuardada);
 
   return {
     inventarioId: id,
@@ -1270,6 +1282,7 @@ export async function comparativo(
       montoFaltanteBruto: aNumeroObligatorio(f.resultado.montoFaltanteBruto),
       montoNegativos: aNumeroObligatorio(f.resultado.montoNegativos!),
       montoFaltanteEmpresa: aNumeroObligatorio(f.resultado.montoFaltanteEmpresa),
+      montoSobranteEmpleado: aNumero(f.resultado.montoSobranteEmpleado),
       colaboradoresAlcanzados: f.resultado.colaboradoresAlcanzados,
       colaboradoresAsistieron: f.resultado.colaboradoresAsistieron!,
       multaInasistencia: aNumeroObligatorio(f.resultado.multaInasistencia),

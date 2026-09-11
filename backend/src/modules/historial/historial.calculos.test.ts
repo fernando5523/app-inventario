@@ -126,6 +126,54 @@ describe('calcularResumenLiquidacion (Pantalla 6)', () => {
     expect(maqueta.residuoCentavos).toBe(0);
   });
 
+  it('resta tambien el sobrante a favor del empleado (decision del cliente: "si sobra, ira a su favor")', () => {
+    // 1850 - 310 - 150 - 200 = 1190, contra los 1390 del mockup sin sobrante.
+    const conSobrante = calcularResumenLiquidacion({
+      montoFaltanteBruto: 1850,
+      montoNegativos: 310,
+      montoFaltanteEmpresa: 150,
+      montoSobranteEmpleado: 200,
+      colaboradoresAlcanzados: 11,
+      colaboradoresAsistieron: 8,
+      multaInasistencia: 20,
+    });
+    expect(conSobrante.montoFaltanteNeto).toBe(1190);
+  });
+
+  it('montoSobranteEmpleado NULL es "sin compensacion", no cero: mismo neto que sin el campo', () => {
+    // Los inventarios liquidados ANTES de esta funcionalidad no tienen este
+    // dato -- la formula tiene que devolver EXACTAMENTE el mismo neto de
+    // siempre (1390), no tratarlo como si el sobrante hubiera sido 0 y
+    // restar de mas ni de menos por error de tipo.
+    const conNull = calcularResumenLiquidacion({
+      montoFaltanteBruto: 1850,
+      montoNegativos: 310,
+      montoFaltanteEmpresa: 150,
+      montoSobranteEmpleado: null,
+      colaboradoresAlcanzados: 11,
+      colaboradoresAsistieron: 8,
+      multaInasistencia: 20,
+    });
+    expect(conNull.montoFaltanteNeto).toBe(mockup.montoFaltanteNeto);
+  });
+
+  it('el neto NO se recorta a cero: si sobrantes + negativos superan al faltante, da negativo tal cual', () => {
+    // Decision del cliente, textual: se muestra como da, sin Math.max(0, ...).
+    const negativo = calcularResumenLiquidacion({
+      montoFaltanteBruto: 100,
+      montoNegativos: 50,
+      montoFaltanteEmpresa: 0,
+      montoSobranteEmpleado: 200,
+      colaboradoresAlcanzados: 11,
+      colaboradoresAsistieron: 8,
+      multaInasistencia: 20,
+    });
+    expect(negativo.montoFaltanteNeto).toBe(-150);
+    // Y la cuota de cada persona, tambien negativa -- no es un bug del
+    // reparto, es lo que corresponde a un mes que dio a favor del personal.
+    expect(negativo.cuotaBase).toBeLessThan(0);
+  });
+
   it('reproduce el ejemplo real de la reunion (4 faltas de 11, S/11.43 c/u)', () => {
     const reunion = calcularResumenLiquidacion({
       montoFaltanteBruto: 0,

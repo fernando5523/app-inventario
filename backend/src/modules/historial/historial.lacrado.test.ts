@@ -230,6 +230,90 @@ describe('verificarLacrado', () => {
     const v = verificarLacrado(viejo, hash, contenido as ContenidoLacrado);
     expect(v.versionDistinta).toBe(true);
   });
+
+  /**
+   * REGRESION liquidacion v2 (2026-09): el inventario 45 (folio
+   * INV-2026-09-CON-10-9A8) se lacro en formato v1, ANTES de que existieran
+   * `montoSobranteEmpleado`/`esEmpresa`. Verificarlo HOY -- con el codigo que
+   * ya sabe de esos dos campos -- tiene que seguir dando `intacto: true`.
+   */
+  it('un sello v1 (inventario 45) sigue verificando intacto aunque el codigo ya sepa de liquidacion v2', () => {
+    // Lo sellado en su momento: version 1, SIN los campos nuevos siquiera
+    // declarados (asi era DatosLacrado antes de esta funcionalidad).
+    const selladoEnV1 = armarContenidoLacrado(BASE, 1);
+    const hashDelSello = calcularHash(selladoEnV1);
+
+    // Hoy, `armarDatosLacrado` (historial.service.ts) SIEMPRE lee las
+    // columnas nuevas de la base -- para un inventario viejo, vienen NULL /
+    // el default `false`. La reconstruccion para VERIFICAR tiene que pedirse
+    // en version 1 (la que dice `lacrado.contenido.version`), no la ultima.
+    const datosDeHoy: DatosLacrado = {
+      ...BASE,
+      resultado: { ...BASE.resultado!, montoSobranteEmpleado: null },
+      diferencias: BASE.diferencias.map((d) => ({ ...d, esEmpresa: false })),
+    };
+    const reconstruidoEnV1 = armarContenidoLacrado(datosDeHoy, 1);
+
+    const v = verificarLacrado(selladoEnV1, hashDelSello, reconstruidoEnV1);
+    expect(v.intacto).toBe(true);
+    expect(v.seccionesAlteradas).toEqual([]);
+  });
+
+  it('la MISMA reconstruccion en v2 (el error que hay que evitar) SI rompe el hash de un sello v1', () => {
+    // Documenta por que `verificarSello` tiene que leer la version guardada
+    // y no siempre la ultima: si lo hiciera, esto es lo que pasaria.
+    const selladoEnV1 = armarContenidoLacrado(BASE, 1);
+    const hashDelSello = calcularHash(selladoEnV1);
+    const reconstruidoEnV2 = armarContenidoLacrado(BASE, 2);
+
+    expect(verificarLacrado(selladoEnV1, hashDelSello, reconstruidoEnV2 as ContenidoLacrado).intacto).toBe(false);
+  });
+});
+
+describe('armarContenidoLacrado: version 2 (liquidacion v2)', () => {
+  const conCamposNuevos: DatosLacrado = {
+    ...BASE,
+    resultado: { ...BASE.resultado!, montoSobranteEmpleado: 200 },
+    diferencias: [
+      { ...BASE.diferencias[0]!, esEmpresa: true },
+      { ...BASE.diferencias[1]!, esEmpresa: false },
+    ],
+  };
+
+  it('v1 NO incluye los campos nuevos en la forma CANONICA del contenido, ni aunque `datos` los traiga', () => {
+    // Las claves quedan como `undefined` en el objeto JS (asi las descarta
+    // `serializarCanonico`, ver su comentario) -- lo que importa para el
+    // hash es la cadena canonica, no `Object.keys` en crudo.
+    const v1 = armarContenidoLacrado(conCamposNuevos, 1);
+    expect(serializarCanonico(v1)).not.toContain('montoSobranteEmpleado');
+    expect(serializarCanonico(v1)).not.toContain('esEmpresa');
+    // Y da EXACTAMENTE el mismo hash que si `datos` nunca hubiera tenido
+    // esos campos -- la prueba real de que v1 es indiferente a ellos.
+    expect(calcularHash(v1)).toBe(calcularHash(armarContenidoLacrado(BASE, 1)));
+  });
+
+  it('v2 SI los incluye, y el hash cambia si el sobrante cambia', () => {
+    const v2 = armarContenidoLacrado(conCamposNuevos, 2);
+    expect((v2['resultado'] as Record<string, unknown>)['montoSobranteEmpleado']).toBe(200);
+
+    const otroSobrante: DatosLacrado = { ...conCamposNuevos, resultado: { ...conCamposNuevos.resultado!, montoSobranteEmpleado: 0 } };
+    expect(calcularHash(armarContenidoLacrado(otroSobrante, 2))).not.toBe(calcularHash(armarContenidoLacrado(conCamposNuevos, 2)));
+  });
+
+  it('v2 sella la clasificacion empresa/empleado: reclasificar un item cambia el hash', () => {
+    const reclasificado: DatosLacrado = {
+      ...conCamposNuevos,
+      diferencias: [{ ...conCamposNuevos.diferencias[0]!, esEmpresa: false }, conCamposNuevos.diferencias[1]!],
+    };
+    expect(calcularHash(armarContenidoLacrado(reclasificado, 2))).not.toBe(
+      calcularHash(armarContenidoLacrado(conCamposNuevos, 2)),
+    );
+  });
+
+  it('sin version explicita, usa la ultima (VERSION_CONTENIDO_LACRADO)', () => {
+    expect((armarContenidoLacrado(conCamposNuevos) as { version: number }).version).toBe(VERSION_CONTENIDO_LACRADO);
+    expect(VERSION_CONTENIDO_LACRADO).toBe(2);
+  });
 });
 
 /**

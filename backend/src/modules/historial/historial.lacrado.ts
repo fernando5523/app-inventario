@@ -15,8 +15,24 @@
 
 import { createHash } from 'node:crypto';
 
-/** Version del formato de `contenido`. Ver `armarContenidoLacrado`. */
-export const VERSION_CONTENIDO_LACRADO = 1;
+/**
+ * Version del formato de `contenido`. Ver `armarContenidoLacrado`.
+ *
+ * v1 -> v2 (liquidacion v2, 2026-09): se agrega `resultado.montoSobranteEmpleado`
+ * y `diferencias[].esEmpresa` al contenido sellado -- son plata y
+ * clasificacion que ahora SI puede moverse despues del cierre (el Auditor
+ * reclasifica al liquidar), asi que tienen que quedar bajo el hash como el
+ * resto de la planilla.
+ *
+ * SUBIR ESTE NUMERO NO INVALIDA LOS SELLOS VIEJOS: `armarContenidoLacrado`
+ * recibe la version a armar y arma la forma DE ESA version -- verificar un
+ * sello v1 sigue construyendo el contenido v1 (sin los dos campos nuevos),
+ * asi que un inventario ya lacrado (ej. el 45, folio
+ * INV-2026-09-CON-10-9A8) sigue dando `intacto: true`. Lo unico que cambia
+ * para esos es que ahora se les nota correctamente `versionDistinta: true`
+ * -- exactamente para lo que existe ese flag.
+ */
+export const VERSION_CONTENIDO_LACRADO = 2;
 
 export const ALGORITMO_HASH = 'sha256';
 
@@ -122,6 +138,13 @@ export interface DatosLacrado {
      */
     montoNegativos: number | null;
     montoFaltanteEmpresa: number;
+    /**
+     * Sobrante a favor del empleado (liquidacion v2). Solo entra al hash en
+     * `version >= 2` -- ver `VERSION_CONTENIDO_LACRADO`. Opcional: los
+     * llamadores de version 1 (tests viejos, datos de antes de esta
+     * funcionalidad) no tienen por que conocerlo.
+     */
+    montoSobranteEmpleado?: number | null;
     colaboradoresAlcanzados: number;
     /** NULL, no 0 -- misma razón que `montoNegativos`, arriba. */
     colaboradoresAsistieron: number | null;
@@ -136,6 +159,12 @@ export interface DatosLacrado {
     diferencia: number;
     resueltoEnConteo: number;
     montoDiferencia: number | null;
+    /**
+     * Clasificacion efectiva al momento de liquidar (liquidacion v2). Solo
+     * entra al hash en `version >= 2` -- mismo motivo que
+     * `resultado.montoSobranteEmpleado`.
+     */
+    esEmpresa?: boolean;
   }>;
 
   /** La planilla que firma la gente. Se ordena por `colaboradorId` al armar. */
@@ -179,12 +208,23 @@ export interface ContenidoLacrado extends Record<string, unknown> {
  * query. `version` viaja adentro para que un cambio futuro de formato no
  * invalide los sellos viejos: se verifica cada uno con las reglas de SU
  * version.
+ *
+ * `version` es un PARAMETRO, no siempre `VERSION_CONTENIDO_LACRADO`: al
+ * LACRAR un inventario nuevo se usa la ultima (el default). Al VERIFICAR uno
+ * ya lacrado hay que reconstruir la forma CON LA QUE SE SELLO -- quien llama
+ * (historial.service.ts#verificarSello) tiene que pasar la version guardada
+ * en `lacrado.contenido.version`, o esta funcion produciria una forma que
+ * nunca existio y el hash jamas volveria a coincidir con uno legitimo.
  */
-export function armarContenidoLacrado(datos: DatosLacrado): ContenidoLacrado {
+export function armarContenidoLacrado(
+  datos: DatosLacrado,
+  version: number = VERSION_CONTENIDO_LACRADO,
+): ContenidoLacrado {
   const porNumero = (a: number, b: number): number => a - b;
+  const v2 = version >= 2;
 
   return {
-    version: VERSION_CONTENIDO_LACRADO,
+    version,
     inventarioId: datos.inventarioId,
     sucursalId: datos.sucursalId,
     sucursalNombre: datos.sucursalNombre,
@@ -194,8 +234,21 @@ export function armarContenidoLacrado(datos: DatosLacrado): ContenidoLacrado {
     snapshotItems: datos.snapshotItems,
     snapshotTomadoEn: datos.snapshotTomadoEn,
     cerradoEn: datos.cerradoEn,
-    resultado: datos.resultado,
-    diferencias: [...datos.diferencias].sort((a, b) => (a.codigo < b.codigo ? -1 : a.codigo > b.codigo ? 1 : 0)),
+    resultado:
+      datos.resultado === null
+        ? null
+        : {
+            ...datos.resultado,
+            // `undefined`, no `null`: `serializarCanonico` descarta las
+            // claves `undefined` (ver su propio comentario), asi que en v1
+            // la clave directamente NO EXISTE en el contenido -- igual que
+            // antes de que este campo existiera. Un `null` explicito SI
+            // cambiaria el hash de los sellos viejos.
+            montoSobranteEmpleado: v2 ? (datos.resultado.montoSobranteEmpleado ?? null) : undefined,
+          },
+    diferencias: [...datos.diferencias]
+      .sort((a, b) => (a.codigo < b.codigo ? -1 : a.codigo > b.codigo ? 1 : 0))
+      .map((d) => ({ ...d, esEmpresa: v2 ? (d.esEmpresa ?? false) : undefined })),
     liquidaciones: [...datos.liquidaciones].sort((a, b) => porNumero(a.colaboradorId, b.colaboradorId)),
     aprobaciones: [...datos.aprobaciones].sort((a, b) => porNumero(a.aprobadorId, b.aprobadorId)),
   };
