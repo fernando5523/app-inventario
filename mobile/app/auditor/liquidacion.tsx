@@ -1,16 +1,16 @@
 import { File, Paths } from 'expo-file-system';
 import { router } from 'expo-router';
 import * as Sharing from 'expo-sharing';
-import { AlertTriangle, Building2, Check, ClipboardEdit, FileSpreadsheet, Layers, Scale, Wallet } from 'lucide-react-native';
+import { AlertTriangle, Building2, Check, FileSpreadsheet, Layers, Scale, Wallet } from 'lucide-react-native';
 import { useCallback, useEffect, useMemo, useRef, useState, type JSX } from 'react';
-import { ActivityIndicator, Alert, Pressable, RefreshControl, StyleSheet, Text, TextInput, View } from 'react-native';
+import { ActivityIndicator, Alert, Pressable, RefreshControl, StyleSheet, Text, View } from 'react-native';
 
 import { useRefrescoAlEnfocar } from '../../components/hooks/useRefrescoAlEnfocar';
 
 import { PantallaConTabs } from '../../components/navegacion/PantallaConTabs';
 import { BarraApp, Badge, Button, formatoFechaHora, formatoMiles } from '../../components/ui';
 import { repositorioLiquidacion, repositorioSesion } from '../../lib/contenedor';
-import { notaFaltanteEmpresa, textoDeAjustes, validarAjustes } from '../../lib/dominio/ajustes-formulario';
+import { estadoAjustesNegativos, notaFaltanteEmpresa } from '../../lib/dominio/ajustes-formulario';
 import { asistentesConCentavoExtra, resumirAsistencia } from '../../lib/dominio/reparto-visible';
 import {
   nombreArchivoReporteGerencia,
@@ -26,7 +26,6 @@ import type {
   AjustesDelMes,
   CierreLiquidacion,
   Conciliacion,
-  DatosAjustes,
   DetalleLiquidacion,
   FilaReporteGerencia,
   Liquidacion,
@@ -113,7 +112,6 @@ export default function LiquidacionScreen(): JSX.Element {
   const [conciliacion, setConciliacion] = useState<Conciliacion | null>(null);
   const [filtro, setFiltro] = useState<Filtro>('todos');
   const [ajustes, setAjustes] = useState<AjustesDelMes | null>(null);
-  const [guardandoAjustes, setGuardandoAjustes] = useState(false);
   const [liquidando, setLiquidando] = useState(false);
   /** Lo que devolvió `liquidar` en ESTA sesión: alimenta el cartel de "ya está cerrada". */
   const [cerrado, setCerrado] = useState<CierreLiquidacion | null>(null);
@@ -186,17 +184,13 @@ export default function LiquidacionScreen(): JSX.Element {
   }, [sesion, sucursalId]);
 
   // Al enfocar Y al volver la app a primer plano -- pedido del cliente. Ver
-  // components/hooks/useRefrescoAlEnfocar.ts.
+  // components/hooks/useRefrescoAlEnfocar.ts. Es también lo que actualiza la
+  // tarjeta de ajustes al volver de la pantalla del Excel.
   //
-  // PAUSADO solo mientras una escritura está en vuelo. Los campos del
-  // formulario de ajustes (monto, nota) NO necesitan pausa: son estado local
-  // de `TarjetaAjustes` y no hay ningún `useEffect` que los resincronice
-  // desde la prop -- se precargan una vez, al tocar "Editar". Verificado
-  // antes de dejarlo así: un refresco cambia el texto de la tarjeta, nunca lo
-  // que la persona tipeó.
-  const { refrescando, refrescar } = useRefrescoAlEnfocar(cargar, {
-    pausado: guardandoAjustes || liquidando,
-  });
+  // PAUSADO solo mientras se liquida: esta pantalla ya no tiene nada que
+  // tipear (los ajustes entran por el Excel), así que no hay trabajo a medias
+  // que un refresco pueda pisar.
+  const { refrescando, refrescar } = useRefrescoAlEnfocar(cargar, { pausado: liquidando });
 
   // Cambió la tienda elegida: `cargar` cambia con ella, pero
   // useRefrescoAlEnfocar solo recarga al enfocar. Se recarga YA, y se limpia
@@ -229,13 +223,6 @@ export default function LiquidacionScreen(): JSX.Element {
     router.replace('/');
   }
 
-  /**
-   * Guardar los ajustes RECARGA todo, no solo la tarjeta: al pasar de `null`
-   * a un monto, el backend puede calcular el faltante neto, la cuota y la
-   * planilla entera. Actualizar solo la tarjeta dejaría el resto de la
-   * pantalla diciendo "no se puede calcular" al lado de unos ajustes ya
-   * cargados — el tipo de contradicción que hace desconfiar de todo lo demás.
-   */
   /**
    * PUNTO DE NO RETORNO de la nómina: al confirmar, los descuentos quedan
    * firmes y el inventario pasa a `liquidado`.
@@ -275,22 +262,6 @@ export default function LiquidacionScreen(): JSX.Element {
       Alert.alert('No se pudo cerrar la planilla', e instanceof Error ? e.message : 'Prueba de nuevo en un momento.');
     } finally {
       setLiquidando(false);
-    }
-  }
-
-  async function guardarAjustes(datos: DatosAjustes): Promise<void> {
-    if (!liquidacion) return;
-    setGuardandoAjustes(true);
-    try {
-      await repositorioLiquidacion.registrarAjustes(liquidacion.inventarioId, datos);
-      await cargar();
-    } catch (e) {
-      Alert.alert(
-        'No se pudieron guardar los ajustes',
-        e instanceof Error ? e.message : 'Prueba de nuevo en un momento.',
-      );
-    } finally {
-      setGuardandoAjustes(false);
     }
   }
 
@@ -413,21 +384,12 @@ export default function LiquidacionScreen(): JSX.Element {
         <>
           {/*
             LOS AJUSTES VAN PRIMERO, antes del resumen, y no es cosmético:
-            mientras no estén cargados, el faltante neto y la cuota por
+            mientras no se importe el Excel, el faltante neto y la cuota por
             persona son `null` y toda la pantalla de abajo muestra "no se
-            puede calcular". Poner la tarjeta acá arriba es poner primero lo
-            único accionable.
+            puede calcular". Poner la tarjeta arriba es poner primero lo único
+            accionable.
           */}
-          <TarjetaAjustes
-            inventarioId={liquidacion.inventarioId}
-            estado={ajustes}
-            guardando={guardandoAjustes}
-            onGuardar={guardarAjustes}
-            // Con la planilla cerrada los ajustes son historia: el backend
-            // los rechaza igual, pero un formulario que se puede llenar para
-            // recibir un 409 es peor que no tenerlo.
-            soloLectura={cerrado !== null}
-          />
+          <TarjetaAjustesDelMes inventarioId={liquidacion.inventarioId} estado={ajustes} />
 
           <View style={styles.tarjeta}>
             <View style={styles.tarjetaCabecera}>
@@ -762,7 +724,7 @@ function CierreDePlanilla({
         // persona tiene que saber qué ir a hacer.
         <Text style={styles.tarjetaTexto}>
           {!ajustesListos
-            ? 'Primero carga los ajustes del mes, arriba. Sin eso no se puede calcular lo que se le descuenta a cada persona.'
+            ? 'Primero importa el Excel de ajustes del mes, arriba. Sin eso no se puede calcular lo que se le descuenta a cada persona.'
             : asistentes === 0
               ? 'Ningún colaborador registró conteos en este inventario: no hay asistencia deducible ni a quién repartir el faltante. Revisa que las hojas tengan conteos cargados.'
               : 'Todavía no se puede calcular la planilla: revisa las advertencias de arriba.'}
@@ -779,117 +741,54 @@ function CierreDePlanilla({
 }
 
 /**
- * LOS AJUSTES DEL MES: el paso que faltaba para poder cerrar el mes.
+ * LOS AJUSTES DEL MES: la ENTRADA a la pantalla del Excel de Dynamics
+ * (app/auditor/ajustes-negativos.tsx), con el estado real de la importación.
  *
- * Mientras no estén cargados, `montoNegativos` es `null` en la base y el
- * backend rechaza liquidar con 409 — así que toda la pantalla de abajo
- * muestra "no se puede calcular". Esta tarjeta es lo único accionable en ese
- * estado, y por eso va primero.
+ * Acá había un formulario (monto a favor, monto de empresa y nota) y ya no
+ * queda nada que tipear:
+ *  - el monto a favor del personal entra por el Excel (backend e39b370): un
+ *    número escrito acá el servidor lo ignoraba;
+ *  - el faltante de empresa lo calcula la clasificación de productos (backend
+ *    48899bc) y se muestra en el resumen;
+ *  - la nota documentaba esos montos escritos a mano. Sin ellos no documenta
+ *    nada: no la lee el Historial ni el sello, no destraba liquidar, y su
+ *    "registrado por" se confundiría con quien importó el Excel. Un formulario
+ *    con solo eso sería un campo por llenar sin ninguna consecuencia.
  *
- * El formulario aparece solo cuando hace falta (sin registrar, o al tocar
- * "Corregir"): una vez cargados, lo normal es mirarlos, no editarlos.
+ * `null` = nadie importó el Excel (bloquea liquidar); un número, 0 incluido,
+ * es lo importado. Dos carteles distintos (dominio/ajustes-formulario.ts).
  */
-function TarjetaAjustes({
+function TarjetaAjustesDelMes({
   inventarioId,
   estado,
-  guardando,
-  onGuardar,
-  soloLectura = false,
 }: {
   inventarioId: number;
   estado: AjustesDelMes | null;
-  guardando: boolean;
-  onGuardar: (datos: DatosAjustes) => Promise<void>;
-  /** Con la planilla ya cerrada, los ajustes se muestran pero no se tocan. */
-  soloLectura?: boolean;
 }): JSX.Element | null {
-  const [editando, setEditando] = useState(false);
-  const [montoNegativos, setMontoNegativos] = useState('');
-  const [nota, setNota] = useState('');
-  const [errorCampos, setErrorCampos] = useState<string | null>(null);
-
-  // `null` = todavía cargando el estado. No se dibuja nada en vez de
-  // mostrar "sin registrar", que sería afirmar algo que no se sabe.
+  // `null` = todavía cargando el estado. No se dibuja nada en vez de afirmar
+  // "sin importar", que sería decir algo que no se sabe.
   if (estado === null) return null;
 
-  const texto = textoDeAjustes(estado, soles, formatoFechaHora);
-  const mostrandoFormulario = !soloLectura && (editando || texto.bloqueaLiquidacion);
-
-  async function guardar(): Promise<void> {
-    const validado = validarAjustes({ montoNegativos, nota });
-    if (!validado.ok) {
-      setErrorCampos(validado.error);
-      return;
-    }
-    setErrorCampos(null);
-    await onGuardar(validado.datos);
-    setEditando(false);
-  }
+  const e = estadoAjustesNegativos(estado.montoNegativos, soles);
 
   return (
-    <View style={[styles.tarjeta, texto.bloqueaLiquidacion && styles.tarjetaBloqueante]}>
+    <View style={[styles.tarjeta, e.bloqueaLiquidacion && styles.tarjetaBloqueante]}>
       <View style={styles.tarjetaCabecera}>
-        <ClipboardEdit size={18} color={texto.bloqueaLiquidacion ? colors.rojo : colors.tinta} />
+        <FileSpreadsheet size={18} color={e.bloqueaLiquidacion ? colors.rojo : colors.tinta} />
         <Text style={styles.tarjetaTitulo}>Ajustes del mes</Text>
-        {texto.bloqueaLiquidacion ? <Badge label="Sin registrar" variant="falta" /> : null}
+        <Badge label={e.bloqueaLiquidacion ? 'Sin importar' : 'Importado'} variant={e.bloqueaLiquidacion ? 'falta' : 'ok'} />
       </View>
 
-      <Text style={styles.ajustesEstado}>{texto.titulo}</Text>
-      <Text style={styles.tarjetaTexto}>{texto.detalle}</Text>
-      {estado.nota !== null ? <Text style={styles.ajustesNota}>“{estado.nota}”</Text> : null}
+      <Text style={styles.ajustesEstado}>{e.texto}</Text>
+      <Text style={styles.tarjetaTexto}>
+        Los ajustes a favor del personal salen del Excel de Dynamics: se importan, no se escriben a mano.
+      </Text>
 
-      {mostrandoFormulario ? (
-        <View style={styles.ajustesForm}>
-          <Text style={styles.ajustesEtiqueta}>Ajustes a favor del personal (S/)</Text>
-          <TextInput
-            style={styles.ajustesInput}
-            value={montoNegativos}
-            onChangeText={setMontoNegativos}
-            keyboardType="decimal-pad"
-            placeholder="0"
-            placeholderTextColor={colors.gris}
-          />
-
-          {/* Sin campo de faltante de empresa (backend 48899bc): lo calcula la
-              clasificación de productos y se muestra en el resumen, de solo
-              lectura. Un campo que el servidor ignora es un dato que miente. */}
-          <Text style={styles.ajustesEtiqueta}>¿De dónde salen? (obligatorio)</Text>
-          <TextInput
-            style={[styles.ajustesInput, styles.ajustesInputNota]}
-            value={nota}
-            onChangeText={setNota}
-            multiline
-            placeholder="Ej: mermas documentadas y devoluciones de agosto"
-            placeholderTextColor={colors.gris}
-          />
-
-          {errorCampos !== null ? <Text style={styles.ajustesError}>{errorCampos}</Text> : null}
-
-          <Button
-            label={guardando ? 'Guardando…' : 'Guardar ajustes'}
-            onPress={guardar}
-            disabled={guardando}
-          />
-          {editando ? (
-            <Button label="Cancelar" variant="outline" size="sm" onPress={() => setEditando(false)} />
-          ) : null}
-        </View>
-      ) : soloLectura ? null : (
-        <Button
-          label="Corregir"
-          variant="outline"
-          size="sm"
-          onPress={() => {
-            // Se precargan los valores actuales: corregir es ajustar un
-            // número, no volver a escribirlo todo de memoria.
-            setMontoNegativos(estado.montoNegativos === null ? '' : String(estado.montoNegativos));
-            setNota(estado.nota ?? '');
-            setEditando(true);
-          }}
-        />
-      )}
-
-      <Text style={styles.ajustesPie}>Inventario #{inventarioId}</Text>
+      <Button
+        label={e.boton}
+        variant={e.bloqueaLiquidacion ? 'primary' : 'outline'}
+        onPress={() => router.push({ pathname: '/auditor/ajustes-negativos', params: { inventarioId: String(inventarioId) } })}
+      />
     </View>
   );
 }
@@ -1023,21 +922,6 @@ const styles = StyleSheet.create({
   // grita siempre deja de significar nada.
   tarjetaBloqueante: { borderColor: colors.rojo },
   ajustesEstado: { fontSize: fontSize.lg, fontFamily: fonts.bold, color: colors.tinta },
-  ajustesNota: { fontSize: fontSize.sm, color: colors.gris, fontStyle: 'italic' },
-  ajustesForm: { gap: spacing.sm },
-  ajustesEtiqueta: { fontSize: fontSize.sm, fontFamily: fonts.bold, color: colors.tinta },
-  ajustesInput: {
-    borderWidth: 1,
-    borderColor: colors.borde,
-    borderRadius: radius.md,
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm,
-    fontSize: fontSize.base,
-    color: colors.tinta,
-  },
-  ajustesInputNota: { minHeight: 72, textAlignVertical: 'top' },
-  ajustesError: { fontSize: fontSize.sm, color: colors.rojo, fontFamily: fonts.bold },
-  ajustesPie: { fontSize: fontSize.xs, color: colors.gris },
 
   tarjeta: {
     gap: spacing.md,
