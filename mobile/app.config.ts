@@ -4,7 +4,7 @@ const config: ExpoConfig = {
   name: 'Inventario Movil',
   slug: 'app-inventario-mobile',
   scheme: 'inventario',
-  version: '2.21.0',
+  version: '2.21.1',
   orientation: 'portrait',
   // El diseño aprobado es blanco con rojo Trujillo: "dark" pintaba de
   // oscuro los controles del sistema sobre una app clara.
@@ -14,7 +14,7 @@ const config: ExpoConfig = {
   },
   android: {
     package: 'com.market.inventario',
-    versionCode: 30,
+    versionCode: 31,
   },
   plugins: [
     'expo-router',
