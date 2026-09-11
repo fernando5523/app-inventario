@@ -71,9 +71,11 @@ export interface ResultadoReclasificacion {
 
 /**
  * La excepcion del Auditor manda; si no hay excepcion para ese codigo, manda
- * Dynamics. Es la MISMA regla que documenta `CatalogoItem.esEmpresaManual`
- * en el schema, aplicada aca contra la clasificacion VIGENTE (no la
- * congelada), porque se evalua al liquidar.
+ * Dynamics. La excepcion sale de `ClasificacionProducto`, la fuente VIVA,
+ * leida contra su valor VIGENTE al momento de liquidar -- no de
+ * `CatalogoItem.esEmpresaManual` (esa columna quedo sin uso con la decision
+ * del cliente de evaluar la clasificacion al liquidar y no al cerrar el
+ * conteo: nadie la escribe).
  */
 export function esEmpresaEfectivo(
   codigo: string,
