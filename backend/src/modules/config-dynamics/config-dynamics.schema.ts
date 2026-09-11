@@ -30,7 +30,7 @@ export const guardarConfigDynamicsSchema = z
       .transform((u) => u.replace(/\/+$/, '')),
     /** "trv" para Market Trujillo. Si no viene, se usa el del entorno. */
     dataAreaId: z.string().trim().max(20).optional(),
-    clientSecret: z.string().min(1, 'Si mandás el secreto, que no venga vacío.').max(500).optional(),
+    clientSecret: z.string().min(1, 'Si envías el secreto, no puede estar vacío.').max(500).optional(),
   })
   .strict();
 export type GuardarConfigDynamicsInput = z.infer<typeof guardarConfigDynamicsSchema>;

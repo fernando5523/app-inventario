@@ -906,7 +906,7 @@ export async function crearSnapshot(
   if (modo === 'real' && !(await d365AuthService.isConfigured())) {
     throw new ErrorHttp(
       400,
-      'Dynamics no configurado. Configurá D365_TENANT_ID/D365_CLIENT_ID/D365_CLIENT_SECRET/D365_BASE_URL, o pedí el snapshot con modo "ejemplo".',
+      'Dynamics no configurado. Configura D365_TENANT_ID/D365_CLIENT_ID/D365_CLIENT_SECRET/D365_BASE_URL, o pide el snapshot con modo "ejemplo".',
     );
   }
 

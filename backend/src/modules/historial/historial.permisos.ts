@@ -194,7 +194,7 @@ export function validarPuedeAprobar(
     // Decir que no podes sin decir quien si deja a la persona mirando la
     // pantalla sin saber a quien pedirle.
     throw new Prohibido(
-      'Aprobar el cierre lo hace un auditor o el administrador. Pediles que lo firmen desde su propia sesion.',
+      'Aprobar el cierre lo hace un auditor o el administrador. Pídeles que lo firmen desde su propia sesión.',
     );
   }
 
@@ -321,7 +321,7 @@ export function validarPuedeLacrar(
 
   if (!ROLES_QUE_APRUEBAN_CIERRE.includes(actor.rol)) {
     throw new Prohibido(
-      'Lacrar el inventario lo hace un auditor o el administrador. Pediles que lo firmen desde su propia sesion.',
+      'Lacrar el inventario lo hace un auditor o el administrador. Pídeles que lo firmen desde su propia sesión.',
     );
   }
 

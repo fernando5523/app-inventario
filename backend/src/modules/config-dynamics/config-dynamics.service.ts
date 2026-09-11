@@ -218,7 +218,7 @@ export async function probarConexion(): Promise<ResultadoPruebaDto> {
   const cred = await credencialesEfectivas();
 
   if (cred.origen === 'ninguno' || cred.clientSecret === '') {
-    return { ok: false, mensaje: 'Faltan credenciales: cargá tenant, client id, URL y secreto antes de probar.' };
+    return { ok: false, mensaje: 'Faltan credenciales: ingresa el tenant, el client id, la URL y el secreto antes de probar.' };
   }
 
   const cuerpo = new URLSearchParams({

@@ -37,7 +37,7 @@ export class CifradoNoConfigurado extends Error {
   constructor() {
     super(
       `Falta la variable de entorno ${VAR_CLAVE}: no se puede guardar el secreto de Dynamics sin una clave para cifrarlo. ` +
-        'Generá una con `openssl rand -hex 32` y agregala a backend/.env.',
+        'Genera una con `openssl rand -hex 32` y agrégala a backend/.env.',
     );
     this.name = 'CifradoNoConfigurado';
   }
