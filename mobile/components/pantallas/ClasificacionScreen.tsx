@@ -217,7 +217,7 @@ export function ClasificacionScreen(): JSX.Element {
             subtitle={
               soloClasificados
                 ? 'Cuando marques un producto como empresa, va a aparecer acá.'
-                : 'Probá con otro código, descripción o categoría.'
+                : 'Prueba con otro código, descripción o categoría.'
             }
           />
         ) : (

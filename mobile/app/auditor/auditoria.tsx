@@ -300,11 +300,15 @@ export default function AuditoriaScreen(): JSX.Element {
                   </View>
                 ) : null}
                 <View style={styles.resumenFila}>
-                  <Text style={styles.resumenEtiqueta}>Faltante neto</Text>
+                  {/* "del conteo", NO "neto": esta cifra es el faltante que surge de
+                      comparar el conteo contra el ERP, ANTES de los ajustes de la
+                      liquidación. El neto que se descuenta es otro número y sale de
+                      la pantalla de Liquidación (ver la nota de abajo). */}
+                  <Text style={styles.resumenEtiqueta}>Faltante del conteo</Text>
                   <Text style={[styles.resumenValor, faltanteNeto !== 0 && { color: colors.proceso }]}>{formatoMoneda(faltanteNeto)}</Text>
                 </View>
                 <View style={styles.resumenFila}>
-                  <Text style={styles.resumenEtiqueta}>Sobrante neto</Text>
+                  <Text style={styles.resumenEtiqueta}>Sobrante del conteo</Text>
                   <Text style={[styles.resumenValor, sobranteNeto !== 0 && { color: colors.ok }]}>{formatoMoneda(sobranteNeto)}</Text>
                 </View>
                 {asumidoEmpresa !== 0 ? (
@@ -313,6 +317,9 @@ export default function AuditoriaScreen(): JSX.Element {
                     <Text style={styles.resumenValor}>{formatoMoneda(asumidoEmpresa)}</Text>
                   </View>
                 ) : null}
+                <Text style={styles.resumenNota}>
+                  El monto que se le descuenta a cada persona sale de la Liquidación, que también tiene en cuenta los ajustes del mes y los sobrantes.
+                </Text>
               </View>
 
               <View style={styles.seccion}>
@@ -356,6 +363,7 @@ const styles = StyleSheet.create({
   resumenValor: { fontSize: 16, color: colors.tinta, fontFamily: fonts.bold },
   resumenNeutro: { color: colors.gris },
   resumenPct: { fontSize: 11.5, color: colors.gris, fontFamily: fonts.medium },
+  resumenNota: { fontSize: 11.5, lineHeight: 16, color: colors.gris, fontFamily: fonts.regular, marginTop: 2 },
   seccion: { flexDirection: 'row', alignItems: 'baseline', justifyContent: 'space-between', gap: 10 },
   seccionTitulo: { fontSize: 11, letterSpacing: 1.3, textTransform: 'uppercase', color: colors.gris, fontFamily: fonts.semibold },
   seccionTotal: { fontSize: 11.5, color: colors.grisClaro, fontFamily: fonts.regular },
