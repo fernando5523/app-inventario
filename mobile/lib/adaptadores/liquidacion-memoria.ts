@@ -16,7 +16,6 @@ import type {
   AjustesDelMes,
   CierreLiquidacion,
   Conciliacion,
-  DatosAjustes,
   DetalleLiquidacion,
   Liquidacion,
   ReporteGerencia,
@@ -31,13 +30,6 @@ const SIN_SERVIDOR_REPORTE =
 function redondear(n: number): number {
   return Math.round(n * 100) / 100;
 }
-
-/**
- * Ajustes cargados en esta corrida. Arranca VACÍO a propósito: sin backend,
- * el estado inicial tiene que ser el real —"nadie los cargó"— para poder ver
- * la pantalla bloqueada y después destrabarla cargándolos.
- */
-const ajustesCargados = new Map<number, AjustesDelMes>();
 
 /** Inventarios ya liquidados en esta corrida: liquidar dos veces tiene que fallar. */
 const liquidados = new Set<number>();
@@ -56,7 +48,6 @@ function sinRegistrar(inventarioId: number): AjustesDelMes {
 
 /** Solo para tests: deja el adaptador como recién arrancado. */
 export function limpiarAjustesMemoria(): void {
-  ajustesCargados.clear();
   liquidados.clear();
 }
 
@@ -182,40 +173,20 @@ export const liquidacionMemoria: RepositorioLiquidacion = {
   },
 
   /**
-   * Los ajustes viven en un Map del módulo, no en el dataset fijo: son lo
-   * único de este adaptador que CAMBIA en tiempo de ejecución, y ese cambio
-   * es justo lo que hay que poder ver sin backend — cargar un monto y que la
-   * pantalla pase de "sin registrar" a mostrar la planilla.
+   * SIEMPRE sin importar: los ajustes entran por el Excel de Dynamics
+   * (ajustes-negativos-api.ts), que no tiene variante en memoria, y PUT
+   * /ajustes se borró del backend (2026-09-14). Inventar un monto importado
+   * sería fabricar el dato que destraba la liquidación.
    */
   async ajustes(inventarioId): Promise<AjustesDelMes> {
-    return ajustesCargados.get(inventarioId) ?? sinRegistrar(inventarioId);
-  },
-
-  async registrarAjustes(inventarioId, datos: DatosAjustes): Promise<AjustesDelMes> {
-    await simularLatencia();
-
-    const previo = ajustesCargados.get(inventarioId);
-    const registrado: AjustesDelMes = {
-      inventarioId,
-      registrado: true,
-      montoNegativos: datos.montoNegativos,
-      // No lo manda el formulario: igual que en el backend, lo calcula la
-      // clasificación de productos. Se conserva el que había.
-      montoFaltanteEmpresa: previo?.montoFaltanteEmpresa ?? 170,
-      nota: datos.nota,
-      registradoPor: { id: 101, nombre: 'Nancy Quispe' },
-      registradoEn: new Date().toISOString(),
-    };
-
-    ajustesCargados.set(inventarioId, registrado);
-    return registrado;
+    return sinRegistrar(inventarioId);
   },
 
   /**
-   * Reproduce las guardas REALES del backend, no solo el camino feliz: sin
-   * ajustes cargados rechaza igual que `liquidacion.cierre.ts`. Un adaptador
-   * en memoria que siempre dice que sí hace que la pantalla se pruebe contra
-   * un backend que no existe.
+   * Reproduce las guardas REALES del backend, no solo el camino feliz: sin el
+   * Excel de ajustes importado rechaza igual que `liquidacion.cierre.ts`. Un
+   * adaptador en memoria que siempre dice que sí hace que la pantalla se
+   * pruebe contra un backend que no existe.
    */
   async liquidar(inventarioId): Promise<CierreLiquidacion> {
     await simularLatencia();
@@ -225,8 +196,8 @@ export const liquidacionMemoria: RepositorioLiquidacion = {
         'La planilla de este inventario ya se cerró. Una liquidación no se recalcula: lo que se descontó ya se descontó.',
       );
     }
-    const ajustes = ajustesCargados.get(inventarioId);
-    if (ajustes === undefined || ajustes.montoNegativos === null) {
+    const ajustes = await liquidacionMemoria.ajustes(inventarioId);
+    if (ajustes.montoNegativos === null) {
       throw new Error(
         'No se puede cerrar la planilla todavía. Los ajustes del mes todavía no se cargaron: el faltante neto de esta planilla no los descuenta.',
       );

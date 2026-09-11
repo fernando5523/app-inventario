@@ -553,15 +553,14 @@ export type Conciliacion =
  * Los ajustes del mes: entradas y salidas que bajan el faltante antes de
  * repartirlo. Lo que faltaba para poder cerrar el mes.
  *
- * `montoNegativos` en la base es `null` mientras nadie los cargue, y ese
- * `null` bloquea la liquidación entera — no se puede firmar una planilla
- * calculada sobre un dato que nadie miró. Cargar un **0 explícito** por acá
- * la destraba, y no es una trampa: el 0 vale porque lo escribió una persona
- * identificada, con fecha y con una nota que explica de dónde sale.
+ * `montoNegativos` en la base es `null` mientras nadie importe el Excel de
+ * ajustes de Dynamics, y ese `null` bloquea la liquidación entera. Un `0`
+ * importado la destraba: "se importó y no había" es un dato.
  *
- * Es una versión MÍNIMA y reversible: dos montos y una nota. Las reglas
- * finas —de dónde salen, quién los aprueba, si se cargan por ítem— las define
- * el cliente, y cuando lo haga esto se reemplaza sin tocar lo de alrededor.
+ * SOLO LECTURA desde el 2026-09-14: PUT /ajustes se borró del backend. Los
+ * montos entran por el Excel (adaptadores/ajustes-negativos-api.ts) y el faltante de
+ * empresa lo calcula la clasificación. `nota`/`registradoPor`/`registradoEn`
+ * solo existen en inventarios viejos, y se leen tal cual se guardaron.
  */
 export interface AjustesDelMes {
   inventarioId: number;
@@ -578,15 +577,6 @@ export interface AjustesDelMes {
   registradoPor: { id: number; nombre: string } | null;
   /** ISO. `null` mientras nadie los cargó. */
   registradoEn: string | null;
-}
-
-export interface DatosAjustes {
-  /** `0` es un valor VÁLIDO y significativo: "alguien miró y no había". */
-  montoNegativos: number;
-  // Sin `montoEmpresa` (backend 48899bc): el faltante de empresa lo calcula la
-  // clasificación de productos al liquidar, y PUT /ajustes dejó de aceptarlo.
-  /** Obligatoria: un ajuste sin explicación no se puede auditar después. */
-  nota: string;
 }
 
 /**
@@ -625,12 +615,7 @@ export interface RepositorioLiquidacion {
   conciliacion(sucursalId: number): Promise<Conciliacion | null>;
   /** Qué ajustes tiene cargados ese inventario. Nunca null: si no hay, `registrado: false`. */
   ajustes(inventarioId: number): Promise<AjustesDelMes>;
-  /**
-   * Carga o corrige los ajustes. Solo mientras el inventario esté en
-   * `conteo_cerrado`: antes el faltante todavía puede cambiar, y después la
-   * planilla ya se firmó.
-   */
-  registrarAjustes(inventarioId: number, datos: DatosAjustes): Promise<AjustesDelMes>;
+  // Sin `registrarAjustes`: PUT /ajustes se borró del backend (2026-09-14).
   /**
    * CIERRA LA PLANILLA: calcula el descuento de cada persona, lo persiste y
    * deja el inventario en `liquidado`. Punto de no retorno de la nómina.

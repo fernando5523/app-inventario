@@ -177,9 +177,9 @@ describe('sin ciclo cerrado: null, no excepción', () => {
 });
 
 /**
- * LOS AJUSTES DEL MES. `montoEmpresa` ya NO viaja (backend 48899bc): el
- * faltante de empresa lo calcula la clasificación de productos al liquidar, y
- * PUT /ajustes dejó de aceptarlo.
+ * LOS AJUSTES DEL MES: solo LECTURA. PUT /ajustes se borró del backend
+ * (2026-09-14): los ajustes a favor del personal entran por el Excel de
+ * Dynamics y el faltante de empresa lo calcula la clasificación.
  */
 describe('ajustes del mes', () => {
   const AJUSTES = {
@@ -214,51 +214,20 @@ describe('ajustes del mes', () => {
     expect(a.montoNegativos).toBeNull();
   });
 
-  it('`registrarAjustes` usa PUT: es idempotente y se puede corregir', async () => {
-    // Con la firma de `fetch` declarada: sin los parámetros, `mock.calls` se
-    // tipa como tupla vacía y `calls[0][1]` no compila.
-    const fn = vi.fn(async (_url: string, _init: RequestInit) => json(AJUSTES));
-    vi.stubGlobal('fetch', fn);
+  it('un inventario viejo trae su nota, quién y cuándo tal cual: los datos guardados se siguen leyendo', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => json(AJUSTES)));
 
-    await liquidacionApi.registrarAjustes(29, { montoNegativos: 380, nota: 'Mermas.' });
+    const a = await liquidacionApi.ajustes(29);
 
-    expect(fn.mock.calls[0]![1].method).toBe('PUT');
+    expect(a).toMatchObject({
+      nota: 'Mermas documentadas de agosto.',
+      registradoPor: { id: 101, nombre: 'Nancy Quispe' },
+      registradoEn: '2026-09-05T12:00:00.000Z',
+    });
   });
 
-  it('un 0 viaja en el cuerpo: no se cae por falsy', async () => {
-    const fn = vi.fn(async (_url: string, _init: RequestInit) => json({ ...AJUSTES, montoNegativos: 0 }));
-    vi.stubGlobal('fetch', fn);
-
-    await liquidacionApi.registrarAjustes(29, { montoNegativos: 0, nota: 'No hubo.' });
-
-    const cuerpo = JSON.parse(fn.mock.calls[0]![1].body as string);
-    expect(cuerpo.montoNegativos).toBe(0);
-  });
-
-  it('montoEmpresa NUNCA viaja: el faltante de empresa lo calcula la clasificación, no el formulario', async () => {
-    // Con la firma de `fetch` declarada: sin los parámetros, `mock.calls` se
-    // tipa como tupla vacía y `calls[0][1]` no compila.
-    const fn = vi.fn(async (_url: string, _init: RequestInit) => json(AJUSTES));
-    vi.stubGlobal('fetch', fn);
-
-    // Un llamador viejo que todavía lo mande: el adaptador no lo reenvía.
-    const datosViejos = { montoNegativos: 380, montoEmpresa: 0, nota: 'x' };
-    await liquidacionApi.registrarAjustes(29, datosViejos);
-
-    const cuerpo = JSON.parse(fn.mock.calls[0]![1].body as string);
-    expect(cuerpo).not.toHaveProperty('montoEmpresa');
-  });
-
-  it('la nota viaja tal cual', async () => {
-    // Con la firma de `fetch` declarada: sin los parámetros, `mock.calls` se
-    // tipa como tupla vacía y `calls[0][1]` no compila.
-    const fn = vi.fn(async (_url: string, _init: RequestInit) => json(AJUSTES));
-    vi.stubGlobal('fetch', fn);
-
-    await liquidacionApi.registrarAjustes(29, { montoNegativos: 380, nota: 'Mermas documentadas de agosto.' });
-
-    const cuerpo = JSON.parse(fn.mock.calls[0]![1].body as string);
-    expect(cuerpo.nota).toBe('Mermas documentadas de agosto.');
+  it('registrarAjustes ya no existe: el endpoint que llamaba se borró', () => {
+    expect('registrarAjustes' in liquidacionApi).toBe(false);
   });
 });
 

@@ -37,7 +37,6 @@ import type {
   AjustesDelMes,
   CierreLiquidacion,
   Conciliacion,
-  DatosAjustes,
   Liquidacion,
   ReporteGerencia,
   RepositorioLiquidacion,
@@ -87,21 +86,8 @@ export const liquidacionApi: RepositorioLiquidacion = {
     return await pedir<AjustesDelMes>(`/api/liquidacion/inventarios/${inventarioId}/ajustes`);
   },
 
-  /**
-   * `PUT` y no `POST`: es idempotente. Cargar dos veces lo mismo deja el mismo
-   * estado, y corregir antes de liquidar tiene que poder hacerse.
-   *
-   * `montoEmpresa` NO viaja nunca (backend 48899bc): el faltante de empresa lo
-   * calcula la clasificación de productos al liquidar. El cuerpo se arma campo
-   * por campo, en vez de reenviar `datos`, para que un llamador viejo que
-   * todavía lo mande no lo cuele.
-   */
-  async registrarAjustes(inventarioId, datos: DatosAjustes) {
-    return await pedir<AjustesDelMes>(`/api/liquidacion/inventarios/${inventarioId}/ajustes`, {
-      metodo: 'PUT',
-      cuerpo: { montoNegativos: datos.montoNegativos, nota: datos.nota },
-    });
-  },
+  // Sin `registrarAjustes`: PUT /ajustes se borró del backend (2026-09-14).
+  // Los ajustes entran por el Excel (ajustes-negativos-api.ts).
 
   /**
    * `POST /api/liquidacion/inventarios/:id/liquidar` → `CierreLiquidacion` (201).
