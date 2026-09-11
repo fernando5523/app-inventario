@@ -29,7 +29,7 @@ export const motivoLineaAjusteSchema = z.object({
   motivo: z
     .string()
     .trim()
-    .min(1, 'Contá por qué se excluye o se vuelve a incluir esta línea: sin motivo no se puede auditar después.')
+    .min(1, 'Explica por qué se excluye o se vuelve a incluir esta línea: sin motivo no se puede auditar después.')
     .max(500),
 });
 export type MotivoLineaAjusteInput = z.infer<typeof motivoLineaAjusteSchema>;
