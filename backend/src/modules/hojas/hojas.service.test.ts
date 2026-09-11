@@ -131,15 +131,14 @@ describe('una hoja finalizada es inmutable', () => {
   });
 });
 
-describe('finalizar registra un Conteo en 0 por cada producto sin contar (decisión del cliente 2026-09-05)', () => {
-  // "Si no hay el producto, es 0": finalizar deja de aceptar renglones en
-  // "faltan N" en silencio -- cada producto sin Conteo se registra en 0,
-  // como afirmación de quien finaliza, en la MISMA transacción que el
-  // cambio de estado. Antes esto era un hallazgo abierto ("finalizar() no
-  // sabe si quedó algún producto sin contar"); ahora SÍ lo sabe y lo
-  // cierra. Que el cierre de ronda trate ese 0 como un conteo real (0 vs
-  // stock > 0 = diferencia → recontar) se prueba en
-  // dominio/ciclo-conteos.test.ts, sin base.
+describe('finalizar RECHAZA si quedan productos sin contar (decisión del cliente 2026-09-11): nada de rellenar con 0', () => {
+  // Vuelta atrás de la decisión de fb2e224 ("si no hay el producto, es 0"):
+  // el cliente decidió después (76394fd, en la app) que 'Finalizar' no
+  // aparece hasta que TODOS los productos tengan valor, porque un 0
+  // significa "lo vi y no había", y eso lo tiene que decir la persona, no
+  // el sistema. Esta suite es la contracara en el servidor: la regla vale
+  // aunque alguien llegue por otro camino que la pantalla, así que ACÁ
+  // también se rechaza, nunca se rellena.
   function hojaEnProceso() {
     return {
       ...hoja('en_proceso'),
@@ -156,74 +155,78 @@ describe('finalizar registra un Conteo en 0 por cada producto sin contar (decisi
     };
   }
 
-  it('hoja de 3 productos con 1 contado: crea los 2 que faltan en 0 (quedan 3 conteos, dos en 0)', async () => {
+  it('hoja de 3 productos con 1 contado: rechaza con Conflicto (409), no con 400 ni 500', async () => {
     prismaMock.hojaConteo.findUnique.mockResolvedValue(hojaEnProceso());
     // El producto 51 ya tiene conteo; 52 y 53 no. `finalizar` los busca con
     // `where: { hojaId, conteos: { none: {} } }` -- este mock representa ESE
     // resultado, los dos renglones vacíos.
     prismaMock.producto.findMany.mockResolvedValue([{ id: 52 }, { id: 53 }]);
 
-    await finalizar(CONTADOR, 7);
+    const error = await finalizar(CONTADOR, 7).catch((e) => e);
 
-    expect(prismaMock.conteo.createMany).toHaveBeenCalledTimes(1);
-    const args = prismaMock.conteo.createMany.mock.calls[0]![0];
-    // Sueltas 0 y sin empaques -> total 0 (hojas.calculos.ts#totalUnidades).
-    expect(args.data).toEqual([
-      { hojaId: 7, productoId: 52, sueltas: 0, contadoEn: expect.any(Date) },
-      { hojaId: 7, productoId: 53, sueltas: 0, contadoEn: expect.any(Date) },
-    ]);
-    // El producto ya contado (51) NO está: finalizar rellena SOLO lo vacío,
-    // nunca pisa un conteo real con un 0.
-    expect(args.data.map((d: { productoId: number }) => d.productoId)).not.toContain(51);
+    expect(error).toBeInstanceOf(Conflicto);
+    // 409, no 400: la hoja no está mal formada, está incompleta -- un
+    // conflicto de estado, la misma familia que la hoja finalizada de
+    // arriba, no un error de la solicitud.
+    expect(error.status).toBe(409);
   });
 
-  it('idempotente contra la carrera: skipDuplicates, para no pisar un conteo real que llegó tarde', async () => {
-    prismaMock.hojaConteo.findUnique.mockResolvedValue(hojaEnProceso());
-    prismaMock.producto.findMany.mockResolvedValue([{ id: 52 }]);
-
-    await finalizar(CONTADOR, 7);
-
-    // Si entre la lectura de `sinContar` y la escritura entra el conteo REAL
-    // del 52, el @@unique([hojaId, productoId]) lo protege: se saltea, nunca
-    // se sobreescribe con 0.
-    expect(prismaMock.conteo.createMany.mock.calls[0]![0].skipDuplicates).toBe(true);
-  });
-
-  it('el relleno en 0 y el cambio de estado van en la MISMA transacción', async () => {
+  it('el mensaje dice CUÁNTOS productos faltan por contar', async () => {
     prismaMock.hojaConteo.findUnique.mockResolvedValue(hojaEnProceso());
     prismaMock.producto.findMany.mockResolvedValue([{ id: 52 }, { id: 53 }]);
 
+    const error = await finalizar(CONTADOR, 7).catch((e) => e);
+
+    expect(error.message).toContain('2');
+    expect(error.message.toLowerCase()).toMatch(/falta.*contar/);
+  });
+
+  it('con 1 solo producto sin contar, el mensaje va en singular', async () => {
+    prismaMock.hojaConteo.findUnique.mockResolvedValue(hojaEnProceso());
+    prismaMock.producto.findMany.mockResolvedValue([{ id: 52 }]);
+
+    const error = await finalizar(CONTADOR, 7).catch((e) => e);
+
+    expect(error.message).not.toMatch(/1 productos/);
+    expect(error.message).toMatch(/1 producto\b/);
+  });
+
+  it('rechazada: NO escribe nada -- ni un Conteo en 0, ni el cambio de estado', async () => {
+    prismaMock.hojaConteo.findUnique.mockResolvedValue(hojaEnProceso());
+    prismaMock.producto.findMany.mockResolvedValue([{ id: 52 }, { id: 53 }]);
+
+    await finalizar(CONTADOR, 7).catch(() => undefined);
+
+    // Nunca más se rellena con 0 -- esta llamada no debería existir en
+    // absoluto en el flujo de `finalizar` de acá en más.
+    expect(prismaMock.conteo.createMany).not.toHaveBeenCalled();
+    expect(prismaMock.hojaConteo.update).not.toHaveBeenCalled();
+  });
+
+  it('con todo contado: finaliza de verdad, sin inventar ningún Conteo', async () => {
+    prismaMock.hojaConteo.findUnique.mockResolvedValue(hojaEnProceso());
+    prismaMock.producto.findMany.mockResolvedValue([]);
+
     await finalizar(CONTADOR, 7);
 
-    // Un solo $transaction: escribir los 0 y que fallara el `finalizada`
-    // dejaría ceros inventados en una hoja que sigue abierta.
-    expect(prismaMock.$transaction).toHaveBeenCalledTimes(1);
+    expect(prismaMock.conteo.createMany).not.toHaveBeenCalled();
     expect(prismaMock.hojaConteo.update).toHaveBeenCalledWith({
       where: { id: 7 },
       data: { estado: 'finalizada', sync: 'sincronizado' },
     });
   });
 
-  it('con todo contado no inventa ceros: createMany con lista vacía', async () => {
-    prismaMock.hojaConteo.findUnique.mockResolvedValue(hojaEnProceso());
-    prismaMock.producto.findMany.mockResolvedValue([]);
-
-    await finalizar(CONTADOR, 7);
-
-    expect(prismaMock.conteo.createMany.mock.calls[0]![0].data).toEqual([]);
-  });
-
-  it('una hoja YA finalizada no vuelve a rellenar: ni busca productos ni crea conteos', async () => {
+  it('una hoja YA finalizada no vuelve a validar: ni busca productos sin contar ni escribe nada', async () => {
     prismaMock.hojaConteo.findUnique.mockResolvedValue({
       ...hojaEnProceso(),
       estado: 'finalizada',
       sync: 'sincronizado',
     });
 
-    await finalizar(CONTADOR, 7);
-
-    // La cola reintenta finalizar (es idempotente): la segunda vez no escribe
-    // nada -- ni ceros, ni estado.
+    // Idempotente: reintentar un `finalizar` ya hecho no puede rechazar --
+    // la cola offline lo reintenta y un 409 acá dejaría el item trabado en
+    // error para siempre por algo que ya se cumplió.
+    await expect(finalizar(CONTADOR, 7)).resolves.toMatchObject({ estado: 'finalizada' });
     expect(prismaMock.producto.findMany).not.toHaveBeenCalled();
     expect(prismaMock.conteo.createMany).not.toHaveBeenCalled();
     expect(prismaMock.hojaConteo.update).not.toHaveBeenCalled();

@@ -509,48 +509,45 @@ export async function finalizar(actor: ColaboradorAutenticado, hojaId: number): 
 
   if (hoja.estado !== 'finalizada') {
     /**
-     * DECISIÓN DEL CLIENTE (2026-09-05): al finalizar, un renglón SIN CONTAR
-     * no queda como "faltan N" -- se registra un Conteo en 0 explícito ("si
-     * no hay el producto, es 0"). Es una AFIRMACIÓN de quien finaliza la hoja
-     * ("miré la góndola, no hay"), no el cero automático que
-     * `dominio/ciclo-conteos.ts` (115-127) prohíbe para lo que NADIE miró:
-     * ahí sigue vigente que un ítem jamás mirado NO se asume cero -- lo que
-     * cambia es que finalizar ES ese acto humano de mirar y cerrar.
+     * DECISIÓN DEL CLIENTE (2026-09-11), vuelta atrás de fb2e224: acá el
+     * servidor rellenaba con 0 cada producto sin contar al finalizar ("si
+     * no hay el producto, es 0"). Después el cliente decidió otra regla, en
+     * la app (76394fd): 'Finalizar' no aparece hasta que TODOS los
+     * productos tengan valor, porque un 0 significa "lo vi y no había", y
+     * eso lo tiene que decir la PERSONA, no el sistema. Un relleno
+     * automático es exactamente lo que esa regla prohíbe -- rellenar en
+     * silencio es afirmar en nombre de alguien que nunca miró ese renglón.
      *
-     * Ojo, deja desactualizada una premisa escrita en otro lado: el
-     * comentario de `rondas.service.ts#cerrar` ("Este cierre NO los da por
-     * cero") describe el estado ANTERIOR a este cambio. El cierre sigue sin
-     * tocar nada -- es `finalizar` el que ahora deja esos 0, y el cierre los
-     * trata como cualquier conteo real: 0 vs stock > 0 = diferencia y va a
-     * recontar; 0 vs stock 0 = cuadra (ver ciclo-conteos.ts#destinoTrasRonda).
+     * Por eso ahora el servidor RECHAZA en vez de rellenar: así la regla
+     * vale aunque alguien llegue por otro camino que la pantalla de Contar
+     * (un cliente viejo, un script, la cola offline reintentando algo que
+     * quedó a medias). 409 y no 400: la hoja no está mal formada, está
+     * incompleta -- misma familia que "hoja finalizada" de más arriba, un
+     * conflicto de estado, no un error de la solicitud.
      *
-     * Se registran los 0 con el actor que finaliza (la hoja ya es suya:
-     * `validarEscrituraDeHoja` lo exige arriba) -- el Conteo no lleva
-     * colaborador propio, la autoría vive en el asignado de la hoja.
-     *
-     * En la MISMA transacción que el cambio de estado: escribir los 0 y que
-     * fallara el `finalizada` dejaría ceros inventados en una hoja sin cerrar.
-     * `createMany` + `skipDuplicates` sobre @@unique([hojaId, productoId]) es
-     * lo que lo hace seguro contra la carrera con un conteo REAL que llegue
-     * entre la lectura de `sinContar` y esta escritura: si ya existe un
-     * Conteo para ese producto, se saltea y NUNCA lo pisa con 0.
+     * Sin transacción: ya no hay dos escrituras que mantener juntas (antes
+     * eran los 0 + el cambio de estado) -- que quedaban abajo era la ÚNICA
+     * razón para envolverlas.
      */
     const sinContar = await prisma.producto.findMany({
       where: { hojaId, conteos: { none: {} } },
       select: { id: true },
     });
-    const contadoEn = new Date();
 
-    await prisma.$transaction([
-      prisma.conteo.createMany({
-        data: sinContar.map((p) => ({ hojaId, productoId: p.id, sueltas: 0, contadoEn })),
-        skipDuplicates: true,
-      }),
-      prisma.hojaConteo.update({
-        where: { id: hojaId },
-        data: { estado: 'finalizada', sync: 'sincronizado' },
-      }),
-    ]);
+    if (sinContar.length > 0) {
+      // "Falta" impersonal, invariante: el sujeto de la oración no es
+      // "productos" (que concordaría con "faltan"), es "contar N productos"
+      // como bloque -- "falta contar 2 productos", no "faltan contar 2 productos".
+      throw new Conflicto(
+        `Todavía falta contar ${sinContar.length} producto${sinContar.length === 1 ? '' : 's'} de esta hoja. ` +
+          'Cada producto necesita un valor antes de finalizar -- si no había nada, se carga 0 a mano.',
+      );
+    }
+
+    await prisma.hojaConteo.update({
+      where: { id: hojaId },
+      data: { estado: 'finalizada', sync: 'sincronizado' },
+    });
   }
 
   return detalle(actor, hojaId);
