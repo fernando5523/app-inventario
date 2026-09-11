@@ -12,6 +12,7 @@ import type { HojaConteo, Rol, Sucursal } from '../../lib/dominio/tipos';
 import { useSesion } from '../../lib/sesion-contexto';
 import { useSucursalAuditada } from '../../lib/sucursal-auditada-contexto';
 import { colors, fonts, fontSize, spacing } from '../../lib/theme';
+import { debeReintentarAutomaticamente, INTERVALO_REINTENTO_MS, REINTENTO_INICIAL, trasIntentoFallido } from '../hooks/refresco';
 import { useRefrescoAlEnfocar } from '../hooks/useRefrescoAlEnfocar';
 import { ACCESOS_POR_ROL } from '../navegacion/accesos';
 import { PantallaConTabs } from '../navegacion/PantallaConTabs';
@@ -223,6 +224,33 @@ export function InicioScreen(): JSX.Element {
   // siguiente con esta pantalla todavía abierta, sin cambiar de tab) --
   // los dos disparadores con un solo candado contra solapamiento.
   const { refrescar } = useRefrescoAlEnfocar(cargar);
+
+  // REINTENTO AUTOMÁTICO cuando la descarga de `misHojas` falló (bug real,
+  // 2026-09-11): antes, un "0 hojas asignadas" (en realidad "no se pudo
+  // bajar todavía") se quedaba así hasta que la persona entraba a Mis hojas
+  // y volvía -- no porque esa pantalla haga algo distinto (usa el MISMO
+  // useRefrescoAlEnfocar), sino porque cada visita dispara UN INTENTO MÁS y
+  // el fallo original era transitorio. El cliente fue explícito: ningún
+  // dato depende de navegar a otra pantalla, así que el reintento lo
+  // dispara esta misma pantalla, sola, sin que nadie la vuelva a enfocar.
+  // Ver components/hooks/refresco.ts para el porqué del tope y el intervalo.
+  const intentosAutoRef = useRef(REINTENTO_INICIAL);
+  useEffect(() => {
+    if (sesion?.colaborador.rol !== 'conteo') return;
+    if (resultadoMias?.ok !== false) {
+      // Éxito (o sin intento todavía): se resetea el cupo para la próxima
+      // vez que haga falta, en vez de arrastrar intentos de una falla ya
+      // resuelta.
+      intentosAutoRef.current = REINTENTO_INICIAL;
+      return;
+    }
+    if (!debeReintentarAutomaticamente(intentosAutoRef.current)) return;
+    const id = setTimeout(() => {
+      intentosAutoRef.current = trasIntentoFallido(intentosAutoRef.current);
+      void cargar();
+    }, INTERVALO_REINTENTO_MS);
+    return () => clearTimeout(id);
+  }, [sesion, resultadoMias, cargar]);
 
   // El Auditor cambia la sucursal en OTRA pantalla; acá la sede (rótulo) sigue
   // el contexto al instante, pero las cifras venían del fetch anterior hasta el
