@@ -11,7 +11,6 @@ import type {
   ParametrosInventario,
   ParametrosLineaAjuste,
   ParametrosSucursal,
-  RegistrarAjustesInput,
 } from './liquidacion.schema';
 
 /**
@@ -47,20 +46,7 @@ export const liquidar = asyncHandler(async (req: RequestAutenticado, res: Respon
   res.status(201).json(await cierre.liquidar(req.colaborador!, inventarioId));
 });
 
-/**
- * Los ajustes del mes. `PUT` y no `POST` porque es idempotente: cargar dos
- * veces el mismo monto deja el mismo estado, y corregir un monto mal tipeado
- * antes de liquidar tiene que ser posible.
- *
- * 200 y no 201: no crea un recurso nuevo, completa el `ResultadoInventario`
- * que ya existe.
- */
-export const registrarAjustes = asyncHandler(async (req: RequestAutenticado, res: Response) => {
-  const { inventarioId } = req.params as unknown as ParametrosInventario;
-  const datos = req.body as RegistrarAjustesInput;
-  res.json(await ajustes.registrarAjustes(req.colaborador!, inventarioId, datos));
-});
-
+/** El estado de los ajustes del mes -- solo lectura (el PUT se borró el 2026-09-14, ver liquidacion.ajustes.ts). */
 export const estadoAjustes = asyncHandler(async (req: RequestAutenticado, res: Response) => {
   const { inventarioId } = req.params as unknown as ParametrosInventario;
   res.json(await ajustes.estadoDeAjustes(req.colaborador!, inventarioId));

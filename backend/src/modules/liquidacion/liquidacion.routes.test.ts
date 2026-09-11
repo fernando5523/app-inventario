@@ -30,7 +30,6 @@ vi.mock('./liquidacion.controller', () =>
     'deSucursal',
     'conciliacion',
     'liquidar',
-    'registrarAjustes',
     'estadoAjustes',
     'previsualizarAjustesNegativos',
     'confirmarAjustesNegativos',
@@ -61,7 +60,7 @@ afterEach(async () => {
 
 interface Endpoint {
   nombre: string;
-  metodo: 'GET' | 'PUT' | 'POST' | 'PATCH';
+  metodo: 'GET' | 'POST' | 'PATCH';
   ruta: string;
   cuerpo?: unknown;
   /** El .xlsx crudo (bytes), no JSON -- ver `cuerpoExcel` en liquidacion.routes.ts. */
@@ -72,12 +71,6 @@ const ENDPOINTS: Endpoint[] = [
   { nombre: 'GET /sucursales/:id', metodo: 'GET', ruta: '/api/liquidacion/sucursales/1' },
   { nombre: 'GET /sucursales/:id/conciliacion', metodo: 'GET', ruta: '/api/liquidacion/sucursales/1/conciliacion' },
   { nombre: 'GET /inventarios/:id/ajustes', metodo: 'GET', ruta: '/api/liquidacion/inventarios/1/ajustes' },
-  {
-    nombre: 'PUT /inventarios/:id/ajustes',
-    metodo: 'PUT',
-    ruta: '/api/liquidacion/inventarios/1/ajustes',
-    cuerpo: { nota: 'Mermas.' },
-  },
   { nombre: 'POST /inventarios/:id/liquidar', metodo: 'POST', ruta: '/api/liquidacion/inventarios/1/liquidar' },
   {
     nombre: 'POST /inventarios/:id/ajustes-negativos/preview',
@@ -155,37 +148,23 @@ describe.each(ENDPOINTS)('$nombre: solo el auditor', (e) => {
   });
 });
 
-describe('PUT /api/liquidacion/inventarios/:id/ajustes: el cuerpo', () => {
-  const ajustes = ENDPOINTS.find((e) => e.metodo === 'PUT')!;
-
-  it('sin nota, 400 -- un ajuste sin explicación no se puede auditar después', async () => {
+/**
+ * PUT /ajustes YA NO EXISTE (2026-09-14): los ajustes a favor del personal
+ * entran por el Excel de Dynamics y el faltante de empresa lo calcula la
+ * clasificación; la nota que quedaba no la leía nada más. La guarda de
+ * liquidar solo mira `montoNegativos` (liquidacion.cierre.ts), que escribe el
+ * Excel: sacar el endpoint no bloquea ninguna liquidación. La LECTURA
+ * (GET /ajustes) sigue, y está en la matriz de arriba.
+ */
+describe('PUT /api/liquidacion/inventarios/:id/ajustes: ya no existe', () => {
+  it('auditor, 404: la ruta se sacó', async () => {
     await iniciar();
-    expect((await pedir(ajustes, AUDITOR, {})).status).toBe(400);
-  });
-
-  it('con nota vacía, 400', async () => {
-    await iniciar();
-    expect((await pedir(ajustes, AUDITOR, { nota: '   ' })).status).toBe(400);
-  });
-
-  /**
-   * montoEmpresa YA NO se acepta (2026-09-14): la fuente de verdad del
-   * faltante de empresa pasó a ser la clasificación que evalúa
-   * `liquidacion.cierre.ts#liquidar` (ClasificacionProducto), no un monto
-   * tipeado acá -- ver liquidacion.ajustes.ts. Sin `.strict()` a propósito:
-   * un cliente viejo (mobile todavía sin actualizar) que lo siga mandando no
-   * se tiene que romper -- Zod lo descarta solo, y el 200 lo prueba.
-   */
-  it('montoEmpresa YA NO se acepta: viaja igual (cliente viejo) pero el servidor lo ignora en silencio', async () => {
-    await iniciar();
-    expect((await pedir(ajustes, AUDITOR, { montoEmpresa: -100, nota: 'x' })).status).toBe(200);
-  });
-
-  it('solo nota, sin montoEmpresa, pasa: montoNegativos ya no se carga acá', async () => {
-    await iniciar();
-    expect((await pedir(ajustes, AUDITOR, { nota: 'Revisado, sin cambios en el monto de empresa.' })).status).toBe(
-      200,
-    );
+    const r = await fetch(`${baseUrl}/api/liquidacion/inventarios/1/ajustes`, {
+      method: 'PUT',
+      headers: { ...autorizacion(AUDITOR), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ nota: 'x' }),
+    });
+    expect(r.status).toBe(404);
   });
 });
 

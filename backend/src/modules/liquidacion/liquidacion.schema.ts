@@ -10,31 +10,8 @@ export const parametrosInventarioSchema = z.object({
 });
 export type ParametrosInventario = z.infer<typeof parametrosInventarioSchema>;
 
-/**
- * Los ajustes del mes que siguen siendo manuales por acá: la nota.
- *
- * `montoNegativos` ya NO se carga por acá -- lo reemplaza la importación del
- * Excel de Dynamics (liquidacion.ajustes-negativos.ts,
- * liquidacion.schema.ts#previsualizarAjustesNegativosQuerySchema más abajo).
- *
- * `montoEmpresa` TAMPOCO se carga más por acá (2026-09-14): la fuente de
- * verdad del faltante de empresa pasó a ser la clasificación que evalúa
- * `liquidacion.cierre.ts#liquidar` contra `ClasificacionProducto` (decisión
- * del cliente: el Auditor clasifica PRODUCTOS, no tipea un monto agregado).
- * Un monto manual que `liquidar()` ignoraba en silencio era un dato que
- * mentía -- ver liquidacion.reclasificacion.ts. Sin `.strict()`: un cliente
- * viejo que todavía mande `montoEmpresa` no tiene que romper, Zod lo
- * descarta solo.
- */
-export const registrarAjustesSchema = z.object({
-  /**
-   * OBLIGATORIA. Un ajuste sin explicación es un número que nadie puede
-   * auditar después -- y este número baja lo que se le descuenta a once
-   * personas.
-   */
-  nota: z.string().trim().min(1, 'Contá de dónde salen estos ajustes: sin nota no se puede auditar después.').max(500),
-});
-export type RegistrarAjustesInput = z.infer<typeof registrarAjustesSchema>;
+// Sin schema de PUT /ajustes: el endpoint se borró el 2026-09-14 (ver
+// liquidacion.ajustes.ts). Los ajustes entran por el Excel de Dynamics.
 
 /** El nombre del archivo Excel que se está confirmando -- para dejarlo en `ImportacionAjustesDynamics.nombreArchivo`. */
 export const confirmarAjustesNegativosQuerySchema = z.object({

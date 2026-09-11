@@ -9,14 +9,13 @@ import {
   parametrosInventarioSchema,
   parametrosLineaAjusteSchema,
   parametrosSucursalSchema,
-  registrarAjustesSchema,
 } from './liquidacion.schema';
 
 /**
  * Liquidacion y nomina (pantalla 6).
  *
  * SOLO el `auditor`, en TODOS los endpoints: leer la planilla y la
- * conciliacion, cargar los ajustes y cerrarla. Decision del cliente
+ * conciliacion, importar el Excel de ajustes y cerrarla. Decision del cliente
  * (2026-09-11); el razonamiento -- y lo que deja abierto sobre el control de
  * dos personas -- esta en liquidacion.permisos.ts.
  *
@@ -49,17 +48,11 @@ liquidacionRouter.post(
 );
 
 /**
- * Los ajustes del mes: el paso que faltaba para poder liquidar. Cargarlos es
- * decidir cuanta plata NO se le descuenta al personal -- es parte de la
- * liquidacion, asi que el mismo permiso.
+ * El estado de los ajustes del mes: SOLO lectura. El PUT que los cargaba a
+ * mano se borro (2026-09-14): el monto entra por el Excel de Dynamics (abajo)
+ * y la nota que quedaba no la leia nada mas. Las notas de inventarios viejos
+ * se siguen devolviendo aca, tal cual se guardaron.
  */
-liquidacionRouter.put(
-  '/inventarios/:inventarioId/ajustes',
-  validar(parametrosInventarioSchema, 'params'),
-  validar(registrarAjustesSchema, 'body'),
-  controller.registrarAjustes,
-);
-
 liquidacionRouter.get(
   '/inventarios/:inventarioId/ajustes',
   validar(parametrosInventarioSchema, 'params'),
