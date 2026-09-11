@@ -34,7 +34,6 @@ export const ACCESOS_POR_ROL: Record<Rol, DefinicionAcceso[]> = {
   coordinador: [
     { titulo: 'Gestión de hojas', sub: 'Crear y asignar las hojas de conteo', ruta: '/coordinador/hojas' },
     { titulo: 'Ciclo de conteos', sub: 'Embudo de discrepancias entre las 3 pasadas', ruta: '/coordinador/ciclo' },
-    { titulo: 'Liquidación y nómina', sub: 'Cierre de fin de mes', ruta: '/coordinador/liquidacion' },
     { titulo: 'Mi cuenta', sub: 'Cambiar tu PIN', ruta: '/coordinador/mi-cuenta' },
   ],
   conteo: [
@@ -44,6 +43,10 @@ export const ACCESOS_POR_ROL: Record<Rol, DefinicionAcceso[]> = {
   auditor: [
     { titulo: 'Panel de auditoría', sub: 'Comparar los 3 conteos contra el ERP', ruta: '/auditor/auditoria' },
     { titulo: 'Ciclo de conteos', sub: 'Embudo de discrepancias entre las 3 pasadas', ruta: '/auditor/ciclo' },
+    // Decisión del cliente (2026-09-11): la liquidación pasó del Coordinador
+    // al Auditor. Va ANTES del lacrado porque es el orden del cierre: se
+    // liquida primero y se lacra después (el lacrado exige `liquidado`).
+    { titulo: 'Liquidación y nómina', sub: 'Cierre de fin de mes', ruta: '/auditor/liquidacion' },
     { titulo: 'Aprobación y lacrado', sub: 'Firma y cierre del inventario auditado', ruta: '/auditor/lacrado' },
     { titulo: 'Usuarios de mi sucursal', sub: 'Crear y habilitar cuentas', ruta: '/auditor/usuarios' },
     { titulo: 'Historial de inventarios', sub: 'Cierres de mi sucursal, período por período', ruta: '/auditor/historial' },

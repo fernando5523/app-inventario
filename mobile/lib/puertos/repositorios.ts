@@ -541,7 +541,7 @@ export type Conciliacion =
       advertencia: AdvertenciaLiquidacion;
     };
 
-/** Solo lo usa el Coordinador (cierre de fin de mes, pantalla 6). */
+/** Solo lo usa el Auditor (cierre de fin de mes, pantalla 6): pasó del Coordinador el 2026-09-11. */
 /**
  * Los ajustes del mes: entradas y salidas que bajan el faltante antes de
  * repartirlo. Lo que faltaba para poder cerrar el mes.
@@ -607,9 +607,9 @@ export interface RepositorioLiquidacion {
    * como el lacrado exige ese estado, todo el cierre del mes quedaba
    * inalcanzable en la app aunque el backend estuviera completo.
    *
-   * Lo hace el Coordinador o el Administrador, nunca el Auditor: el sello que
-   * él firma después incluye esta planilla, y quien la cierra no puede
-   * además firmarla.
+   * Lo hace el Auditor (decisión del cliente, 2026-09-11): el backend le
+   * responde 403 a cualquier otro rol. Ver backend liquidacion.permisos.ts,
+   * incluida la nota sobre el control de dos personas del lacrado.
    *
    * Rechaza (409) si faltan los ajustes del mes, si nadie registró conteos, o
    * si ya se liquidó. Esos mensajes se muestran tal cual: dicen qué falta.

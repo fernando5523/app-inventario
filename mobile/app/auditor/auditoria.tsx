@@ -151,10 +151,10 @@ export default function AuditoriaScreen(): JSX.Element {
   }
 
   function irALacrado(): void {
-    // El destino correcto para el Auditor es lacrado, no liquidación: en
-    // auditoria.html (maqueta) el botón decía "Generar liquidación", pero
-    // esa pantalla es del Coordinador — el Auditor cierra el ciclo con
-    // aprobación y lacrado (app/auditor/lacrado.tsx).
+    // Va a aprobación y lacrado (app/auditor/lacrado.tsx). La maqueta
+    // (auditoria.html) decía "Generar liquidación": la liquidación también es
+    // del Auditor desde el 2026-09-11, y se abre desde Inicio ("Liquidación y
+    // nómina"), antes del lacrado.
     router.push('/auditor/lacrado');
   }
 

@@ -1,15 +1,17 @@
 import { router } from 'expo-router';
 import { AlertTriangle, Check, ClipboardEdit, Layers, Scale, Wallet } from 'lucide-react-native';
-import { useCallback, useMemo, useState, type JSX } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type JSX } from 'react';
 import { ActivityIndicator, Alert, Pressable, RefreshControl, StyleSheet, Text, TextInput, View } from 'react-native';
 
 import { useRefrescoAlEnfocar } from '../../components/hooks/useRefrescoAlEnfocar';
 
 import { PantallaConTabs } from '../../components/navegacion/PantallaConTabs';
 import { BarraApp, Badge, Button, formatoFechaHora } from '../../components/ui';
-import { repositorioLiquidacion } from '../../lib/contenedor';
+import { repositorioLiquidacion, repositorioSesion } from '../../lib/contenedor';
 import { textoDeAjustes, validarAjustes } from '../../lib/dominio/ajustes-formulario';
 import { asistentesConCentavoExtra, resumirAsistencia } from '../../lib/dominio/reparto-visible';
+import { sucursalEnFoco } from '../../lib/dominio/sucursal-en-foco';
+import type { Sucursal } from '../../lib/dominio/tipos';
 import type {
   AjustesDelMes,
   CierreLiquidacion,
@@ -19,6 +21,7 @@ import type {
   Liquidacion,
 } from '../../lib/puertos/repositorios';
 import { useSesion } from '../../lib/sesion-contexto';
+import { useSucursalAuditada } from '../../lib/sucursal-auditada-contexto';
 import { colors, fonts, fontSize, radius, spacing } from '../../lib/theme';
 
 const nf = new Intl.NumberFormat('es-PE', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -53,7 +56,15 @@ const MOTIVO_SIN_AJUSTES = 'No se puede calcular: faltan los ajustes del mes.';
  * la persona tocando un botón en loop.
  */
 const SIN_CICLO_CERRADO =
-  'Todavía no hay un inventario con el conteo cerrado en esta tienda. Cierra las 3 rondas desde Ciclo de conteos y vuelve aquí.';
+  'Todavía no hay un inventario con el conteo cerrado en esta tienda. Cuando se cierren las 3 rondas en Ciclo de conteos, vuelve aquí.';
+
+/**
+ * Auditor sin tienda en la ficha que todavía no eligió ninguna: no hay
+ * sucursal que pedir, y la pantalla lo dice en vez de inventar una (ver
+ * `sucursalEnFoco`).
+ */
+const SIN_SUCURSAL =
+  'Elige la tienda en el Panel de auditoría (Sucursal a auditar): la liquidación sigue a la sucursal elegida.';
 
 type Filtro = 'todos' | 'asistio' | 'falto';
 
@@ -67,8 +78,16 @@ function filtrar(planilla: DetalleLiquidacion[], filtro: Filtro): DetalleLiquida
 
 /**
  * Liquidación y nómina (mobile/design/liquidacion.html) — acceso del
- * Coordinador, cierre de fin de mes: faltante neto -> cuota base -> multas
- * por inasistencia, y la planilla de los 11 colaboradores filtrable.
+ * AUDITOR, cierre de fin de mes: faltante neto -> cuota base -> multas por
+ * inasistencia, y la planilla de los 11 colaboradores filtrable.
+ *
+ * Fue del Coordinador hasta el 2026-09-11. Decisión del cliente: "el
+ * Coordinador deja de ver la liquidacion y ejecutarlo, ahora lo realiza el
+ * auditor" -- el backend ya le responde 403 (liquidacion.permisos.ts).
+ *
+ * Sigue la sucursal COMPARTIDA que el auditor eligió en Auditoría, Ciclo,
+ * Historial o Inicio: audita toda la cadena, no una tienda (ver
+ * lib/sucursal-auditada-contexto.tsx).
  *
  * Los montos en soles son los mismos del mockup (el propio mockup los
  * marca como ilustrativos) — vienen de `repositorioLiquidacion`, ninguno
@@ -87,16 +106,34 @@ export default function LiquidacionScreen(): JSX.Element {
   /** Lo que devolvió `liquidar` en ESTA sesión: alimenta el cartel de "ya está cerrada". */
   const [cerrado, setCerrado] = useState<CierreLiquidacion | null>(null);
 
+  // La sucursal COMPARTIDA (contexto), no la de la ficha: mismo criterio que
+  // lacrado.tsx. El padrón resuelve el nombre para la barra.
+  const { elegida } = useSucursalAuditada();
+  const [padronSucursales, setPadronSucursales] = useState<Sucursal[]>([]);
+  useEffect(() => {
+    repositorioSesion.sucursales().then(setPadronSucursales);
+  }, []);
+  const sucursalId = sucursalEnFoco({
+    rol: sesion?.colaborador.rol ?? 'auditor',
+    sucursalDeSesion: sesion?.sucursal?.id ?? null,
+    elegida,
+  });
+  const nombreSucursal = padronSucursales.find((s) => s.id === sucursalId)?.nombre ?? sesion?.sucursal?.nombre;
+
   const cargar = useCallback(async () => {
     if (!sesion) return;
+    if (sucursalId === null) {
+      setCargando(false);
+      return;
+    }
     setError(null);
     try {
       // Piden lo mismo (el último ciclo cerrado de la sucursal): si uno es
       // null el otro también lo es, pero se piden en paralelo en vez de
       // encadenados porque no dependen entre sí.
       const [resultadoLiq, resultadoConc] = await Promise.all([
-        repositorioLiquidacion.deSucursal(sesion.sucursal!.id),
-        repositorioLiquidacion.conciliacion(sesion.sucursal!.id),
+        repositorioLiquidacion.deSucursal(sucursalId),
+        repositorioLiquidacion.conciliacion(sucursalId),
       ]);
       setLiquidacion(resultadoLiq);
       setConciliacion(resultadoConc);
@@ -113,7 +150,7 @@ export default function LiquidacionScreen(): JSX.Element {
     } finally {
       setCargando(false);
     }
-  }, [sesion]);
+  }, [sesion, sucursalId]);
 
   // Al enfocar Y al volver la app a primer plano -- pedido del cliente. Ver
   // components/hooks/useRefrescoAlEnfocar.ts.
@@ -127,6 +164,26 @@ export default function LiquidacionScreen(): JSX.Element {
   const { refrescando, refrescar } = useRefrescoAlEnfocar(cargar, {
     pausado: guardandoAjustes || liquidando,
   });
+
+  // Cambió la tienda elegida: `cargar` cambia con ella, pero
+  // useRefrescoAlEnfocar solo recarga al enfocar. Se recarga YA, y se limpia
+  // lo anterior ANTES: la barra ya dice la tienda nueva, y dejar la planilla
+  // de la anterior sería un número con el apellido equivocado (mismo criterio
+  // que auditoria.tsx). El primer render lo saltea: esa carga la hace el hook.
+  const primerRender = useRef(true);
+  useEffect(() => {
+    if (primerRender.current) {
+      primerRender.current = false;
+      return;
+    }
+    setLiquidacion(null);
+    setConciliacion(null);
+    setAjustes(null);
+    setCerrado(null);
+    setError(null);
+    setCargando(true);
+    void cargar();
+  }, [cargar]);
 
   const visibles = useMemo(() => (liquidacion ? filtrar(liquidacion.planilla, filtro) : []), [liquidacion, filtro]);
 
@@ -163,7 +220,7 @@ export default function LiquidacionScreen(): JSX.Element {
       'Cerrar la planilla',
       `Faltante neto: ${soles(liquidacion.faltanteNeto)}\n` +
         `Alcanza a ${liquidacion.planilla.length} colaboradores.\n\n` +
-        'Esto cierra la planilla: los descuentos quedan firmes y solo un auditor puede lacrar después. No se puede deshacer.',
+        'Esto cierra la planilla: los descuentos quedan firmes y el paso siguiente es el lacrado. No se puede deshacer.',
       [
         { text: 'Cancelar', style: 'cancel' },
         { text: 'Liquidar', style: 'destructive', onPress: () => void confirmarLiquidacion() },
@@ -241,7 +298,7 @@ export default function LiquidacionScreen(): JSX.Element {
     >
       <BarraApp
         rotulo="Gestión masiva"
-        sede={`Liquidación · ${sesion.sucursal!.nombre}`}
+        sede={nombreSucursal ? `Liquidación · ${nombreSucursal}` : 'Liquidación'}
         cifras={liquidacion ? `${liquidacion.periodo} · ${liquidacion.planilla.length} colaboradores` : undefined}
         onSalir={salir}
       />
@@ -259,6 +316,12 @@ export default function LiquidacionScreen(): JSX.Element {
       */}
       {cargando ? (
         <ActivityIndicator color={colors.rojo} style={styles.cargando} />
+      ) : sucursalId === null ? (
+        <View style={styles.tarjeta}>
+          <Text style={styles.tarjetaTitulo}>Elige una tienda</Text>
+          <Text style={styles.tarjetaTexto}>{SIN_SUCURSAL}</Text>
+          <Button label="Ir al Panel de auditoría" variant="outline" onPress={() => router.push('/auditor/auditoria')} />
+        </View>
       ) : error !== null ? (
         <View style={styles.tarjeta}>
           <Text style={styles.tarjetaTitulo}>No se pudo cargar la liquidación</Text>
@@ -273,7 +336,7 @@ export default function LiquidacionScreen(): JSX.Element {
             <Text style={styles.tarjetaTitulo}>Todavía no hay nada que liquidar</Text>
           </View>
           <Text style={styles.tarjetaTexto}>{SIN_CICLO_CERRADO}</Text>
-          <Button label="Ir al ciclo de conteos" variant="outline" onPress={() => router.push('/coordinador/ciclo')} />
+          <Button label="Ir al ciclo de conteos" variant="outline" onPress={() => router.push('/auditor/ciclo')} />
         </View>
       ) : (
         <>
@@ -392,7 +455,7 @@ export default function LiquidacionScreen(): JSX.Element {
           {/* Por qué el total de la planilla no da EXACTO contra el
               faltante neto -- el residuo de redondeo de la cuota, y si lo
               recaudado por inasistencia se repartió entero. Para que el
-              Coordinador lo vea ANTES de lacrar, no después de que alguien
+              Auditor lo vea ANTES de liquidar, no después de que alguien
               de Contabilidad pregunte por qué no cierra. */}
           {conciliacion ? (
             <View style={styles.tarjeta}>
@@ -535,9 +598,9 @@ export default function LiquidacionScreen(): JSX.Element {
                 {cerrado.colaboradores} colaboradores quedaron firmes por {soles(cerrado.totalDescontado)} en total.
               </Text>
               <Text style={styles.tarjetaTexto}>
-                El paso que sigue es el lacrado, y lo firma un auditor — no tú: el sello incluye esta planilla, y quien
-                la cierra no puede además firmarla.
+                El paso que sigue es la aprobación y el lacrado: el sello incluye esta planilla.
               </Text>
+              <Button label="Ir a aprobación y lacrado" variant="outline" onPress={() => router.push('/auditor/lacrado')} />
             </View>
           ) : (
             <CierreDePlanilla
@@ -605,17 +668,17 @@ function CierreDePlanilla({
       {puedeLiquidar ? (
         <Text style={styles.tarjetaTexto}>
           Vas a dejar firmes los descuentos de {liquidacion.planilla.length} colaboradores por{' '}
-          {soles(liquidacion.faltanteNeto!)} de faltante neto. Después de esto, solo un auditor puede lacrar.
+          {soles(liquidacion.faltanteNeto!)} de faltante neto. Después de esto sigue el lacrado.
         </Text>
       ) : (
         // Dice QUÉ falta, no "no se puede": si el botón está apagado, la
         // persona tiene que saber qué ir a hacer.
         <Text style={styles.tarjetaTexto}>
           {!ajustesListos
-            ? 'Primero cargá los ajustes del mes, arriba. Sin eso no se puede calcular lo que se le descuenta a cada persona.'
+            ? 'Primero carga los ajustes del mes, arriba. Sin eso no se puede calcular lo que se le descuenta a cada persona.'
             : asistentes === 0
               ? 'Ningún colaborador registró conteos en este inventario: no hay asistencia deducible ni a quién repartir el faltante. Revisa que las hojas tengan conteos cargados.'
-              : 'Todavía no se puede calcular la planilla: revisá las advertencias de arriba.'}
+              : 'Todavía no se puede calcular la planilla: revisa las advertencias de arriba.'}
         </Text>
       )}
 
@@ -709,7 +772,7 @@ function TarjetaAjustes({
             keyboardType="decimal-pad"
             // Vacío NO es 0: dejarlo así conserva el monto que calculó el
             // cierre del conteo desde las categorías de empresa.
-            placeholder="Dejalo vacío para conservar el calculado"
+            placeholder="Déjalo vacío para conservar el calculado"
             placeholderTextColor={colors.gris}
           />
 
