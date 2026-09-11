@@ -313,6 +313,14 @@ export interface ListadoLineasAjustesNegativosDto {
    */
   importacion: ImportacionVigenteDto | null;
   lineas: readonly LineaAjusteNegativoDto[];
+  /**
+   * `false` una vez que el inventario ya está `liquidado` o `lacrado` -- lo
+   * que usa la pantalla para bloquear los botones de excluir/incluir ANTES
+   * de intentar la llamada. No reemplaza el bloqueo real del backend
+   * (`validarEstadoParaAjustar`, en excluirLineaAjusteNegativo/
+   * incluirLineaAjusteNegativo): es la versión "no dejar ni tocar el botón".
+   */
+  puedeEditar: boolean;
 }
 
 /**
@@ -329,8 +337,10 @@ export async function listarLineasAjusteNegativo(
 ): Promise<ListadoLineasAjustesNegativosDto> {
   validarAcceso(actor);
 
-  const inventario = await prisma.inventario.findUnique({ where: { id: inventarioId }, select: { id: true } });
+  const inventario = await prisma.inventario.findUnique({ where: { id: inventarioId }, select: { id: true, estado: true } });
   if (inventario === null) throw new NoEncontrado('Ese inventario no existe.');
+
+  const puedeEditar = inventario.estado !== 'liquidado' && inventario.estado !== 'lacrado';
 
   const importacion = await prisma.importacionAjustesDynamics.findFirst({
     where: { inventarioId, vigente: true },
@@ -343,9 +353,10 @@ export async function listarLineasAjusteNegativo(
     },
   });
 
-  if (importacion === null) return { importacion: null, lineas: [] };
+  if (importacion === null) return { importacion: null, lineas: [], puedeEditar };
 
   return {
+    puedeEditar,
     importacion: {
       id: importacion.id,
       nombreArchivo: importacion.nombreArchivo,

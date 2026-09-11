@@ -464,6 +464,7 @@ describe('listarLineasAjusteNegativo: NULL != 0 tambien en el listado', () => {
     const resultado = await listarLineasAjusteNegativo(AUDITOR, 9);
     expect(resultado.importacion).toBeNull();
     expect(resultado.lineas).toEqual([]);
+    expect(resultado.puedeEditar).toBe(true); // conteo_cerrado, el default de mockInventario()
   });
 
   it('importación vigente CON 0 líneas útiles: importacion NO es null (el archivo se importó de verdad)', async () => {
@@ -523,13 +524,21 @@ describe('listarLineasAjusteNegativo: NULL != 0 tambien en el listado', () => {
     });
   });
 
-  it('NO exige conteo_cerrado: se puede leer aunque el inventario ya esté liquidado o lacrado', async () => {
+  it('NO exige conteo_cerrado: se puede LEER aunque el inventario ya esté liquidado o lacrado', async () => {
     mockInventario({ estado: 'liquidado' });
     prismaMock.importacionAjustesDynamics.findFirst.mockResolvedValue(null);
-    await expect(listarLineasAjusteNegativo(AUDITOR, 9)).resolves.toEqual({ importacion: null, lineas: [] });
+    await expect(listarLineasAjusteNegativo(AUDITOR, 9)).resolves.toEqual({
+      importacion: null,
+      lineas: [],
+      puedeEditar: false,
+    });
 
     mockInventario({ estado: 'lacrado' });
-    await expect(listarLineasAjusteNegativo(AUDITOR, 9)).resolves.toEqual({ importacion: null, lineas: [] });
+    await expect(listarLineasAjusteNegativo(AUDITOR, 9)).resolves.toEqual({
+      importacion: null,
+      lineas: [],
+      puedeEditar: false,
+    });
   });
 
   it('pide la importación VIGENTE de ESTE inventario', async () => {
@@ -538,5 +547,25 @@ describe('listarLineasAjusteNegativo: NULL != 0 tambien en el listado', () => {
     expect(prismaMock.importacionAjustesDynamics.findFirst).toHaveBeenCalledWith(
       expect.objectContaining({ where: { inventarioId: 9, vigente: true } }),
     );
+  });
+
+  /**
+   * `puedeEditar` es lo que la PANTALLA usa para bloquear los botones de
+   * excluir/incluir ANTES de intentar la llamada -- no reemplaza el bloqueo
+   * real (`validarEstadoParaAjustar`, ya probado en el describe de
+   * excluir/incluir), es la versión "no dejes ni tocar el botón".
+   */
+  describe('puedeEditar', () => {
+    it.each([
+      ['conteo_cerrado', true],
+      ['en_curso', true],
+      ['liquidado', false],
+      ['lacrado', false],
+    ])('estado %s -> puedeEditar %s', async (estado, esperado) => {
+      mockInventario({ estado });
+      prismaMock.importacionAjustesDynamics.findFirst.mockResolvedValue(null);
+      const resultado = await listarLineasAjusteNegativo(AUDITOR, 9);
+      expect(resultado.puedeEditar).toBe(esperado);
+    });
   });
 });
