@@ -524,19 +524,14 @@ model CatalogoItem {
   /// Aditiva: `esEmpresa` sigue existiendo tal cual, no se toca.
   responsable ResponsableItem? @map("responsable")
 
-  /// EXCEPCION del Auditor a `esEmpresa`, copiada de ClasificacionProducto
-  /// al traer el snapshot (d365-catalogo.service.ts#crearSnapshot).
+  /// SIN USO -- nadie la escribe ni la lee. Se diseno para copiar aca la
+  /// excepcion del Auditor al traer el snapshot, pero despues se decidio
+  /// evaluar la clasificacion AL LIQUIDAR, leyendo ClasificacionProducto en
+  /// vivo (liquidacion.reclasificacion.ts). Queda en NULL en todas las filas.
   ///
-  /// null = sin excepcion: manda `esEmpresa` (Dynamics). La clasificacion
-  /// efectiva de un item es SIEMPRE `esEmpresaManual ?? esEmpresa`, y la
-  /// arma el service que construye la matriz -- auditoria.calculos.ts sigue
-  /// recibiendo un booleano y no se entera de donde salio.
-  ///
-  /// CONGELADA en el snapshot, igual que stockErp y precioVenta: si el
-  /// Auditor reclasifica un codigo en octubre, septiembre no se reescribe.
-  /// Columna APARTE y no un pisado de `esEmpresa`, a proposito: "que dijo
-  /// el ERP" y "que decidio el Auditor" son dos datos, y fusionarlos borra
-  /// el primero.
+  /// No se borra porque sacarla es una migracion. No la llenes sin revisar
+  /// esa decision: una copia congelada en el snapshot contradice justamente
+  /// que una reclasificacion posterior al cierre aplique igual.
   esEmpresaManual Boolean? @map("es_empresa_manual")
 
   createdAt DateTime @default(now()) @map("created_at")
@@ -945,23 +940,25 @@ model ResultadoInventario {
   /// ejemplo del cliente).
   montoFaltanteEmpresa Decimal @default(0) @map("monto_faltante_empresa") @db.Decimal(12, 2)
   /// Sobrante que va A FAVOR del personal: valor de los sobrantes de
-  /// productos NO empresa (clasificacion efectiva `esEmpresaManual ??
-  /// esEmpresa` = false), a precio de venta -- misma valorizacion que
+  /// productos NO empresa, a precio de venta -- misma valorizacion que
   /// montoFaltanteBruto. NO es `unidadesSobrantes` (cantidad fisica, empresa
   /// incluida) ni el `valorSobrante` de auditoria.calculos.ts (suma tambien
   /// los de empresa, y los productos de empresa no entran a la liquidacion,
   /// ni en contra ni a favor).
   ///
-  /// Congelado al cerrar el conteo (rondas.service.ts#cerrar), en la misma
-  /// transaccion que el resto del resultado.
+  /// Congelado AL LIQUIDAR (liquidacion.cierre.ts#liquidar), en la misma
+  /// transaccion que la planilla, con la clasificacion efectiva de ese
+  /// momento: ClasificacionProducto vigente ?? CatalogoItem.esEmpresa.
+  /// Motivo: si el Auditor reclasifica un producto despues del cierre del
+  /// conteo, tiene que aplicar igual a la liquidacion.
   ///
-  /// NULLABLE y SIN relleno para atras: NULL = "este inventario cerro antes
-  /// de que existiera la regla". historial.service.ts#resumirResultado
-  /// RECALCULA el neto en cada lectura, asi que ponerle un valor a un
-  /// inventario ya liquidado cambiaria el neto que muestra el historico --
-  /// distinto del que se desconto de verdad. La formula tiene que leer NULL
-  /// como "sin compensacion de sobrantes", la regla con la que ese
-  /// inventario se liquido. Distinto de 0 = "se calculo y no hubo".
+  /// NULLABLE y SIN relleno para atras: NULL = "no se liquido con esta
+  /// regla" -- todavia no se liquido, o se liquido antes de que existiera.
+  /// historial.service.ts#resumirResultado RECALCULA el neto en cada
+  /// lectura, asi que ponerle un valor a un inventario ya liquidado
+  /// cambiaria el neto que muestra el historico -- distinto del que se
+  /// desconto de verdad. Por eso la formula lee NULL como "sin compensacion
+  /// de sobrantes" (historial.calculos.ts), y 0 = "se calculo y no hubo".
   montoSobranteEmpleado Decimal? @map("monto_sobrante_empleado") @db.Decimal(12, 2)
 
   /// -- Reparto (Pantalla 6) --
@@ -1082,21 +1079,21 @@ model DiferenciaItem {
   precioUnitario  Decimal? @map("precio_unitario")  @db.Decimal(12, 4)
   montoDiferencia Decimal? @map("monto_diferencia") @db.Decimal(12, 2)
 
-  /// Clasificacion EFECTIVA del item (`esEmpresaManual ?? esEmpresa` de su
-  /// CatalogoItem), CONGELADA al cerrar el conteo igual que `descripcion` y
-  /// `precioUnitario`. Es lo que filtra el reporte a gerencia (sobrantes y
-  /// faltantes de productos de empresa) sin volver a cruzar contra el
-  /// catalogo.
+  /// Clasificacion EFECTIVA del item (ClasificacionProducto vigente ??
+  /// CatalogoItem.esEmpresa), congelada AL LIQUIDAR: la escribe
+  /// liquidacion.reclasificacion.ts dentro de la transaccion de
+  /// liquidacion.cierre.ts#liquidar. Motivo: si el Auditor reclasifica un
+  /// producto despues del cierre del conteo, tiene que aplicar igual.
+  /// Es lo que filtra el reporte a gerencia (sobrantes y faltantes de
+  /// productos de empresa) sin volver a cruzar contra el catalogo.
   ///
-  /// Filas anteriores a esta columna: la migracion las rellena con el
-  /// `es_empresa` de su CatalogoItem (mismo inventario, mismo codigo), que
-  /// es EXACTAMENTE el valor que uso ese cierre (auditoria.service.ts arma
-  /// la matriz con CatalogoItem.esEmpresa). Asi este campo y
-  /// ResultadoInventario.montoFaltanteEmpresa no pueden discrepar.
+  /// El cierre del conteo (rondas.service.ts#cerrar) NO la escribe: la fila
+  /// nace con el @default(false), que es PROVISORIO hasta liquidar. Antes
+  /// de eso no dice nada sobre el item.
   ///
-  /// El @default(false) existe SOLO para que el createMany actual de
-  /// rondas.service.ts#cerrar siga compilando. No es una regla: quien cierra
-  /// el conteo TIENE que escribirlo siempre, explicito.
+  /// Filas anteriores a esta columna: la migracion las relleno con el
+  /// `es_empresa` de su CatalogoItem (mismo inventario, mismo codigo), el
+  /// valor con el que esos inventarios calcularon montoFaltanteEmpresa.
   esEmpresa Boolean @default(false) @map("es_empresa")
 
   createdAt DateTime @default(now()) @map("created_at")
@@ -1120,10 +1117,12 @@ model DiferenciaItem {
 /// reclasificar lo mismo cada mes. Caso real: productos de empresa que en
 /// D365 figuran como Employee para forzar que entren al conteo.
 ///
-/// Es la fuente VIVA; lo que usa cada inventario es la copia congelada en
-/// CatalogoItem.esEmpresaManual. Sin fila = sin excepcion, manda Dynamics.
-/// El historial de cambios vive en RegistroAuditoria: esta tabla dice lo
-/// que vale HOY.
+/// Es la fuente VIVA y se lee AL LIQUIDAR (liquidacion.reclasificacion.ts):
+/// lo que se aplico a cada inventario queda congelado en
+/// DiferenciaItem.esEmpresa y en ResultadoInventario.montoFaltanteEmpresa y
+/// montoSobranteEmpleado. Sin fila = sin excepcion, manda Dynamics. El
+/// historial de cambios vive en RegistroAuditoria: esta tabla dice lo que
+/// vale HOY.
 model ClasificacionProducto {
   id        Int     @id @default(autoincrement())
   /// ItemNumber de Dynamics -- la identidad estable entre periodos (ver
