@@ -17,6 +17,11 @@ const prismaMock = vi.hoisted(() => ({
   colaborador: { findMany: vi.fn() },
   hojaConteo: { findMany: vi.fn() },
   liquidacionColaborador: { createMany: vi.fn() },
+  // Liquidacion v2: reclasificacion al liquidar (liquidacion.reclasificacion.ts).
+  diferenciaItem: { findMany: vi.fn(), updateMany: vi.fn() },
+  catalogoItem: { findMany: vi.fn() },
+  clasificacionProducto: { findMany: vi.fn() },
+  resultadoInventario: { update: vi.fn() },
   $transaction: vi.fn(),
 }));
 vi.mock('../../config/database', () => ({ prisma: prismaMock }));
@@ -197,6 +202,19 @@ const hojasConAsistencia = [
   // 10 y 11 no aparecen: nunca recibieron hoja.
 ];
 
+/**
+ * La reclasificacion (liquidacion.reclasificacion.ts) reemplaza a
+ * `resultado.montoFaltanteEmpresa` con lo que calcula A PARTIR de estas dos
+ * filas. Se arman para reproducir EXACTAMENTE el mismo `montoFaltanteEmpresa:
+ * 10` de `resultadoCompleto`, de modo que los tests de ESTE archivo (que no
+ * son sobre reclasificacion) seguan viendo los mismos numeros de siempre. El
+ * flujo de reclasificacion en si -- que un item cambie de lado -- tiene su
+ * propio test en liquidacion.flujo-reclasificacion.test.ts.
+ */
+const decimalDiferencia = decimal;
+const diferenciasPorDefecto = [{ codigo: 'ITEM-EMPRESA', diferencia: -1, montoDiferencia: decimalDiferencia(-10) }];
+const catalogoPorDefecto = [{ codigo: 'ITEM-EMPRESA', esEmpresa: true }];
+
 describe('liquidar', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -205,6 +223,9 @@ describe('liquidar', () => {
       equipo(11).map((c) => ({ id: c.id, nombre: c.nombre, rol: c.rol })),
     );
     prismaMock.hojaConteo.findMany.mockResolvedValue(hojasConAsistencia);
+    prismaMock.diferenciaItem.findMany.mockResolvedValue(diferenciasPorDefecto);
+    prismaMock.catalogoItem.findMany.mockResolvedValue(catalogoPorDefecto);
+    prismaMock.clasificacionProducto.findMany.mockResolvedValue([]);
     prismaMock.$transaction.mockImplementation(async (arg: unknown) =>
       Array.isArray(arg) ? Promise.all(arg) : arg,
     );
@@ -373,16 +394,23 @@ describe('liquidar', () => {
     });
 
     /**
-     * Planilla y estado, o ninguno de los dos. Si el estado quedara en
-     * `liquidado` sin las filas, el lacrado -- que ahora EXIGE ese estado --
-     * sellaría la planilla vacía que este cambio existe para impedir.
+     * Planilla, estado Y la reclasificacion congelada, o ninguno de los
+     * tres. Si el estado quedara en `liquidado` sin las filas, el lacrado --
+     * que ahora EXIGE ese estado -- sellaría la planilla vacía que este
+     * cambio existe para impedir; si la clasificacion quedara a medio
+     * escribir, el reporte a gerencia y el sello leerían un
+     * `DiferenciaItem.esEmpresa` que no es el que se uso para calcular la
+     * planilla que se esta firmando.
      */
-    it('planilla y estado van en la MISMA transacción', async () => {
+    it('planilla, estado y reclasificacion van en la MISMA transacción', async () => {
       await liquidar(AUDITOR, 9);
 
       const [arg] = prismaMock.$transaction.mock.calls[0] as [unknown];
       expect(Array.isArray(arg)).toBe(true);
-      expect((arg as unknown[]).length).toBe(2);
+      // liquidacionColaborador.createMany + inventario.update +
+      // resultadoInventario.update + 1 updateMany por codigo en
+      // `diferenciasPorDefecto` (uno solo, 'ITEM-EMPRESA').
+      expect((arg as unknown[]).length).toBe(4);
     });
 
     it('si la transacción falla no queda nada, ni el registro de auditoría', async () => {

@@ -66,6 +66,12 @@ import {
 } from '../historial/historial.calculos';
 import { validarAcceso } from './liquidacion.permisos';
 import { armarAdvertencia } from './liquidacion.service';
+import {
+  clasificacionManualVigente,
+  datosParaReclasificar,
+  operacionesDeEscrituraClasificacion,
+  reclasificarAlLiquidar,
+} from './liquidacion.reclasificacion';
 
 // ---------------------------------------------------------------------------
 // El calculo, puro
@@ -288,10 +294,33 @@ export async function liquidar(
     );
   }
 
+  /**
+   * RECLASIFICACION AL LIQUIDAR (liquidacion v2, decision del cliente): la
+   * clasificacion empresa/empleado de cada item se evalua AHORA, con la
+   * excepcion VIGENTE del Auditor (`ClasificacionProducto`), no con la que
+   * tenia Dynamics cuando se cerro el conteo. `montoFaltanteEmpresa` de acá
+   * REEMPLAZA al que quedo congelado en `ResultadoInventario` al cerrar
+   * (ese usaba solo Dynamics); `montoSobranteEmpleado` es nuevo. Ver
+   * liquidacion.reclasificacion.ts para el detalle y por que
+   * `montoFaltanteBruto` NO se toca (ya incluye el faltante de empresa;
+   * restarlo aca de nuevo lo descontaria dos veces).
+   *
+   * Se lee y calcula ANTES de la transaccion (son lecturas), pero se ESCRIBE
+   * dentro de ella, mas abajo -- junto con la planilla y el estado, para que
+   * no pueda quedar la clasificacion congelada sin la liquidacion hecha, ni
+   * al reves.
+   */
+  const filasParaReclasificar = await datosParaReclasificar(inventarioId);
+  const clasificacionManual = await clasificacionManualVigente();
+  const reclasificacion = reclasificarAlLiquidar(filasParaReclasificar, clasificacionManual);
+
   const { planilla, resumen, asistentes } = await proyectarPlanilla(inventarioId, inventario.sucursalId, {
     montoFaltanteBruto: r.montoFaltanteBruto.toNumber(),
+    // Lo escribe el Excel de ajustes (liquidacion.ajustes.ts) antes de
+    // liquidar -- se sigue leyendo tal cual quedo en el resultado, sin tocar.
     montoNegativos: r.montoNegativos!.toNumber(),
-    montoFaltanteEmpresa: r.montoFaltanteEmpresa.toNumber(),
+    montoFaltanteEmpresa: reclasificacion.montoFaltanteEmpresa,
+    montoSobranteEmpleado: reclasificacion.montoSobranteEmpleado,
     colaboradoresAlcanzados: r.colaboradoresAlcanzados,
     colaboradoresAsistieron: r.colaboradoresAsistieron!,
     multaInasistencia: r.multaInasistencia.toNumber(),
@@ -323,9 +352,13 @@ export async function liquidar(
     );
   }
 
-  // Planilla y estado, o ninguno de los dos. Si el estado quedara en
-  // `liquidado` sin las filas, el lacrado -- que ahora exige ese estado --
-  // sellaria la planilla vacia que este cambio existe para impedir.
+  // Planilla, estado Y la clasificacion recalculada -- las TRES o ninguna.
+  // Si el estado quedara en `liquidado` sin las filas, el lacrado -- que
+  // ahora exige ese estado -- sellaria la planilla vacia que este cambio
+  // existe para impedir. Y si la clasificacion quedara a medio escribir (o
+  // no se escribiera pero el estado si cambiara a `liquidado`), el reporte a
+  // gerencia y el sello leerian un `DiferenciaItem.esEmpresa` que no es el
+  // que de verdad se uso para calcular la planilla que se esta por firmar.
   await prisma.$transaction([
     prisma.liquidacionColaborador.createMany({
       data: planilla.map((f) => ({ inventarioId, ...f })),
@@ -335,6 +368,14 @@ export async function liquidar(
       skipDuplicates: true,
     }),
     prisma.inventario.update({ where: { id: inventarioId }, data: { estado: 'liquidado' } }),
+    prisma.resultadoInventario.update({
+      where: { inventarioId },
+      data: {
+        montoFaltanteEmpresa: reclasificacion.montoFaltanteEmpresa,
+        montoSobranteEmpleado: reclasificacion.montoSobranteEmpleado,
+      },
+    }),
+    ...operacionesDeEscrituraClasificacion(inventarioId, reclasificacion.esEmpresaPorCodigo),
   ]);
 
   await registrarAuditoria({
