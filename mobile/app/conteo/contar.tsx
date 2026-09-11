@@ -22,6 +22,7 @@ import { repositorioHojas, repositorioInventario, sincronizador } from '../../li
 import { resolverCodigoEnHoja, type CoincidenciaEscaneo } from '../../lib/dominio/escaneo';
 import { aplicarFiltro, contarFiltrosActivos, FILTRO_VACIO, textoFiltroActivo, type FiltroProductos } from '../../lib/dominio/filtro-productos';
 import { avance, puedeEditar, puedeFinalizar } from '../../lib/dominio/hoja';
+import { pluralizar } from '../../lib/dominio/plural';
 import { ORDINAL } from '../../lib/dominio/texto-cierre-ronda';
 import type { Conteo, HojaConteo, Producto } from '../../lib/dominio/tipos';
 import { cargarHojaActiva, textoHojaVieja, type MotivoSinHoja } from '../../lib/orquestar-carga-de-hoja';
@@ -357,7 +358,7 @@ export default function ContarScreen(): JSX.Element {
   //
   // `total`, NUNCA hoja.tamano: tamano es el tamaño nominal del lote, no cuántos
   // productos tiene ESTA hoja — la última de un inventario real queda parcial.
-  const textoFinalizar = `Los ${total} ítems de esta hoja están contados.`;
+  const textoFinalizar = `${pluralizar(total, 'El', 'Los')} ${total} ${pluralizar(total, 'ítem', 'ítems')} de esta hoja ${pluralizar(total, 'está', 'están')} ${pluralizar(total, 'contado', 'contados')}.`;
 
   // `error` se arma con la razón ACOTADA a esta hoja (`razonRechazoHoja`),
   // nunca con `estadoCola.error` (global) directo — el resto de `estadoCola`
@@ -445,7 +446,7 @@ export default function ContarScreen(): JSX.Element {
         <Text style={styles.pieTexto}>
           {filtroTexto
             ? `Mostrando ${visibles.length} de ${hoja.productos.length} ítems · filtro: ${filtroTexto}`
-            : `Mostrando los ${hoja.productos.length} ítems de esta hoja · desplázate para ver más`}
+            : `Mostrando ${pluralizar(hoja.productos.length, 'el', 'los')} ${hoja.productos.length} ${pluralizar(hoja.productos.length, 'ítem', 'ítems')} de esta hoja · desplázate para ver más`}
         </Text>
       </View>
 
@@ -466,7 +467,7 @@ export default function ContarScreen(): JSX.Element {
             <Text style={styles.accionDeshabilitadaTexto}>Finalizar hoja #{hoja.numero}</Text>
           </View>
           <Text style={styles.finalizarNota}>
-            {`Faltan ${faltantes} ${faltantes === 1 ? 'producto' : 'productos'} por contar. Ingresa su cantidad — teclea 0 si miraste y no había — para poder finalizar.`}
+            {`${pluralizar(faltantes, 'Falta', 'Faltan')} ${faltantes} ${pluralizar(faltantes, 'producto', 'productos')} por contar. Ingresa su cantidad — teclea 0 si miraste y no había — para poder finalizar.`}
           </Text>
         </View>
       )}

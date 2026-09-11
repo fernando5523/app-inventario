@@ -18,6 +18,7 @@ import {
   type EstadoPaso,
 } from '../../lib/dominio/texto-cierre-ronda';
 import { partirEnHojas } from '../../lib/dominio/lote';
+import { pluralizar } from '../../lib/dominio/plural';
 import { type Rol, type Sucursal, type TamanoHoja } from '../../lib/dominio/tipos';
 import type { ResumenRonda } from '../../lib/puertos/repositorios';
 import { useSesion } from '../../lib/sesion-contexto';
@@ -494,8 +495,9 @@ export function CicloScreen({ rol }: CicloScreenProps): JSX.Element {
                 <View style={styles.bloqueoAviso}>
                   <AlertTriangle size={16} color={colors.proceso} />
                   <Text style={styles.bloqueoTexto}>
-                    Quedan {formatoMiles(resumenActivo.hojasSinFinalizar.length)} hoja
-                    {resumenActivo.hojasSinFinalizar.length === 1 ? '' : 's'} sin finalizar:{' '}
+                    {pluralizar(resumenActivo.hojasSinFinalizar.length, 'Queda', 'Quedan')}{' '}
+                    {formatoMiles(resumenActivo.hojasSinFinalizar.length)}{' '}
+                    {pluralizar(resumenActivo.hojasSinFinalizar.length, 'hoja', 'hojas')} sin finalizar:{' '}
                     {resumenActivo.hojasSinFinalizar.slice(0, 4).map((h) => `#${h.numero}`).join(', ')}
                     {resumenActivo.hojasSinFinalizar.length > 4 ? ` y ${resumenActivo.hojasSinFinalizar.length - 4} más` : ''}. Una
                     hoja sin finalizar es una hoja que alguien todavía está contando.

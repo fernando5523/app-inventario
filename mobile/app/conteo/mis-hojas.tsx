@@ -253,7 +253,11 @@ export default function MisHojasScreen(): JSX.Element {
 
           <View style={styles.pieLista}>
             <Text style={styles.pieTexto}>
-              Mostrando las <Text style={styles.pieFuerte}>{hojas.length} hojas</Text> asignadas · {enProceso} en proceso ·{' '}
+              Mostrando {pluralizar(hojas.length, 'la', 'las')}{' '}
+              <Text style={styles.pieFuerte}>
+                {hojas.length} {pluralizar(hojas.length, 'hoja', 'hojas')}
+              </Text>{' '}
+              {pluralizar(hojas.length, 'asignada', 'asignadas')} · {enProceso} en proceso ·{' '}
               {finalizadas} finalizadas · {pendientes} pendientes
             </Text>
           </View>
