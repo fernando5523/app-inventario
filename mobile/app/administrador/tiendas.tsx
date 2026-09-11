@@ -318,7 +318,7 @@ export default function TiendasScreen(): JSX.Element {
             />
             {mostrandoTodos ? (
               <Text style={styles.ayudaAlmacen}>
-                Mostrando los {almacenes.length} almacenes del ERP. Los de Tránsito y Cuarentena no se inventarían: elegí uno solo si esta
+                Mostrando los {almacenes.length} almacenes del ERP. Los de Tránsito y Cuarentena no se inventarían: elige uno solo si esta
                 tienda es nueva. Al guardarla queda habilitado para las próximas.
               </Text>
             ) : (

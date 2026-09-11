@@ -26,7 +26,7 @@ const TAMANO_PAGINA = 40;
  * inventarios que todavía no se liquidaron.
  */
 const AVISO_CUANDO_APLICA =
-  'Lo que marques acá cuenta para los inventarios que todavía no se liquidaron. Los ya liquidados no cambian.';
+  'Lo que marques aquí cuenta para los inventarios que todavía no se liquidaron. Los ya liquidados no cambian.';
 
 const OPCIONES_FILTRO: OpcionChip[] = [
   { id: 'todos', etiqueta: 'Todos' },
@@ -216,7 +216,7 @@ export function ClasificacionScreen(): JSX.Element {
             title={soloClasificados ? 'Todavía no hay excepciones' : 'Sin resultados'}
             subtitle={
               soloClasificados
-                ? 'Cuando marques un producto como empresa, va a aparecer acá.'
+                ? 'Cuando marques un producto como empresa, va a aparecer aquí.'
                 : 'Prueba con otro código, descripción o categoría.'
             }
           />

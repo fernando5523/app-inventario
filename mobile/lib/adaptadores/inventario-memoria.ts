@@ -144,7 +144,7 @@ export const inventarioMemoria: RepositorioInventario = {
       })),
       sePuedeCerrar: pendientes.length === 0,
       siguienteRonda: null,
-      motivoSinSiguiente: 'El adaptador en memoria no compara contra el ERP: probá el ciclo de rondas contra el backend.',
+      motivoSinSiguiente: 'El adaptador en memoria no compara contra el ERP: prueba el ciclo de rondas contra el backend.',
     };
   },
 

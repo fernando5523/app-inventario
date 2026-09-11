@@ -134,7 +134,7 @@ async function actualizarEstadoDesdeLaCola(huboExito: boolean): Promise<void> {
     // ver sqlite-cola.ts#RECHAZO_SIN_MOTIVO) -- "revisá la conexión" solo
     // queda para cuando lo que falló de verdad fue la red (sin-red), que
     // no deja una razón de servidor que mostrar.
-    error: enError > 0 ? (razonRechazo ?? `${enError} ${enError === 1 ? 'ítem no se pudo sincronizar' : 'ítems no se pudieron sincronizar'} — revisá la conexión o pedí ayuda.`) : null,
+    error: enError > 0 ? (razonRechazo ?? `${enError} ${enError === 1 ? 'ítem no se pudo sincronizar' : 'ítems no se pudieron sincronizar'} — revisa la conexión o pide ayuda.`) : null,
   };
   notificar();
 }

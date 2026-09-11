@@ -275,7 +275,7 @@ export function ModalConteo({
               </Text>
             </Pressable>
             {!hayValorIngresado ? (
-              <Text style={styles.hintGuardar}>Ingresá la cantidad. Si miraste y no había ninguno, tecleá 0.</Text>
+              <Text style={styles.hintGuardar}>Ingresa la cantidad. Si miraste y no había ninguno, teclea 0.</Text>
             ) : null}
           </ScrollView>
         </View>

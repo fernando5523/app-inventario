@@ -54,7 +54,7 @@ export function validarPinNuevo(pinActual: string, pinNuevo: string, colaborador
     return 'Ese PIN es el que genera el sistema a partir de tu número de colaborador: cualquiera que vea la lista de login lo deduce. Elige otro.';
   }
   if (esPinTrivial(pinNuevo)) {
-    return 'Evitá PINs como 000000, 111111 o 123456: son los primeros que alguien prueba.';
+    return 'Evita PINs como 000000, 111111 o 123456: son los primeros que alguien prueba.';
   }
   return null;
 }

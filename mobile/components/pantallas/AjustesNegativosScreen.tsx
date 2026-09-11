@@ -282,7 +282,7 @@ export function AjustesNegativosScreen(): JSX.Element {
 
               {preview.validas.some((v) => v.advertencias.length > 0) ? (
                 <View style={styles.bloqueLineas}>
-                  <Text style={styles.subtitulo}>Válidas con advertencia — igual suman, decidí si excluirlas después de confirmar</Text>
+                  <Text style={styles.subtitulo}>Válidas con advertencia — igual suman, decide si excluirlas después de confirmar</Text>
                   {preview.validas
                     .filter((v) => v.advertencias.length > 0)
                     .map((v) => (

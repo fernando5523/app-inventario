@@ -466,7 +466,7 @@ export default function ContarScreen(): JSX.Element {
             <Text style={styles.accionDeshabilitadaTexto}>Finalizar hoja #{hoja.numero}</Text>
           </View>
           <Text style={styles.finalizarNota}>
-            {`Faltan ${faltantes} ${faltantes === 1 ? 'producto' : 'productos'} por contar. Cargá su cantidad — teclea 0 si miraste y no había — para poder finalizar.`}
+            {`Faltan ${faltantes} ${faltantes === 1 ? 'producto' : 'productos'} por contar. Ingresa su cantidad — teclea 0 si miraste y no había — para poder finalizar.`}
           </Text>
         </View>
       )}

@@ -120,7 +120,7 @@ describe('estado()/suscribir(): la banda tiene que decir la verdad', () => {
     expect(estado.error).toContain('3');
   });
 
-  it('si hay una razón de rechazo real, esa razón GANA sobre el mensaje genérico de "revisá la conexión"', async () => {
+  it('si hay una razón de rechazo real, esa razón GANA sobre el mensaje genérico de "revisa la conexión"', async () => {
     // 2a: un 409 (ej. "la hoja ya la finalizó otro colaborador") no es un
     // problema de red -- decirle a la persona que revise la conexión la
     // manda a buscar señal cuando el problema real es otro.
@@ -136,7 +136,7 @@ describe('estado()/suscribir(): la banda tiene que decir la verdad', () => {
 
     const estado = sincronizadorReal.estado();
     expect(estado.error).toBe('La hoja ya está finalizada: no se puede corregir el conteo.');
-    expect(estado.error).not.toContain('revisá la conexión');
+    expect(estado.error).not.toContain('revisa la conexión');
   });
 
   it('un rechazo DEFINITIVO (403) viaja aparte de `error` y no se cuenta como pendiente', async () => {
