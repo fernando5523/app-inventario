@@ -375,13 +375,17 @@ describe('liquidar', () => {
       expect(data).toHaveLength(11);
     });
 
-    it('el universo es el MISMO que colaboradoresAlcanzados', async () => {
+    it('el universo es el MISMO que colaboradoresAlcanzados, y solo roles de tienda', async () => {
       // Si estas dos consultas no coinciden, la cuota por persona no cierra
-      // contra el faltante neto y nadie entiende por qué.
+      // contra el faltante neto y nadie entiende por qué. El auditor y el
+      // administrador NO son "de tienda" (decision del cliente) ni con un
+      // sucursalId viejo en su ficha.
       await liquidar(AUDITOR, 9);
 
       expect(prismaMock.colaborador.findMany).toHaveBeenCalledWith(
-        expect.objectContaining({ where: { sucursalId: 1, activo: true } }),
+        expect.objectContaining({
+          where: { sucursalId: 1, activo: true, rol: { in: ['coordinador', 'conteo'] } },
+        }),
       );
     });
 

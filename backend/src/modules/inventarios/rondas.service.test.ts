@@ -394,7 +394,11 @@ describe('cerrar', () => {
       expect(data.montoFaltanteEmpresa).toBe(0);
       // TODO el personal habilitado de la sucursal (mock: 11), no un valor fijo.
       expect(data.colaboradoresAlcanzados).toBe(11);
-      expect(prismaMock.colaborador.count).toHaveBeenCalledWith({ where: { sucursalId: 1, activo: true } });
+      // Solo roles de tienda: el auditor y el administrador no cuentan, ni
+      // con un sucursalId viejo en su ficha (decision del cliente).
+      expect(prismaMock.colaborador.count).toHaveBeenCalledWith({
+        where: { sucursalId: 1, activo: true, rol: { in: ['coordinador', 'conteo'] } },
+      });
     });
 
     it('todo cuadró: no escribe NINGUNA fila de diferencias', async () => {

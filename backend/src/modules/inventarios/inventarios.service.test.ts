@@ -343,6 +343,31 @@ describe('asignarHojas', () => {
     await expect(asignarHojas(COORD, 9, [10, 999])).rejects.toThrow(SolicitudInvalida);
   });
 
+  /**
+   * DECISION DEL CLIENTE: el auditor (y el administrador) NO pertenecen a
+   * ninguna tienda, ni con un `sucursalId` viejo en su ficha (caso real:
+   * Gilmer). El backend tiene que rechazarlo -- no puede depender de que el
+   * selector del Coordinador no se lo ofrezca.
+   */
+  it('rechaza a un auditor con sucursalId de esta tienda: no es personal de tienda', async () => {
+    // El mock simula lo que devolveria Prisma con el filtro de rol real: el
+    // auditor (68) queda afuera aunque tenga sucursalId de esta tienda.
+    prismaMock.colaborador.findMany.mockResolvedValue([{ id: 10, nombre: 'Ana' }]);
+    const error = await asignarHojas(COORD, 9, [10, 68]).catch((e) => e);
+    expect(error).toBeInstanceOf(SolicitudInvalida);
+    expect(error.message).toContain('68');
+  });
+
+  it('la consulta de personas filtra por rol de tienda (coordinador/conteo), no solo por sucursal', async () => {
+    await asignarHojas(COORD, 9, [10, 20]);
+
+    expect(prismaMock.colaborador.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({ rol: { in: ['coordinador', 'conteo'] } }),
+      }),
+    );
+  });
+
   it('sin personas no reparte', async () => {
     await expect(asignarHojas(COORD, 9, [])).rejects.toThrow(SolicitudInvalida);
   });

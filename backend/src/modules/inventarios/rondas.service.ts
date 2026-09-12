@@ -44,6 +44,7 @@ import type { ColaboradorAutenticado } from '../../shared/tipos';
 import { armarMatriz } from '../auditoria/auditoria.service';
 import { diferenciasParaPersistir, embudoDeConteos, resumir as resumirAuditoria } from '../auditoria/auditoria.calculos';
 import { redondear } from '../historial/historial.calculos';
+import { ROLES_DE_TIENDA } from '../sesion/sesion.service';
 import { totalUnidades } from '../hojas/hojas.calculos';
 import { INCLUIR_TODO, aHojaDto, type HojaDto } from '../hojas/hojas.service';
 
@@ -444,8 +445,14 @@ export async function cerrar(
     const diferencias = diferenciasParaPersistir(matrizCompleta);
     // TODO el personal habilitado de la sucursal, no solo quien contó --
     // mismo criterio que documenta ResultadoInventario.colaboradoresAlcanzados.
+    //
+    // `rol: { in: ROLES_DE_TIENDA }` -- el auditor y el administrador NO
+    // pertenecen a ninguna tienda (decision del cliente), ni con un
+    // `sucursalId` viejo en su ficha. Mismo filtro que
+    // `liquidacion.cierre.ts#proyectarPlanilla`: si estos dos no coinciden,
+    // la cuota por persona deja de cerrar contra el faltante neto.
     const colaboradoresAlcanzados = await prisma.colaborador.count({
-      where: { sucursalId: inventario.sucursalId, activo: true },
+      where: { sucursalId: inventario.sucursalId, activo: true, rol: { in: ROLES_DE_TIENDA } },
     });
 
     await prisma.$transaction([

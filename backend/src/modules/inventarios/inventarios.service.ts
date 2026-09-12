@@ -34,6 +34,7 @@ import { registrarAuditoria } from '../../shared/auditoria';
 import { Conflicto, NoEncontrado, SolicitudInvalida } from '../../shared/errores';
 import type { ColaboradorAutenticado } from '../../shared/tipos';
 import { INCLUIR_TODO, aHojaDto, type HojaDto } from '../hojas/hojas.service';
+import { ROLES_DE_TIENDA } from '../sesion/sesion.service';
 
 /** Lo que devuelve `GET /api/sucursales/:id/inventarios/activo`. */
 export interface InventarioActivoDto {
@@ -260,13 +261,18 @@ export async function asignarHojas(
   }
 
   /**
-   * Los que se pasan tienen que existir, estar activos y ser DE ESA TIENDA.
-   * Sin esta verificacion se le puede asignar una hoja a alguien de otra
-   * sucursal -- que despues la ve en "Mis hojas" y cuenta gondolas que no
-   * son las suyas.
+   * Los que se pasan tienen que existir, estar activos, ser DE ESA TIENDA Y
+   * DE UN ROL DE TIENDA (coordinador/conteo). Sin la sucursal se le puede
+   * asignar una hoja a alguien de otra tienda -- que despues la ve en "Mis
+   * hojas" y cuenta gondolas que no son las suyas. Sin el rol, a un auditor
+   * o administrador con un `sucursalId` viejo en su ficha -- el conteo es
+   * ciego, y el auditor no pertenece a ninguna tienda (decision del
+   * cliente, ver ROLES_DE_TIENDA en sesion.service.ts): esto NO puede
+   * depender de que el selector no se lo ofrezca, tiene que rechazarlo el
+   * backend.
    */
   const encontrados = await prisma.colaborador.findMany({
-    where: { id: { in: colaboradorIds }, activo: true, sucursalId: inventario.sucursalId },
+    where: { id: { in: colaboradorIds }, activo: true, sucursalId: inventario.sucursalId, rol: { in: ROLES_DE_TIENDA } },
     select: { id: true, nombre: true },
   });
   if (encontrados.length !== colaboradorIds.length) {
@@ -276,11 +282,11 @@ export async function asignarHojas(
      * diferencia contra lo que SI encontro la consulta -- el dato ya estaba
      * a mano.
      *
-     * No se dice cual de las tres causas es (inexistente / inactiva / de
-     * otra tienda) a proposito: distinguirlas confirmaria que un id existe
-     * en otra sucursal, y quien reparte hojas no tiene por que enterarse del
-     * padron ajeno. Se nombran las tres y se manda a Usuarios, que es donde
-     * se resuelven las tres.
+     * No se dice cual de las CUATRO causas es (inexistente / inactiva / de
+     * otra tienda / auditor o administrador sin tienda) a proposito:
+     * distinguirlas confirmaria que un id existe en otra sucursal, y quien
+     * reparte hojas no tiene por que enterarse del padron ajeno. Se nombran
+     * las cuatro y se manda a Usuarios, que es donde se resuelven todas.
      */
     const hallados = new Set(encontrados.map((c) => c.id));
     const faltan = colaboradorIds.filter((id) => !hallados.has(id));

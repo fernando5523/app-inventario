@@ -70,6 +70,7 @@ import {
   operacionesDeEscrituraClasificacion,
   resolverMontosDeClasificacion,
 } from './liquidacion.reclasificacion';
+import { ROLES_DE_TIENDA } from '../sesion/sesion.service';
 
 // ---------------------------------------------------------------------------
 // El calculo, puro
@@ -174,7 +175,14 @@ export async function proyectarPlanilla(
     // El MISMO universo que `colaboradoresAlcanzados` (rondas.service.ts):
     // si estas dos consultas no coinciden, la cuota por persona no cierra
     // contra el faltante neto y nadie entiende por que.
-    where: { sucursalId, activo: true },
+    //
+    // `rol: { in: ROLES_DE_TIENDA }` -- decision del cliente: el auditor y
+    // el administrador NO pertenecen a ninguna tienda, ni con un
+    // `sucursalId` viejo en su ficha (ver el comentario de la constante en
+    // sesion.service.ts, el caso real es Gilmer). Sin este filtro entraban a
+    // la planilla, se les repartia faltante y se les cobraba multa por no
+    // haber contado -- cosa que un auditor nunca hace.
+    where: { sucursalId, activo: true, rol: { in: ROLES_DE_TIENDA } },
     select: { id: true, nombre: true, rol: true },
     orderBy: { id: 'asc' },
   });

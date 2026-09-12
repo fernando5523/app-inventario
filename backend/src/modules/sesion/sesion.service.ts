@@ -25,7 +25,17 @@ const DURACION_SESION_MS = 12 * 60 * 60 * 1000; // 12 horas, igual que sesion-me
  * aparecer bajo su vieja tienda -- sin tocar su fila (no hace falta migrar dato,
  * la columna ya es nullable y nada aquí la cambia).
  */
-const ROLES_DE_TIENDA: Rol[] = ['coordinador', 'conteo'];
+/**
+ * EXPORTADA (no solo de este modulo): es el mismo criterio de "quien
+ * pertenece a una tienda" que necesitan `rondas.service.ts` (colaboradores
+ * alcanzados al cerrar el conteo), `liquidacion.cierre.ts` (el personal de
+ * la planilla) e `inventarios.service.ts` (a quien se le puede asignar una
+ * hoja) -- decision del cliente: el auditor y el administrador NO pertenecen
+ * a ninguna tienda, ni aunque su ficha tenga un `sucursalId` viejo (ver el
+ * comentario de arriba sobre Gilmer). Una sola fuente: si el dia de manana
+ * cambia que roles son "de tienda", se cambia ACA y nada mas.
+ */
+export const ROLES_DE_TIENDA: Rol[] = ['coordinador', 'conteo'];
 const ROLES_SIN_TIENDA: Rol[] = ['administrador', 'auditor'];
 
 export interface SucursalDto {
