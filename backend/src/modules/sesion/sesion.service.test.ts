@@ -13,16 +13,17 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const prismaMock = vi.hoisted(() => ({
-  colaborador: { findMany: vi.fn() },
+  colaborador: { findMany: vi.fn(), findUnique: vi.fn() },
   sucursal: { findMany: vi.fn() },
 }));
 vi.mock('../../config/database', () => ({ prisma: prismaMock }));
 
-import { listarAdministradores, listarColaboradores, listarSucursales } from './sesion.service';
+import { ingresar, listarAdministradores, listarColaboradores, listarSucursales } from './sesion.service';
 
 beforeEach(() => {
   vi.clearAllMocks();
   prismaMock.colaborador.findMany.mockResolvedValue([]);
+  prismaMock.colaborador.findUnique.mockResolvedValue(null);
   prismaMock.sucursal.findMany.mockResolvedValue([]);
 });
 
@@ -63,5 +64,31 @@ describe('listarSucursales: el conteo de la tarjeta no cuenta a los sin-tienda',
     expect(args.include._count.select.colaboradores).toEqual({
       where: { rol: { in: ['coordinador', 'conteo'] }, activo: true },
     });
+  });
+});
+
+/**
+ * `SucursalDto.colaboradores` viaja en DOS respuestas (la lista del login y la
+ * sesion que se emite al ingresar) y significa lo mismo en las dos. Si solo una
+ * filtra, la misma tienda muestra dos numeros distintos segun la pantalla --
+ * que es exactamente lo que pasaba con Tiendas (11) contra el login (9).
+ */
+describe('ingresar: la sucursal de la SESION cuenta lo mismo que el login', () => {
+  it('filtra por rol de tienda y activo, no cuenta todas las filas de la sucursal', async () => {
+    await expect(ingresar(101, '123456')).rejects.toThrow();
+
+    const args = prismaMock.colaborador.findUnique.mock.calls[0]?.[0];
+    expect(args.include.sucursal.include._count.select.colaboradores).toEqual({
+      where: { rol: { in: ['coordinador', 'conteo'] }, activo: true },
+    });
+  });
+
+  it('es EXACTAMENTE el mismo filtro que usa la tarjeta del login', async () => {
+    await listarSucursales();
+    await ingresar(101, '123456').catch(() => undefined);
+
+    const login = prismaMock.sucursal.findMany.mock.calls[0]?.[0].include._count.select.colaboradores;
+    const sesion = prismaMock.colaborador.findUnique.mock.calls[0]?.[0].include.sucursal.include._count.select.colaboradores;
+    expect(sesion).toEqual(login);
   });
 });

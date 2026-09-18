@@ -4,6 +4,7 @@ import rateLimit from 'express-rate-limit';
 import { validar } from '../../middleware/validation.middleware';
 import * as controller from './sesion.controller';
 import { requiereSesion } from '../../middleware/auth.middleware';
+import type { RequestAutenticado } from '../../shared/tipos';
 import { cambiarPinSchema, ingresarSchema, parametrosSucursalSchema } from './sesion.schema';
 
 /**
@@ -36,13 +37,38 @@ function manejarLimiteExcedido(req: Request, res: Response): void {
  * fuerza bruta contra un colaboradorId conocido es viable. Se limita por
  * colaborador (no por IP, que en la tienda es compartida por varios
  * telefonos en la misma WiFi).
+ *
+ * Una sola instancia para las dos rutas (misma ventana, mismo limite, mismo
+ * 429), pero cada ruta cuenta en su propio espacio de claves:
+ * - `/ingresar` -> `ingresar:<colaboradorId del body>`. Todavia no hay
+ *   sesion; sin id cae a la IP, y `validar` rechaza ese body con 400 igual.
+ * - `/cambiar-pin` -> `cambiar-pin:<colaboradorId de la sesion>`.
+ *   `requiereSesion` corre ANTES y deja `req.colaborador`, asi que la clave
+ *   sale de la sesion y NUNCA del body (mismo criterio que el controller):
+ *   un colaboradorId ajeno en el body no pasa el conteo a otra cuenta.
+ * El prefijo va en LAS DOS claves: si la de `/ingresar` fuera el valor del
+ * body a secas, un body con `colaboradorId: "cambiar-pin:<id>"` sumaria al
+ * cupo de cambio de PIN de esa persona sin tener su sesion (el limitador
+ * cuenta antes de que `validar` rechace el body).
+ *
+ * Decision: cupos SEPARADOS, segun el plan D de backend/README.md
+ * ("Endurecer el limitador": que un ataque no bloquee el cambio legitimo).
+ * Lo que se gana: 8 ingresos fallidos con el id de alguien, que cualquiera
+ * puede mandar sin sesion, no le bloquean el cambio de PIN. El costo
+ * aceptado: quien tenga en la mano una sesion ajena abierta prueba hasta 8
+ * PIN por `/cambiar-pin` ademas de los 8 por `/ingresar` en cada ventana
+ * de 15 min.
  */
 export const limitadorIngreso = rateLimit({
   windowMs: 15 * 60 * 1000,
   limit: 8,
   standardHeaders: true,
   legacyHeaders: false,
-  keyGenerator: (req) => String(req.body?.colaboradorId ?? req.ip),
+  keyGenerator: (req) => {
+    const deLaSesion = (req as RequestAutenticado).colaborador?.colaboradorId;
+    if (deLaSesion !== undefined) return `cambiar-pin:${deLaSesion}`;
+    return `ingresar:${String(req.body?.colaboradorId ?? req.ip)}`;
+  },
   handler: manejarLimiteExcedido,
 });
 
@@ -66,13 +92,16 @@ sesionRouter.post('/ingresar', limitadorIngreso, validar(ingresarSchema, 'body')
  * pasa a ser conocido solo por su dueno -- el reseteo del administrador,
  * por definicion, deja el PIN en manos de dos personas.
  *
- * Rate-limited igual que el ingreso: pide el PIN actual, asi que es otra
- * puerta por donde se podria probar a fuerza bruta.
+ * Rate-limited igual que el ingreso, pero con su PROPIO cupo (ver
+ * `limitadorIngreso`): pide el PIN actual, asi que es otra puerta por donde
+ * se podria probar a fuerza bruta. `requiereSesion` va ANTES del limitador:
+ * la clave sale del colaborador de la sesion, y un pedido sin sesion (401)
+ * no gasta cupo de nadie.
  */
 sesionRouter.post(
   '/cambiar-pin',
-  limitadorIngreso,
   requiereSesion,
+  limitadorIngreso,
   validar(cambiarPinSchema, 'body'),
   controller.cambiarPin,
 );

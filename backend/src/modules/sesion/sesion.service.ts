@@ -121,7 +121,17 @@ export async function listarAdministradores(): Promise<ColaboradorDto[]> {
 export async function ingresar(colaboradorId: number, pin: string): Promise<SesionDto> {
   const colaborador = await prisma.colaborador.findUnique({
     where: { id: colaboradorId },
-    include: { sucursal: { include: { _count: { select: { colaboradores: true } } } } },
+    // El MISMO conteo que `listarSucursales` (y que Tiendas, ver
+    // tiendas.service.ts): `SucursalDto.colaboradores` significa lo mismo en
+    // las tres -- personal de tienda ACTIVO. Sin el filtro, la sesion devolvia
+    // el total de filas de la sucursal (auditor con `sucursalId` viejo
+    // incluido) y la misma tienda mostraba dos numeros distintos segun por
+    // donde se la mirara.
+    include: {
+      sucursal: {
+        include: { _count: { select: { colaboradores: { where: { rol: { in: ROLES_DE_TIENDA }, activo: true } } } } },
+      },
+    },
   });
   if (!colaborador) throw new NoEncontrado('Colaborador no encontrado.');
   if (!colaborador.activo) throw new NoAutorizado('Esta cuenta esta deshabilitada.');
