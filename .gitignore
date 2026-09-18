@@ -24,6 +24,13 @@ build/
 .env.*
 _env_nuevo.txt
 
+# Índices de herramientas de análisis — se regeneran solos desde el código y
+# son de CADA checkout: su contenido depende de la ruta absoluta del clon y de
+# los bytes que ese clon tenga en disco. Versionarlos haría que dos personas se
+# pisaran el índice en cada commit, y el del otro nunca serviría.
+.atl/
+.codegraph/
+
 # Editor / SO / Temporales.
 .DS_Store
 Thumbs.db
