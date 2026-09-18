@@ -1,5 +1,7 @@
 /** Unico archivo del modulo que toca Prisma (regla de capas dura). */
 
+import type { Prisma } from '@prisma/client';
+
 import { prisma } from '../../config/database';
 import { registrarAuditoria } from '../../shared/auditoria';
 import { NoEncontrado, SolicitudInvalida } from '../../shared/errores';
@@ -11,8 +13,30 @@ import {
   parsear as parsearAlmacenes,
   serializar as serializarAlmacenes,
 } from '../d365/d365.almacenes-inventario';
+import { ROLES_DE_TIENDA } from '../sesion/sesion.service';
 import { resolverAlmacen, type AlmacenResuelto } from './tiendas.almacen';
 import type { ActualizarTiendaInput, CrearTiendaInput } from './tiendas.schema';
+
+/**
+ * Cuantos "colaboradores" tiene una tienda: EL MISMO numero que muestra el
+ * login (sesion.service.ts#listarSucursales), no el total de filas colgadas de
+ * la sucursal.
+ *
+ * Sin este filtro, Tiendas decia "Market Central Luzuriaga · 11 colaboradores"
+ * donde el login decia "9": la diferencia eran los 2 auditores (caso real,
+ * Gilmer y Rosa). El auditor y el administrador NO pertenecen a ninguna tienda
+ * -- decision del cliente, ver ROLES_DE_TIENDA en sesion.service.ts --, ni con
+ * un `sucursalId` viejo en su ficha.
+ *
+ * `activo: true` por el MISMO motivo que el login: una cuenta deshabilitada no
+ * puede entrar, no entra a la planilla (liquidacion.cierre.ts#proyectarPlanilla)
+ * ni se le puede asignar una hoja (inventarios.service.ts#asignarHojas), asi
+ * que no es personal de esa tienda hoy. Las deshabilitadas se siguen viendo en
+ * Usuarios, que es donde se gestionan.
+ */
+const CONTEO_DE_PERSONAL_DE_TIENDA = {
+  _count: { select: { colaboradores: { where: { rol: { in: ROLES_DE_TIENDA }, activo: true } } } },
+} satisfies Prisma.SucursalInclude;
 
 export interface TiendaDto {
   id: number;
@@ -129,7 +153,7 @@ async function habilitarAlmacen(actor: ColaboradorAutenticado, codigo: string): 
 export async function listar(): Promise<TiendaDto[]> {
   const tiendas = await prisma.sucursal.findMany({
     orderBy: { id: 'asc' },
-    include: { _count: { select: { colaboradores: true } } },
+    include: CONTEO_DE_PERSONAL_DE_TIENDA,
   });
   return tiendas.map(aDto);
 }
@@ -149,7 +173,7 @@ export async function crear(actor: ColaboradorAutenticado, input: CrearTiendaInp
       // con "md11_cent" y "MD11_CENT" para el mismo almacen.
       ...(almacen !== null ? { almacenId: almacen.almacenId, almacenNombre: almacen.almacenNombre } : {}),
     },
-    include: { _count: { select: { colaboradores: true } } },
+    include: CONTEO_DE_PERSONAL_DE_TIENDA,
   });
 
   await registrarAuditoria({
@@ -197,7 +221,7 @@ export async function actualizar(
         ? { almacenId: almacen.almacenId, almacenNombre: almacen.almacenNombre }
         : {}),
     },
-    include: { _count: { select: { colaboradores: true } } },
+    include: CONTEO_DE_PERSONAL_DE_TIENDA,
   });
 
   await registrarAuditoria({
