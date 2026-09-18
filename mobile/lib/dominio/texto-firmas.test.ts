@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { textoAuditoresInsuficientes, textoFirmadoPor, textoFirmas } from './texto-firmas';
+import { textoAuditoresInsuficientes, textoFirmadoPor, textoFirmas, textoFirmasPendientes } from './texto-firmas';
 
 describe('textoFirmas: sigue el mínimo configurable, no un 2 hardcodeado', () => {
   it('con requerido 1 (config de hoy): "0 / 1 firma", singular', () => {
@@ -22,6 +22,25 @@ describe('textoFirmadoPor: pluraliza auditor según el requerido', () => {
   it('1 -> "Firmado por 1 auditor"; 2 -> "Firmado por 2 auditores"', () => {
     expect(textoFirmadoPor(1)).toBe('Firmado por 1 auditor');
     expect(textoFirmadoPor(2)).toBe('Firmado por 2 auditores');
+  });
+});
+
+describe('textoFirmasPendientes: qué falta para lacrar, concordado con el mínimo', () => {
+  it('con requerido 1 (config de hoy): "falta la firma", no "faltan 1 de las 1 firma"', () => {
+    expect(textoFirmasPendientes(0, 1)).toBe('falta la firma de auditoría');
+  });
+
+  it('con requerido 2 y una sola pendiente: el verbo concuerda con la que falta', () => {
+    expect(textoFirmasPendientes(1, 2)).toBe('falta 1 de las 2 firmas de auditoría');
+  });
+
+  it('con requerido 2 y ninguna hecha: plural en el verbo', () => {
+    expect(textoFirmasPendientes(0, 2)).toBe('faltan 2 de las 2 firmas de auditoría');
+  });
+
+  it('ya firmaron todos: no dice que faltan firmas (decía "faltan 0"), dice qué falta de verdad', () => {
+    expect(textoFirmasPendientes(1, 1)).toBe('la firma ya está registrada y solo falta ejecutar el lacrado');
+    expect(textoFirmasPendientes(2, 2)).toBe('las 2 firmas ya están registradas y solo falta ejecutar el lacrado');
   });
 });
 

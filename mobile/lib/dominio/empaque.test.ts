@@ -79,6 +79,16 @@ describe('validarConteo', () => {
     expect(advertencias[0].tipo).toBe('sueltas-exceden-factor');
   });
 
+  it('la advertencia nombra el empaque SIN declinarle el género: el nombre lo pone el ERP', () => {
+    // "otro(a) Pack de 6" no se lee y no es como habla el resto de la app. El
+    // artículo concuerda con "empaque", que sí es una palabra nuestra.
+    const advertencias = validarConteo(conteo({ sueltas: 8 }), [PACK]);
+    expect(advertencias[0].mensaje).toBe(
+      '8 sueltas alcanzan para armar un empaque más de Pack (6 unidades): revisar antes de guardar.',
+    );
+    expect(advertencias[0].mensaje).not.toContain('(a)');
+  });
+
   it('sueltas exactamente igual al factor también advierte', () => {
     const advertencias = validarConteo(conteo({ sueltas: 6 }), [PACK]);
     expect(advertencias.some((a) => a.tipo === 'sueltas-exceden-factor')).toBe(true);

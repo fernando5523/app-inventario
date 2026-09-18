@@ -129,9 +129,14 @@ export function validarConteo(conteo: Conteo, empaquesDisponibles: Empaque[]): A
       const empaqueDelMinimo = empaquesDisponibles.find((e) => e.factor === factorMinimo)!;
       advertencias.push({
         tipo: 'sueltas-exceden-factor',
+        // El nombre del empaque viene del ERP y puede ser cualquier cosa
+        // ("Emp.6", "Saco", "Caja"): no se le puede declinar el genero. Por eso
+        // la frase se apoya en "un empaque mas de <nombre>" -- el articulo
+        // concuerda con "empaque", no con el nombre -- en vez del "otro(a)"
+        // con parentesis, que no se lee y no es como habla el resto de la app.
         mensaje:
-          `${conteo.sueltas} sueltas alcanzan para armar otro(a) ${empaqueDelMinimo.nombre} ` +
-          `de ${empaqueDelMinimo.factor}: revisar antes de guardar.`,
+          `${conteo.sueltas} sueltas alcanzan para armar un empaque más de ${empaqueDelMinimo.nombre} ` +
+          `(${empaqueDelMinimo.factor} unidades): revisar antes de guardar.`,
       });
     }
   }

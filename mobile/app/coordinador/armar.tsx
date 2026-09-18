@@ -11,6 +11,7 @@ import { avanceParaMostrar } from '../../lib/dominio/avance-snapshot';
 import { textoDeCriterios } from '../../lib/dominio/criterios-snapshot';
 import { rotuloHojasCreadas } from '../../lib/dominio/rotulo-armado';
 import { partirEnHojas } from '../../lib/dominio/lote';
+import { pluralizar } from '../../lib/dominio/plural';
 import { TAMANOS_HOJA, type Colaborador, type HojaConteo, type TamanoHoja } from '../../lib/dominio/tipos';
 import {
   ErrorSnapshot,
@@ -380,8 +381,26 @@ export default function ArmarHojasScreen(): JSX.Element {
     const valores = [...conteos.values()];
     const min = Math.min(...valores);
     const max = Math.max(...valores);
-    return min === max ? `${min} hojas por persona` : `${min}–${max} hojas por persona`;
+    // Con pocas hojas y varios contadores el reparto parejo da UNA por
+    // persona. El rango (min–max) va siempre en plural: lo manda el máximo.
+    return min === max ? `${min} ${pluralizar(min, 'hoja', 'hojas')} por persona` : `${min}–${max} hojas por persona`;
   }, [paso3Hecho, contadores, hojas]);
+
+  // El texto del paso 3 concuerda con SUS DOS cifras: una ronda de reconteo
+  // puede tener UNA hoja, y una tienda chica UN solo contador presente. Con un
+  // solo contador no hay nada que "repartir entre" -- se le asigna todo, así
+  // que cambian también el verbo y la preposición.
+  const lasHojas = pluralizar(hojas.length, 'la única hoja', `las ${formatoMiles(hojas.length)} hojas`);
+  const repartoHecho = pluralizar(
+    contadores.length,
+    `${pluralizar(hojas.length, 'está asignada', 'están asignadas')} al contador presente`,
+    `${pluralizar(hojas.length, 'está repartida', 'están repartidas')} entre los ${contadores.length} contadores presentes`,
+  );
+  const repartoPendiente = pluralizar(
+    contadores.length,
+    `Asigna ${lasHojas} al contador presente`,
+    `Reparte ${lasHojas} entre los ${contadores.length} contadores presentes`,
+  );
 
   if (!sesion) return <View />;
 
@@ -625,8 +644,8 @@ export default function ArmarHojasScreen(): JSX.Element {
                 <SelectorTamano valor={tamanoElegido} onElegir={setTamanoElegido} disabled={creandoHojas} />
                 {previa ? (
                   <Text style={styles.previaTexto}>
-                    → {formatoMiles(previa.total)} hojas de {tamanoElegido} ítems
-                    {previa.parcial > 0 ? ` · la última con ${previa.parcial} ítems` : ''}
+                    → {formatoMiles(previa.total)} {pluralizar(previa.total, 'hoja', 'hojas')} de {tamanoElegido} ítems
+                    {previa.parcial > 0 ? ` · la última con ${previa.parcial} ${pluralizar(previa.parcial, 'ítem', 'ítems')}` : ''}
                   </Text>
                 ) : null}
               </>
@@ -642,8 +661,8 @@ export default function ArmarHojasScreen(): JSX.Element {
               !paso2Hecho
                 ? 'Crea primero las hojas de conteo para poder asignarlas.'
                 : paso3Hecho && resultadoReparto
-                  ? `Las ${formatoMiles(hojas.length)} hojas ya están repartidas entre los ${contadores.length} contadores presentes, en bloques contiguos (${resultadoReparto}).`
-                  : `Reparte las ${formatoMiles(hojas.length)} hojas entre los ${contadores.length} contadores presentes, en bloques contiguos. Contar es caminar la góndola, no saltar de punta a punta.`
+                  ? `${pluralizar(hojas.length, 'La única hoja', `Las ${formatoMiles(hojas.length)} hojas`)} ya ${repartoHecho}, en bloques contiguos (${resultadoReparto}).`
+                  : `${repartoPendiente}, en bloques contiguos. Contar es caminar la góndola, no saltar de punta a punta.`
             }
           />
 
@@ -656,7 +675,7 @@ export default function ArmarHojasScreen(): JSX.Element {
                     : `Traer catálogo ${tipoElegido === 'anual' ? 'anual' : 'mensual'} de Dynamics`
                   : !paso2Hecho
                     ? tamanoElegido
-                      ? `Crear ${previa ? formatoMiles(previa.total) : ''} hojas de ${tamanoElegido} ítems`
+                      ? `Crear ${previa ? formatoMiles(previa.total) : ''} ${pluralizar(previa?.total ?? 0, 'hoja', 'hojas')} de ${tamanoElegido} ítems`
                       : 'Elige el tamaño de hoja'
                     : 'Repartir automáticamente'
               }

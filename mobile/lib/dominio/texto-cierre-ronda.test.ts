@@ -22,6 +22,11 @@ describe('textoBotonCierre: el botón dice qué ronda CIERRA y qué pasa DESPUÉ
   it('sin nada por recontar (aRecontar 0, todo cuadró): cerrar termina el inventario aunque no sea la 3ra ronda', () => {
     expect(textoBotonCierre(1, 0, fmt)).toBe('Cerrar el 1er conteo y terminar el inventario');
   });
+
+  it('UN solo ítem por recontar: "1 ítem", no "1 ítems" — en la 2da y la 3ra pasada esa cifra llega a uno', () => {
+    expect(textoBotonCierre(1, 1, fmt)).toBe('Cerrar el 1er conteo y abrir el 2do · 1 ítem');
+    expect(textoBotonCierre(2, 2, fmt)).toBe('Cerrar el 2do conteo y abrir el 3er · 2 ítems');
+  });
 });
 
 describe('esUltimaPasada: cuándo cerrar TERMINA el conteo en vez de abrir otra ronda', () => {

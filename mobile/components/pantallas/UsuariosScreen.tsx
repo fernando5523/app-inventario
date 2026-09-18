@@ -11,6 +11,7 @@ import { useRefrescoAlEnfocar } from '../hooks/useRefrescoAlEnfocar';
 // perilla del contenedor no la alcanzaba y seguía mostrando el mock en
 // RAM aunque el servidor respondiera.
 import { repositorioTiendas, repositorioUsuarios } from '../../lib/contenedor';
+import { pluralizar } from '../../lib/dominio/plural';
 import { rolesQuePuedeCrear } from '../../lib/dominio/roles';
 import type { Rol, Sucursal, Usuario } from '../../lib/dominio/tipos';
 import { useSesion } from '../../lib/sesion-contexto';
@@ -293,6 +294,10 @@ export function UsuariosScreen({ rol }: UsuariosScreenProps): JSX.Element {
     ]);
   }
 
+  // Una tienda recién dada de alta puede tener una sola cuenta habilitada:
+  // "1 habilitadas" es el mismo plural clavado que el resto de los contadores.
+  const habilitadas = usuarios.filter((u) => u.activo).length;
+
   return (
     <PantallaConTabs scrollable={false} contentStyle={styles.pantallaConTabs}>
       <ScrollView
@@ -304,7 +309,7 @@ export function UsuariosScreen({ rol }: UsuariosScreenProps): JSX.Element {
         <BarraApp
           rotulo="Usuarios"
           sede={rol === 'auditor' ? sesion.sucursal!.nombre : undefined}
-          cifras={`${usuarios.length} cuenta${usuarios.length === 1 ? '' : 's'} · ${usuarios.filter((u) => u.activo).length} habilitadas`}
+          cifras={`${usuarios.length} cuenta${usuarios.length === 1 ? '' : 's'} · ${habilitadas} ${pluralizar(habilitadas, 'habilitada', 'habilitadas')}`}
         />
 
         <Button

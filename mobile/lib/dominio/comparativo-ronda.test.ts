@@ -71,6 +71,33 @@ describe('comparativoDeRonda', () => {
     expect(c?.detalle).not.toContain('pasan al siguiente');
   });
 
+  /**
+   * En la 2da y la 3ra pasada el embudo trabaja sobre lo que no cuadró, que
+   * puede ser UN ítem: ahí "1 cuadraron contra Dynamics" o "1 de 1 ítems
+   * cuadrados" es el mismo plural clavado que ya se corrigió en el resto de
+   * los contadores (536b6ca, 9c2185b).
+   */
+  it('con UNA sola cifra, el verbo concuerda: "1 cuadró" / "1 pasa", no "cuadraron" / "pasan"', () => {
+    const c = comparativoDeRonda({ total: 2, cuadrados: 1, aRecontar: 1, sinContar: 0, sinDatoErp: 0 }, num, pct);
+    expect(c?.detalle).toContain('1 cuadró contra Dynamics');
+    expect(c?.detalle).toContain('1 pasa al siguiente conteo');
+  });
+
+  it('con más de una sigue en plural', () => {
+    const c = comparativoDeRonda({ total: 5, cuadrados: 3, aRecontar: 2, sinContar: 0, sinDatoErp: 0 }, num, pct);
+    expect(c?.detalle).toContain('3 cuadraron contra Dynamics');
+    expect(c?.detalle).toContain('2 pasan al siguiente conteo');
+  });
+
+  it('el avance pluraliza por el TOTAL auditable, no por la parte: "0 de 1 ítem cuadrado"', () => {
+    // Mismo criterio que textoFirmas ("0 / 1 firma"): en "X de N" manda N.
+    const unico = comparativoDeRonda({ total: 1, cuadrados: 0, aRecontar: 1, sinContar: 0, sinDatoErp: 0 }, num, pct);
+    expect(unico?.avance.texto).toBe('0 de 1 ítem cuadrado (0.0%)');
+
+    const varios = comparativoDeRonda({ total: 3, cuadrados: 1, aRecontar: 2, sinContar: 0, sinDatoErp: 0 }, num, pct);
+    expect(varios?.avance.texto).toContain('1 de 3 ítems cuadrados');
+  });
+
   it('una ronda recién abierta, sin contar nada, no dice que cuadró algo', () => {
     const c = comparativoDeRonda({ total: 136, cuadrados: 0, aRecontar: 136, sinContar: 136, sinDatoErp: 0 }, num, pct);
     expect(c?.avance.pct).toBe(0);

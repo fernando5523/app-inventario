@@ -26,6 +26,7 @@ import {
   textoMostrando,
   type FiltroHojasModal,
 } from '../../lib/dominio/filtro-hojas';
+import { pluralizar } from '../../lib/dominio/plural';
 import { ORDINAL } from '../../lib/dominio/texto-cierre-ronda';
 import type { HojaConteo } from '../../lib/dominio/tipos';
 import type { EstadoCola } from '../../lib/puertos/repositorios';
@@ -188,12 +189,15 @@ export default function HojasScreen(): JSX.Element {
         <BarraApp
           rotulo={`Hojas de esta ronda · ${ORDINAL[rondaActual ?? 1]} conteo`}
           sede={sesion.sucursal!.nombre}
-          cifras={`${hojas.length} hojas · ${totalItemsBloque} ítems · ${enProceso} en proceso`}
+          // Una ronda de reconteo (2da/3ra) se arma con lo que no cuadró: puede
+          // ser UNA hoja de UN ítem.
+          cifras={`${hojas.length} ${pluralizar(hojas.length, 'hoja', 'hojas')} · ${totalItemsBloque} ${pluralizar(totalItemsBloque, 'ítem', 'ítems')} · ${enProceso} en proceso`}
           onSalir={salir}
           sinBorde
         />
         <AvanceFila
-          texto={`${contadosTotal} / ${totalItemsBloque} ítems contados`}
+          // "X / N": concuerda con N, igual que en Mis hojas del Contador.
+          texto={`${contadosTotal} / ${totalItemsBloque} ${pluralizar(totalItemsBloque, 'ítem contado', 'ítems contados')}`}
           porcentaje={totalItemsBloque === 0 ? 0 : (contadosTotal / totalItemsBloque) * 100}
         />
       </View>

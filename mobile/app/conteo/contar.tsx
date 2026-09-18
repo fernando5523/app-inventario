@@ -358,7 +358,9 @@ export default function ContarScreen(): JSX.Element {
   //
   // `total`, NUNCA hoja.tamano: tamano es el tamaño nominal del lote, no cuántos
   // productos tiene ESTA hoja — la última de un inventario real queda parcial.
-  const textoFinalizar = `${pluralizar(total, 'El', 'Los')} ${total} ${pluralizar(total, 'ítem', 'ítems')} de esta hoja ${pluralizar(total, 'está', 'están')} ${pluralizar(total, 'contado', 'contados')}.`;
+  //
+  // "El 1 ítem" pegaba artículo y número; con uno solo va "El único ítem".
+  const textoFinalizar = `${pluralizar(total, 'El único ítem', `Los ${total} ítems`)} de esta hoja ${pluralizar(total, 'está', 'están')} ${pluralizar(total, 'contado', 'contados')}.`;
 
   // `error` se arma con la razón ACOTADA a esta hoja (`razonRechazoHoja`),
   // nunca con `estadoCola.error` (global) directo — el resto de `estadoCola`
@@ -445,8 +447,8 @@ export default function ContarScreen(): JSX.Element {
       <View style={styles.pieLista}>
         <Text style={styles.pieTexto}>
           {filtroTexto
-            ? `Mostrando ${visibles.length} de ${hoja.productos.length} ítems · filtro: ${filtroTexto}`
-            : `Mostrando ${pluralizar(hoja.productos.length, 'el', 'los')} ${hoja.productos.length} ${pluralizar(hoja.productos.length, 'ítem', 'ítems')} de esta hoja · desplázate para ver más`}
+            ? `Mostrando ${visibles.length} de ${hoja.productos.length} ${pluralizar(hoja.productos.length, 'ítem', 'ítems')} · filtro: ${filtroTexto}`
+            : `Mostrando ${pluralizar(hoja.productos.length, 'el único ítem', `los ${hoja.productos.length} ítems`)} de esta hoja · desplázate para ver más`}
         </Text>
       </View>
 

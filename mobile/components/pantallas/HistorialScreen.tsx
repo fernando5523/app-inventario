@@ -20,8 +20,9 @@ import type {
   SeccionSellada,
   VerificacionSello,
 } from '../../lib/puertos/repositorios';
+import { pluralizar } from '../../lib/dominio/plural';
 import { sucursalEnFoco } from '../../lib/dominio/sucursal-en-foco';
-import { textoFirmadoPor, textoFirmas } from '../../lib/dominio/texto-firmas';
+import { textoFirmadoPor, textoFirmas, textoFirmasPendientes } from '../../lib/dominio/texto-firmas';
 import { useSesion } from '../../lib/sesion-contexto';
 import { useSucursalAuditada } from '../../lib/sucursal-auditada-contexto';
 import { colors, fonts, radius, spacing } from '../../lib/theme';
@@ -866,7 +867,7 @@ export function HistorialScreen({ rol }: HistorialScreenProps): JSX.Element {
             <Text style={styles.ayuda}>
               {detalle.estado === 'en_curso'
                 ? `El conteo sigue abierto: este inventario todavía se puede modificar. El lacrado llega al final del ciclo, con ${detalle.aprobacionesRequeridas === 1 ? 'la firma' : `las ${detalle.aprobacionesRequeridas} firmas`} de auditoría.`
-                : `Este inventario ya no se recuenta, pero todavía no está sellado: faltan ${detalle.aprobacionesRequeridas - detalle.aprobaciones.length} de las ${detalle.aprobacionesRequeridas} firma${detalle.aprobacionesRequeridas === 1 ? '' : 's'} de auditoría. Hasta que se lacre, sigue siendo modificable.`}
+                : `Este inventario ya no se recuenta, pero todavía no está sellado: ${textoFirmasPendientes(detalle.aprobaciones.length, detalle.aprobacionesRequeridas)}. Hasta que se lacre, sigue siendo modificable.`}
             </Text>
           </View>
         )}
@@ -989,7 +990,12 @@ export function HistorialScreen({ rol }: HistorialScreenProps): JSX.Element {
               {/* Nunca más un techo silencioso: mientras queden inventarios
                   sin traer para este filtro, el botón sigue ahí. */}
               {inventarios.length < total ? (
-                <Button label={`Cargar más (${total - inventarios.length} restantes)`} variant="outline" loading={cargandoMas} onPress={cargarMas} />
+                <Button
+                  label={`Cargar más (${total - inventarios.length} ${pluralizar(total - inventarios.length, 'restante', 'restantes')})`}
+                  variant="outline"
+                  loading={cargandoMas}
+                  onPress={cargarMas}
+                />
               ) : null}
             </ScrollView>
           )}

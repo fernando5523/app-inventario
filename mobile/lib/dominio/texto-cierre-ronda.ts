@@ -7,6 +7,8 @@
  * (mismo patrón que `comparativo-ronda.ts`) para no atar el dominio a la UI.
  */
 
+import { pluralizar } from './plural';
+
 /** "1er", "2do", "3er" — nombre ordinal de una ronda del ciclo. */
 export const ORDINAL: Record<number, string> = { 1: '1er', 2: '2do', 3: '3er' };
 
@@ -46,7 +48,9 @@ export function textoBotonCierre(rondaActiva: number, aRecontar: number, formato
   if (esUltimaPasada(rondaActiva, aRecontar)) {
     return `Cerrar el ${ORDINAL[rondaActiva]} conteo y terminar el inventario`;
   }
-  return `Cerrar el ${ORDINAL[rondaActiva]} conteo y abrir el ${ORDINAL[rondaActiva + 1]} · ${formato(aRecontar)} ítems`;
+  // `pluralizar`: en la 2da y la 3ra pasada lo que queda por recontar son
+  // pocos ítems y puede ser UNO -- "· 1 ítems" en el botón del cierre.
+  return `Cerrar el ${ORDINAL[rondaActiva]} conteo y abrir el ${ORDINAL[rondaActiva + 1]} · ${formato(aRecontar)} ${pluralizar(aRecontar, 'ítem', 'ítems')}`;
 }
 
 /**

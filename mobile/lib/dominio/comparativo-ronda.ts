@@ -29,6 +29,8 @@ export interface ResumenParaMostrar {
   sinDatoErp: number;
 }
 
+import { pluralizar } from './plural';
+
 export interface ComparativoVisible {
   avance: { pct: number; texto: string };
   detalle: string;
@@ -58,15 +60,23 @@ export function comparativoDeRonda(
 
   // Solo se nombra lo que NO es cero: "0 sin contar" es ruido que compite con
   // las cifras que sí importan.
-  const partes = [`${formatoNumero(r.cuadrados)} cuadraron contra Dynamics`];
-  if (r.aRecontar > 0) partes.push(`${formatoNumero(r.aRecontar)} pasan al siguiente conteo`);
+  // El VERBO concuerda con su cifra: en la 2da y la 3ra pasada el embudo
+  // trabaja sobre pocos ítems y cualquiera de estas puede dar 1 ("1 cuadraron
+  // contra Dynamics", "1 pasan al siguiente conteo"). "sin contar" y "sin
+  // stock en el ERP" no llevan verbo, así que no cambian.
+  const partes = [`${formatoNumero(r.cuadrados)} ${pluralizar(r.cuadrados, 'cuadró', 'cuadraron')} contra Dynamics`];
+  if (r.aRecontar > 0) partes.push(`${formatoNumero(r.aRecontar)} ${pluralizar(r.aRecontar, 'pasa', 'pasan')} al siguiente conteo`);
   if (r.sinContar > 0) partes.push(`${formatoNumero(r.sinContar)} sin contar`);
   if (r.sinDatoErp > 0) partes.push(`${formatoNumero(r.sinDatoErp)} sin stock en el ERP`);
 
   return {
     avance: {
       pct,
-      texto: `${formatoNumero(r.cuadrados)} de ${formatoNumero(auditables)} ítems cuadrados (${formatoPct(pct)}%)`,
+      // En "X de N ítems cuadrados" el sustantivo (y su participio) concuerdan
+      // con N, el TOTAL -- mismo criterio que `textoFirmas` ("0 / 1 firma") y
+      // que `textoMostrando` de filtro-hojas.ts. En la 3ra pasada los
+      // auditables pueden ser uno solo.
+      texto: `${formatoNumero(r.cuadrados)} de ${formatoNumero(auditables)} ${pluralizar(auditables, 'ítem cuadrado', 'ítems cuadrados')} (${formatoPct(pct)}%)`,
     },
     detalle: `${partes.join(' · ')}.`,
   };

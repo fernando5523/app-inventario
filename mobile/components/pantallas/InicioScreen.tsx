@@ -326,7 +326,11 @@ export function InicioScreen(): JSX.Element {
       // Sin red, totalHojas/items son null: se muestran como "—", nunca
       // como "0 hojas" (que diría "no hay ninguna" en vez de "no lo sé").
       const sinRed = inventario.totalHojas === null || inventario.items === null || sinDatosDeRonda;
-      cifras = `${cifraOSinRed(inventario.totalHojas)} hojas · ${cifraOSinRed(inventario.items, formatoMiles)} ítems · ${cifraOSinRed(asignadas)} asignadas${sinRed ? ' · sin red' : ''}`;
+      // Concordancia con 1 en las tres cifras: un reconteo (rondas 2 y 3) deja
+      // UNA hoja de UN ítem, y las asignadas empiezan en una. Con `null` (sin
+      // red) va el plural: es como se lee el "—" (mismo criterio que 536b6ca
+      // en "— hojas asignadas").
+      cifras = `${cifraOSinRed(inventario.totalHojas)} ${pluralizar(inventario.totalHojas ?? 0, 'hoja', 'hojas')} · ${cifraOSinRed(inventario.items, formatoMiles)} ${pluralizar(inventario.items ?? 0, 'ítem', 'ítems')} · ${cifraOSinRed(asignadas)} ${pluralizar(asignadas ?? 0, 'asignada', 'asignadas')}${sinRed ? ' · sin red' : ''}`;
       filasEstado = [
         { etiqueta: 'Hojas asignadas', valor: cifraOSinRed(asignadas), pct: asignadas === null ? 'sin red' : filaPct(asignadas, inventario.totalHojas) },
         {
@@ -335,7 +339,14 @@ export function InicioScreen(): JSX.Element {
           pct: finalizadas === null ? 'sin red' : filaPct(finalizadas, inventario.totalHojas),
           color: colors.ok,
         },
-        { etiqueta: 'Contando ahora', valor: cifraOSinRed(contando), pct: contando === null ? 'sin red' : 'colaboradores' },
+        // El `pct` se pinta PEGADO al `valor` (ver el render de FilaEstado), así
+        // que forma frase con él: con una sola persona contando -- lo normal al
+        // arrancar la jornada -- decía "1 colaboradores".
+        {
+          etiqueta: 'Contando ahora',
+          valor: cifraOSinRed(contando),
+          pct: contando === null ? 'sin red' : pluralizar(contando, 'colaborador', 'colaboradores'),
+        },
       ];
       sync = resumenParaTablero(hojasRonda1);
     }
@@ -357,14 +368,16 @@ export function InicioScreen(): JSX.Element {
       // Conteo ciego: SOLO sus hojas y sus ítems. Nunca el total del
       // inventario ni una cifra que venga del ERP.
       cifras = hojaActual
-        ? `Hoja #${hojaActual.numero} · Lote de ${totalHojaActual} ítems`
+        ? `Hoja #${hojaActual.numero} · Lote de ${totalHojaActual} ${pluralizar(totalHojaActual, 'ítem', 'ítems')}`
         : `${cifraOSinRed(asignadas)} ${pluralizar(asignadas ?? 0, 'hoja asignada', 'hojas asignadas')}${asignadas === null ? ` (${motivoCorto(resultadoMias?.ok === false ? resultadoMias.motivo : undefined)})` : ''}`;
       filasEstado = hojaActual
         ? [
             {
               etiqueta: `Hoja #${hojaActual.numero}`,
               valor: String(hojaActual.conteos.length),
-              pct: `/ ${totalHojaActual} ítems`,
+              // "X / N ítems": el sustantivo concuerda con N, el total de la
+              // hoja (mismo criterio que textoFirmas, "0 / 1 firma").
+              pct: `/ ${totalHojaActual} ${pluralizar(totalHojaActual, 'ítem', 'ítems')}`,
               color: colors.ok,
             },
             { etiqueta: 'Tus hojas sin empezar', valor: String(pendientes), pct: `de ${misHojas.length}` },
@@ -373,7 +386,14 @@ export function InicioScreen(): JSX.Element {
             {
               etiqueta: 'Hojas asignadas',
               valor: cifraOSinRed(asignadas),
-              pct: asignadas === null ? motivoCorto(resultadoMias?.ok === false ? resultadoMias.motivo : undefined) : pendientes === misHojas.length ? 'todas pendientes' : '',
+              // Con UNA hoja asignada se leía "1 todas pendientes": el `pct` va
+              // pegado al `valor`, así que con una sola es "1 pendiente".
+              pct:
+                asignadas === null
+                  ? motivoCorto(resultadoMias?.ok === false ? resultadoMias.motivo : undefined)
+                  : pendientes === misHojas.length
+                    ? pluralizar(misHojas.length, 'pendiente', 'todas pendientes')
+                    : '',
             },
           ];
       sync = resumenParaTablero(misHojas);
@@ -402,7 +422,8 @@ export function InicioScreen(): JSX.Element {
       // Mismo criterio que el bloque de Coordinador: sin red no se muestra
       // "0 hojas", se muestra "—" y se aclara por qué.
       const sinRed = inventario.totalHojas === null || inventario.items === null || sinDatosDeRonda;
-      cifras = `${cifraOSinRed(inventario.totalHojas)} hojas · ${cifraOSinRed(inventario.items, formatoMiles)} ítems · ${etiquetaEstado1}${sinRed ? ' · sin red' : ''}`;
+      // Mismo criterio que el bloque del Coordinador, más arriba.
+      cifras = `${cifraOSinRed(inventario.totalHojas)} ${pluralizar(inventario.totalHojas ?? 0, 'hoja', 'hojas')} · ${cifraOSinRed(inventario.items, formatoMiles)} ${pluralizar(inventario.items ?? 0, 'ítem', 'ítems')} · ${etiquetaEstado1}${sinRed ? ' · sin red' : ''}`;
       filasEstado = [
         { etiqueta: 'Ciclo de conteos', valor: etiquetaEstado1, color: estado1 === 'finalizada' ? colors.ok : colors.proceso },
         {
@@ -419,7 +440,9 @@ export function InicioScreen(): JSX.Element {
     // el avance de un conteo. Nunca stock, nunca avance de ninguna hoja.
     tituloEstado = 'Estado del sistema';
     if (estadoSistema) {
-      cifras = `${estadoSistema.tiendasActivas} de ${estadoSistema.totalTiendas} tiendas activas`;
+      // "X de N tiendas activas": concuerda con N (el padrón), igual que el
+      // resto de las frases "X de N" de la app.
+      cifras = `${estadoSistema.tiendasActivas} de ${estadoSistema.totalTiendas} ${pluralizar(estadoSistema.totalTiendas, 'tienda activa', 'tiendas activas')}`;
       filasEstado = [
         {
           etiqueta: 'Tiendas activas',
@@ -435,7 +458,12 @@ export function InicioScreen(): JSX.Element {
         {
           etiqueta: 'Inventarios en curso',
           valor: String(estadoSistema.inventariosEnCurso),
-          pct: estadoSistema.inventariosEnCurso === 0 ? 'ninguno ahora' : 'sucursales contando',
+          // Con un inventario en curso decía "1 sucursales contando" (visto en
+          // el Inicio del Administrador): el `pct` forma frase con el `valor`.
+          pct:
+            estadoSistema.inventariosEnCurso === 0
+              ? 'ninguno ahora'
+              : pluralizar(estadoSistema.inventariosEnCurso, 'sucursal contando', 'sucursales contando'),
           color: estadoSistema.inventariosEnCurso > 0 ? colors.proceso : undefined,
         },
       ];

@@ -9,6 +9,7 @@ import { ALTO_TAB_BAR } from '../../components/navegacion/tabs';
 import { Badge, BarraApp, Button, Card, EmptyState, Select, type SelectOpcion } from '../../components/ui';
 // Del contenedor: las sucursales salen de Postgres con el backend vivo.
 import { repositorioTiendas } from '../../lib/contenedor';
+import { pluralizar } from '../../lib/dominio/plural';
 import type { Almacen, Sucursal } from '../../lib/dominio/tipos';
 import { colors, fonts, fontSize, radius, spacing } from '../../lib/theme';
 
@@ -255,7 +256,8 @@ export default function TiendasScreen(): JSX.Element {
         contentStyle={[styles.contenido, { paddingBottom: ALTO_TAB_BAR + insets.bottom + 120 }]}
         refreshControl={<RefreshControl refreshing={refrescando} onRefresh={refrescar} tintColor={colors.rojo} colors={[colors.rojo]} />}
       >
-      <BarraApp rotulo="Tiendas" cifras={`${activas} de ${tiendas.length} activas`} />
+      {/* "X de N activas": concuerda con N, el total del padrón. */}
+      <BarraApp rotulo="Tiendas" cifras={`${activas} de ${tiendas.length} ${pluralizar(tiendas.length, 'activa', 'activas')}`} />
 
       <Button
         label={formularioAbierto ? 'Cancelar' : 'Nueva tienda'}

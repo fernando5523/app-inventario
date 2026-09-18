@@ -197,12 +197,15 @@ export default function MisHojasScreen(): JSX.Element {
         <BarraApp
           rotulo={`Mis hojas · ${ORDINAL[rondaActual ?? 1]} conteo`}
           sede={sesion.sucursal!.nombre}
-          cifras={`${hojas.length} ${pluralizar(hojas.length, 'hoja', 'hojas')} · ${totalItemsBloque} ítems · ${enProceso} en proceso`}
+          cifras={`${hojas.length} ${pluralizar(hojas.length, 'hoja', 'hojas')} · ${totalItemsBloque} ${pluralizar(totalItemsBloque, 'ítem', 'ítems')} · ${enProceso} en proceso`}
           onSalir={salir}
           sinBorde
         />
         <AvanceFila
-          texto={`${contadosTotal} / ${totalItemsBloque} ítems contados`}
+          // "X / N ítems contados": el sustantivo y su participio concuerdan con
+          // N, el total del bloque -- mismo criterio que textoFirmas ("0 / 1
+          // firma"). En un reconteo ese bloque llega a tener un solo ítem.
+          texto={`${contadosTotal} / ${totalItemsBloque} ${pluralizar(totalItemsBloque, 'ítem contado', 'ítems contados')}`}
           porcentaje={totalItemsBloque === 0 ? 0 : (contadosTotal / totalItemsBloque) * 100}
         />
       </View>
@@ -253,12 +256,14 @@ export default function MisHojasScreen(): JSX.Element {
 
           <View style={styles.pieLista}>
             <Text style={styles.pieTexto}>
+              {/* Con UNA hoja, "la 1 hoja asignada" pega artículo y número y no
+                  se lee: va "la única hoja asignada". Las dos cifras del final
+                  concuerdan por el mismo motivo ("1 pendientes"). */}
               Mostrando {pluralizar(hojas.length, 'la', 'las')}{' '}
-              <Text style={styles.pieFuerte}>
-                {hojas.length} {pluralizar(hojas.length, 'hoja', 'hojas')}
-              </Text>{' '}
+              <Text style={styles.pieFuerte}>{pluralizar(hojas.length, 'única hoja', `${hojas.length} hojas`)}</Text>{' '}
               {pluralizar(hojas.length, 'asignada', 'asignadas')} · {enProceso} en proceso ·{' '}
-              {finalizadas} finalizadas · {pendientes} pendientes
+              {finalizadas} {pluralizar(finalizadas, 'finalizada', 'finalizadas')} · {pendientes}{' '}
+              {pluralizar(pendientes, 'pendiente', 'pendientes')}
             </Text>
           </View>
         </>
