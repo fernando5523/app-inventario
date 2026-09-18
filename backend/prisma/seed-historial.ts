@@ -19,7 +19,8 @@
 
 import { Prisma, PrismaClient } from '@prisma/client';
 import { repartirExacto } from '../src/dominio/reparto-de-fondo';
-import { armarContenidoLacrado, armarFolio, calcularHash, ALGORITMO_HASH } from '../src/modules/historial/historial.lacrado';
+import { APROBACIONES_REQUERIDAS, armarContenidoLacrado, armarFolio, calcularHash, ALGORITMO_HASH } from '../src/modules/historial/historial.lacrado';
+import { sincronizarSecuenciasYAvisar } from './sincronizar-secuencias';
 
 const prisma = new PrismaClient();
 
@@ -371,9 +372,10 @@ async function sembrarPeriodo(d: DatosPeriodo, sucursalNombre: string): Promise<
 
 /**
  * Un tercer inventario con el conteo YA CERRADO pero SIN FIRMAR. Es el que
- * deja ver la pantalla de lacrado en su estado interesante ("0 / 2 aprobado",
+ * deja ver la pantalla de lacrado en su estado interesante ("0 de N firmas",
  * boton de lacrar bloqueado) -- con solo inventarios ya lacrados, esa
- * pantalla no se puede validar con el cliente.
+ * pantalla no se puede validar con el cliente. N es el minimo configurado
+ * (APROBACIONES_REQUERIDAS, ver historial.lacrado.ts), no un 2 fijo.
  */
 async function sembrarPendienteDeFirma(): Promise<void> {
   const existente = await prisma.inventario.findUnique({ where: { id: ID_AGOSTO } });
@@ -475,7 +477,7 @@ async function sembrarPendienteDeFirma(): Promise<void> {
     });
   }
 
-  console.log('  2026-08: liquidado y SIN FIRMAR (0 / 2) -- listo para probar el lacrado.');
+  console.log(`  2026-08: liquidado y SIN FIRMAR (0 / ${APROBACIONES_REQUERIDAS}) -- listo para probar el lacrado.`);
 }
 
 async function main(): Promise<void> {
@@ -490,7 +492,12 @@ async function main(): Promise<void> {
   await sembrarPeriodo(JUNIO, sucursal.nombre);
   await sembrarPeriodo(JULIO, sucursal.nombre);
   await sembrarPendienteDeFirma();
-  console.log('Listo: 2 inventarios lacrados + 1 esperando las dos firmas.');
+  console.log(`Listo: 2 inventarios lacrados + 1 esperando ${APROBACIONES_REQUERIDAS === 1 ? 'su firma' : `sus ${APROBACIONES_REQUERIDAS} firmas`}.`);
+
+  // Los inventarios 8001..8003 se insertan con id EXPLICITO, que en PostgreSQL
+  // NO avanza la secuencia. Ver prisma/sincronizar-secuencias.ts: sin esto, el
+  // primer alta hecha desde la app choca con un P2002 (500).
+  await sincronizarSecuenciasYAvisar(prisma);
 }
 
 main()

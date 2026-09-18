@@ -44,6 +44,7 @@
 
 import { Prisma, PrismaClient } from '@prisma/client';
 import { factorDesdeSimbolo } from '../src/dominio/empaque';
+import { sincronizarSecuenciasYAvisar } from './sincronizar-secuencias';
 
 const prisma = new PrismaClient();
 
@@ -502,6 +503,11 @@ async function main(): Promise<void> {
   await sembrarAnual();
   await sembrarEnCurso();
   console.log('Listo.');
+
+  // Los inventarios 8004..8006 se insertan con id EXPLICITO, que en PostgreSQL
+  // NO avanza la secuencia. Ver prisma/sincronizar-secuencias.ts: sin esto, el
+  // primer alta hecha desde la app choca con un P2002 (500).
+  await sincronizarSecuenciasYAvisar(prisma);
 }
 
 main()

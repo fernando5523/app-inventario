@@ -53,6 +53,7 @@
 import { PrismaClient } from '@prisma/client';
 import argon2 from 'argon2';
 import { CONFIGURACIONES } from './configuraciones';
+import { sincronizarSecuenciasYAvisar } from './sincronizar-secuencias';
 
 const prisma = new PrismaClient();
 
@@ -237,6 +238,12 @@ async function main() {
   for (const [rol, pin] of Object.entries(PIN_DEV_POR_ROL)) {
     console.log(`  ${rol.padEnd(13)} ${pin}`);
   }
+
+  // Todo lo de arriba se inserta con id EXPLICITO (sucursales 1..4,
+  // colaboradores 101..405, administrador 1000) y eso NO avanza la secuencia
+  // del autoincremento. Sin esta linea, la primera tienda o el primer usuario
+  // que el cliente cree DESDE LA APP choca con un P2002 y la API responde 500.
+  await sincronizarSecuenciasYAvisar(prisma);
 }
 
 main()
