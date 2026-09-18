@@ -69,6 +69,7 @@ async function main(): Promise<number> {
   const porConteoHoja = incluyeLacrados ? {} : { conteo: { hoja: { inventarioId: { notIn: idsLacrados } } } };
   const porCatalogo = incluyeLacrados ? {} : { catalogoItem: { inventarioId: { notIn: idsLacrados } } };
   const porLacrado = incluyeLacrados ? {} : { lacrado: { inventarioId: { notIn: idsLacrados } } };
+  const porImportacion = incluyeLacrados ? {} : { importacion: { inventarioId: { notIn: idsLacrados } } };
 
   const conteoLineas = await prisma.lineaConteo.count({ where: porConteoHoja });
   const conteoConteos = await prisma.conteo.count({ where: porHoja });
@@ -83,6 +84,9 @@ async function main(): Promise<number> {
   const conteoHojas = await prisma.hojaConteo.count({ where: invNotIn });
   const conteoEmpaquesCatalogo = await prisma.empaqueCatalogo.count({ where: porCatalogo });
   const conteoCatalogo = await prisma.catalogoItem.count({ where: invNotIn });
+  const conteoLineasAjuste = await prisma.lineaAjusteDynamics.count({ where: porImportacion });
+  const conteoImportaciones = await prisma.importacionAjustesDynamics.count({ where: invNotIn });
+  const conteoAsistencia = await prisma.asistenciaInventario.count({ where: invNotIn });
   const conteoInventarios = await prisma.inventario.count({ where: idNotIn });
   const totalColaboradores = await prisma.colaborador.count();
   const totalSucursales = await prisma.sucursal.count();
@@ -119,6 +123,9 @@ async function main(): Promise<number> {
   console.log(`hojas_conteo:             ${conteoHojas}`);
   console.log(`empaques_catalogo:        ${conteoEmpaquesCatalogo}`);
   console.log(`catalogo_items:           ${conteoCatalogo}`);
+  console.log(`lineas_ajuste_dynamics:   ${conteoLineasAjuste}`);
+  console.log(`importaciones_ajustes:    ${conteoImportaciones}`);
+  console.log(`asistencia_inventario:    ${conteoAsistencia}`);
   console.log(`inventarios:              ${conteoInventarios}`);
   console.log(`sesiones_token (no-admin):${conteoSesionesNoAdmin}`);
   console.log(`registro_auditoria (no-admin actor): ${conteoAuditoriaNoAdmin}`);
@@ -179,6 +186,23 @@ async function main(): Promise<number> {
       await tx.hojaConteo.deleteMany({ where: invNotIn });
       await tx.empaqueCatalogo.deleteMany({ where: porCatalogo });
       await tx.catalogoItem.deleteMany({ where: invNotIn });
+      // La OCTAVA FK RESTRICT hacia `inventarios`, y la unica que faltaba:
+      // sin esto el borrado del inventario muere con
+      //   violates RESTRICT setting of foreign key constraint
+      //   "importaciones_ajustes_dynamics_inventario_id_fkey"
+      // en cuanto alguien haya importado el Excel de ajustes (tramo 3), que
+      // es justo lo que deja una validacion completa del cierre. Las lineas
+      // van primero: cuelgan de la importacion, no del inventario.
+      await tx.lineaAjusteDynamics.deleteMany({ where: porImportacion });
+      await tx.importacionAjustesDynamics.deleteMany({ where: invNotIn });
+      // La NOVENA, y el mismo bug que la octava: sin esto el borrado muere con
+      //   violates RESTRICT setting of foreign key constraint
+      //   "asistencia_inventario_inventario_id_fkey"
+      // (ver la migracion 20260918160000_asistencia_claves_foraneas). Con una
+      // diferencia que la hace mas facil de encontrar que las otras ocho: las
+      // marcas existen desde que el Coordinador pasa lista, o sea que un
+      // inventario reventaba aca aunque nadie hubiera contado todavia.
+      await tx.asistenciaInventario.deleteMany({ where: invNotIn });
       await tx.inventario.deleteMany({ where: idNotIn });
 
       if (!conservarUsuariosTiendas) {

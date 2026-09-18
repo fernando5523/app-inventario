@@ -4,6 +4,8 @@
  * Crea su propia tienda, su gente y su inventario: NO toca el inventario 20
  * ni ninguno existente. Limpia todo al final salvo que se pase --dejar.
  */
+import { pinDev } from './_pin-dev.mjs';
+
 const BASE = process.env.BASE_URL ?? 'http://localhost:3000';
 const DEJAR = process.argv.includes('--dejar');
 let fallas = 0;
@@ -28,7 +30,7 @@ const S = Date.now().toString().slice(-6);
 const PIN = S;
 
 console.log('== ESCENARIO PROPIO (no toca el inventario 20) ==');
-const admin = await entrar(1000, '001000');
+const admin = await entrar(1000, pinDev('administrador'));
 const tienda = (await api('POST', '/api/tiendas', {
   token: admin.token,
   body: { nombre: `Market Ciclo ${S}`, almacenId: 'MD01_LUZ' },
@@ -53,7 +55,27 @@ const sAud2 = await entrar(gente.aud2.id, PIN);
 const snap = (await api('POST', '/api/d365/snapshot', {
   token: sCoord.token, body: { sucursalId: tienda.id, modo: 'ejemplo' },
 })).datos;
-const invId = snap.inventarioId;
+const invId = snap?.inventarioId;
+
+// GUARDA DE ALCANCE -- ver el comentario largo en verificar-ciclo-rondas.mjs.
+// En corto: `invId` y `tienda.id` salen de respuestas HTTP, y si el backend
+// contesta cualquier otra cosa (un 429 del limitador de ingreso alcanza)
+// quedan `undefined`. Prisma IGNORA las condiciones `undefined`, asi que los
+// `deleteMany` de la limpieza de mas abajo dejarian de estar acotados a este
+// escenario y borrarian las filas de TODA la base. Se corta antes de tocarla.
+function exigirId(valor, que) {
+  if (Number.isInteger(valor) && valor > 0) return valor;
+  console.error(`\n  [ABORTA] ${que}: se esperaba un id y llego ${JSON.stringify(valor)}.`);
+  console.error('  El escenario no se armo; sin ese id, un filtro de Prisma no filtra NADA.');
+  if (Number.isInteger(tienda?.id)) {
+    console.error(`  Puede haber quedado la tienda de prueba ${tienda.id} sin borrar: conviene revisarla a mano.`);
+  }
+  process.exit(1);
+}
+exigirId(tienda?.id, 'la tienda de prueba');
+for (const [clave, persona] of Object.entries(gente)) exigirId(persona?.id, `el usuario "${clave}"`);
+exigirId(invId, 'el inventario del snapshot');
+
 ok(`inventario ${invId} con ${snap.items} items`);
 
 await api('POST', `/api/inventarios/${invId}/hojas`, { token: sCoord.token, body: { tamano: 20 } });

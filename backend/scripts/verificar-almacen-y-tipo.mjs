@@ -5,6 +5,7 @@
  *   3. las dos restricciones unicas con `tipo`, escribiendo DIRECTO en Postgres.
  */
 import { PrismaClient } from '@prisma/client';
+import { pinDev } from './_pin-dev.mjs';
 
 const BASE = process.env.BASE_URL ?? 'http://localhost:3000';
 const prisma = new PrismaClient();
@@ -24,7 +25,8 @@ async function api(metodo, ruta, { token, body } = {}) {
   return { status: r.status, datos, texto };
 }
 
-const ingresar = async (id, pin = String(id).padStart(6, '0')) => {
+// Sin PIN por defecto: el de desarrollo sale del ROL (pinDev), no del id.
+const ingresar = async (id, pin) => {
   const r = await api('POST', '/api/sesion/ingresar', { body: { colaboradorId: id, pin } });
   return r.status === 200 ? r.datos : null;
 };
@@ -45,7 +47,7 @@ async function debeRechazar(tx, etiqueta, fn) {
 }
 
 console.log('== 1. EL ALMACEN ES UN ATRIBUTO DE LA SUCURSAL ==');
-const admin = await ingresar(1000);
+const admin = await ingresar(1000, pinDev('administrador'));
 if (admin === null) { mal('no se pudo ingresar como administrador'); }
 else {
   const lista = await api('GET', '/api/tiendas', { token: admin.token });

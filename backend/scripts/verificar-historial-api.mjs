@@ -1,13 +1,22 @@
 /**
- * Prueba de PUNTA A PUNTA contra el backend vivo en localhost:3000.
- * Lo que se verifica aca no se puede verificar con un test unitario: que la
- * identidad de quien firma salga del TOKEN y no del body, atravesando el
- * middleware de sesion, las rutas y el service reales.
+ * Prueba de PUNTA A PUNTA contra el backend vivo (BASE_URL, por defecto
+ * http://localhost:3000). Lo que se verifica aca no se puede verificar con un
+ * test unitario: que la identidad de quien firma salga del TOKEN y no del
+ * body, atravesando el middleware de sesion, las rutas y el service reales.
+ *
+ * El minimo de firmas del lacrado es configurable
+ * (LACRADO_APROBACIONES_REQUERIDAS, default 1): el camino feliz lo lee de
+ * /lacrado/estado y se ramifica, en vez de suponer que son dos.
  */
-const BASE = 'http://localhost:3000';
+import { PrismaClient } from '@prisma/client';
+import { pinDev } from './_pin-dev.mjs';
+
+const BASE = process.env.BASE_URL ?? 'http://localhost:3000';
+const prisma = new PrismaClient();
 let fallas = 0;
 const ok = (t) => console.log('  [OK]    ' + t);
 const mal = (t) => { console.log('  [FALLA] ' + t); fallas += 1; };
+const info = (t) => console.log('  [INFO]  ' + t);
 
 async function api(metodo, ruta, { token, body } = {}) {
   const r = await fetch(BASE + ruta, {
@@ -20,18 +29,20 @@ async function api(metodo, ruta, { token, body } = {}) {
   return { status: r.status, datos };
 }
 
-const ingresar = async (id) => {
-  const r = await api('POST', '/api/sesion/ingresar', { body: { colaboradorId: id, pin: String(id).padStart(6, '0') } });
-  if (r.status !== 200) throw new Error(`no se pudo ingresar como ${id}: ${r.status} ${JSON.stringify(r.datos)}`);
+// El PIN de un colaborador sembrado sale de su ROL, no del id (ver _pin-dev.mjs).
+const ingresar = async (id, rol) => {
+  const r = await api('POST', '/api/sesion/ingresar', { body: { colaboradorId: id, pin: pinDev(rol) } });
+  if (r.status !== 200) throw new Error(`no se pudo ingresar como ${id} (${rol}): ${r.status} ${JSON.stringify(r.datos)}`);
   return r.datos;
 };
 
 console.log('== SESIONES ==');
-const gilmer = await ingresar(103);   // auditor Luzuriaga
-const rosa = await ingresar(106);     // auditor Luzuriaga
-const maria = await ingresar(102);    // rol conteo, Luzuriaga
-const nilda = await ingresar(203);    // auditor de OTRA sucursal (Carhuaz)
-ok(`${gilmer.colaborador.nombre} (${gilmer.colaborador.rol}), ${rosa.colaborador.nombre}, ${maria.colaborador.nombre} (${maria.colaborador.rol}), ${nilda.colaborador.nombre} (Carhuaz)`);
+const gilmer = await ingresar(103, 'auditor');   // auditor Luzuriaga
+const rosa = await ingresar(106, 'auditor');     // auditor Luzuriaga
+const maria = await ingresar(102, 'conteo');     // rol conteo, Luzuriaga
+const nilda = await ingresar(203, 'auditor');    // auditor de OTRA sucursal (Carhuaz)
+const ana = await ingresar(201, 'coordinador');  // coordinadora de Carhuaz
+ok(`${gilmer.colaborador.nombre} (${gilmer.colaborador.rol}), ${rosa.colaborador.nombre}, ${maria.colaborador.nombre} (${maria.colaborador.rol}), ${nilda.colaborador.nombre} (auditora, Carhuaz), ${ana.colaborador.nombre} (${ana.colaborador.rol}, Carhuaz)`);
 
 console.log('\n== CONTEO CIEGO: quien entra al historico ==');
 {
@@ -45,16 +56,28 @@ console.log('\n== CONTEO CIEGO: quien entra al historico ==');
   sin.status === 401 ? ok('sin token: 401') : mal(`sin token recibio ${sin.status}`);
 }
 
-console.log('\n== ALCANCE POR SUCURSAL ==');
+console.log('\n== ALCANCE: el auditor ve toda la cadena, el coordinador no entra ==');
 {
+  // Correccion del cliente (2026-09-09): el auditor accede a TODAS las
+  // sucursales. Nilda es de Carhuaz: si pide Luzuriaga ve Luzuriaga -- y SOLO
+  // Luzuriaga, porque el filtro ahora se respeta en vez de ignorarse.
+  const enLaBase = await prisma.inventario.count({ where: { sucursalId: 1 } });
   const r = await api('GET', '/api/historial/inventarios?sucursalId=1', { token: nilda.token });
-  const deOtra = (r.datos.inventarios ?? []).filter((i) => i.sucursalId !== 2);
-  deOtra.length === 0
-    ? ok('un auditor de Carhuaz pidiendo sucursalId=1 NO ve datos de Luzuriaga (se ignora el filtro)')
-    : mal(`filtro ignorado mal: vio ${deOtra.length} inventarios ajenos`);
+  const lista = r.datos?.inventarios ?? [];
+  r.status === 200 && r.datos.total === enLaBase && lista.length > 0 && lista.every((i) => i.sucursalId === 1)
+    ? ok(`una auditora de Carhuaz pidiendo sucursalId=1 ve los ${r.datos.total} inventarios de Luzuriaga que tiene la base, y ninguno de otra tienda`)
+    : mal(`Nilda con sucursalId=1: ${r.status}, total ${r.datos?.total} (la base tiene ${enLaBase}), sucursales [${[...new Set(lista.map((i) => i.sucursalId))].join(', ')}]`);
 
   const d = await api('GET', '/api/historial/inventarios/8001', { token: nilda.token });
-  d.status === 403 ? ok('detalle de un inventario ajeno: 403') : mal(`detalle ajeno devolvio ${d.status}`);
+  d.status === 200 ? ok('y abre el detalle de un inventario de otra sucursal: 200') : mal(`detalle de otra sucursal devolvio ${d.status}`);
+
+  // El unico corte que queda en el historico es por ROL, el del conteo ciego:
+  // el coordinador no lo lee, ni el de su tienda ni el de otra.
+  const propio = await api('GET', '/api/historial/inventarios?sucursalId=2', { token: ana.token });
+  const ajeno = await api('GET', '/api/historial/inventarios/8001', { token: ana.token });
+  propio.status === 403 && ajeno.status === 403
+    ? ok('una coordinadora no lee el historico de su tienda ni el de otra: 403 por rol, el conteo ciego se sostiene')
+    : mal(`coordinadora en el historico: el de su tienda ${propio.status}, el de otra ${ajeno.status}`);
 }
 
 console.log('\n== DETALLE E HISTORICO ==');
@@ -137,7 +160,7 @@ console.log('\n== EL CONTROL DE DOS PERSONAS, VIA HTTP ==');
 }
 
 console.log('');
-console.log('== CAMINO FELIZ: DOS FIRMAS, DOS SESIONES, UN LACRADO ==');
+console.log('== CAMINO FELIZ: FIRMAS DESDE SESIONES DISTINTAS Y UN LACRADO ==');
 {
   const ID = 8003; // agosto 2026, liquidado y sin firmar
   const yaLacrado = (await api('GET', `/api/historial/inventarios/${ID}`, { token: gilmer.token })).datos.estado === 'lacrado';
@@ -145,51 +168,86 @@ console.log('== CAMINO FELIZ: DOS FIRMAS, DOS SESIONES, UN LACRADO ==');
   if (yaLacrado) {
     console.log('  (ya lacrado por una corrida anterior; correr `npx tsx prisma/limpiar-historial-demo.ts && npm run prisma:seed-historial` para repetir)');
   } else {
-    const f1 = await api('POST', `/api/historial/inventarios/${ID}/aprobaciones`, { token: gilmer.token, body: {} });
-    f1.status === 201 && f1.datos.aprobadorId === 103
-      ? ok(`firma 1 desde la sesion de Gilmer -> registrada contra el id ${f1.datos.aprobadorId} (${f1.datos.aprobadorNombre}), rol "${f1.datos.rolAlAprobar}", listoParaLacrar=${f1.datos.listoParaLacrar}`)
-      : mal(`firma 1: ${f1.status} ${JSON.stringify(f1.datos)}`);
+    // Cuantas firmas DISTINTAS exige el lacrado lo decide el entorno
+    // (LACRADO_APROBACIONES_REQUERIDAS, default 1 por decision del cliente):
+    // se lee de la API en vez de suponerlo. El modelo de doble firma no cambia
+    // con el numero -- nadie firma dos veces y quien firma sale del token.
+    const estado = await api('GET', `/api/historial/inventarios/${ID}/lacrado/estado`, { token: gilmer.token });
+    const requeridas = estado.datos?.aprobacionesRequeridas;
 
-    const repetida = await api('POST', `/api/historial/inventarios/${ID}/aprobaciones`, { token: gilmer.token, body: {} });
-    repetida.status === 409
-      ? ok(`Gilmer intentando dar TAMBIEN la segunda firma -> 409: "${repetida.datos.error.slice(0, 68)}..."`)
-      : mal(`segunda firma del mismo: ${repetida.status}`);
+    if (!Number.isInteger(requeridas) || requeridas < 1) {
+      mal(`aprobacionesRequeridas tiene que ser un entero >= 1: ${estado.status} ${JSON.stringify(estado.datos)}`);
+    } else {
+      ok(`el lacrado exige ${requeridas === 1 ? 'UNA firma' : `${requeridas} firmas de personas distintas`} (aprobacionesRequeridas de /lacrado/estado)`);
 
-    const sinPar = await api('POST', `/api/historial/inventarios/${ID}/lacrado`, { token: gilmer.token, body: {} });
-    sinPar.status === 409
-      ? ok(`lacrar con UNA sola firma -> 409: "${sinPar.datos.error.slice(0, 68)}..."`)
-      : mal(`lacrado con una firma: ${sinPar.status}`);
+      const f1 = await api('POST', `/api/historial/inventarios/${ID}/aprobaciones`, { token: gilmer.token, body: {} });
+      f1.status === 201 && f1.datos.aprobadorId === 103 && f1.datos.listoParaLacrar === (requeridas === 1)
+        ? ok(`firma 1 desde la sesion de Gilmer -> registrada contra el id ${f1.datos.aprobadorId} (${f1.datos.aprobadorNombre}), rol "${f1.datos.rolAlAprobar}", listoParaLacrar=${f1.datos.listoParaLacrar}`)
+        : mal(`firma 1: ${f1.status} ${JSON.stringify(f1.datos)}`);
 
-    const f2 = await api('POST', `/api/historial/inventarios/${ID}/aprobaciones`, {
-      token: rosa.token,
-      body: { nota: 'Revisado contra el reporte de Jocelyn.' },
-    });
-    f2.status === 201 && f2.datos.aprobadorId === 106 && f2.datos.listoParaLacrar === true
-      ? ok(`firma 2 desde la sesion de Rosa -> id ${f2.datos.aprobadorId} (${f2.datos.aprobadorNombre}), listoParaLacrar=true`)
-      : mal(`firma 2: ${f2.status} ${JSON.stringify(f2.datos)}`);
+      const repetida = await api('POST', `/api/historial/inventarios/${ID}/aprobaciones`, { token: gilmer.token, body: {} });
+      repetida.status === 409
+        ? ok(`Gilmer intentando dar TAMBIEN la segunda firma -> 409: "${repetida.datos?.error?.slice(0, 68)}..."`)
+        : mal(`segunda firma del mismo: ${repetida.status}`);
 
-    const lac = await api('POST', `/api/historial/inventarios/${ID}/lacrado`, { token: gilmer.token, body: {} });
-    lac.status === 201
-      ? ok(`LACRADO: folio ${lac.datos.folio}, hash ${lac.datos.hash.slice(0, 12)}..., firmado por ${lac.datos.aprobadoPor.map((a) => a.nombre).join(' + ')}`)
-      : mal(`lacrado: ${lac.status} ${JSON.stringify(lac.datos)}`);
+      // Lacrar con UNA firma: con minimo 1 alcanza; con 2 o mas es justo lo
+      // que el control tiene que impedir.
+      const conUna = await api('POST', `/api/historial/inventarios/${ID}/lacrado`, { token: gilmer.token, body: {} });
+      let lacrado = null;
+      if (requeridas === 1) {
+        conUna.status === 201
+          ? ok(`con minimo 1, lacrar con UNA firma -> 201: folio ${conUna.datos.folio}, hash ${conUna.datos.hash.slice(0, 12)}..., firmado por ${conUna.datos.aprobadoPor.map((a) => a.nombre).join(' + ')}`)
+          : mal(`lacrado con una firma y minimo 1: ${conUna.status} ${JSON.stringify(conUna.datos)}`);
+        if (conUna.status === 201) lacrado = conUna.datos;
+        info('firma 2: no aplica con minimo 1 -- el inventario ya quedo lacrado con la primera');
+      } else {
+        conUna.status === 409
+          ? ok(`lacrar con UNA sola firma de ${requeridas} -> 409: "${conUna.datos?.error?.slice(0, 68)}..."`)
+          : mal(`lacrado con una firma de ${requeridas}: ${conUna.status}`);
 
-    const v = await api('GET', `/api/historial/inventarios/${ID}/lacrado/verificacion`, { token: gilmer.token });
-    v.datos.intacto === true ? ok('el sello recien creado verifica INTACTO') : mal(`verificacion: ${JSON.stringify(v.datos)}`);
+        const f2 = await api('POST', `/api/historial/inventarios/${ID}/aprobaciones`, {
+          token: rosa.token,
+          body: { nota: 'Revisado contra el reporte de Jocelyn.' },
+        });
+        f2.status === 201 && f2.datos.aprobadorId === 106 && f2.datos.listoParaLacrar === (requeridas === 2)
+          ? ok(`firma 2 desde la sesion de Rosa -> id ${f2.datos.aprobadorId} (${f2.datos.aprobadorNombre}), listoParaLacrar=${f2.datos.listoParaLacrar}`)
+          : mal(`firma 2: ${f2.status} ${JSON.stringify(f2.datos)}`);
 
-    const det = await api('GET', `/api/historial/inventarios/${ID}`, { token: gilmer.token });
-    det.datos.estado === 'lacrado' && det.datos.abierto === false
-      ? ok('el inventario quedo estado=lacrado y libero la sucursal (abierto=false)')
-      : mal(`estado post-lacrado: ${det.datos.estado}, abierto=${det.datos.abierto}`);
+        const conDos = await api('POST', `/api/historial/inventarios/${ID}/lacrado`, { token: gilmer.token, body: {} });
+        if (requeridas === 2) {
+          conDos.status === 201
+            ? ok(`LACRADO: folio ${conDos.datos.folio}, hash ${conDos.datos.hash.slice(0, 12)}..., firmado por ${conDos.datos.aprobadoPor.map((a) => a.nombre).join(' + ')}`)
+            : mal(`lacrado: ${conDos.status} ${JSON.stringify(conDos.datos)}`);
+          if (conDos.status === 201) lacrado = conDos.datos;
+        } else {
+          conDos.status === 409
+            ? ok(`con 2 firmas de ${requeridas} tampoco se lacra -> 409`)
+            : mal(`lacrado con 2 firmas de ${requeridas}: ${conDos.status}`);
+          info(`el seed tiene dos auditores en Luzuriaga: con minimo ${requeridas} el camino feliz termina aca`);
+        }
+      }
 
-    const erp = await api('POST', `/api/historial/inventarios/${ID}/lacrado/registro-erp`, {
-      token: gilmer.token,
-      body: { referencia: 'AJ-2026-08-0221' },
-    });
-    erp.status === 201
-      ? ok(`registro MANUAL en Dynamics (fase 2) anotado: ${erp.datos.referencia}`)
-      : mal(`registro erp: ${erp.status} ${JSON.stringify(erp.datos)}`);
+      if (lacrado !== null) {
+        const v = await api('GET', `/api/historial/inventarios/${ID}/lacrado/verificacion`, { token: gilmer.token });
+        v.datos.intacto === true ? ok('el sello recien creado verifica INTACTO') : mal(`verificacion: ${JSON.stringify(v.datos)}`);
+
+        const det = await api('GET', `/api/historial/inventarios/${ID}`, { token: gilmer.token });
+        det.datos.estado === 'lacrado' && det.datos.abierto === false
+          ? ok('el inventario quedo estado=lacrado y libero la sucursal (abierto=false)')
+          : mal(`estado post-lacrado: ${det.datos.estado}, abierto=${det.datos.abierto}`);
+
+        const erp = await api('POST', `/api/historial/inventarios/${ID}/lacrado/registro-erp`, {
+          token: gilmer.token,
+          body: { referencia: 'AJ-2026-08-0221' },
+        });
+        erp.status === 201
+          ? ok(`registro MANUAL en Dynamics (fase 2) anotado: ${erp.datos.referencia}`)
+          : mal(`registro erp: ${erp.status} ${JSON.stringify(erp.datos)}`);
+      }
+    }
   }
 }
 
+await prisma.$disconnect();
 console.log(fallas === 0 ? '\nTODO EL FLUJO HTTP SE COMPORTA COMO SE ESPERA.' : `\n${fallas} FALLA(S).`);
 process.exit(fallas === 0 ? 0 : 1);

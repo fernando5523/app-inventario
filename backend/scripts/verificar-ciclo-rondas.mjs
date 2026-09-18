@@ -8,6 +8,8 @@
  *
  * Arma su propia tienda: no toca ningún inventario existente.
  */
+import { pinDev } from './_pin-dev.mjs';
+
 const BASE = process.env.BASE_URL ?? 'http://localhost:3000';
 const DEJAR = process.argv.includes('--dejar');
 let fallas = 0;
@@ -32,7 +34,7 @@ const S = Date.now().toString().slice(-6);
 const PIN = S;
 
 console.log('== ESCENARIO ==');
-const admin = await entrar(1000, '001000');
+const admin = await entrar(1000, pinDev('administrador'));
 const tienda = (await api('POST', '/api/tiendas', {
   token: admin.token, body: { nombre: `Market Rondas ${S}`, almacenId: 'MD01_LUZ' },
 })).datos;
@@ -49,7 +51,35 @@ const sCont = await entrar(gente.cont.id, PIN);
 const snap = (await api('POST', '/api/d365/snapshot', {
   token: sCoord.token, body: { sucursalId: tienda.id, modo: 'ejemplo' },
 })).datos;
-const inv = snap.inventarioId;
+const inv = snap?.inventarioId;
+
+// GUARDA DE ALCANCE -- es lo único que separa a este script de pisarle el
+// catálogo a TODA la base.
+//
+// `inv` y `tienda.id` salen de respuestas HTTP: si el backend contesta algo
+// distinto de lo esperado (un 429 del limitador de ingreso alcanza), quedan
+// `undefined`. Y Prisma IGNORA las condiciones `undefined`, así que
+// `where: { inventarioId: undefined }` no filtra nada: filtra TODO. Con eso,
+// el `update` de acá abajo y los `deleteMany` de la limpieza pasan por encima
+// de todos los inventarios de la base. No es teórico: una corrida con el
+// ingreso limitado dejó 94 filas de catálogo con el stock de este escenario.
+//
+// Por eso se corta ACÁ, antes de tocar la base, en vez de confiar en que el
+// `where` de cada consulta esté bien escrito.
+function exigirId(valor, que) {
+  if (Number.isInteger(valor) && valor > 0) return valor;
+  console.error(`\n  [ABORTA] ${que}: se esperaba un id y llegó ${JSON.stringify(valor)}.`);
+  console.error('  El escenario no se armó; sin ese id, un filtro de Prisma no filtra NADA.');
+  if (Number.isInteger(tienda?.id)) {
+    console.error(`  Puede haber quedado la tienda de prueba ${tienda.id} sin borrar: conviene revisarla a mano.`);
+  }
+  process.exit(1);
+}
+exigirId(tienda?.id, 'la tienda de prueba');
+exigirId(gente.coord?.id, 'el coordinador');
+exigirId(gente.cont?.id, 'el contador');
+exigirId(inv, 'el inventario del snapshot');
+
 await api('POST', `/api/inventarios/${inv}/hojas`, { token: sCoord.token, body: { tamano: 20 } });
 await api('POST', `/api/inventarios/${inv}/hojas/asignar`, { token: sCoord.token, body: { colaboradorIds: [gente.cont.id] } });
 ok(`tienda ${tienda.id}, inventario ${inv} con ${snap.items} items`);
@@ -61,7 +91,18 @@ ok(`tienda ${tienda.id}, inventario ${inv} con ${snap.items} items`);
 const { PrismaClient } = await import('@prisma/client');
 const prisma = new PrismaClient();
 {
-  const items = await prisma.catalogoItem.findMany({ where: { inventarioId: inv }, select: { id: true }, orderBy: { codigo: 'asc' } });
+  const items = await prisma.catalogoItem.findMany({
+    where: { inventarioId: inv }, select: { id: true, inventarioId: true }, orderBy: { codigo: 'asc' },
+  });
+  // Segunda red, independiente del `where` de arriba: se comprueba fila por
+  // fila que todo lo que se va a escribir sea de ESTE inventario. Si alguna
+  // vez el filtro se rompe (o se lo borra sin querer), no se escribe NADA.
+  const ajenas = items.filter((it) => it.inventarioId !== inv);
+  if (ajenas.length > 0) {
+    console.error(`\n  [ABORTA] el catálogo a modificar trae ${ajenas.length} fila(s) de otro inventario.`);
+    console.error(`  Se esperaba solo el inventario ${inv}: no se escribe nada.`);
+    process.exit(1);
+  }
   for (const [i, it] of items.entries()) {
     await prisma.catalogoItem.update({ where: { id: it.id }, data: { stockErp: 100 + i * 10 } });
   }
@@ -251,6 +292,29 @@ if (DEJAR) {
   await prisma.hojaConteo.deleteMany({ where: { inventarioId: inv } });
   await prisma.empaqueCatalogo.deleteMany({ where: { catalogoItem: { inventarioId: inv } } });
   await prisma.catalogoItem.deleteMany({ where: { inventarioId: inv } });
+
+  // Hacia `inventarios` cuelgan OCHO claves foráneas y TODAS son ON DELETE
+  // RESTRICT: alcanza con que quede UNA fila hija para que el borrado del
+  // inventario falle y la tienda de prueba se quede en la base para siempre.
+  // Las dos primeras de acá abajo son las que escribe rondas.service#cerrar al
+  // cerrar la última ronda, o sea justo lo que este escenario produce; las
+  // otras hoy quedan vacías, y se borran igual para que la limpieza no vuelva
+  // a quedar corta si mañana el script liquida o importa ajustes.
+  await prisma.resultadoInventario.deleteMany({ where: { inventarioId: inv } });
+  await prisma.diferenciaItem.deleteMany({ where: { inventarioId: inv } });
+  await prisma.aprobacionCierre.deleteMany({ where: { inventarioId: inv } });
+  await prisma.liquidacionColaborador.deleteMany({ where: { inventarioId: inv } });
+  // Las líneas del Excel antes que su importación: esa también es RESTRICT.
+  await prisma.lineaAjusteDynamics.deleteMany({ where: { importacion: { inventarioId: inv } } });
+  await prisma.importacionAjustesDynamics.deleteMany({ where: { inventarioId: inv } });
+
+  // La octava es `lacrados_inventario`, y NO se borra acá a propósito: este
+  // escenario nunca lacra (no llama a POST /historial/inventarios/:id/lacrado),
+  // así que no hay fila que borrar. Si algún día llegara a lacrar, borrarla
+  // exige deshabilitar el trigger `lacrado_inmutable` dentro de la transacción
+  // y volver a habilitarlo en un `finally`, como hace
+  // prisma/limpiar-historial-demo.ts; esa complejidad no se agrega mientras no
+  // haga falta.
   await prisma.inventario.deleteMany({ where: { id: inv } });
   await prisma.sesionToken.deleteMany({ where: { colaborador: { sucursalId: tienda.id } } });
   await prisma.registroAuditoria.deleteMany({ where: { actor: { sucursalId: tienda.id } } });

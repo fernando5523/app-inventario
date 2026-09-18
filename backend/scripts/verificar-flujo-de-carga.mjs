@@ -12,6 +12,8 @@
  *
  * Deja la tienda de prueba borrada al final (salvo que se pase --dejar).
  */
+import { pinDev } from './_pin-dev.mjs';
+
 const BASE = process.env.BASE_URL ?? 'http://localhost:3000';
 const DEJAR = process.argv.includes('--dejar');
 let fallas = 0;
@@ -43,7 +45,7 @@ listaAdmins.status === 200 && Array.isArray(listaAdmins.datos) && listaAdmins.da
   ? ok(`la app puede LISTAR administradores sin sesion: ${listaAdmins.datos.map((a) => `${a.nombre} (id ${a.id})`).join(', ')}`)
   : mal(`GET /api/sesion/administradores: ${listaAdmins.status} ${listaAdmins.texto}`);
 
-const admin = await api('POST', '/api/sesion/ingresar', { body: { colaboradorId: 1000, pin: '001000' } });
+const admin = await api('POST', '/api/sesion/ingresar', { body: { colaboradorId: 1000, pin: pinDev('administrador') } });
 if (admin.status !== 200) {
   mal(`el administrador NO PUEDE ENTRAR: ${admin.status} ${admin.texto}`);
   console.log('\nSin esto el cliente queda afuera de su propia app. Se corta la prueba.');
@@ -119,10 +121,28 @@ creados.filter((c) => c.rol === 'auditor').length >= 2
 // ===========================================================================
 console.log('\n== PASO 4: EL COORDINADOR ENTRA Y ARRANCA EL INVENTARIO ==');
 
+// La lista para elegir con quien entrar trae SOLO al PERSONAL DE TIENDA. El
+// criterio es uno solo y vive en el backend: ROLES_DE_TIENDA en
+// sesion.service.ts (coordinador y conteo). Aca no se re-decide quien es de
+// tienda: se filtra lo que el propio script creo, con el mismo rol que le
+// mando a POST /api/usuarios.
+const ROLES_DE_TIENDA = ['coordinador', 'conteo'];
+const deTienda = creados.filter((c) => ROLES_DE_TIENDA.includes(c.rol));
+
 const visibles = await api('GET', `/api/sesion/sucursales/${sucursalId}/colaboradores`);
-visibles.status === 200 && visibles.datos.length === creados.length
+visibles.status === 200 && visibles.datos?.length === deTienda.length
   ? ok(`la app lista a los ${visibles.datos.length} de la tienda nueva para elegir con quien entrar`)
-  : mal(`listar colaboradores: ${visibles.status}, ${visibles.datos?.length} de ${creados.length}`);
+  : mal(`listar colaboradores: ${visibles.status}, ${visibles.datos?.length} de ${deTienda.length}`);
+
+// Y la regla al reves, que es la que importa despues del cambio: el auditor NO
+// pertenece a ninguna tienda (decision del cliente), asi que NINGUNO de los
+// dos creados puede salir en esa lista -- entra por el grupo
+// "administradores" (GET /api/sesion/administradores, paso 1).
+const idsVisibles = new Set((visibles.datos ?? []).map((c) => c.id));
+const auditoresColados = creados.filter((c) => c.rol === 'auditor' && idsVisibles.has(c.id));
+auditoresColados.length === 0
+  ? ok('y NINGUN auditor aparece en esa lista: el auditor no es personal de tienda, entra por "administradores"')
+  : mal(`se colaron ${auditoresColados.length} auditor(es) en la tienda: ${auditoresColados.map((c) => c.nombre).join(', ')}`);
 
 const enSucursales = await api('GET', '/api/sesion/sucursales');
 enSucursales.datos?.some((s) => s.id === sucursalId)

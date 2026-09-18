@@ -22,9 +22,12 @@
  *   node scripts/verificar-wizard-coordinador.mjs --dejar
  */
 
+import { pinDev } from './_pin-dev.mjs';
+
 const BASE = process.env.BASE_URL ?? 'http://localhost:3000';
 const DEJAR = process.argv.includes('--dejar');
-const PIN_ADMIN = process.env.PIN_ADMIN ?? '001000';
+// El del seed para el rol administrador, o PIN_ADMIN si viene en el entorno.
+const PIN_ADMIN = pinDev('administrador');
 
 let fallas = 0;
 const ok = (t) => console.log('  [OK]    ' + t);
@@ -60,24 +63,21 @@ async function main() {
     return;
   }
   /**
-   * Se prueba con CADA administrador y no solo con el primero: el PIN de
-   * desarrollo es el id con ceros adelante (prisma/seed.ts), asi que "el
-   * primero de la lista" no es necesariamente el que entra. Con PIN_ADMIN se
-   * fuerza uno puntual.
+   * Se recorre la lista en vez de tomar el primero: el administrador del
+   * seed no tiene por que ser el primero, y los demas no tienen su PIN. Cada
+   * uno recibe UN solo intento con el PIN de desarrollo del rol (fijo por
+   * rol, no por id) -- nunca varios PIN contra la misma cuenta, porque el
+   * backend limita los intentos por colaboradorId.
    */
   let token = null;
   let admin = null;
   for (const candidato of admins.datos) {
-    const pines = process.env.PIN_ADMIN ? [process.env.PIN_ADMIN] : [String(candidato.id).padStart(6, '0')];
-    for (const pin of pines) {
-      const login = await api('POST', '/api/sesion/ingresar', { body: { colaboradorId: candidato.id, pin } });
-      if (login.status === 200) {
-        token = login.datos.token;
-        admin = candidato;
-        break;
-      }
+    const login = await api('POST', '/api/sesion/ingresar', { body: { colaboradorId: candidato.id, pin: PIN_ADMIN } });
+    if (login.status === 200) {
+      token = login.datos.token;
+      admin = candidato;
+      break;
     }
-    if (token) break;
   }
   if (!token) {
     mal(`Ningún administrador pudo entrar. Probá con PIN_ADMIN=<pin> node scripts/verificar-wizard-coordinador.mjs`);
@@ -213,6 +213,15 @@ async function main() {
  * aviso. Un limpiador que falla en silencio es peor que no tenerlo.
  */
 async function limpiar(inventarioId) {
+  // GUARDA DE ALCANCE: Prisma IGNORA las condiciones `undefined`, así que un
+  // `inventarioId` vacío convertiría cada `deleteMany` de acá abajo en un
+  // "borrar todo" sobre la base entera. Hoy el llamador corta antes si el
+  // snapshot falló, pero eso no se puede dar por sentado desde acá: la red
+  // tiene que estar donde está el borrado, no donde está el chequeo.
+  if (!Number.isInteger(inventarioId) || inventarioId <= 0) {
+    console.error(`    SE NIEGA a borrar: "${inventarioId}" no es un id de inventario válido.`);
+    return false;
+  }
   try {
     // Prisma Client directo, sin subproceso. Las dos vias anteriores
     // fallaron en Windows: `npx tsx -e` por el quoting del SQL inline, y

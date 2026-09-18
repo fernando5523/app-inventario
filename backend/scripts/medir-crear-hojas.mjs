@@ -14,6 +14,8 @@
  *   node scripts/medir-crear-hojas.mjs <inventarioId> [tamano]
  */
 
+import { pinDev } from './_pin-dev.mjs';
+
 const BASE = process.env.BASE_URL ?? 'http://localhost:3000';
 const inventarioId = Number(process.argv[2]);
 const tamano = Number(process.argv[3] ?? 50);
@@ -40,9 +42,11 @@ async function api(metodo, ruta, { token, body } = {}) {
 }
 
 async function entrar() {
+  // UN intento por administrador, con el PIN del rol (o PIN_ADMIN): nunca
+  // varios PIN contra la misma cuenta -- ver _pin-dev.mjs.
+  const pin = pinDev('administrador');
   const admins = await api('GET', '/api/sesion/administradores');
   for (const c of admins.datos ?? []) {
-    const pin = process.env.PIN_ADMIN ?? String(c.id).padStart(6, '0');
     const login = await api('POST', '/api/sesion/ingresar', { body: { colaboradorId: c.id, pin } });
     if (login.status === 200) return login.datos.token;
   }

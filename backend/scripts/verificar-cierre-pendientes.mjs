@@ -8,6 +8,7 @@
  * del servicio la saltea cualquiera que escriba directo en la tabla.
  */
 import { PrismaClient } from '@prisma/client';
+import { pinDev } from './_pin-dev.mjs';
 
 const BASE = process.env.BASE_URL ?? 'http://localhost:3000';
 const prisma = new PrismaClient();
@@ -27,7 +28,9 @@ async function api(metodo, ruta, { token, body } = {}) {
   return { status: r.status, datos, texto };
 }
 
-const ingresar = async (id, pin = String(id).padStart(6, '0')) => {
+// Sin PIN por defecto: el de un colaborador sembrado sale de su ROL (pinDev),
+// no del id, y este script tambien entra con PINs que pone el mismo.
+const ingresar = async (id, pin) => {
   const r = await api('POST', '/api/sesion/ingresar', { body: { colaboradorId: id, pin } });
   return r.status === 200 ? r.datos : null;
 };
@@ -52,62 +55,71 @@ async function debeRechazar(tx, etiqueta, fn) {
 // ===========================================================================
 console.log('== 1. STOCK DEL ERP: la auditoria distingue "sin dato" de "cero" ==');
 {
-  const total = await prisma.catalogoItem.count();
-  const sinStock = await prisma.catalogoItem.count({ where: { stockErp: null } });
-  console.log(`  catalogo: ${total} items, ${sinStock} sin stock del ERP`);
+  // El 8004 (seed-auditoria) trae en su catalogo los tres estados del stock:
+  // un numero, un 0 explicito y NULL. Es el caso chico del bug de los 11.835
+  // productos reales sin stock cargado que salieron "100% cuadrados": para
+  // probar la regla no hacen falta once mil filas, hace falta que convivan
+  // los tres estados. Lo que dice la base se lee aca, con Prisma.
+  const INV = 8004;
+  const catalogo = await prisma.catalogoItem.findMany({ where: { inventarioId: INV }, select: { codigo: true, stockErp: true } });
+  const sinDato = catalogo.filter((c) => c.stockErp === null).map((c) => c.codigo);
+  const enCero = catalogo.filter((c) => c.stockErp === 0).map((c) => c.codigo);
+  console.log(`  inventario ${INV}: ${catalogo.length} items, ${sinDato.length} SIN stock del ERP, ${enCero.length} con stock 0 explicito`);
 
-  const gilmer = await ingresar(103);
-  if (gilmer === null) { mal('no se pudo ingresar como auditor'); }
-  else {
-    // El inventario con los 11.835 productos reales sin stock cargado.
-    const conCatalogoReal = await prisma.catalogoItem.groupBy({
-      by: ['inventarioId'],
-      _count: true,
-      orderBy: { _count: { inventarioId: 'desc' } },
-      take: 1,
-    });
-    const invGrande = conCatalogoReal[0]?.inventarioId;
-
-    const admin = await ingresar(1000);
-    if (admin !== null && invGrande !== undefined) {
-      const r = await api('GET', `/api/auditoria/inventarios/${invGrande}/resumen`, { token: admin.token });
-      if (r.status !== 200) mal(`resumen del inventario ${invGrande}: ${r.status} ${r.texto}`);
+  if (sinDato.length === 0 || enCero.length === 0) {
+    mal(`el inventario ${INV} no tiene items sin dato Y en cero: correr \`npm run prisma:seed-auditoria\``);
+  } else {
+    const gilmer = await ingresar(103, pinDev('auditor'));
+    if (gilmer === null) { mal('no se pudo ingresar como auditor'); }
+    else {
+      const r = await api('GET', `/api/auditoria/inventarios/${INV}/resumen`, { token: gilmer.token });
+      if (r.status !== 200) mal(`resumen del inventario ${INV}: ${r.status} ${r.texto}`);
       else {
         const s = r.datos.resumen;
-        s.cuadrados === 0 && s.sinDatoErp > 0
-          ? ok(`inventario ${invGrande}: ${s.sinDatoErp} items SIN DATO DEL ERP, ${s.cuadrados} cuadrados — no dice "100% cuadrado"`)
-          : mal(`el resumen sigue mintiendo: cuadrados=${s.cuadrados}, sinDatoErp=${s.sinDatoErp}`);
+        // Los NULL de la base se cuentan aparte y NUNCA como cuadrados.
+        s.sinDatoErp === sinDato.length && s.cuadrados + s.conFalta + s.deEmpresa === s.auditables
+          ? ok(`${s.sinDatoErp} items SIN DATO DEL ERP (los ${sinDato.length} NULL de la base), fuera de los ${s.cuadrados} cuadrados — no dice "100% cuadrado"`)
+          : mal(`el resumen sigue mintiendo: sinDatoErp=${s.sinDatoErp} (la base tiene ${sinDato.length} NULL), cuadrados=${s.cuadrados}, conFalta=${s.conFalta}, deEmpresa=${s.deEmpresa}, auditables=${s.auditables}`);
 
-        s.auditables === 0 && s.porcentajeAuditable === 0
-          ? ok('porcentajeAuditable=0%: dice que hoy no se puede auditar nada de ese inventario')
-          : mal(`auditables=${s.auditables}, porcentajeAuditable=${s.porcentajeAuditable}`);
+        // Y quedan afuera de lo auditable: el porcentaje dice cuanto se puede
+        // afirmar hoy, y lo que SI tiene stock se sigue auditando.
+        s.auditables === s.items - s.sinDatoErp - s.sinContar && s.auditables > 0
+          && Math.abs(s.porcentajeAuditable - (s.auditables / s.items) * 100) < 0.051 && s.porcentajeAuditable < 100
+          ? ok(`porcentajeAuditable=${s.porcentajeAuditable}%: ${s.auditables} de ${s.items} se pueden auditar, ${s.cuadrados} cuadrados (${s.porcentajeCuadrado}%)`)
+          : mal(`auditables=${s.auditables}, porcentajeAuditable=${s.porcentajeAuditable}, items=${s.items}, sinContar=${s.sinContar}`);
       }
 
-      const m = await api('GET', `/api/auditoria/inventarios/${invGrande}/matriz?limite=1`, { token: admin.token });
-      const fila = m.datos?.matriz?.[0];
+      const m = await api('GET', `/api/auditoria/inventarios/${INV}/matriz?limite=500`, { token: gilmer.token });
+      const filas = m.datos?.matriz ?? [];
+
+      // La fila sin dato: IT-1015 no trajo stock del ERP.
+      const fila = filas.find((i) => i.codigo === 'IT-1015');
       fila?.stockErp === null && fila.diferenciaUnidades === null && fila.veredicto === 'sin_erp'
-        ? ok(`la fila viaja con stockErp=null y diferencia=null, veredicto "${fila.veredicto}"`)
+        ? ok(`la fila IT-1015 viaja con stockErp=null y diferencia=null, veredicto "${fila.veredicto}"`)
         : mal(`la fila: ${JSON.stringify(fila)}`);
-      fila?.motivoSinDato !== null && fila?.motivoSinDato !== undefined
+      typeof fila?.motivoSinDato === 'string' && fila.motivoSinDato !== ''
         ? ok(`y con el motivo legible: "${fila.motivoSinDato.slice(0, 62)}..."`)
         : mal('falta motivoSinDato');
-    }
 
-    // El inventario de demo, que SI tiene stock: sigue auditando bien.
-    const demo = await api('GET', '/api/auditoria/inventarios/8004/resumen', { token: gilmer.token });
-    demo.status === 200 && demo.datos.resumen.auditables > 0
-      ? ok(`el inventario con stock cargado sigue auditando: ${demo.datos.resumen.auditables} auditables, ${demo.datos.resumen.cuadrados} cuadrados (${demo.datos.resumen.porcentajeCuadrado}%)`)
-      : mal(`demo: ${demo.status} ${JSON.stringify(demo.datos?.resumen)}`);
+      // La otra mitad de la regla: el 0 SI es un dato. Un item cuyo ERP dice 0
+      // se audita (cuadra, o da sobrante si aparecio mercaderia) y no cae en
+      // "sin dato".
+      const filasCero = filas.filter((i) => enCero.includes(i.codigo));
+      filasCero.length === enCero.length
+        && filasCero.every((i) => i.stockErp === 0 && i.veredicto !== 'sin_erp' && (i.conteoFinal === null || i.diferenciaUnidades === i.conteoFinal))
+        ? ok(`los ${enCero.length} con stock 0 explicito SI se auditan: ${filasCero.map((i) => `${i.codigo} "${i.veredicto}" (${i.diferenciaUnidades ?? 'sin contar'})`).join(', ')}`)
+        : mal(`stock 0 tratado como sin dato: ${JSON.stringify(filasCero)}`);
+    }
   }
 }
 
 // ===========================================================================
 console.log('\n== 2. ROTACION DE PIN ==');
 {
-  const admin = await ingresar(1000);
-  const gilmer = await ingresar(103);   // auditor Luzuriaga
-  const nilda = await ingresar(203);    // auditor Carhuaz
-  const maria = await ingresar(102);    // conteo Luzuriaga
+  const admin = await ingresar(1000, pinDev('administrador'));
+  const gilmer = await ingresar(103, pinDev('auditor'));  // auditor Luzuriaga
+  const nilda = await ingresar(203, pinDev('auditor'));   // auditor Carhuaz
+  const maria = await ingresar(102, pinDev('conteo'));    // conteo Luzuriaga
 
   if (admin === null || gilmer === null) { mal('no se pudo ingresar'); }
   else {
@@ -119,15 +131,19 @@ console.log('\n== 2. ROTACION DE PIN ==');
     const conNuevo = await ingresar(111, NUEVO);
     conNuevo !== null ? ok('y el colaborador PUEDE ingresar con el PIN nuevo: el cambio llego a la base') : mal('el PIN nuevo no sirve para ingresar');
 
-    const conViejo = await ingresar(111, '000111');
+    // El "viejo" es el del seed: 111 (Hugo Vergaray) es conteo.
+    const conViejo = await ingresar(111, pinDev('conteo'));
     conViejo === null ? ok('y ya NO puede ingresar con el viejo') : mal('el PIN viejo sigue funcionando');
 
-    // Se lo devuelve al valor del seed: los PIN predecibles sirven para probar.
-    await api('POST', '/api/usuarios/111/resetear-pin', { token: admin.token, body: { pin: '000111' } });
+    // Se le devuelve el PIN del seed (el de su rol). El id con ceros ya no
+    // sirve para esto: resetear-pin lo rechaza con 400 (esPinPredecible).
+    await api('POST', '/api/usuarios/111/resetear-pin', { token: admin.token, body: { pin: pinDev('conteo') } });
     ok('restaurado al PIN del seed para no romper las pruebas de nadie');
 
     // -- El auditor, solo su sucursal ---------------------------------------
-    const propio = await api('POST', '/api/usuarios/107/resetear-pin', { token: gilmer.token, body: { pin: '000107' } });
+    // 107 (Luis Shuan) es conteo: se le pone su mismo PIN del seed, asi el
+    // reseteo no le cambia nada.
+    const propio = await api('POST', '/api/usuarios/107/resetear-pin', { token: gilmer.token, body: { pin: pinDev('conteo') } });
     propio.status === 204 ? ok('el auditor resetea a un colaborador DE SU sucursal: 204') : mal(`auditor en su sucursal: ${propio.status}`);
 
     if (nilda !== null) {
@@ -151,7 +167,7 @@ console.log('\n== 2. ROTACION DE PIN ==');
       const MIO = '445566';
       const cambio = await api('POST', '/api/sesion/cambiar-pin', {
         token: maria.token,
-        body: { pinActual: '000102', pinNuevo: MIO },
+        body: { pinActual: pinDev('conteo'), pinNuevo: MIO },
       });
       if (cambio.status === 404) {
         mal('NO EXISTE el endpoint de cambio de PIN propio');
@@ -178,7 +194,7 @@ console.log('\n== 2. ROTACION DE PIN ==');
           : mal(`PIN predecible: ${predecible.status}`);
 
         // Restaurar
-        await api('POST', '/api/usuarios/102/resetear-pin', { token: admin.token, body: { pin: '000102' } });
+        await api('POST', '/api/usuarios/102/resetear-pin', { token: admin.token, body: { pin: pinDev('conteo') } });
         ok('restaurado al PIN del seed');
       } else {
         mal(`cambio de PIN propio: ${cambio.status} ${cambio.texto}`);

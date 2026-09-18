@@ -95,6 +95,7 @@ import {
   reclasificarAlLiquidar,
   type FilaDiferenciaParaReclasificar,
 } from '../src/modules/liquidacion/liquidacion.reclasificacion';
+import { ROLES_DE_TIENDA } from '../src/modules/sesion/sesion.service';
 import { registrarAuditoria } from '../src/shared/auditoria';
 import type { ColaboradorAutenticado, Rol } from '../src/shared/tipos';
 
@@ -384,13 +385,19 @@ async function main(): Promise<number> {
     return 1;
   }
 
+  // Solo PERSONAL DE TIENDA (coordinador/conteo): el auditor y el administrador
+  // no cuentan ni entran a la planilla, y asignarHojas los rechaza (ver
+  // ROLES_DE_TIENDA en sesion.service.ts). Sin este filtro el script creaba el
+  // inventario y recien fallaba al repartir, dejandolo abierto a medias.
   const personal = await prisma.colaborador.findMany({
-    where: { sucursalId, activo: true },
+    where: { sucursalId, activo: true, rol: { in: ROLES_DE_TIENDA } },
     select: { id: true, nombre: true, rol: true },
     orderBy: { id: 'asc' },
   });
   if (personal.length === 0) {
-    console.error(`La sucursal ${sucursalId} no tiene personal activo: no hay a nombre de quien contar. Este script no crea usuarios.`);
+    console.error(
+      `La sucursal ${sucursalId} no tiene personal de tienda activo (coordinador o conteo): no hay a nombre de quien contar. Este script no crea usuarios.`,
+    );
     return 1;
   }
 
