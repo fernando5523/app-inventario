@@ -221,6 +221,12 @@ model Colaborador {
   clasificacionesProducto ClasificacionProducto[]      @relation("ClasificadoPor")
   importacionesAjustes    ImportacionAjustesDynamics[] @relation("ImportadoPor")
   lineasAjusteExcluidas   LineaAjusteDynamics[]        @relation("ExcluidaPor")
+  /// Asistencia: los dias en que se le marco la entrada, y -- si es
+  /// Coordinador -- las marcas que cargo. Son DOS relaciones distintas a la
+  /// misma tabla y por eso van nombradas; confundirlas le atribuiria a
+  /// alguien una asistencia que solo registro.
+  asistencias             AsistenciaInventario[]       @relation("ColaboradorMarcado")
+  asistenciasRegistradas  AsistenciaInventario[]       @relation("AsistenciaRegistradaPor")
 
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
@@ -407,6 +413,9 @@ model Inventario {
   /// ser varios (re-importar no borra), pero a lo sumo UNO vigente -- ver
   /// ImportacionAjustesDynamics.vigente.
   importacionesAjustes ImportacionAjustesDynamics[]
+  /// Las marcas de entrada del personal. Pueden existir ANTES que la primera
+  /// hoja y que el primer conteo: se pasa lista cuando la gente llega.
+  asistencias          AsistenciaInventario[]
 
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
@@ -742,6 +751,73 @@ model LineaConteo {
   @@map("lineas_conteo")
 }
 
+/// LA LISTA DE PRESENTES, cargada por el Coordinador. Una fila = "esta
+/// persona vino este dia".
+///
+/// QUE REEMPLAZA: hasta este cambio la asistencia se DEDUCIA de las hojas --
+/// "tenes una hoja con al menos un conteo, entonces viniste"
+/// (dominio/asistencia.ts). Esa regla le cobraba multa a quien vino y no
+/// llego a cargar un renglon; el cliente habia aceptado ese costo por
+/// escrito y ahora lo revirtio. El dato pasa de inferido a DECLARADO, y
+/// quien lo declara queda registrado (`registradoPorId`).
+///
+/// SOLO ENTRADA, NO HAY SALIDA. No es un reloj de fichada: la liquidacion
+/// necesita saber si la persona ESTUVO ese dia, no cuantas horas. Una salida
+/// obligaria al Coordinador a acordarse de cerrar cada jornada, y una salida
+/// sin cargar no se distinguiria de una ausencia -- el mismo problema que se
+/// acaba de sacar de encima.
+///
+/// EL DIA ES EL DATO, LA HORA ES EL RASTRO. `dia` (sin hora) es lo unico que
+/// entra al calculo de la multa; `registradoEn` guarda el INSTANTE de la
+/// marca -- que es la hora de entrada, porque el Coordinador marca cuando ve
+/// llegar a la persona -- y existe para poder auditar despues ("esta marca
+/// tiene hora de las 22:00"). Ninguno de los dos reemplaza al otro.
+///
+/// LA DURACION DEL INVENTARIO SALE DE ACA: los dias DISTINTOS con al menos
+/// una marca de cualquiera. No se declara en ningun lado, a proposito -- una
+/// duracion declarada y las marcas reales discrepan el primer dia que el
+/// inventario se estira, y la multa se cobra sobre esa diferencia. Se congela
+/// en `ResultadoInventario.diasDelInventario` al cerrar el conteo.
+///
+/// LAS TRES FK VAN EN RESTRICT, como el resto del esquema: nada de esta
+/// tabla desaparece en silencio. Nacio sin ninguna -- los ids iban pelados --
+/// y se corrigio en 20260918160000_asistencia_claves_foraneas; el detalle de
+/// por que RESTRICT y no CASCADE esta en esa migracion.
+///
+/// La consecuencia operativa, que hay que recordar al escribir un script:
+/// esta es la NOVENA FK RESTRICT hacia `inventarios`. Todo lo que borre un
+/// inventario tiene que borrar sus marcas ANTES, o Postgres lo frena. Y a
+/// diferencia de las otras ocho, estas marcas pueden existir en un inventario
+/// SIN UN SOLO CONTEO: el Coordinador pasa lista cuando la gente llega, no
+/// cuando termina de contar.
+model AsistenciaInventario {
+  id              Int        @id @default(autoincrement())
+  inventarioId    Int        @map("inventario_id")
+  inventario      Inventario @relation(fields: [inventarioId], references: [id])
+
+  /// A quien se le marca la entrada.
+  colaboradorId   Int         @map("colaborador_id")
+  colaborador     Colaborador @relation("ColaboradorMarcado", fields: [colaboradorId], references: [id])
+  /// El dia de la jornada (sin hora). La cantidad de dias DISTINTOS con
+  /// al menos una marca es la duracion del inventario.
+  dia             DateTime @db.Date
+  /// Fecha y HORA de la entrada -- solo entrada, no hay salida.
+  registradoEn    DateTime @default(now()) @map("registrado_en")
+  /// Quien la cargo. La asistencia mueve plata (multa y bono): una marca sin
+  /// autor es una decision que despues nadie puede explicar, misma razon que
+  /// `ResultadoInventario.ajustesPorId`. Va en RESTRICT y no en SET NULL --
+  /// a diferencia de `ajustesPorId` -- porque aca la columna es obligatoria:
+  /// una marca sin autor no es un estado valido al que se pueda degradar.
+  registradoPorId Int         @map("registrado_por_id")
+  registradoPor   Colaborador @relation("AsistenciaRegistradaPor", fields: [registradoPorId], references: [id])
+
+  /// UNA marca por persona y dia. Hace la carga IDEMPOTENTE -- el
+  /// Coordinador puede tocar el boton dos veces, o dos coordinadores marcar
+  /// a la misma persona, sin que a nadie le sobren dias de asistencia.
+  @@unique([inventarioId, colaboradorId, dia])
+  @@map("asistencia_inventario")
+}
+
 // ---------------------------------------------------------------------------
 // Historico: cierre, lacrado y resultados
 //
@@ -965,15 +1041,28 @@ model ResultadoInventario {
   /// Entre CUANTA gente se divide el neto: todo el personal habilitado de
   /// la tienda (11 en el ejemplo), no solo quienes asistieron a contar.
   colaboradoresAlcanzados Int @map("colaboradores_alcanzados")
-  /// De esos, cuantos asistieron. La diferencia son las faltas que pagan
-  /// multa y alimentan el fondo que se redistribuye.
+  /// De esos, cuantos CUMPLIERON LA ASISTENCIA COMPLETA: vinieron TODOS los
+  /// dias del inventario, o sea los que no pagan multa. La diferencia son
+  /// quienes faltaron al menos un dia, pagan multa por cada uno y alimentan
+  /// el fondo que se redistribuye.
   ///
-  /// SE DEDUCE DE LAS HOJAS, sin carga manual: asistio quien tiene al menos
-  /// una hoja asignada con al menos un conteo, en cualquier ronda. Decision
-  /// del cliente; la regla y su costo aceptado -- quien vino y no llego a
-  /// contar figura como ausente -- viven en `dominio/asistencia.ts`.
-  /// Lo escribe el cierre del conteo (rondas.service.ts#cerrar), en la misma
-  /// transaccion que el resto del resultado.
+  /// CAMBIO DE SIGNIFICADO, y el numero puede bajar: antes era "cuantos
+  /// vinieron alguna vez", deducido de las hojas -- tener una hoja con al
+  /// menos un conteo alcanzaba. Con la multa prorrateada por dia, "el que
+  /// asistio" dejo de ser una categoria util: en un inventario de tres dias
+  /// casi todos asistieron ALGUN dia. Lo que hay que contar es quienes
+  /// cobran bono, y esos son los de asistencia completa
+  /// (`dominio/asistencia.ts#quienesAsistieronTodo`).
+  ///
+  /// SALE DE LAS MARCAS de `asistencia_inventario`, que carga el Coordinador
+  /// a mano: ya no se deduce de las hojas. Lo escribe el cierre del conteo
+  /// (rondas.service.ts#cerrar), en la misma transaccion que el resto del
+  /// resultado y que `diasDelInventario`, que es su denominador.
+  ///
+  /// Los sellos de lacrado viejos NO se rompen: el campo entra al hash desde
+  /// v1 (historial.lacrado.ts) pero lo que se sella es el VALOR que se
+  /// guardo, y ese no se toca -- cambia como se calcula de aca en adelante,
+  /// no lo que ya esta escrito.
   ///
   /// SIGUE NULLABLE, y ya no por lo mismo: los inventarios cerrados ANTES de
   /// que existiera la regla tienen NULL de verdad, y ahi NULL significa "esto
@@ -986,9 +1075,41 @@ model ResultadoInventario {
   /// de la MISMA regla y la MISMA consulta: este campo es CUANTOS, aquel es
   /// QUIENES, y no pueden discrepar.
   colaboradoresAsistieron Int? @map("colaboradores_asistieron")
-  /// Monto de la multa por inasistencia VIGENTE en este inventario (S/20
-  /// hoy). Congelado igual que tamanoHoja: si manana la multa sube, el
-  /// historico tiene que seguir liquidando agosto con la de agosto.
+  /// CUANTOS DIAS DURO el inventario: dias distintos con al menos una marca
+  /// en `asistencia_inventario` (dominio/asistencia.ts#diasDelInventario).
+  /// Congelado al cerrar el conteo, en la misma transaccion que el resto del
+  /// resultado, y por la misma razon que todo lo demas de esta tabla: es el
+  /// DENOMINADOR de todas las multas del inventario. Sin congelarlo, una
+  /// marca cargada en noviembre -- o una borrada -- cambiaria la multa de
+  /// agosto, que ya se descontó de un sueldo.
+  ///
+  /// 0 significa "este inventario se cerro cuando la asistencia todavia se
+  /// deducia de las hojas", no "duro cero dias": con 0 dias la formula nueva
+  /// da multa 0 para todos, que es exactamente lo que corresponde a una
+  /// planilla ya firmada con la regla vieja (sus montos viven congelados en
+  /// `liquidaciones_colaborador`, no se recalculan). `prisma/rellenar-asistencia.ts`
+  /// lo completa para los inventarios ya cerrados, junto con sus marcas.
+  ///
+  /// NO es NULLABLE, a diferencia de `colaboradoresAsistieron`: aquel
+  /// distingue "no se sabe quien vino" de "no vino nadie" porque alimenta una
+  /// guarda ANTES de liquidar; este solo multiplica, y 0 ya es la respuesta
+  /// correcta para el caso viejo.
+  diasDelInventario Int @default(0) @map("dias_del_inventario")
+  /// TARIFA POR DIA de inasistencia vigente en este inventario (S/20 hoy).
+  ///
+  /// CAMBIO DE SIGNIFICADO, y es el mismo numero: hasta la asistencia
+  /// registrada esto era el monto TOTAL que pagaba un ausente, UNA vez --
+  /// faltar un dia de tres costaba igual que no aparecer nunca. Ahora es el
+  /// precio de UN dia faltado, y la multa de cada persona es
+  ///     (diasDelInventario - dias que asistio) * esta tarifa
+  /// (dominio/asistencia.ts#multaPorInasistencia).
+  ///
+  /// Los inventarios cerrados ANTES del cambio guardan 20 con el significado
+  /// viejo y no se tocan: su `diasDelInventario` es 0, asi que la formula
+  /// nueva no los reinterpreta.
+  ///
+  /// Congelado igual que tamanoHoja: si manana la tarifa sube, el historico
+  /// tiene que seguir liquidando agosto con la de agosto.
   multaInasistencia Decimal @default(20) @map("multa_inasistencia") @db.Decimal(12, 2)
 
   calculadoEn DateTime @default(now()) @map("calculado_en")
@@ -1243,13 +1364,48 @@ model LiquidacionColaborador {
   nombreAlLiquidar String @map("nombre_al_liquidar")
   rolAlLiquidar    Rol    @map("rol_al_liquidar")
 
-  /// Asistio al inventario. False = multa (Pantalla 6).
+  /// Cumplio la asistencia COMPLETA: vino todos los dias del inventario.
+  /// False = falto al menos uno, paga multa por cada dia y no cobra bono
+  /// (Pantalla 6).
+  ///
+  /// CAMBIO DE SIGNIFICADO, en lockstep con
+  /// `ResultadoInventario.colaboradoresAsistieron` -- aquel es CUANTOS, este
+  /// es QUIENES, y el schema ya decia que no pueden discrepar. Antes era
+  /// "vino alguna vez"; ahora es "vino todos los dias". Con un inventario de
+  /// un solo dia las dos definiciones coinciden, que es el unico caso que
+  /// existia hasta ahora.
   asistio Boolean
+
+  /// CUANTOS DIAS VINO, congelado al liquidar igual que `nombreAlLiquidar`.
+  ///
+  /// Se guarda aunque parezca derivable, y esa es justamente la razon: el
+  /// denominador (`ResultadoInventario.diasDelInventario`) y la tarifa
+  /// (`ResultadoInventario.multaInasistencia`) estan en otra tabla, asi que
+  /// sin esta columna la planilla de agosto solo puede mostrar "X de Y dias"
+  /// DESPEJANDOLO de la multa (dias - multa/tarifa). Eso es derivar una
+  /// parte a partir de un total, exactamente al reves de la regla que sigue
+  /// todo el resto del schema (ver el comentario de Conteo): el dia que la
+  /// tarifa se guarde redondeada, o que alguien toque una marca, la cuenta
+  /// devuelve un numero de dias que nadie trabajo.
+  ///
+  /// Sale de `dominio/asistencia.ts#diasAsistidosPorColaborador` sobre las
+  /// marcas del inventario, en la misma transaccion que la planilla.
+  ///
+  /// 0 por defecto, y con las planillas VIEJAS quiere decir "se liquido
+  /// cuando la asistencia no se contaba por dia", no "no vino nunca": esas
+  /// filas ya tienen la respuesta en `asistio`, que era binario. La pantalla
+  /// que muestre "dias asistidos / dias del inventario" tiene que leer
+  /// `ResultadoInventario.diasDelInventario` primero: si es 0, ese inventario
+  /// es de los viejos y la fraccion no significa nada.
+  diasAsistidos Int @default(0) @map("dias_asistidos")
 
   /// Las PARTES del descuento. El total (cuota + multa - bono) no se
   /// guarda: se calcula en historial.calculos.ts, misma regla que el
   /// `total` ausente de Conteo.
   cuotaBase         Decimal @map("cuota_base") @db.Decimal(12, 2)
+  /// Multa TOTAL de esta persona en este inventario: tarifa por dia x dias
+  /// faltados. Ya no es el monto fijo de un ausente -- ver
+  /// `ResultadoInventario.multaInasistencia`, que paso a ser la tarifa.
   multaInasistencia Decimal @default(0) @map("multa_inasistencia") @db.Decimal(12, 2)
   /// Redistribucion del fondo de multas entre quienes SI asistieron: les
   /// baja la cuota (docs/pantallas.md, Pantalla 6).

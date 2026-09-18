@@ -333,8 +333,8 @@ export default function AuditoriaScreen(): JSX.Element {
             <View style={styles.footerLista}>
               <View style={styles.pieLista}>
                 <Text style={styles.pieTexto}>
-                  Mostrando {visibles.length} de <Text style={styles.pieFuerte}>{items.length} ítems</Text> · {contados} contados · {conDiferencia} con
-                  diferencia en total
+                  Mostrando {visibles.length} de <Text style={styles.pieFuerte}>{items.length} ítems</Text> · {contados}{' '}
+                  {pluralizar(contados, 'contado', 'contados')} · {conDiferencia} con diferencia en total
                 </Text>
               </View>
 

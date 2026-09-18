@@ -2,6 +2,7 @@ import cors from 'cors';
 import express, { type Express } from 'express';
 import helmet from 'helmet';
 import { errorMiddleware } from '../middleware/error.middleware';
+import { asistenciaRouter } from '../modules/asistencia';
 import { auditoriaRouter } from '../modules/auditoria';
 import { clasificacionRouter } from '../modules/clasificacion';
 import { configRouter } from '../modules/config';
@@ -33,6 +34,11 @@ export function crearApp(): Express {
   // porque `activo` cuelga de /api/sucursales/:id, no de /api/inventarios.
   app.use('/api/inventarios', inventariosRouter);
   app.use('/api/sucursales', sucursalesInventariosRouter);
+  // La lista de asistencia cuelga del MISMO prefijo que inventariosRouter, en
+  // un router propio (mismo criterio que liquidacion.reporte-gerencia.routes.ts:
+  // otro tema, otro archivo, dos personas sin pisarse). Por eso su rol va por
+  // ruta y no a nivel del router -- ver asistencia.routes.ts.
+  app.use('/api/inventarios', asistenciaRouter);
   app.use('/api/d365', d365Router);
   app.use('/api/historial', historialRouter);
   app.use('/api/auditoria', auditoriaRouter);

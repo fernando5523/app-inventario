@@ -8,6 +8,7 @@
  */
 
 import type {
+  RepositorioAsistencia,
   RepositorioAuditoria,
   RepositorioCatalogo,
   RepositorioClasificacion,
@@ -24,6 +25,7 @@ import type {
   Sincronizador,
 } from './puertos/repositorios';
 
+import { asistenciaMemoria } from './adaptadores/asistencia-memoria';
 import { auditoriaMemoria } from './adaptadores/auditoria-memoria';
 import { catalogoMemoria } from './adaptadores/catalogo-memoria';
 import { configDynamicsApi } from './adaptadores/config-dynamics-api';
@@ -39,6 +41,7 @@ import { sincronizadorReal } from './adaptadores/sincronizador';
 import { tiendasMemoria } from './adaptadores/tiendas-memoria';
 import { usuariosMemoria } from './adaptadores/usuarios-memoria';
 
+import { asistenciaApi } from './adaptadores/asistencia-api';
 import { catalogoApi } from './adaptadores/catalogo-api';
 import { clasificacionApi } from './adaptadores/clasificacion-api';
 import { configApi } from './adaptadores/config-api';
@@ -74,6 +77,7 @@ const entorno = (globalThis as { process?: { env?: Record<string, string | undef
 /** Los puertos que HOY tienen una implementación HTTP escrita. */
 type PuertoConectable =
   | 'sesion'
+  | 'asistencia'
   | 'hojas'
   | 'catalogo'
   | 'inventario'
@@ -243,6 +247,26 @@ export const repositorioInventario: RepositorioInventario = elegir('inventario',
  * ultima pantalla con datos inventados.
  */
 export const repositorioAuditoria: RepositorioAuditoria = elegir('auditoria', auditoriaMemoria, auditoriaApi);
+
+/**
+ * ── ASISTENCIA: CONECTADA ──
+ *
+ * La marca del Coordinador (`app/coordinador/asistencia.tsx`) reemplaza la
+ * regla que ADIVINABA quién asistió mirando las hojas con conteos. Aquella
+ * dejaba como ausente a quien vino y no llegó a contar, y le descontaba del
+ * sueldo por eso: el costo que el cliente había aceptado a cambio de no tener
+ * carga manual, y que este cambio revierte.
+ *
+ * Sale a la red por default, como el resto: una marca en memoria se pierde al
+ * cerrar la app, y la asistencia es el denominador de la multa de todo el
+ * personal. `EXPO_PUBLIC_PUERTOS_MEMORIA=asistencia` la devuelve al mock para
+ * mostrar la pantalla sin backend.
+ *
+ * NO hay variante SQLite con cola, al revés que las hojas: ver
+ * `RepositorioAsistencia` en el puerto: una entrada que se sube tres horas
+ * más tarde llega cuando el día podría estar cerrado.
+ */
+export const repositorioAsistencia: RepositorioAsistencia = elegir('asistencia', asistenciaMemoria, asistenciaApi);
 
 /**
  * ── LIQUIDACIÓN: contra el backend real ──

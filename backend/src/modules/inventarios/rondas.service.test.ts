@@ -21,6 +21,7 @@ const prismaMock = vi.hoisted(() => ({
   producto: { findMany: vi.fn() },
   catalogoItem: { findMany: vi.fn() },
   colaborador: { count: vi.fn() },
+  asistenciaInventario: { findMany: vi.fn() },
   resultadoInventario: { create: vi.fn() },
   diferenciaItem: { createMany: vi.fn() },
   $transaction: vi.fn(),
@@ -55,7 +56,7 @@ const itemCatalogo = (codigo: string, categoria: string | null, stockErp: number
 });
 
 /**
- * `hojaConteo.findMany` sirve a CINCO consultas distintas en este camino
+ * `hojaConteo.findMany` sirve a CUATRO consultas distintas en este camino
  * (hojasSinFinalizar, hojasSinSincronizar, contadoHastaLaRonda dentro de
  * universoDeLaRonda, el listado final de hojas nuevas, y -- cuando se
  * cierra el conteo -- `armarMatriz` de auditoria.service.ts) -- un solo
@@ -74,15 +75,9 @@ function mockHojaConteoFindMany(args: {
   contadoPorRonda?: Array<{ numeroConteo: number; productos: unknown[] }>;
   hojasNuevas?: unknown[];
   matrizHojasFinalizadas?: unknown[];
-  /** Las del cálculo de asistencia: `select` con `_count.conteos`. */
-  asistencia?: Array<{ asignadoAId: number | null; asignadoA2Id: number | null; _count: { conteos: number } }>;
 }): void {
   prismaMock.hojaConteo.findMany.mockImplementation(async (query: unknown) => {
     const q = query as { where?: Record<string, unknown>; include?: unknown; select?: Record<string, unknown> };
-    // La de asistencia se reconoce por el `select`, que es lo único que pide
-    // `_count` -- ANTES que los demás, porque su `where` es solo
-    // `{ inventarioId }` y caería en el `return []` del final.
-    if (q.select?.['_count'] !== undefined) return args.asistencia ?? [];
     const whereEstado = q.where?.estado;
     if (typeof whereEstado === 'string') return args.matrizHojasFinalizadas ?? [];
     if (whereEstado !== undefined) return args.sinFinalizar ?? [];
@@ -97,6 +92,9 @@ function mockHojaConteoFindMany(args: {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // Sin marcas por defecto: los tests que no son sobre asistencia no tienen que
+  // saber que existe, pero `cerrar` la lee siempre al cerrar el conteo.
+  prismaMock.asistenciaInventario.findMany.mockResolvedValue([]);
   prismaMock.inventario.findUnique.mockResolvedValue({ id: 9, sucursalId: 1, estado: 'en_curso', tamanoHoja: 50 });
   prismaMock.hojaConteo.count.mockImplementation(async (query: unknown) => {
     const q = query as { where?: { numeroConteo?: number } };
@@ -343,31 +341,53 @@ describe('cerrar', () => {
     });
 
     /**
-     * LA ASISTENCIA YA NO ES NULL, y la diferencia con `montoNegativos` es
-     * si el dato existe en alguna parte: la asistencia está en las hojas y
-     * el cliente definió cómo deducirla (dominio/asistencia.ts); los ajustes
-     * no tienen dónde cargarse todavía, y `neto = bruto − negativos −
-     * empresa` hace que asumir 0 se le descuente de más a alguien.
+     * LA ASISTENCIA YA NO ES NULL, y la diferencia con `montoNegativos` es si
+     * el dato existe en alguna parte: la asistencia la registró el Coordinador
+     * día por día durante el conteo (`asistencia_inventario`); los ajustes no
+     * tienen dónde cargarse todavía, y `neto = bruto − negativos − empresa`
+     * hace que asumir 0 se le descuente de más a alguien.
      */
-    it('cuenta la asistencia desde las hojas, no la deja en null', async () => {
-      mockHojaConteoFindMany({
-        contadoPorRonda: [
-          {
-            numeroConteo: 1,
-            productos: [{ codigo: '100', empaques: [{ nombre: 'U', factor: 1 }], conteos: [{ sueltas: 5, empaques: [] }] }],
-          },
-        ],
-        matrizHojasFinalizadas: [hojaFinalizadaParaMatriz],
-        asistencia: [
-          { asignadoAId: 7, asignadoA2Id: 9, _count: { conteos: 40 } }, // vinieron los dos
-          { asignadoAId: 11, asignadoA2Id: null, _count: { conteos: 0 } }, // asignado, no contó
-        ],
+    describe('congela la asistencia registrada', () => {
+      // Tres días. El 7 y el 9 los hicieron todos; el 11 faltó el último.
+      const DIAS = ['2026-09-01', '2026-09-02', '2026-09-03'].map((d) => new Date(`${d}T00:00:00.000Z`));
+
+      beforeEach(() => {
+        prismaMock.asistenciaInventario.findMany.mockResolvedValue([
+          ...[7, 9].flatMap((id) => DIAS.map((dia) => ({ colaboradorId: id, dia }))),
+          ...DIAS.slice(0, 2).map((dia) => ({ colaboradorId: 11, dia })),
+        ]);
       });
 
-      await cerrar(COORD, 9, 1);
+      it('cuenta a los que hicieron TODOS los días, no a los que vinieron alguna vez', async () => {
+        // El 11 vino 2 de 3: NO entra. `colaboradoresAsistieron` es el divisor
+        // del fondo de multas -- contarlo ahí le daría bono a quien además
+        // paga multa, y el reparto dejaría de cerrar.
+        await cerrar(COORD, 9, 1);
 
-      expect(prismaMock.resultadoInventario.create).toHaveBeenCalledWith({
-        data: expect.objectContaining({ colaboradoresAsistieron: 2 }),
+        expect(prismaMock.resultadoInventario.create).toHaveBeenCalledWith({
+          data: expect.objectContaining({ colaboradoresAsistieron: 2 }),
+        });
+      });
+
+      it('congela los DIAS del inventario: el denominador de todas las multas', async () => {
+        // Sin esto, una marca cargada -- o borrada -- en noviembre cambiaría
+        // la multa de agosto, de un sueldo que ya se pagó.
+        await cerrar(COORD, 9, 1);
+
+        expect(prismaMock.resultadoInventario.create).toHaveBeenCalledWith({
+          data: expect.objectContaining({ diasDelInventario: 3 }),
+        });
+      });
+
+      it('sin una sola marca, cero días y cero asistentes -- no revienta', async () => {
+        // `liquidar()` corta ahí antes de escribir una fila: con 0 días la
+        // multa da 0 para todos, y eso significa "nadie cargó la asistencia".
+        prismaMock.asistenciaInventario.findMany.mockResolvedValue([]);
+        await cerrar(COORD, 9, 1);
+
+        expect(prismaMock.resultadoInventario.create).toHaveBeenCalledWith({
+          data: expect.objectContaining({ diasDelInventario: 0, colaboradoresAsistieron: 0 }),
+        });
       });
     });
 

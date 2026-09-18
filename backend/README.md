@@ -849,6 +849,19 @@ Hay además un ítem **con diferencia pero sin precio**: la diferencia en unidad
 
 Correr cualquiera de los seeds dos veces no duplica ni rompe nada: las sucursales y colaboradores van por `upsert`, y cada inventario de demo se salta si ya existe. Verificado con una consulta de duplicados sobre `catalogo_items` y `empaques_catalogo` después de la segunda corrida: ninguno.
 
+#### Las secuencias del autoincremento quedan sanas
+
+Los seeds insertan con el **id puesto a mano** (sucursales 1-4, colaboradores 101-405, administrador 1000, inventarios de demo 8001-8006). En PostgreSQL, un `INSERT` que trae el id **no avanza la secuencia** del autoincremento, así que la primera tienda o el primer usuario creado **desde la app** —que no manda id, y hace bien— pedía un id bajo que la semilla ya tenía ocupado:
+
+```
+Invalid `prisma.sucursal.create()` invocation
+Unique constraint failed on the fields: (`id`)      <- P2002
+```
+
+La API lo devolvía como un **500**. No era un problema de laboratorio: le pasaba igual al cliente en cuanto sembrara el padrón y creara su primera tienda o su primer usuario.
+
+Por eso cada seed que inserta con id explícito termina llamando a `prisma/sincronizar-secuencias.ts`, que deja cada secuencia del esquema `public` en `GREATEST(MAX(id), último valor entregado)` y lo dice en una línea del log. Es idempotente, no falla con tablas vacías y **nunca baja un contador** —ese es el motivo del `GREATEST`—, así que después de sembrar los inventarios de demo los nuevos arrancan en 8007 en vez de reusar un id que ya estuvo en uso.
+
 ### Verificación contra la API
 
 ```bash
@@ -1246,6 +1259,8 @@ Los mismos códigos de artículo se repiten en los tres períodos a propósito: 
 
 El hash de los sellos de demo se calcula con **las mismas funciones** que usa el endpoint real, así que `GET .../lacrado/verificacion` sobre ellos da `intacto: true` de verdad y la pantalla se puede validar de punta a punta.
 
+Los tres inventarios se insertan con el **id explícito** (8001-8003), así que el seed termina sincronizando las secuencias del autoincremento — ver "Las secuencias del autoincremento quedan sanas", más arriba.
+
 ### Verificación contra la base real
 
 Los dos scripts que se usaron para verificar todo esto quedan en el repo — sin ellos nadie puede repetir la comprobación:
@@ -1560,7 +1575,7 @@ Escribe en `RegistroAuditoria` con `accion: "colaborador.pin_cambiado_por_si_mis
 
 - **Lista pública**: `GET /api/sesion/sucursales/:id/colaboradores` y `GET /api/sesion/administradores` responden `200` **sin token**, con id + nombre + DNI + rol. Solo `/ingresar` y `/cambiar-pin` llevan middleware de sesión.
 - **PIN derivable**: probado un intento por colaborador con `pin = String(id).padStart(6,'0')`. En la base viva de ese día, **1 de 6** entró: `Admin Sistema` (id 1000, PIN `001000`), rol **administrador** — el peor caso. Los otros 5 ya tenían PIN propio (habían sido reseteados a mano). El riesgo real no era ese 1: era el seed, que dejaba a **los 30** derivables cada vez que se corría. Eso es lo que se corrigió (arriba).
-- **Limitador** (`sesion.routes.ts#limitadorIngreso`): 8 intentos / 15 min, `key = colaboradorId ?? ip`. Verificado: el 9.º intento devuelve `429`. Es **por colaborador, no por IP** (bien: la WiFi de tienda es compartida). Dos costados: (1) permite un **DoS de cuenta** trivial — 8 intentos fallidos con el id de alguien lo dejan sin entrar 15 min; (2) comparte el cupo con `cambiar-pin` y usa MemoryStore (no se comparte entre instancias). Con PIN aleatorio, 8/15 min ≈ 768 intentos/día → ~28 % de acierto **en un año**; con PIN derivable, se acierta al primer intento y el limitador es irrelevante.
+- **Limitador** (`sesion.routes.ts#limitadorIngreso`): 8 intentos / 15 min, con un cupo aparte por ruta (desde 2026-09-15): `/ingresar` cuenta por `ingresar:<colaboradorId del body>` (sin id, por IP) y `/cambiar-pin` por `cambiar-pin:<colaboradorId de la sesión>` (`requiereSesion` corre antes: sin sesión da `401` y no gasta cupo). Verificado: el 9.º intento devuelve `429`. Es **por colaborador, no por IP** (bien: la WiFi de tienda es compartida). Dos costados: (1) permite un **DoS de cuenta** trivial — 8 intentos fallidos con el id de alguien lo dejan sin entrar 15 min (ya no le bloquean el cambio de PIN); (2) usa MemoryStore (no se comparte entre instancias). Con PIN aleatorio, 8/15 min ≈ 768 intentos/día → ~28 % de acierto **en un año**; con PIN derivable, se acierta al primer intento y el limitador es irrelevante.
 - **Plan A implementado (2026-09-04)**: `validarPinElegible` (`sesion.pin.ts`) ahora se llama también desde `usuarios.service.ts#crear` (solo el chequeo trivial — al crear, el id lo autogenera Prisma, así que el predecible no se puede evaluar todavía) y `#resetearPin` (los dos chequeos, predecible y trivial, porque ahí ya se conoce el id). Un admin ya **no** puede fijar `000022` ni `123456` — el backend los rechaza con `400`.
 - **B, C y D siguen sin implementar** — ver el plan abajo.
 
@@ -1571,7 +1586,7 @@ Escribe en `RegistroAuditoria` con `accion: "colaborador.pin_cambiado_por_si_mis
 | **A** | Bloquear PINs predecibles/triviales también al **crear** y **resetear** | ✅ Implementado (2026-09-04) | `validarPinElegible` en `usuarios.service.ts` crear y `resetearPin` | Nada del flujo; solo rechaza PINs malos que antes pasaban | **Bajo** (½ día) |
 | **B** | **Forzar cambio de PIN en el primer ingreso** | Pendiente | Columna `debeCambiarPin Boolean @default(true)` en `Colaborador` + migración; `ingresar()` devuelve el flag; `crear`/`resetearPin` lo ponen en `true`, `cambiar-pin` en `false`; el login intercala el cambio antes del token útil (toca front) | El login gana un paso obligatorio; hay que sembrar el flag en los usuarios existentes | **Medio-alto** (2-3 días, front incluido) |
 | **C** | Reset/alta genera PIN **aleatorio**, se muestra **una sola vez** | Pendiente | `resetearPin`/`crear` sin `pin` en el body: el server genera 6 dígitos (evitando predecible/trivial), hashea, y devuelve el valor una vez; la UI de Usuarios lo muestra en un modal "anotalo". Combina natural con B (entra como temporal) | El admin ya no teclea el PIN; cambia la UI de Usuarios | **Medio** (1-2 días) |
-| **D** | Endurecer el limitador | Pendiente | Bajar `limit`, backoff incremental, separar la key de `cambiar-pin` de la de `ingresar` (que un ataque no bloquee el cambio legítimo), evaluar el DoS de cuenta | Poco; calibrar para no molestar el uso normal | **Bajo** (½ día) |
+| **D** | Endurecer el limitador | Parcial (2026-09-15): separar la key de `cambiar-pin` de la de `ingresar`, hecho; bajar `limit`, backoff incremental y el DoS de cuenta, pendientes | Bajar `limit`, backoff incremental, separar la key de `cambiar-pin` de la de `ingresar` (que un ataque no bloquee el cambio legítimo), evaluar el DoS de cuenta | Poco; calibrar para no molestar el uso normal | **Bajo** (½ día) |
 
 **Recomendación**: B como siguiente paso (tapa el resto del agujero de raíz), C encima para que un reset no deje el PIN en dos manos, D como ajuste fino. B rompe pruebas en curso, así que se implementa cuando el flujo esté validado, no antes.
 

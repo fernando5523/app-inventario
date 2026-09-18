@@ -20,6 +20,7 @@ import {
   type PuntoComparativoConSucursal,
 } from './historial.calculos';
 import { resolverMontosDeClasificacion } from '../liquidacion/liquidacion.reclasificacion';
+import { bonoBase } from '../../dominio/reparto-de-fondo';
 import {
   armarLibroDiferencias,
   nombreArchivoExportConsolidado,
@@ -205,6 +206,62 @@ async function resumirResultado(
   };
 }
 
+/**
+ * EL FONDO DE MULTAS REAL Y SU BONO "DE CARTEL", que `calcularResumenLiquidacion`
+ * ya no puede calcular.
+ *
+ * Esa funcion (historial.calculos.ts) los saca de `faltantes x multaInasistencia`,
+ * y con la multa POR DIA esa multiplicacion dejo de reconstruir el fondo:
+ * `faltantes` cuenta PERSONAS y cada una falto una cantidad distinta de dias.
+ * Tres personas que faltaron 1, 2 y 3 dias aportan 6 tarifas, no 3. El
+ * historico mostraria un fondo que no es el que se repartio, sobre una
+ * planilla que en la base esta perfectamente cuadrada.
+ *
+ * (Los otros derivados de `calcularResumenLiquidacion` siguen bien:
+ * `montoFaltanteNeto`, `cuotaBase` y `residuoCentavos` no miran la multa, y
+ * `faltantes` es `alcanzados - asistieron`, que con `colaboradoresAsistieron`
+ * significando "cumplio la asistencia completa" sigue siendo exacto.)
+ *
+ * DOS FUENTES, en este orden, y el orden es la regla:
+ *
+ *   1. LA PLANILLA FIRMADA, si existe. Es la unica verdad para un inventario
+ *      liquidado -- esos montos ya se descontaron de un sueldo. Cubre tambien
+ *      a los inventarios cerrados con la regla VIEJA (multa fija por ausente,
+ *      `diasDelInventario` en 0): sus multas viven congeladas y no se
+ *      reinterpretan con la formula nueva.
+ *   2. Las MARCAS, para el que todavia no se liquido. Como cada marca es un
+ *      dia-persona presente (@@unique), los dias faltados de todo el
+ *      inventario son `alcanzados x dias - marcas`. Sale de un `count`, sin
+ *      traer una fila.
+ */
+async function fondoYBonoReales(
+  inventarioId: number,
+  r: { colaboradoresAlcanzados: number; colaboradoresAsistieron: number; diasDelInventario: number; tarifaPorDia: number },
+): Promise<{ fondoMultas: number; bonoAsistencia: number }> {
+  const firmada = await prisma.liquidacionColaborador.aggregate({
+    where: { inventarioId },
+    _sum: { multaInasistencia: true },
+    _count: true,
+  });
+
+  let fondoMultas: number;
+  if (firmada._count > 0) {
+    fondoMultas = aNumero(firmada._sum.multaInasistencia) ?? 0;
+  } else {
+    const marcas = await prisma.asistenciaInventario.count({ where: { inventarioId } });
+    // `Math.max(0, ...)` por lo mismo que `multaPorInasistencia` nunca es
+    // negativa: una marca de alguien que ya no esta en el padron alcanzado
+    // haria que las marcas superen a los dia-persona posibles, y un fondo
+    // negativo es plata que la empresa le estaria devolviendo a todos.
+    const diasFaltadosEnTotal = Math.max(0, r.colaboradoresAlcanzados * r.diasDelInventario - marcas);
+    fondoMultas = (Math.round(r.tarifaPorDia * 100) * diasFaltadosEnTotal) / 100;
+  }
+
+  // El PISO del reparto, entre los que cumplieron la asistencia completa
+  // (`colaboradoresAsistieron`), no entre los que vinieron algun dia.
+  return { fondoMultas, bonoAsistencia: bonoBase(fondoMultas, r.colaboradoresAsistieron) };
+}
+
 function resumirLacrado(l: InventarioConIncludes['lacrado']): LacradoResumenDto | null {
   if (l === null) return null;
   return {
@@ -360,6 +417,17 @@ export async function obtenerDetalle(actor: ColaboradorAutenticado, id: number):
           colaboradoresAsistieron: resultado.colaboradoresAsistieron!,
           multaInasistencia: aNumeroObligatorio(resultado.multaInasistencia),
         });
+  // Va con el mismo candado que `liquidacion`: sin asistencia registrada no
+  // se deriva un fondo, se deja en null y la advertencia dice por que.
+  const fondoYBono =
+    liquidacion === null || resultado === null
+      ? null
+      : await fondoYBonoReales(inv.id, {
+          colaboradoresAlcanzados: resultado.colaboradoresAlcanzados,
+          colaboradoresAsistieron: resultado.colaboradoresAsistieron!,
+          diasDelInventario: resultado.diasDelInventario,
+          tarifaPorDia: aNumeroObligatorio(resultado.multaInasistencia),
+        });
 
   return {
     id: inv.id,
@@ -422,9 +490,13 @@ export async function obtenerDetalle(actor: ColaboradorAutenticado, id: number):
             montoFaltanteNeto: liquidacion?.montoFaltanteNeto ?? null,
             cuotaBase: liquidacion?.cuotaBase ?? null,
             faltantes: liquidacion?.faltantes ?? null,
-            fondoMultas: liquidacion?.fondoMultas ?? null,
-            bonoAsistencia: liquidacion?.bonoAsistencia ?? null,
+            // Estos dos NO salen de `liquidacion` (el resumen): con la multa
+            // por dia esa formula ya no reconstruye el fondo. Ver
+            // `fondoYBonoReales`.
+            fondoMultas: fondoYBono?.fondoMultas ?? null,
+            bonoAsistencia: fondoYBono?.bonoAsistencia ?? null,
             residuoCentavos: liquidacion?.residuoCentavos ?? null,
+            diasDelInventario: resultado?.diasDelInventario ?? null,
           },
 
     hojas: inv.hojas.map((h) => ({
@@ -703,11 +775,33 @@ export async function obtenerLiquidacion(actor: ColaboradorAutenticado, id: numb
           multaInasistencia: aNumeroObligatorio(r.multaInasistencia),
         });
 
+  /**
+   * El resumen, CON EL FONDO Y EL BONO CORREGIDOS. `calcularResumenLiquidacion`
+   * los calcula con la formula vieja (`faltantes x multaInasistencia`), que con
+   * la multa por dia ya no reconstruye nada -- ver `fondoYBonoReales`.
+   *
+   * Se pisan los dos campos en vez de devolver un objeto aparte para que no
+   * quede una version "casi buena" del resumen dando vueltas: quien lea
+   * `resumen.fondoMultas` de este endpoint tiene que ver el numero real, no
+   * tener que acordarse de mirar otro lado.
+   */
+  const resumenCorregido =
+    resumen === null || r === null
+      ? null
+      : { ...resumen, ...(await fondoYBonoReales(inv.id, {
+          colaboradoresAlcanzados: r.colaboradoresAlcanzados,
+          colaboradoresAsistieron: r.colaboradoresAsistieron!,
+          diasDelInventario: r.diasDelInventario,
+          tarifaPorDia: aNumeroObligatorio(r.multaInasistencia),
+        })) };
+
   return {
     inventarioId: inv.id,
     sucursal: { id: inv.sucursal.id, nombre: inv.sucursal.nombre },
     periodo: claveDePeriodo(inv.periodoAnio, inv.periodoMes),
-    resumen,
+    resumen: resumenCorregido,
+    /** El denominador de `diasAsistidos` en cada fila. Ver el schema. */
+    diasDelInventario: r?.diasDelInventario ?? null,
     // Igual criterio que liquidacion.service.ts#AdvertenciaLiquidacion:
     // quien firma tiene que ver esto ANTES de firmar, no después.
     asistenciaSinRegistrar,
@@ -725,7 +819,12 @@ export async function obtenerLiquidacion(actor: ColaboradorAutenticado, id: numb
         nombreActual: l.colaborador.nombre,
         dni: l.colaborador.dni,
         rol: l.rolAlLiquidar,
+        // CUMPLIO LA ASISTENCIA COMPLETA, no "vino alguna vez": es el que no
+        // paga multa y cobra bono (ver schema.prisma#LiquidacionColaborador).
         asistio: l.asistio,
+        // Congelados al liquidar. `diasAsistidos` es lo que hace auditable la
+        // multa: sin el, "S/40" con tarifa 20 obliga a recontar marcas.
+        diasAsistidos: l.diasAsistidos,
         cuotaBase,
         multaInasistencia,
         bonoAsistencia,
@@ -793,6 +892,10 @@ function armarDatosLacrado(inv: InventarioParaSello): DatosLacrado {
             montoSobranteEmpleado: aNumero(inv.resultado.montoSobranteEmpleado),
             colaboradoresAlcanzados: inv.resultado.colaboradoresAlcanzados,
             colaboradoresAsistieron: inv.resultado.colaboradoresAsistieron,
+            // El DENOMINADOR de todas las multas de la planilla de abajo.
+            // Entra al hash desde la v3 del contenido -- sin el, el sello
+            // firma los montos sin firmar la cuenta que los produjo.
+            diasDelInventario: inv.resultado.diasDelInventario,
             multaInasistencia: aNumeroObligatorio(inv.resultado.multaInasistencia),
           },
     diferencias: inv.diferencias.map((d) => ({
@@ -807,6 +910,11 @@ function armarDatosLacrado(inv: InventarioParaSello): DatosLacrado {
     liquidaciones: inv.liquidaciones.map((l) => ({
       colaboradorId: l.colaboradorId,
       asistio: l.asistio,
+      // La JUSTIFICACION de `multaInasistencia`, que ya estaba sellado:
+      // `(diasDelInventario - diasAsistidos) x tarifa` ES el monto. Y
+      // `liquidaciones_colaborador` no tiene trigger de inmutabilidad -- el
+      // hash es lo unico que protege esta tabla.
+      diasAsistidos: l.diasAsistidos,
       cuotaBase: aNumeroObligatorio(l.cuotaBase),
       multaInasistencia: aNumeroObligatorio(l.multaInasistencia),
       bonoAsistencia: aNumeroObligatorio(l.bonoAsistencia),

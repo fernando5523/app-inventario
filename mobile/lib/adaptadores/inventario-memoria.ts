@@ -18,6 +18,7 @@ import {
 } from './_compartido';
 import { configDynamicsMemoria } from './config-dynamics-memoria';
 import { sesionMemoria } from './sesion-memoria';
+import { pluralizar } from '../dominio/plural';
 import { ErrorSnapshot, type RepositorioInventario } from '../puertos/repositorios';
 
 const TOTAL_ITEMS_SNAPSHOT = 8000; // Market Central Luzuriaga — validado en mobile/design/hojas.html.
@@ -159,7 +160,7 @@ export const inventarioMemoria: RepositorioInventario = {
     if (pendientes.length > 0) {
       const cuales = pendientes.slice(0, 5).map((h) => h.numero).join(', ');
       throw new Error(
-        `No se puede cerrar la ronda ${ronda}: quedan ${pendientes.length} hoja(s) sin finalizar (${cuales}${pendientes.length > 5 ? '…' : ''}).`,
+        `No se puede cerrar la ronda ${ronda}: ${pluralizar(pendientes.length, 'queda', 'quedan')} ${pendientes.length} ${pluralizar(pendientes.length, 'hoja', 'hojas')} sin finalizar (${cuales}${pendientes.length > 5 ? '…' : ''}).`,
       );
     }
 

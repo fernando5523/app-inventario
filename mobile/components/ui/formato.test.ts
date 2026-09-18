@@ -13,7 +13,16 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { formatoFecha, formatoFechaHora, formatoMiles, formatoPct } from './formato';
+import {
+  diaEnLima,
+  formatoDiaJornada,
+  formatoDiaJornadaLargo,
+  formatoFecha,
+  formatoFechaHora,
+  formatoHora,
+  formatoMiles,
+  formatoPct,
+} from './formato';
 
 describe('fechas: SIEMPRE en hora de Lima, no en la del dispositivo', () => {
   /** El caso exacto del bug. */
@@ -73,5 +82,52 @@ describe('números', () => {
 
   it('el porcentaje lleva coma decimal', () => {
     expect(formatoPct(2.7)).toContain(',');
+  });
+});
+
+/**
+ * El día de la jornada decide CONTRA QUÉ DÍA se guarda una marca de
+ * asistencia, y los días distintos con marcas son la duración del
+ * inventario: el denominador de la multa de todo el personal. Un día corrido
+ * por la zona del dispositivo le agrega un día al inventario y una falta a
+ * cada persona que sí vino.
+ */
+describe('el día de la jornada, en hora de Lima', () => {
+  it('a las 19:05 de Lima todavía es el mismo día, aunque en UTC ya sea el siguiente', () => {
+    // 2026-09-16T00:05Z = 2026-09-15 19:05 en Lima.
+    expect(diaEnLima(new Date('2026-09-16T00:05:00.000Z'))).toBe('2026-09-15');
+  });
+
+  it('a las 05:00 de Lima es el día que corresponde, no el anterior', () => {
+    expect(diaEnLima(new Date('2026-09-15T10:00:00.000Z'))).toBe('2026-09-15');
+  });
+
+  it('cruza el fin de mes sin inventar un día 00', () => {
+    expect(diaEnLima(new Date('2026-10-01T02:00:00.000Z'))).toBe('2026-09-30');
+  });
+
+  it('la hora sola sale en Lima igual que la completa: no es otro cálculo', () => {
+    expect(formatoHora('2026-09-05T10:38:00.000Z')).toBe('05:38');
+    expect(formatoFechaHora('2026-09-05T10:38:00.000Z')).toContain('05:38');
+  });
+
+  it('mismo offset en enero y en julio: Perú no cambia de hora', () => {
+    expect(diaEnLima(new Date('2026-01-15T03:00:00.000Z'))).toBe('2026-01-14');
+    expect(diaEnLima(new Date('2026-07-15T03:00:00.000Z'))).toBe('2026-07-14');
+  });
+
+  /**
+   * Un día YA es una fecha sin hora: correrlo a Lima le restaría 5 horas a
+   * algo que no las tiene y devolvería el día anterior en la tira de días.
+   */
+  it('un día ya guardado se muestra tal cual, sin correrlo otra vez', () => {
+    expect(formatoDiaJornada('2026-09-15')).toBe('Mar 15/09');
+    expect(formatoDiaJornada('2026-09-14')).toBe('Lun 14/09');
+    expect(formatoDiaJornadaLargo('2026-09-15')).toBe('martes 15/09/2026');
+  });
+
+  it('el domingo no se cae del índice de la semana', () => {
+    expect(formatoDiaJornada('2026-09-13')).toBe('Dom 13/09');
+    expect(formatoDiaJornadaLargo('2026-09-13')).toBe('domingo 13/09/2026');
   });
 });

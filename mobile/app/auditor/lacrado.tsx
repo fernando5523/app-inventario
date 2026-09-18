@@ -7,6 +7,7 @@ import { useRefrescoAlEnfocar } from '../../components/hooks/useRefrescoAlEnfoca
 import { PantallaConTabs } from '../../components/navegacion/PantallaConTabs';
 import { BandaSync, Badge, BarraApp, Button, formatoFechaHora, formatoMiles } from '../../components/ui';
 import { repositorioHistorial, repositorioLacrado, repositorioSesion } from '../../lib/contenedor';
+import { pluralizar } from '../../lib/dominio/plural';
 import { sucursalEnFoco } from '../../lib/dominio/sucursal-en-foco';
 import { textoAuditoresInsuficientes } from '../../lib/dominio/texto-firmas';
 import type { Colaborador, Sucursal } from '../../lib/dominio/tipos';
@@ -225,9 +226,12 @@ export default function LacradoScreen(): JSX.Element {
       : auditoresInsuficientes
         ? textoAuditoresInsuficientes(auditores.length, aprobacionesRequeridas)
         : todasAprobadas
-          ? aprobacionesRequeridas === 1
+          ? // Con el mínimo configurado en 1 (5c2c23c) esta rama decía "Las 1
+            // firmas quedaron registradas". Y "Tu firma" solo es verdad si la
+            // firma es MÍA: con un mínimo de 1 la pudo poner el otro auditor.
+            miFirma && aprobacionesRequeridas === 1
             ? 'Tu firma quedó registrada. Ya se puede ejecutar el lacrado.'
-            : `Las ${aprobacionesRequeridas} firmas quedaron registradas. Ya se puede ejecutar el lacrado.`
+            : `${pluralizar(aprobacionesRequeridas, 'La firma quedó registrada', `Las ${aprobacionesRequeridas} firmas quedaron registradas`)}. Ya se puede ejecutar el lacrado.`
           : !miFirma && aprobacionesHechas === 0
             ? aprobacionesRequeridas === 1
               ? 'Puedes registrar tu firma ahora: con esa alcanza para habilitar el lacrado.'
@@ -241,7 +245,7 @@ export default function LacradoScreen(): JSX.Element {
     : estado.lacrado
       ? undefined // se muestra el resultado, no este texto
       : !todasAprobadas
-        ? `Faltan firmas de auditoría (${aprobacionesHechas} de ${aprobacionesRequeridas}). El lacrado se habilita recién con ${aprobacionesRequeridas === 1 ? 'esa firma' : 'todas ellas'}, y también hace falta sincronización con Dynamics.`
+        ? `${pluralizar(aprobacionesRequeridas, 'Falta la firma', 'Faltan firmas')} de auditoría (${aprobacionesHechas} de ${aprobacionesRequeridas}). El lacrado se habilita recién con ${pluralizar(aprobacionesRequeridas, 'esa firma', 'todas ellas')}, y también hace falta sincronización con Dynamics.`
         : !estado.todoSincronizado
           ? `${aprobacionesRequeridas === 1 ? 'La firma está registrada' : 'Las firmas están registradas'}, pero falta sincronización con Dynamics (WiFi de tienda) para poder lacrar.`
           : `Todo listo: ${aprobacionesRequeridas === 1 ? 'la firma está registrada' : 'las firmas están registradas'} y hay sincronización con Dynamics.`;

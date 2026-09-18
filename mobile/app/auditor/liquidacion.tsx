@@ -11,6 +11,7 @@ import { PantallaConTabs } from '../../components/navegacion/PantallaConTabs';
 import { BarraApp, Badge, Button, formatoFechaHora, formatoMiles } from '../../components/ui';
 import { repositorioLiquidacion, repositorioSesion } from '../../lib/contenedor';
 import { estadoAjustesNegativos, notaFaltanteEmpresa } from '../../lib/dominio/ajustes-formulario';
+import { diasFaltados, multaPorInasistencia, textoDiasAsistidos } from '../../lib/dominio/asistencia';
 import { pluralizar } from '../../lib/dominio/plural';
 import { asistentesConCentavoExtra, resumirAsistencia } from '../../lib/dominio/reparto-visible';
 import {
@@ -78,6 +79,16 @@ const SIN_CICLO_CERRADO =
 const SIN_SUCURSAL =
   'Elige la tienda en el Panel de auditoría (Sucursal a auditar): la liquidación sigue a la sucursal elegida.';
 
+/**
+ * Los ids siguen siendo `asistio`/`falto` porque es el campo que filtran,
+ * pero LAS ETIQUETAS dicen "sin faltas" / "con faltas".
+ *
+ * Con la asistencia por día, `asistio` significa "vino TODOS los días": un
+ * `false` es "faltó al menos un día", no "no vino". Un chip que dijera
+ * "Faltaron" sobre alguien que trabajó dos de las tres jornadas afirmaría
+ * algo falso de esa persona -- y es justo la fila a la que se le está
+ * descontando plata.
+ */
 type Filtro = 'todos' | 'asistio' | 'falto';
 
 const NOMBRE_ROL: Record<string, string> = { coordinador: 'Coordinador', conteo: 'Conteo', auditor: 'Auditor' };
@@ -86,6 +97,68 @@ function filtrar(planilla: DetalleLiquidacion[], filtro: Filtro): DetalleLiquida
   if (filtro === 'asistio') return planilla.filter((p) => p.asistio);
   if (filtro === 'falto') return planilla.filter((p) => !p.asistio);
   return planilla;
+}
+
+/**
+ * EN QUÉ RÉGIMEN se cobró la multa de este cierre. Decide cómo se REDACTA el
+ * fondo y cada fila -- nunca cuánto es.
+ *
+ *   null → la asistencia de este inventario todavía no se registró.
+ *   0    → cierre con la REGLA VIEJA: monto fijo por persona ausente, ya
+ *          congelado en la planilla. No es "duró cero días".
+ *   > 0  → multa por día faltado.
+ *
+ * Una sola definición para los dos lugares que la consultan (la tarjeta del
+ * fondo y la línea de cada fila): si cada uno la resolviera por su cuenta, un
+ * día se contradirían sobre el mismo cierre.
+ */
+type Regimen = 'sin-asistencia' | 'multa-fija' | 'multa-por-dia';
+
+function regimenDeLaMulta(liquidacion: Liquidacion): Regimen {
+  if (liquidacion.diasDelInventario === null) return 'sin-asistencia';
+  return liquidacion.diasDelInventario > 0 ? 'multa-por-dia' : 'multa-fija';
+}
+
+/**
+ * QUÉ LE PASÓ A ESA PERSONA y qué le costó (o le devolvió) -- la línea que
+ * explica el monto de la fila.
+ *
+ * Nunca dice "No asistió" sobre un `asistio: false` del régimen por día: ver
+ * el comentario de `Filtro` arriba. Nombra los días que faltó, que es el
+ * hecho registrado, y el monto que sale de ellos.
+ *
+ * La multa se arma con `multaPorInasistencia`, la MISMA función (y el mismo
+ * nombre) que usa el servidor -- ver dominio/asistencia.ts. Si esta cuenta y
+ * el `monto` de la fila alguna vez no coincidieran, se vería acá mismo: el
+ * desglose está al lado del total, no en otra pantalla.
+ */
+function efectoDeLaFila(fila: DetalleLiquidacion, liquidacion: Liquidacion): string {
+  const regimen = regimenDeLaMulta(liquidacion);
+
+  // Sin asistencia registrada no se afirma nada sobre esta persona: ni que
+  // vino, ni que faltó, ni cuánto se le cobra. El encabezado ya explica qué
+  // falta (ver `advertencia`), y el monto de la fila habla por sí solo.
+  if (regimen === 'sin-asistencia') return 'Sin asistencia registrada';
+
+  if (fila.asistio) {
+    const vino = regimen === 'multa-por-dia' ? 'Vino todos los días' : 'Asistió';
+    return liquidacion.bonoAsistencia === null ? vino : `${vino} · –${soles(liquidacion.bonoAsistencia)} de bono`;
+  }
+
+  // REGLA VIEJA: no hay días que contar -- la multa fue un monto fijo por
+  // persona y ese cierre ya se firmó así. Decir "Faltó 0 días · +S/ 0.00"
+  // sería contarle a quien lee una multa que no existió, sobre alguien a
+  // quien sí se le descontó.
+  if (regimen === 'multa-fija') return `Faltó · +${soles(liquidacion.multaInasistencia)} de multa`;
+
+  // Los días de ESTA persona pueden faltar aunque el inventario sí tenga
+  // días: se afirma lo único que se sabe, sin inventar un número que acá se
+  // traduce en soles.
+  if (fila.diasAsistidos === null) return 'Faltó al menos un día';
+
+  const faltados = diasFaltados(liquidacion.diasDelInventario!, fila.diasAsistidos);
+  const multa = multaPorInasistencia(liquidacion.diasDelInventario!, fila.diasAsistidos, liquidacion.multaInasistencia);
+  return `Faltó ${faltados} ${pluralizar(faltados, 'día', 'días')} · +${soles(multa)} de multa`;
 }
 
 /**
@@ -303,16 +376,19 @@ export default function LiquidacionScreen(): JSX.Element {
   }
 
   /**
-   * `totalFaltas`/`cuotaBase`/`bonoAsistencia` nacen o faltan JUNTOS: los
-   * tres dependen de los mismos dos datos (asistencia/ajustes del mes, ver
-   * motivoSinCalcular) — nunca uno sin los otros dos. Un solo flag en vez
-   * de tres chequeos sueltos evita que un caso quede a medio blindar.
+   * Los seis nacen o faltan JUNTOS: todos dependen de los mismos dos datos
+   * (asistencia/ajustes del mes, ver motivoSinCalcular) — nunca uno sin los
+   * otros. Un solo flag en vez de seis chequeos sueltos evita que un caso
+   * quede a medio blindar.
    */
   const datosCompletos =
     liquidacion !== null &&
     liquidacion.totalFaltas !== null &&
     liquidacion.cuotaBase !== null &&
-    liquidacion.bonoAsistencia !== null;
+    liquidacion.bonoAsistencia !== null &&
+    liquidacion.diasDelInventario !== null &&
+    liquidacion.diasFaltadosEnTotal !== null &&
+    liquidacion.fondoMultas !== null;
 
   /**
    * LA RESTA QUE DABA -2. Era `planilla.length - totalFaltas` con la planilla
@@ -324,6 +400,23 @@ export default function LiquidacionScreen(): JSX.Element {
    */
   const asistencia = liquidacion === null ? null : resumirAsistencia(liquidacion.planilla.length, liquidacion.planilla.filter((p) => p.asistio).length);
   const asistieron = datosCompletos ? asistencia!.asistieron : null;
+  /**
+   * PERSONAS con al menos una falta -- la misma unidad que
+   * `liquidacion.totalFaltas`, pero sale de `resumirAsistencia` sobre la
+   * planilla y no del campo, por lo mismo que `asistieron`: esa función es la
+   * que garantiza que ninguno de los dos sea negativo y que sumen el universo.
+   * Es el arreglo del "-2" del 2026-09-05, y no se afloja para ahorrar una
+   * línea.
+   */
+  const conFaltas = datosCompletos ? asistencia!.faltaron : null;
+
+  /**
+   * Ver `regimenDeLaMulta`. En los cierres viejos `diasFaltadosEnTotal` viene
+   * en 0 y el fondo NO es 0 (sale de las multas congeladas en la planilla),
+   * así que una frase en días diría "0 días faltados × S/20 = S/40" -- una
+   * cuenta que no cierra sola a la vista de quien la lee.
+   */
+  const multaPorDia = liquidacion !== null && regimenDeLaMulta(liquidacion) === 'multa-por-dia';
 
   // A cuántos asistentes les tocó el centavo extra del reparto. La regla vive
   // en lib/dominio/reparto-visible.ts, no acá: así se prueba sin montar la
@@ -451,7 +544,15 @@ export default function LiquidacionScreen(): JSX.Element {
             <View style={styles.tarjetaCabecera}>
               <Wallet size={18} color={colors.rojo} />
               <Text style={styles.tarjetaTitulo}>Fondo de multas por inasistencia</Text>
-              {datosCompletos ? <Badge label={`${liquidacion.totalFaltas!} faltas`} /> : null}
+              {datosCompletos ? (
+                <Badge
+                  label={
+                    multaPorDia
+                      ? `${liquidacion.diasFaltadosEnTotal!} ${pluralizar(liquidacion.diasFaltadosEnTotal!, 'día faltado', 'días faltados')}`
+                      : `${liquidacion.totalFaltas!} ${pluralizar(liquidacion.totalFaltas!, 'falta', 'faltas')}`
+                  }
+                />
+              ) : null}
             </View>
             {/* Toda la tarjeta depende de totalFaltas/bonoAsistencia -- si
                 cualquiera falta, no hay números parciales que mostrar: se
@@ -460,12 +561,44 @@ export default function LiquidacionScreen(): JSX.Element {
               <Text style={styles.tarjetaTexto}>{motivoSinCalcular(liquidacion.advertencia)}</Text>
             ) : (
               <>
+                {/*
+                  EL MONTO SALE DE `fondoMultas`, NUNCA DE UNA MULTIPLICACIÓN
+                  DE ESTA PANTALLA.
+                  Bug real, encontrado en la integración: acá decía
+                  `totalFaltas × multaInasistencia`, y `totalFaltas` son
+                  PERSONAS, no días. Con una sola persona faltando 2 de 3 días
+                  el fondo real es S/40 y esta línea mostraba S/20 -- la mitad,
+                  con toda la pinta de ser correcta porque la cuenta "cerraba"
+                  contra sus propios factores. El multiplicando de días es
+                  `diasFaltadosEnTotal`; el monto ya viene hecho.
+
+                  Y se redacta según el régimen: en los cierres viejos la multa
+                  era fija por persona y no hay días que mostrar (ver
+                  `multaPorDia`).
+                */}
                 <Text style={styles.tarjetaTexto}>
-                  {liquidacion.totalFaltas} faltas × {soles(liquidacion.multaInasistencia)} ={' '}
-                  {soles(liquidacion.totalFaltas! * liquidacion.multaInasistencia)}, redistribuido entre los {asistieron}{' '}
-                  colaboradores que sí asistieron.
+                  {multaPorDia ? (
+                    <>
+                      {liquidacion.diasFaltadosEnTotal}{' '}
+                      {pluralizar(liquidacion.diasFaltadosEnTotal!, 'día faltado', 'días faltados')} ×{' '}
+                      {soles(liquidacion.multaInasistencia)} por día = {soles(liquidacion.fondoMultas!)}, redistribuido
+                      entre los {asistieron}{' '}
+                      {pluralizar(asistieron ?? 0, 'colaborador que vino', 'colaboradores que vinieron')} todos los días
+                      del inventario ({liquidacion.diasDelInventario}).
+                    </>
+                  ) : (
+                    <>
+                      {liquidacion.totalFaltas}{' '}
+                      {pluralizar(liquidacion.totalFaltas!, 'persona que faltó', 'personas que faltaron')} ×{' '}
+                      {soles(liquidacion.multaInasistencia)} = {soles(liquidacion.fondoMultas!)}, redistribuido entre los{' '}
+                      {asistieron} {pluralizar(asistieron ?? 0, 'colaborador que asistió', 'colaboradores que asistieron')}.
+                      Este cierre es anterior a la asistencia por día: la multa era un monto fijo por persona.
+                    </>
+                  )}
                 </Text>
-                <Text style={styles.resultado}>-{soles(liquidacion.bonoAsistencia!)} de descuento adicional para cada asistente</Text>
+                <Text style={styles.resultado}>
+                  -{soles(liquidacion.bonoAsistencia!)} de descuento adicional para cada uno de ellos
+                </Text>
               </>
             )}
 
@@ -485,7 +618,7 @@ export default function LiquidacionScreen(): JSX.Element {
             {hayCentavoDeReparto ? (
               <Text style={styles.notaReparto}>
                 A {conCentavoExtra} de ellos les toca S/ 0.01 más, para que la suma dé exactamente{' '}
-                {soles(liquidacion.totalFaltas! * liquidacion.multaInasistencia)}.
+                {soles(liquidacion.fondoMultas!)}.
               </Text>
             ) : null}
           </View>
@@ -566,10 +699,11 @@ export default function LiquidacionScreen(): JSX.Element {
             {(
               [
                 { id: 'todos', etiqueta: 'Todos', cuenta: liquidacion.planilla.length },
-                // '—' y no el número: "asistieron"/"faltaron" no se pueden
-                // afirmar sin asistencia registrada (ver motivoSinCalcular).
-                { id: 'asistio', etiqueta: 'Asistieron', cuenta: asistieron ?? '—' },
-                { id: 'falto', etiqueta: 'Faltaron', cuenta: liquidacion.totalFaltas ?? '—' },
+                // '—' y no el número: sin asistencia registrada no se puede
+                // afirmar quién vino completo (ver motivoSinCalcular). Y las
+                // dos cuentas son de PERSONAS: ver `conFaltas` arriba.
+                { id: 'asistio', etiqueta: 'Sin faltas', cuenta: asistieron ?? '—' },
+                { id: 'falto', etiqueta: 'Con faltas', cuenta: conFaltas ?? '—' },
               ] as const
             ).map((f) => {
               const activo = filtro === f.id;
@@ -594,13 +728,21 @@ export default function LiquidacionScreen(): JSX.Element {
               <View key={p.colaboradorId} style={[styles.personaFila, !p.asistio && styles.personaFilaFalto]}>
                 <View style={styles.personaDatos}>
                   <Text style={styles.personaNombre}>{p.nombre}</Text>
+                  {/*
+                    DÍAS ASISTIDOS SOBRE DÍAS DEL INVENTARIO, los dos juntos.
+                    Nunca el numerador solo: 2 de 2 y 2 de 5 son la diferencia
+                    entre cobrar bono y pagar tres días de multa, y quien firma
+                    este descuento tiene derecho a ver de dónde sale.
+                  */}
                   <Text style={styles.personaSub}>
-                    {NOMBRE_ROL[p.rol] ?? p.rol} ·{' '}
-                    {p.asistio
-                      ? liquidacion.bonoAsistencia !== null
-                        ? `Asistió (–${soles(liquidacion.bonoAsistencia)} bono)`
-                        : 'Asistió'
-                      : `Faltó (+${soles(liquidacion.multaInasistencia)} multa)`}
+                    {NOMBRE_ROL[p.rol] ?? p.rol}
+                    {/* La fracción solo existe si hubo días registrados: en un
+                        cierre de la regla vieja no hay denominador, y
+                        "0 de 0 días" no dice nada de esa persona. */}
+                    {multaPorDia ? ` · ${textoDiasAsistidos(p.diasAsistidos, liquidacion.diasDelInventario)}` : ''}
+                  </Text>
+                  <Text style={[styles.personaEfecto, !p.asistio && styles.personaEfectoMulta]}>
+                    {efectoDeLaFila(p, liquidacion)}
                   </Text>
                 </View>
                 <View style={styles.personaMonto}>
@@ -694,19 +836,24 @@ function CierreDePlanilla({
   const calculable = liquidacion.faltanteNeto !== null && liquidacion.cuotaBase !== null;
 
   /**
-   * ASISTENTES REALES, de la planilla PROYECTADA.
+   * QUE HAYA ASISTENCIA REGISTRADA, sobre la planilla PROYECTADA.
    *
    * Antes esto era `liquidacion.planilla.length > 0`, y era un candado que
    * pedía su propia llave: la planilla sale de `LiquidacionColaborador`, que
    * el backend solo llena AL liquidar. El botón nunca se habilitaba.
    *
-   * Ahora el backend proyecta las filas antes de firmar, así que se puede
-   * preguntar lo que de verdad importa: si hay alguien que haya contado. Con
-   * 0 asistentes el backend rechaza igual (409), y un botón que se puede
-   * tocar para recibir un error enseña a ignorar los errores.
+   * Después pasó a ser "hay al menos un asistente", que con la asistencia por
+   * día HABRÍA VUELTO A SER UN CANDADO ROTO: `asistio` ahora significa "vino
+   * todos los días", así que un inventario en el que todos faltaron alguna
+   * jornada daría cero asistentes y bloquearía una liquidación perfectamente
+   * válida -- una en la que TODOS trabajaron.
+   *
+   * Lo que de verdad hace falta es que alguien haya registrado la asistencia:
+   * sin días, no hay denominador con el que calcular la multa de nadie.
    */
-  const asistentes = liquidacion.planilla.filter((p) => p.asistio).length;
-  const puedeLiquidar = ajustesListos && calculable && asistentes > 0;
+  const asistenciaRegistrada =
+    liquidacion.diasDelInventario !== null && liquidacion.diasDelInventario > 0 && liquidacion.planilla.length > 0;
+  const puedeLiquidar = ajustesListos && calculable && asistenciaRegistrada;
 
   return (
     <View style={styles.tarjeta}>
@@ -726,8 +873,8 @@ function CierreDePlanilla({
         <Text style={styles.tarjetaTexto}>
           {!ajustesListos
             ? 'Primero importa el Excel de ajustes del mes, arriba. Sin eso no se puede calcular lo que se le descuenta a cada persona.'
-            : asistentes === 0
-              ? 'Ningún colaborador registró conteos en este inventario: no hay asistencia deducible ni a quién repartir el faltante. Revisa que las hojas tengan conteos cargados.'
+            : !asistenciaRegistrada
+              ? 'Este inventario no tiene ningún día de asistencia registrado: sin días no hay con qué medir las faltas ni a quién repartir el faltante. El Coordinador la marca en «Asistencia del inventario», día por día.'
               : 'Todavía no se puede calcular la planilla: revisa las advertencias de arriba.'}
         </Text>
       )}
@@ -1012,6 +1159,14 @@ const styles = StyleSheet.create({
   personaDatos: { flex: 1, minWidth: 0, gap: 2 },
   personaNombre: { fontSize: 13.5, color: colors.tinta, fontFamily: fonts.bold },
   personaSub: { fontSize: 11.5, color: colors.gris, fontFamily: fonts.regular },
+  /** El efecto de la asistencia sobre el monto. Un tono más claro que `personaSub`: explica la cifra, no compite con ella. */
+  personaEfecto: { fontSize: 11.5, color: colors.grisClaro, fontFamily: fonts.medium },
+  /**
+   * La multa usa `proceso` (el estado de ATENCIÓN del design system), no el
+   * rojo de marca: en esta app el rojo es siempre la acción. Es el mismo tono
+   * que ya lleva el monto de quien tiene faltas (`resumenFalta`).
+   */
+  personaEfectoMulta: { color: colors.proceso },
   personaMonto: { alignItems: 'flex-end', gap: 2 },
   personaMontoValor: { fontSize: 15, color: colors.tinta, fontFamily: fonts.bold, fontVariant: ['tabular-nums'] },
   personaMontoSub: { fontSize: 10.5, color: colors.grisClaro, fontFamily: fonts.regular },

@@ -31,11 +31,16 @@ function almacenPorCodigo(codigo: string): Almacen | undefined {
   return ALMACENES.find((a) => a.codigo === codigo);
 }
 
+// `colaboradores` es el PERSONAL DE TIENDA (coordinador/conteo) del padrón de
+// sesion-memoria.ts, no el total de fichas: el auditor no pertenece a ninguna
+// tienda (paridad con tiendas.service.ts del backend, que cuenta con el mismo
+// filtro que el login). Por eso 9 y no 11 en Luzuriaga: sus 2 auditores
+// (Gilmer y Rosa) no cuentan.
 const tiendas: Sucursal[] = [
-  { id: 1, nombre: 'Market Central Luzuriaga', colaboradores: 11, activa: true, almacenId: ALMACENES[1].codigo, almacenNombre: ALMACENES[1].nombre },
-  { id: 2, nombre: 'Market Carhuaz', colaboradores: 6, activa: true, almacenId: ALMACENES[0].codigo, almacenNombre: ALMACENES[0].nombre },
-  { id: 3, nombre: 'Market Bolívar', colaboradores: 7, activa: true },
-  { id: 4, nombre: 'Market Sucre', colaboradores: 5, activa: true },
+  { id: 1, nombre: 'Market Central Luzuriaga', colaboradores: 9, activa: true, almacenId: ALMACENES[1].codigo, almacenNombre: ALMACENES[1].nombre },
+  { id: 2, nombre: 'Market Carhuaz', colaboradores: 5, activa: true, almacenId: ALMACENES[0].codigo, almacenNombre: ALMACENES[0].nombre },
+  { id: 3, nombre: 'Market Bolívar', colaboradores: 6, activa: true },
+  { id: 4, nombre: 'Market Sucre', colaboradores: 4, activa: true },
 ];
 let proximoId = 5;
 

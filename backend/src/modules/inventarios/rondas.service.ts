@@ -27,7 +27,12 @@
  */
 
 import { prisma } from '../../config/database';
-import { aHojaParaAsistencia, quienesAsistieron, SELECT_ASISTENCIA } from '../../dominio/asistencia';
+import {
+  aMarcaAsistencia,
+  diasDelInventario,
+  quienesAsistieronTodo,
+  SELECT_ASISTENCIA,
+} from '../../dominio/asistencia';
 import {
   destinoTrasRonda,
   itemsParaLaRondaSiguiente,
@@ -325,10 +330,11 @@ export interface CierreDeRondaDto {
  *
  * `ResultadoInventario` se calcula ACÁ y no al lacrar ni a pedido: es la
  * verdad que hay que congelar en el instante del cierre, no recalcularla
- * después con datos que ya cambiaron. `montoNegativos` y
- * `colaboradoresAsistieron` se persisten en NULL a propósito -- ver el
- * comentario largo en schema.prisma#ResultadoInventario y en el bloque de
- * abajo: hoy no existe ningún mecanismo para capturarlos.
+ * después con datos que ya cambiaron. `montoNegativos` se persiste en NULL a
+ * propósito -- ver el comentario largo en schema.prisma#ResultadoInventario y
+ * en el bloque de abajo: hoy no existe ningún mecanismo para capturarlo. La
+ * asistencia SÍ se congela (`colaboradoresAsistieron` y `diasDelInventario`):
+ * la registró el Coordinador durante el conteo y acá queda firme.
  *
  * REQUISITOS PARA CERRAR, EN ORDEN (el orden importa: primero lo que hay
  * que ir a resolver a mano, después lo que se resuelve solo):
@@ -427,16 +433,37 @@ export async function cerrar(
     const embudo = embudoDeConteos(matrizCompleta);
     const resumenAuditoria = resumirAuditoria(matrizCompleta);
 
-    // QUIENES ASISTIERON, deducido de las hojas -- decisión del cliente, con
-    // su costo escrito al lado en `dominio/asistencia.ts`. Se congela ACÁ,
-    // en el cierre, y no se recalcula después: las hojas de un inventario
-    // cerrado ya no cambian, pero el padrón sí (alguien se va, entra otro),
-    // y la planilla de agosto no se reescribe en noviembre.
-    const hojasDelInventario = await prisma.hojaConteo.findMany({
-      where: { inventarioId },
-      select: SELECT_ASISTENCIA,
-    });
-    const asistieron = quienesAsistieron(hojasDelInventario.map(aHojaParaAsistencia));
+    /**
+     * LA ASISTENCIA, CONGELADA. Ya NO se deduce de las hojas: la registra el
+     * Coordinador día por día en `asistencia_inventario` (el porqué de la
+     * vuelta atrás está en la cabecera de `dominio/asistencia.ts`).
+     *
+     * Se congelan DOS números, y el que importa de verdad es el segundo:
+     *
+     *   - `colaboradoresAsistieron`: cuántos cumplieron la asistencia
+     *     COMPLETA -- los que no pagan multa y cobran bono. No es "cuántos
+     *     vinieron alguna vez"; ver el comentario de `FilaPlanilla.asistio`
+     *     en liquidacion.cierre.ts, que explica por qué ese booleano no puede
+     *     significar lo otro sin descuadrar el reparto del fondo.
+     *
+     *   - `diasDelInventario`: EL DENOMINADOR DE TODAS LAS MULTAS. Sin
+     *     congelarlo no hay multa recalculable ni auditable: una marca
+     *     cargada -- o borrada -- en noviembre cambiaría cuánto se le
+     *     descontó a alguien en agosto, de un sueldo que ya se pagó. La API
+     *     deja la asistencia firme al cerrar el conteo (ese es el otro
+     *     candado), pero este número no depende de que ese candado siga
+     *     puesto dentro de seis meses.
+     *
+     * Misma razón por la que todo `ResultadoInventario` se calcula ACÁ y no
+     * a pedido: es la verdad del instante del cierre. El padrón cambia
+     * (alguien se va, entra otro) y la planilla de agosto no se reescribe en
+     * noviembre.
+     */
+    const marcas = (
+      await prisma.asistenciaInventario.findMany({ where: { inventarioId }, select: SELECT_ASISTENCIA })
+    ).map(aMarcaAsistencia);
+    const dias = diasDelInventario(marcas);
+    const asistieron = quienesAsistieronTodo(marcas, dias);
     // El DETALLE ítem por ítem de esos mismos agregados. Sale de la misma
     // matriz y entra en la misma transacción a propósito: si el total y su
     // detalle se escribieran en dos momentos distintos podrían discrepar, y
@@ -507,9 +534,13 @@ export async function cerrar(
           // con `ajustesSinRegistrar` -- hoy no.
           montoNegativos: null,
           colaboradoresAsistieron: asistieron.size,
+          // El denominador de todas las multas de este inventario. Ver el
+          // bloque de arriba: se congela acá o la multa deja de ser auditable.
+          diasDelInventario: dias,
           // multaInasistencia: se deja el default de la columna (S/20) --
           // no hay config editable para esto todavía (ver
-          // backend/prisma/configuraciones.ts).
+          // backend/prisma/configuraciones.ts). Desde la asistencia por día
+          // ese número es la TARIFA POR DIA, no el monto del ausente.
         },
       }),
       // El detalle que se va a ajustar en el ERP y que el sello hashea.

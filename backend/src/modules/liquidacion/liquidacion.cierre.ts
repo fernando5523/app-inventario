@@ -24,17 +24,24 @@
  * planilla no se cerro.
  *
  * ---------------------------------------------------------------------------
- * DE DONDE SALE LA ASISTENCIA
+ * DE DONDE SALE LA ASISTENCIA (CAMBIO: YA NO SE DEDUCE DE LAS HOJAS)
  * ---------------------------------------------------------------------------
- * SE DEDUCE DE LAS HOJAS, sin carga manual: asistio quien tiene al menos una
- * hoja asignada con al menos un conteo, en cualquier ronda. La regla y su
- * costo aceptado -- quien vino y no llego a contar figura como ausente --
- * viven en `dominio/asistencia.ts`.
+ * LA REGISTRA EL COORDINADOR, dia por dia, en `asistencia_inventario`. Hasta
+ * este cambio se deducia de las hojas (una hoja con conteos = asistio) y la
+ * multa era un monto fijo por persona ausente. Ahora la multa es POR DIA
+ * FALTADO y las hojas ya no dicen nada sobre quien vino. El porque de la
+ * vuelta atras -- y el costo que el cliente habia aceptado y ahora no --
+ * estan en la cabecera de `dominio/asistencia.ts`.
  *
  * Esta funcion usa LA MISMA consulta (`SELECT_ASISTENCIA`) que el cierre del
  * conteo, y de ahi sale la invariante: la cantidad de `asistio: true` en la
  * planilla es igual a `ResultadoInventario.colaboradoresAsistieron`. Salen de
  * la misma lectura, no pueden discrepar -- y ese numero lo firma alguien.
+ *
+ * OJO con el significado de `asistio`: es CUMPLIO LA ASISTENCIA COMPLETA (los
+ * dias del inventario), no "vino alguna vez". Ver el comentario del campo en
+ * `FilaPlanilla`, que explica por que no puede ser lo otro sin descuadrar el
+ * reparto del fondo.
  *
  * ---------------------------------------------------------------------------
  * LO QUE TODAVIA FRENA ESTE ENDPOINT, A PROPOSITO
@@ -53,7 +60,12 @@
  */
 
 import { prisma } from '../../config/database';
-import { aHojaParaAsistencia, quienesAsistieron, SELECT_ASISTENCIA } from '../../dominio/asistencia';
+import {
+  aMarcaAsistencia,
+  diasAsistidosPorColaborador,
+  multaPorInasistencia,
+  SELECT_ASISTENCIA,
+} from '../../dominio/asistencia';
 import { bonoBase, repartirExacto } from '../../dominio/reparto-de-fondo';
 import { registrarAuditoria } from '../../shared/auditoria';
 import { Conflicto, NoEncontrado } from '../../shared/errores';
@@ -85,12 +97,35 @@ export interface ColaboradorParaLiquidar {
 export interface EntradaPlanilla {
   /** Todo el personal alcanzado: el mismo universo que `colaboradoresAlcanzados`. */
   colaboradores: ColaboradorParaLiquidar[];
-  /** QUIENES asistieron, no cuantos -- ver el comentario de cabecera. */
-  idsQueAsistieron: readonly number[];
+  /**
+   * Cuantos dias duro el inventario: EL DENOMINADOR DE TODAS LAS MULTAS.
+   *
+   * Llega congelado desde `ResultadoInventario.diasDelInventario` y no se
+   * deduce de las marcas acá: si se dedujera, borrar la ultima marca de un
+   * dia le bajaria la multa a todo el mundo y le regalaria el bono a quien
+   * falto justo ese dia. El numero que manda es el que quedo firmado al
+   * cerrar el conteo.
+   */
+  diasDelInventario: number;
+  /**
+   * `colaboradorId -> dias distintos que asistio`
+   * (`dominio/asistencia.ts#diasAsistidosPorColaborador`).
+   *
+   * Quien no esta en el Map asistio CERO dias -- no es un dato faltante: la
+   * asistencia la registra el coordinador, y no haber sido marcado nunca es
+   * exactamente la ausencia total. El universo de personal lo pone
+   * `colaboradores`, no este Map.
+   */
+  diasAsistidos: ReadonlyMap<number, number>;
   cuotaBase: number;
-  multaInasistencia: number;
-  /** `faltantes x multaInasistencia`, lo que se redistribuye entre los que vinieron. */
-  fondoMultas: number;
+  /**
+   * La multa POR DIA faltado, no por persona ausente.
+   * `ResultadoInventario.multaInasistencia` cambio de significado con este
+   * mismo cambio: era el monto fijo de quien no venia, ahora es la tarifa
+   * diaria. El nombre del campo en la base quedo igual; el de acá no, para
+   * que nadie le pase el monto viejo sin darse cuenta.
+   */
+  tarifaMultaPorDia: number;
 }
 
 /** Una fila de `LiquidacionColaborador`, sin `inventarioId`: lo pone quien escribe. */
@@ -98,8 +133,36 @@ export interface FilaPlanilla {
   colaboradorId: number;
   nombreAlLiquidar: string;
   rolAlLiquidar: Rol;
+  /**
+   * CUMPLIO LA ASISTENCIA COMPLETA: vino LOS `diasDelInventario` dias. NO es
+   * "vino alguna vez" -- Delia, que hizo 1 de 3, tiene `asistio: false` y
+   * `diasAsistidos: 1`.
+   *
+   * Se eligio asi y no por "vino al menos un dia" porque este booleano es el
+   * que usan la pantalla y el historico para contar entre cuantos se reparte
+   * el fondo (`bonoBase(fondo, asistieron)`, la conciliacion de
+   * liquidacion.service.ts). Con la multa prorrateada, "vino alguna vez" dejo
+   * de ser una categoria util -- casi todos vinieron alguna vez -- y usarlo
+   * para repartir daria un bono por persona mas chico que el que cada uno
+   * cobra de verdad: el encabezado diria un numero y la planilla otro.
+   *
+   * La equivalencia que sostiene todo: `asistio === (multaInasistencia === 0)
+   * === (bonoAsistencia > 0 cuando hay fondo)`. Quien quiera mostrar "vino
+   * algun dia" tiene `diasAsistidos > 0`, que es el dato honesto y esta acá
+   * al lado.
+   */
   asistio: boolean;
+  /**
+   * Dias que asistio, CONGELADOS junto al resto de la fila. Es lo que la
+   * pantalla muestra como "1 / 3" y lo unico que hace auditable la multa
+   * meses despues: sin este numero, `multaInasistencia: 40` con una tarifa de
+   * 20 obliga a recontar marcas que para entonces pueden haber cambiado.
+   *
+   * Misma razon por la que `nombreAlLiquidar` y `rolAlLiquidar` se congelan.
+   */
+  diasAsistidos: number;
   cuotaBase: number;
+  /** Ya NO es el monto fijo: es `dias faltados x tarifa` (puede ser 0, 20, 40...). */
   multaInasistencia: number;
   bonoAsistencia: number;
 }
@@ -114,18 +177,60 @@ export interface FilaPlanilla {
  * dos verdades. El total se calcula con
  * `historial.calculos.ts#calcularTotalDescuento` cada vez que se muestra.
  *
+ * ---------------------------------------------------------------------------
+ * EL FONDO SE CALCULA ACA, NO LLEGA POR PARAMETRO. ES LO QUE SOSTIENE LA SUMA
+ * ---------------------------------------------------------------------------
+ * Antes el fondo entraba como dato (`fondoMultas`, calculado afuera como
+ * `faltantes x multa`), porque con una multa fija por persona ausente esa
+ * multiplicacion no podia discrepar de la suma de las multas de la planilla.
+ * Con la multa POR DIA ya no: el fondo es la suma de multas prorrateadas, una
+ * por persona, con denominadores distintos. Cualquier formula de afuera que
+ * intente reconstruirlo -- `gente que falto x tarifa` -- da otro numero.
+ *
+ * Por eso se deriva de las MISMAS filas que se estan armando. No es que sea
+ * mas comodo: es que asi la invariante no depende de que dos calculos
+ * coincidan, sino de que hay uno solo.
+ *
+ *     suma(multa) === fondo === suma(bono)
+ *     suma(fila) === cuotaBase x alcanzados
+ *
+ * Y de ahi sale lo unico que le importa a quien firma: LA PLANILLA SUMA EL
+ * FALTANTE NETO (menos el residuo del redondeo de la cuota, que es anterior a
+ * este cambio y se expone en `ResumenLiquidacion.residuoCentavos`).
+ *
  * El bono sale de `repartirExacto`, NO de `bonoBase x asistentes`: esa
  * multiplicacion es la que no cerraba (S/80 entre 7 daba S/80.01, el ejemplo
  * real de la reunion). Cada fila lleva SU centavo, y la suma de la columna da
  * el fondo exacto. Ver dominio/reparto-de-fondo.ts.
+ *
+ * COBRAN BONO LOS DE ASISTENCIA COMPLETA, que son exactamente los de multa 0.
+ * Si el fondo se repartiera entre quienes vinieron algun dia, alguien podria
+ * cobrar bono Y pagar multa: aportaria al fondo y cobraria de el, y la
+ * planilla dejaria de sumar el neto.
  */
 export function armarPlanilla(e: EntradaPlanilla): FilaPlanilla[] {
-  const asistieron = new Set(e.idsQueAsistieron);
-  const idsAsistentes = e.colaboradores.filter((c) => asistieron.has(c.id)).map((c) => c.id);
-  const bonoPorPersona = repartirExacto(e.fondoMultas, idsAsistentes);
+  // La multa de cada uno, ANTES de repartir nada: el fondo es su suma, asi
+  // que no se puede repartir sin haberlas calculado todas.
+  const multaPorColaborador = new Map(
+    e.colaboradores.map((c) => [
+      c.id,
+      multaPorInasistencia(e.diasDelInventario, e.diasAsistidos.get(c.id) ?? 0, e.tarifaMultaPorDia),
+    ]),
+  );
+
+  // En CENTAVOS para sumar: `reparto-de-fondo.ts` existe justamente porque
+  // sumar soles de a uno acumula el error que despues no deja cerrar.
+  const fondoMultas =
+    [...multaPorColaborador.values()].reduce((total, multa) => total + Math.round(multa * 100), 0) / 100;
+
+  const idsConBono = e.colaboradores.filter((c) => multaPorColaborador.get(c.id) === 0).map((c) => c.id);
+  const bonoPorPersona = repartirExacto(fondoMultas, idsConBono);
 
   return e.colaboradores.map((c) => {
-    const asistio = asistieron.has(c.id);
+    const multaInasistencia = multaPorColaborador.get(c.id) ?? 0;
+    // Quien cumplio la asistencia completa no paga multa; quien falto un dia
+    // no cobra bono. Nunca los dos -- ver el comentario de `asistio`.
+    const asistio = multaInasistencia === 0;
     return {
       colaboradorId: c.id,
       // Nombre y rol CONGELADOS: es lo que decia el recibo de sueldo de ese
@@ -134,12 +239,26 @@ export function armarPlanilla(e: EntradaPlanilla): FilaPlanilla[] {
       nombreAlLiquidar: c.nombre,
       rolAlLiquidar: c.rol,
       asistio,
+      diasAsistidos: e.diasAsistidos.get(c.id) ?? 0,
       cuotaBase: e.cuotaBase,
-      // Quien vino no paga multa; quien falto no cobra bono. Nunca los dos.
-      multaInasistencia: asistio ? 0 : e.multaInasistencia,
+      multaInasistencia,
       bonoAsistencia: asistio ? (bonoPorPersona.get(c.id) ?? 0) : 0,
     };
   });
+}
+
+/**
+ * El fondo de multas que ESTA planilla recauda y reparte: la suma de la
+ * columna de multas.
+ *
+ * Se deriva de las filas en vez de recalcularse con una formula porque es el
+ * mismo motivo de siempre -- dos calculos del mismo numero terminan
+ * discrepando. Lo necesitan el encabezado de la pantalla (el bono "de
+ * cartel") y la guarda de `liquidar()` que corta cuando no hay a quien
+ * repartirlo.
+ */
+export function fondoDeLaPlanilla(filas: readonly FilaPlanilla[]): number {
+  return filas.reduce((total, f) => total + Math.round(f.multaInasistencia * 100), 0) / 100;
 }
 
 // ---------------------------------------------------------------------------
@@ -148,9 +267,26 @@ export function armarPlanilla(e: EntradaPlanilla): FilaPlanilla[] {
 
 export interface ProyeccionPlanilla {
   planilla: FilaPlanilla[];
+  /**
+   * OJO: `resumen.fondoMultas` y `resumen.bonoAsistencia` son los de la
+   * formula VIEJA (`gente que falto x tarifa`), que con la multa por dia ya
+   * no reconstruye nada -- tres personas que faltaron 1, 2 y 3 dias aportan
+   * 6 tarifas, no 3. `calcularResumenLiquidacion` vive en
+   * historial.calculos.ts y sigue calculandolos asi para no romper a los
+   * inventarios viejos que lo llaman sin planilla.
+   *
+   * LOS BUENOS SON LOS DE ACA ABAJO (`fondoMultas`, `bonoAsistencia`), que
+   * salen de las filas. Quien arme una pantalla o un reporte usa esos.
+   */
   resumen: ReturnType<typeof calcularResumenLiquidacion>;
-  /** Ids de quienes asistieron, deducidos de las hojas. */
+  /** Quienes cumplieron la asistencia COMPLETA -- los que cobran bono. */
   asistentes: number[];
+  /** El denominador congelado de todas las multas de este inventario. */
+  diasDelInventario: number;
+  /** El fondo REAL: la suma de las multas de estas filas (`fondoDeLaPlanilla`). */
+  fondoMultas: number;
+  /** El piso del reparto, sobre el fondo real. Es el bono "de cartel". */
+  bonoAsistencia: number;
 }
 
 /**
@@ -170,6 +306,16 @@ export async function proyectarPlanilla(
   inventarioId: number,
   sucursalId: number,
   entrada: EntradaLiquidacion,
+  /**
+   * `ResultadoInventario.diasDelInventario`, congelado al cerrar el conteo.
+   * Entra por parametro y NO se deduce de las marcas de hoy: es el
+   * denominador de todas las multas, y deducirlo haria que borrar la ultima
+   * marca de un dia le bajara la multa a todo el mundo.
+   *
+   * Va aparte de `entrada` porque `EntradaLiquidacion` es el tipo de
+   * historial.calculos.ts y lo comparten llamadores que no arman planilla.
+   */
+  diasDelInventario: number,
 ): Promise<ProyeccionPlanilla> {
   const colaboradores = await prisma.colaborador.findMany({
     // El MISMO universo que `colaboradoresAlcanzados` (rondas.service.ts):
@@ -187,29 +333,42 @@ export async function proyectarPlanilla(
     orderBy: { id: 'asc' },
   });
 
-  // QUIENES asistieron, con LA MISMA regla y LA MISMA consulta que uso el
-  // cierre del conteo para contar cuantos (SELECT_ASISTENCIA en
+  // CUANTOS DIAS HIZO CADA UNO, con LA MISMA consulta que uso el cierre del
+  // conteo para congelar el denominador (SELECT_ASISTENCIA en
   // dominio/asistencia.ts). De ahi sale la invariante que se testea: la
   // cantidad de `asistio: true` en la planilla es igual a
   // `ResultadoInventario.colaboradoresAsistieron`.
-  const hojas = await prisma.hojaConteo.findMany({
-    where: { inventarioId },
-    select: SELECT_ASISTENCIA,
-  });
-  const asistentes = [...quienesAsistieron(hojas.map(aHojaParaAsistencia))];
+  const marcas = (
+    await prisma.asistenciaInventario.findMany({ where: { inventarioId }, select: SELECT_ASISTENCIA })
+  ).map(aMarcaAsistencia);
+  const diasAsistidos = diasAsistidosPorColaborador(marcas);
 
   const resumen = calcularResumenLiquidacion(entrada);
 
+  const planilla = armarPlanilla({
+    colaboradores: colaboradores.map((c) => ({ id: c.id, nombre: c.nombre, rol: c.rol as Rol })),
+    diasDelInventario,
+    diasAsistidos,
+    cuotaBase: resumen.cuotaBase,
+    // `multaInasistencia` del resultado congelado ES la tarifa por dia desde
+    // este cambio -- el campo de la base no se renombro, el de acá si, para
+    // que nadie le pase el monto viejo del ausente sin darse cuenta.
+    tarifaMultaPorDia: entrada.multaInasistencia,
+  });
+
+  // El fondo sale de LAS FILAS, nunca de `resumen.fondoMultas`: ver el
+  // comentario de `ProyeccionPlanilla`. Es lo que hace que la suma cierre sin
+  // depender de que dos calculos coincidan.
+  const fondoMultas = fondoDeLaPlanilla(planilla);
+  const asistentes = planilla.filter((f) => f.asistio).map((f) => f.colaboradorId);
+
   return {
-    planilla: armarPlanilla({
-      colaboradores: colaboradores.map((c) => ({ id: c.id, nombre: c.nombre, rol: c.rol as Rol })),
-      idsQueAsistieron: asistentes,
-      cuotaBase: resumen.cuotaBase,
-      multaInasistencia: entrada.multaInasistencia,
-      fondoMultas: resumen.fondoMultas,
-    }),
+    planilla,
     resumen,
     asistentes,
+    diasDelInventario,
+    fondoMultas,
+    bonoAsistencia: bonoBase(fondoMultas, asistentes.length),
   };
 }
 
@@ -327,41 +486,68 @@ export async function liquidar(
     montoSobranteEmpleado: r.montoSobranteEmpleado === null ? null : r.montoSobranteEmpleado.toNumber(),
   });
 
-  const { planilla, resumen, asistentes } = await proyectarPlanilla(inventarioId, inventario.sucursalId, {
-    montoFaltanteBruto: r.montoFaltanteBruto.toNumber(),
-    // Lo escribe el Excel de ajustes (liquidacion.ajustes.ts) antes de
-    // liquidar -- se sigue leyendo tal cual quedo en el resultado, sin tocar.
-    montoNegativos: r.montoNegativos!.toNumber(),
-    montoFaltanteEmpresa: montos.montoFaltanteEmpresa,
-    montoSobranteEmpleado: montos.montoSobranteEmpleado,
-    colaboradoresAlcanzados: r.colaboradoresAlcanzados,
-    colaboradoresAsistieron: r.colaboradoresAsistieron!,
-    multaInasistencia: r.multaInasistencia.toNumber(),
-  });
+  const { planilla, resumen, asistentes, fondoMultas, bonoAsistencia } = await proyectarPlanilla(
+    inventarioId,
+    inventario.sucursalId,
+    {
+      montoFaltanteBruto: r.montoFaltanteBruto.toNumber(),
+      // Lo escribe el Excel de ajustes (liquidacion.ajustes.ts) antes de
+      // liquidar -- se sigue leyendo tal cual quedo en el resultado, sin tocar.
+      montoNegativos: r.montoNegativos!.toNumber(),
+      montoFaltanteEmpresa: montos.montoFaltanteEmpresa,
+      montoSobranteEmpleado: montos.montoSobranteEmpleado,
+      colaboradoresAlcanzados: r.colaboradoresAlcanzados,
+      colaboradoresAsistieron: r.colaboradoresAsistieron!,
+      multaInasistencia: r.multaInasistencia.toNumber(),
+    },
+    // El denominador CONGELADO al cerrar el conteo, no las marcas de hoy.
+    r.diasDelInventario,
+  );
 
   /**
-   * NADIE CONTO: no hay asistencia deducible ni a quien repartir.
+   * NADIE MARCO ASISTENCIA: el inventario no tiene un solo dia.
    *
-   * Pasa cuando el inventario llega a `conteo_cerrado` con todas las hojas
-   * finalizadas pero SIN un solo conteo cargado -- visto en la app el
-   * 2026-09-05 en Luzuriaga, con las hojas finalizadas por script. La
-   * asistencia se deduce de hojas con conteos (ver dominio/asistencia.ts),
-   * asi que da 0 asistentes.
+   * Con `diasDelInventario` en 0 la formula nueva da multa 0 para todos, y la
+   * planilla saldria sin una sola multa ni bono -- solo la cuota. Para una
+   * planilla YA FIRMADA con la regla vieja eso es exactamente lo correcto
+   * (sus montos viven congelados en `liquidaciones_colaborador` y no se
+   * recalculan), pero para una que se esta por firmar AHORA significa otra
+   * cosa: que nadie cargo la asistencia. Perdonarle la multa a todo el mundo
+   * en silencio no es conservador, es firmar un numero que nadie reviso.
    *
-   * Con 0 asistentes la cuenta deja de significar nada: el fondo de multas
-   * no tiene entre quienes repartirse, TODO el personal figura ausente, y la
-   * planilla sale con multa para todos por un inventario que en los hechos
-   * nadie hizo. Se corta ACA, antes de escribir una sola fila.
+   * Alcanza a los inventarios cerrados ANTES de este cambio, que quedaron con
+   * 0 y sin marcas. Para esos existe `prisma/rellenar-asistencia.ts`: se
+   * completa la asistencia y recien ahi se liquida.
+   */
+  if (r.diasDelInventario === 0) {
+    throw new Conflicto(
+      'Este inventario no tiene ningún día de asistencia registrado: sin días no hay multa que calcular ni fondo que repartir. ' +
+        'El coordinador tiene que registrar la asistencia antes de cerrar la planilla.',
+    );
+  }
+
+  /**
+   * NADIE VINO TODOS LOS DIAS: el fondo no tiene a quien repartirse.
    *
-   * Va DESPUES de deducir la asistencia y no antes: el numero que decide es
-   * el de las hojas, no el `colaboradoresAsistieron` congelado en el
-   * resultado -- si alguno de los dos estuviera mal, el que manda es el que
-   * se acaba de leer.
+   * Si a todos les falta aunque sea un dia, todos pagan multa y nadie cobra
+   * bono: la empresa recauda el fondo y no lo redistribuye. Eso es
+   * EXACTAMENTE lo que el bono existe para impedir -- la planilla sumaria
+   * `neto + fondo` y se le descontaria de mas a todo el personal.
+   *
+   * Es degenerado (que absolutamente nadie complete el inventario es raro),
+   * pero el error no es simetrico: la alternativa silenciosa le cobra de mas
+   * a gente que trabajo. Se corta ACA, antes de escribir una sola fila.
+   *
+   * Va DESPUES de armar la planilla y no antes: el numero que decide sale de
+   * las filas que se estan por escribir, no del `colaboradoresAsistieron`
+   * congelado en el resultado -- si alguno de los dos estuviera mal, manda el
+   * que se acaba de calcular.
    */
   if (asistentes.length === 0) {
     throw new Conflicto(
-      'Ningún colaborador registró conteos en este inventario: no hay asistencia deducible ni a quién repartir el faltante. ' +
-        'Revisa que las hojas tengan conteos cargados antes de liquidar.',
+      `Ningún colaborador cumplió los ${r.diasDelInventario} días del inventario: el fondo de multas (S/${fondoMultas.toFixed(2)}) ` +
+        'no tiene entre quiénes repartirse, y cerrar la planilla así le descontaría ese monto de más a todo el personal. ' +
+        'Revisá la asistencia registrada antes de liquidar.',
     );
   }
 
@@ -374,7 +560,22 @@ export async function liquidar(
   // que de verdad se uso para calcular la planilla que se esta por firmar.
   await prisma.$transaction([
     prisma.liquidacionColaborador.createMany({
-      data: planilla.map((f) => ({ inventarioId, ...f })),
+      // COLUMNA POR COLUMNA, no `{ inventarioId, ...f }`. El spread compila
+      // aunque `FilaPlanilla` tenga un campo que la tabla no tiene -- TypeScript
+      // no hace control de propiedades de mas sobre un spread -- y Prisma
+      // recien lo rechaza EN RUNTIME, adentro de la transaccion del cierre.
+      // Enumerarlas convierte ese reventon en un error de compilacion.
+      data: planilla.map((f) => ({
+        inventarioId,
+        colaboradorId: f.colaboradorId,
+        nombreAlLiquidar: f.nombreAlLiquidar,
+        rolAlLiquidar: f.rolAlLiquidar,
+        asistio: f.asistio,
+        diasAsistidos: f.diasAsistidos,
+        cuotaBase: f.cuotaBase,
+        multaInasistencia: f.multaInasistencia,
+        bonoAsistencia: f.bonoAsistencia,
+      })),
       // @@unique([inventarioId, colaboradorId]): el estado hace que esto
       // corra una sola vez, pero un reintento no tiene que reventar con un
       // error de constraint que no le dice nada a quien lo lee.
@@ -411,8 +612,10 @@ export async function liquidar(
     colaboradores: planilla.length,
     cuotaBase: resumen.cuotaBase,
     // El piso del reparto, no el promedio: es el numero que TODOS reciben
-    // como minimo, y el que muestra el encabezado de la Pantalla 6.
-    bonoAsistencia: bonoBase(resumen.fondoMultas, planilla.filter((f) => f.asistio).length),
+    // como minimo, y el que muestra el encabezado de la Pantalla 6. Sale del
+    // fondo REAL de la planilla, no de `resumen.fondoMultas` -- ver el
+    // comentario de `ProyeccionPlanilla`.
+    bonoAsistencia,
     faltantes: resumen.faltantes,
     // `redondear` sobre la suma: sumar decimales de a uno acumula el error de
     // punto flotante que reparto-de-fondo.ts existe para no tener.

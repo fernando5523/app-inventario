@@ -16,7 +16,13 @@
 
 import { prisma } from '../../config/database';
 import type { ColaboradorAutenticado, Rol } from '../../shared/tipos';
-import { calcularResumenLiquidacion, calcularTotalDescuento, redondear } from '../historial/historial.calculos';
+import {
+  calcularResumenLiquidacion,
+  calcularTotalDescuento,
+  redondear,
+  type ResumenLiquidacion,
+} from '../historial/historial.calculos';
+import { bonoBase } from '../../dominio/reparto-de-fondo';
 import { proyectarPlanilla } from './liquidacion.cierre';
 import { validarAcceso } from './liquidacion.permisos';
 import { resolverMontosDeClasificacion } from './liquidacion.reclasificacion';
@@ -26,7 +32,14 @@ export interface DetalleLiquidacionDto {
   colaboradorId: number;
   nombre: string;
   rol: Rol;
+  /**
+   * CUMPLIO LA ASISTENCIA COMPLETA (vino los `diasDelInventario` dias), no
+   * "vino alguna vez". Es el que no paga multa y cobra bono. Quien quiera
+   * mostrar "vino algun dia" usa `diasAsistidos > 0`.
+   */
   asistio: boolean;
+  /** Dias que asistio. La pantalla lo muestra como `diasAsistidos / diasDelInventario`. */
+  diasAsistidos: number;
   /** Cuota base ± bono/multa, ya calculado. Nunca se guarda un total suelto sin sus partes. */
   monto: number;
 }
@@ -112,8 +125,45 @@ export interface LiquidacionDto {
    * mismo criterio que `faltanteNeto`.
    */
   bonoAsistencia: number | null;
-  /** null, mismo criterio que `faltanteNeto`: sin asistencia registrada no hay "cuántos faltaron" que valga. */
+  /**
+   * CUANTAS PERSONAS no completaron el inventario. PERSONAS, no días -- va al
+   * lado de `planilla.length` y de "cuántos asistieron", y esos tres números
+   * tienen que sumar entre sí: `asistieron + faltaron === colaboradores`. Fue
+   * una invariante rota de verdad una vez ("-2 colaboradores que sí
+   * asistieron", 2026-09-05) y por eso no se mezclan unidades en este trío.
+   *
+   * NO sirve para reconstruir el fondo: `totalFaltas x tarifa` cuenta personas
+   * y cada una faltó una cantidad distinta de días. Para eso están
+   * `diasFaltadosEnTotal` (el multiplicando correcto) y `fondoMultas`, que ya
+   * viene calculado y no hace falta multiplicar.
+   */
   totalFaltas: number | null;
+  /**
+   * LA SUMA DE DIAS FALTADOS DE TODO EL PERSONAL -- lo que multiplicado por la
+   * tarifa da el fondo de multas: `diasFaltadosEnTotal x multaInasistencia ===
+   * fondoMultas`.
+   *
+   * Existe para que una pantalla pueda mostrar la composición del fondo
+   * ("6 días × S/20 = S/120") sin tener que sumar la planilla a mano ni --
+   * peor -- multiplicar `totalFaltas`, que da otro número.
+   *
+   * 0 en los inventarios cerrados con la regla VIEJA (`diasDelInventario` en
+   * 0): esos no tienen asistencia por día, y su fondo sale de las multas fijas
+   * que quedaron congeladas en la planilla. Un 0 acá con un fondo distinto de
+   * 0 significa exactamente eso, no un error de cuenta.
+   */
+  diasFaltadosEnTotal: number | null;
+  /**
+   * Cuantos dias duro el inventario: el denominador de `diasAsistidos` en cada
+   * fila y de todas las multas.
+   *
+   * 0 significa "este inventario se cerro cuando la asistencia todavia se
+   * deducia de las hojas", NO "duro cero dias" (ver
+   * schema.prisma#ResultadoInventario.diasDelInventario). Una pantalla que
+   * muestre "X / Y dias" tiene que chequearlo: con 0, ese inventario no tiene
+   * asistencia por dia que mostrar y sus montos son los de la regla vieja.
+   */
+  diasDelInventario: number;
   planilla: DetalleLiquidacionDto[];
   /**
    * `true` = la planilla todavia NO se firmo: son las filas que
@@ -130,6 +180,43 @@ export interface LiquidacionDto {
    * sumarlo alla y mostrarlo en la pantalla. Ver AdvertenciaLiquidacion.
    */
   advertencia: AdvertenciaLiquidacion;
+}
+
+/**
+ * EL BONO "DE CARTEL": el piso del reparto del fondo de multas, derivado de
+ * LAS FILAS de la planilla -- las firmadas o las proyectadas, da igual, porque
+ * las dos llevan lo mismo.
+ *
+ * Un solo camino para los dos casos a proposito. La proyeccion ya trae su
+ * `bonoAsistencia` calculado (`proyectarPlanilla`), pero usar ese para una y
+ * este para la otra serian dos formulas del mismo numero, y dos formulas del
+ * mismo numero terminan discrepando -- es la regla con la que este modulo
+ * pelea desde el primer dia.
+ *
+ * DE DONDE SALE EL FONDO sin que la fila guarde su multa: el total de cada
+ * persona es `cuota + multa - bono`, y nunca hay multa Y bono en la misma fila
+ * (`asistio` es exactamente "no paga multa"). Entonces, para quien no
+ * completo, `monto - cuota` ES su multa. Mismo despeje que ya usaba
+ * `repartido` mas abajo para los bonos, en el otro sentido.
+ *
+ * Es el PISO y no el promedio: cuando el fondo no divide exacto a algunos les
+ * toca un centavo mas, y decir un promedio con decimales que nadie recibe
+ * seria peor que decir el minimo que todos cobran. El monto exacto de cada uno
+ * esta en su fila.
+ */
+function bonoDeCartel(
+  resumen: ResumenLiquidacion | null,
+  planilla: readonly DetalleLiquidacionDto[],
+): number | null {
+  // Mismo criterio que `faltanteNeto`: sin los datos que nadie capturo, no se
+  // deriva un numero con apariencia de dato.
+  if (resumen === null) return null;
+
+  const fondo = planilla
+    .filter((p) => !p.asistio)
+    .reduce((total, p) => total + Math.round((p.monto - resumen.cuotaBase) * 100), 0);
+
+  return bonoBase(fondo / 100, planilla.filter((p) => p.asistio).length);
 }
 
 /**
@@ -296,7 +383,10 @@ export async function deSucursal(actor: ColaboradorAutenticado, sucursalId: numb
   const proyeccion =
     persistida || resumen === null
       ? null
-      : await proyectarPlanilla(inventario.id, inventario.sucursalId, {
+      : await proyectarPlanilla(
+        inventario.id,
+        inventario.sucursalId,
+        {
           montoFaltanteBruto: r.montoFaltanteBruto.toNumber(),
           montoNegativos: r.montoNegativos!.toNumber(),
           montoFaltanteEmpresa: montos.montoFaltanteEmpresa,
@@ -304,7 +394,10 @@ export async function deSucursal(actor: ColaboradorAutenticado, sucursalId: numb
           colaboradoresAlcanzados: r.colaboradoresAlcanzados,
           colaboradoresAsistieron: r.colaboradoresAsistieron!,
           multaInasistencia: r.multaInasistencia.toNumber(),
-        });
+        },
+        // El denominador CONGELADO al cerrar el conteo, no las marcas de hoy.
+        r.diasDelInventario,
+      );
 
   const planilla: DetalleLiquidacionDto[] = persistida
     ? inventario.liquidaciones.map((l) => ({
@@ -314,6 +407,10 @@ export async function deSucursal(actor: ColaboradorAutenticado, sucursalId: numb
         nombre: l.nombreAlLiquidar,
         rol: l.rolAlLiquidar as Rol,
         asistio: l.asistio,
+        // CONGELADO al liquidar, igual que el nombre: es el "1 de 3" que
+        // justifica la multa de esa fila. No se recalcula desde las marcas --
+        // ver el comentario de la columna en schema.prisma.
+        diasAsistidos: l.diasAsistidos,
         // Derivado de sus tres partes, nunca una columna -- misma regla que
         // deja a Conteo sin columna `total`.
         monto: calcularTotalDescuento({
@@ -327,6 +424,7 @@ export async function deSucursal(actor: ColaboradorAutenticado, sucursalId: numb
         nombre: f.nombreAlLiquidar,
         rol: f.rolAlLiquidar,
         asistio: f.asistio,
+        diasAsistidos: f.diasAsistidos,
         monto: calcularTotalDescuento(f),
       }));
 
@@ -344,8 +442,33 @@ export async function deSucursal(actor: ColaboradorAutenticado, sucursalId: numb
     faltanteNeto: resumen?.montoFaltanteNeto ?? null,
     cuotaBase: resumen?.cuotaBase ?? null,
     multaInasistencia: r.multaInasistencia.toNumber(),
-    bonoAsistencia: resumen?.bonoAsistencia ?? null,
-    totalFaltas: resumen?.faltantes ?? null,
+    /**
+     * EL PISO DEL REPARTO DEL FONDO REAL, no `resumen.bonoAsistencia`.
+     *
+     * `calcularResumenLiquidacion` (historial.calculos.ts) lo saca de
+     * `faltantes x multaInasistencia`, y con la multa POR DIA esa
+     * multiplicacion ya no reconstruye el fondo: tres personas que faltaron 1,
+     * 2 y 3 dias aportan 6 tarifas, no 3. El encabezado mostraria un bono mas
+     * chico que el que cada uno cobra en su fila, y quien compare las dos
+     * cosas deja de creerle a la pantalla.
+     *
+     * Para una planilla ya firmada sale de sus propias filas (el bono de un
+     * asistente es `cuota - monto`, porque no paga multa); para una proyectada,
+     * de `proyectarPlanilla`, que lo deriva de las filas que va a escribir.
+     */
+    bonoAsistencia: bonoDeCartel(resumen, planilla),
+    /**
+     * CUANTOS NO COMPLETARON la asistencia -- los que pagan multa. Sale de la
+     * planilla y no de `resumen.faltantes` por la misma razon: con la multa por
+     * dia, "faltantes" dejo de ser un numero que se pueda derivar del par
+     * (alcanzados, asistieron) sin mirar quien falto cuanto.
+     */
+    totalFaltas: resumen === null ? null : planilla.filter((p) => !p.asistio).length,
+    diasFaltadosEnTotal:
+      resumen === null
+        ? null
+        : planilla.reduce((total, p) => total + Math.max(0, r.diasDelInventario - p.diasAsistidos), 0),
+    diasDelInventario: r.diasDelInventario,
     planilla,
     /**
      * `true` = todavia no se firmo, estas filas son lo que VA A PASAR.
@@ -396,6 +519,24 @@ export async function conciliacion(
     liquidacion.planilla.filter((p) => p.asistio).reduce((total, p) => total + (cuotaBase - p.monto), 0),
   );
 
+  /**
+   * Lo que EFECTIVAMENTE se recaudó en multas, despejado de las filas igual
+   * que `repartido` -- y por el mismo motivo, que ahora pesa el doble.
+   *
+   * ANTES era `totalFaltas × multaInasistencia`, y con la multa por día esa
+   * multiplicación dejó de reconstruir el fondo: `totalFaltas` cuenta PERSONAS
+   * y cada una faltó una cantidad distinta de días. Tres personas que faltaron
+   * 1, 2 y 3 días aportan 6 tarifas, no 3 -- la conciliación habría reportado
+   * "no cierra, la empresa pone S/60" sobre una planilla perfectamente
+   * cuadrada, que es la peor forma de fallar: manda a auditar lo que está bien.
+   *
+   * Para quien no completó la asistencia, `monto - cuota` ES su multa (nunca
+   * hay multa Y bono en la misma fila).
+   */
+  const recaudado = redondear(
+    liquidacion.planilla.filter((p) => !p.asistio).reduce((total, p) => total + (p.monto - cuotaBase), 0),
+  );
+
   return {
     periodo: liquidacion.periodo,
     calculable: true,
@@ -410,6 +551,8 @@ export async function conciliacion(
      */
     diferenciaPorRedondeo: redondear(faltanteNeto - sumaPlanilla),
     colaboradores: liquidacion.planilla.length,
+    // Los tres en PERSONAS, y tienen que sumar entre si -- ver el comentario de
+    // `totalFaltas`. Los dias faltados viajan aparte, en `fondoDeMultas`.
     asistieron: liquidacion.planilla.filter((p) => p.asistio).length,
     faltaron: totalFaltas,
 
@@ -424,11 +567,19 @@ export async function conciliacion(
      * vez de aparecer como un descuadre en la nomina tres meses despues.
      */
     fondoDeMultas: {
-      recaudado: redondear(totalFaltas * liquidacion.multaInasistencia),
-      repartido: repartido,
+      recaudado,
+      repartido,
+      /**
+       * DE DONDE SALE lo recaudado: `dias x tarifa`. Se expone al lado del
+       * monto para que la conciliacion se pueda leer sin recalcular nada --
+       * y para que quede a la vista que el multiplicando son DIAS, no las
+       * personas de `faltaron`.
+       */
+      diasFaltados: liquidacion.diasFaltadosEnTotal,
+      tarifaPorDia: liquidacion.multaInasistencia,
       /** Tiene que ser 0. Positivo = la empresa pone; negativo = se queda. */
-      diferencia: redondear(repartido - totalFaltas * liquidacion.multaInasistencia),
-      cierra: redondear(repartido - totalFaltas * liquidacion.multaInasistencia) === 0,
+      diferencia: redondear(repartido - recaudado),
+      cierra: redondear(repartido - recaudado) === 0,
     },
 
     /** Lo que hay que decirle a quien firma -- ver AdvertenciaLiquidacion. */

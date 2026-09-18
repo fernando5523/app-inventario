@@ -74,6 +74,18 @@ export function formatoFecha(iso: string): string {
   return `${dd}/${mm}/${d.getUTCFullYear()}`;
 }
 
+/**
+ * "2026-09-05T10:38:00.000Z" -> "05:38" (hora de Lima), sin la fecha.
+ *
+ * Para cuando el día ya lo dice el contexto y repetirlo es ruido: la hora de
+ * entrada de una fila que está debajo del encabezado "martes 15/09/2026" no
+ * necesita decir "15/09/2026" once veces.
+ */
+export function formatoHora(iso: string): string {
+  const d = enLima(iso);
+  return `${String(d.getUTCHours()).padStart(2, '0')}:${String(d.getUTCMinutes()).padStart(2, '0')}`;
+}
+
 /** "2026-09-05T10:38:00.000Z" -> "05/09/2026 05:38" (hora de Lima). */
 export function formatoFechaHora(iso: string): string {
   const d = enLima(iso);
@@ -84,3 +96,60 @@ export function formatoFechaHora(iso: string): string {
 
 /** ["ENE".."DIC"] — los meses en la abreviatura de tres letras que usan las maquetas. */
 export const MESES_CORTOS = ['ENE', 'FEB', 'MAR', 'ABR', 'MAY', 'JUN', 'JUL', 'AGO', 'SET', 'OCT', 'NOV', 'DIC'];
+
+// ---------------------------------------------------------------------------
+// EL DÍA DE LA JORNADA (asistencia)
+// ---------------------------------------------------------------------------
+
+/**
+ * El DÍA de la jornada en hora de Lima, `YYYY-MM-DD`.
+ *
+ * Reusa `OFFSET_LIMA_MINUTOS` y no `getDate()` por lo mismo que todo lo de
+ * arriba, pero acá el costo del error es peor que una hora mal escrita: la
+ * marca de asistencia se guarda CONTRA UN DÍA, y los días distintos con al
+ * menos una marca son la duración del inventario -- el denominador de la
+ * multa de todo el personal. Un teléfono en UTC a las 19:05 de Lima ya está
+ * en el día siguiente: el Coordinador marcaría la entrada de once personas en
+ * un día que nadie trabajó, agregándole un día al inventario y una falta a
+ * cada uno de los que sí vinieron.
+ *
+ * Recibe el instante y no lo toma de adentro para poder probarlo: una función
+ * que lee el reloj por su cuenta solo se puede probar el día correcto.
+ */
+export function diaEnLima(momento: Date): string {
+  const d = new Date(momento.getTime() + OFFSET_LIMA_MINUTOS * 60_000);
+  const mm = String(d.getUTCMonth() + 1).padStart(2, '0');
+  const dd = String(d.getUTCDate()).padStart(2, '0');
+  return `${d.getUTCFullYear()}-${mm}-${dd}`;
+}
+
+/** Días de la semana en español, del domingo al sábado -- índice de `getUTCDay()`. */
+const DIAS_SEMANA = ['domingo', 'lunes', 'martes', 'miércoles', 'jueves', 'viernes', 'sábado'];
+
+/**
+ * "2026-09-15" -> "Mar 15/09", para la tira de días ya registrados.
+ *
+ * El día de la semana va adelante porque es como se acuerda una jornada
+ * ("el martes vino toda la mañana"), no por el número. A mano y sin `Intl`,
+ * igual que el resto del archivo.
+ *
+ * El día se interpreta como UTC (`T00:00:00Z`) a propósito: es una FECHA, no
+ * un instante, y `new Date('2026-09-15')` sin zona ya se parsea así. Correrlo
+ * a Lima sería restarle 5 horas a algo que no tiene hora, y devolvería el día
+ * anterior.
+ */
+export function formatoDiaJornada(dia: string): string {
+  const d = new Date(`${dia}T00:00:00Z`);
+  const semana = DIAS_SEMANA[d.getUTCDay()];
+  const dd = String(d.getUTCDate()).padStart(2, '0');
+  const mm = String(d.getUTCMonth() + 1).padStart(2, '0');
+  return `${semana.charAt(0).toUpperCase()}${semana.slice(1, 3)} ${dd}/${mm}`;
+}
+
+/** "2026-09-15" -> "martes 15/09/2026", para el encabezado que dice qué día se está marcando. */
+export function formatoDiaJornadaLargo(dia: string): string {
+  const d = new Date(`${dia}T00:00:00Z`);
+  const dd = String(d.getUTCDate()).padStart(2, '0');
+  const mm = String(d.getUTCMonth() + 1).padStart(2, '0');
+  return `${DIAS_SEMANA[d.getUTCDay()]} ${dd}/${mm}/${d.getUTCFullYear()}`;
+}

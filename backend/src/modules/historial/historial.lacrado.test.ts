@@ -312,7 +312,143 @@ describe('armarContenidoLacrado: version 2 (liquidacion v2)', () => {
 
   it('sin version explicita, usa la ultima (VERSION_CONTENIDO_LACRADO)', () => {
     expect((armarContenidoLacrado(conCamposNuevos) as { version: number }).version).toBe(VERSION_CONTENIDO_LACRADO);
-    expect(VERSION_CONTENIDO_LACRADO).toBe(2);
+    expect(VERSION_CONTENIDO_LACRADO).toBe(3);
+  });
+});
+
+/**
+ * VERSION 3: los DIAS entran al sello (asistencia registrada por dia).
+ *
+ * El sello ya cubria `multaInasistencia` de cada fila -- la plata -- pero no
+ * el "1 de 3 dias" que la justifica. Con la multa por dia esos dos numeros SON
+ * la multa, y `liquidaciones_colaborador` no tiene trigger de inmutabilidad:
+ * el hash es lo unico que protege esa tabla.
+ */
+describe('armarContenidoLacrado: version 3 (asistencia por dia)', () => {
+  /**
+   * Inventario de 3 dias: el 10 los hizo todos, el 20 hizo 2 (falto uno).
+   *
+   * Se construye a partir de `BASE` agregando SOLO los campos nuevos -- los
+   * montos quedan intactos -- para que el test de v2 pueda comparar hashes y
+   * medir exactamente lo que dice medir. Y cierra la cuenta: la multa de S/20
+   * de BASE es 1 dia faltado x la tarifa de S/20.
+   */
+  const diasPorColaborador = new Map([
+    [10, 3],
+    [20, 2],
+  ]);
+  const conDias: DatosLacrado = {
+    ...BASE,
+    resultado: { ...BASE.resultado!, diasDelInventario: 3 },
+    liquidaciones: BASE.liquidaciones.map((l) => ({ ...l, diasAsistidos: diasPorColaborador.get(l.colaboradorId)! })),
+  };
+
+  it('v2 NO incluye los campos nuevos, ni aunque `datos` los traiga', () => {
+    const v2 = armarContenidoLacrado(conDias, 2);
+    expect(serializarCanonico(v2)).not.toContain('diasAsistidos');
+    expect(serializarCanonico(v2)).not.toContain('diasDelInventario');
+    // Y da EXACTAMENTE el mismo hash que si `datos` nunca los hubiera tenido:
+    // la prueba real de que v2 es indiferente a ellos.
+    expect(calcularHash(v2)).toBe(calcularHash(armarContenidoLacrado(BASE, 2)));
+  });
+
+  it('v3 SI los incluye', () => {
+    const v3 = armarContenidoLacrado(conDias, 3);
+    expect((v3['resultado'] as Record<string, unknown>)['diasDelInventario']).toBe(3);
+    expect((v3['liquidaciones'] as Array<Record<string, unknown>>)[0]?.['diasAsistidos']).toBe(3); // el 10, ordenado
+  });
+
+  /**
+   * EL PUNTO DE TODO ESTO: editar `dias_asistidos` en la base -- que no tiene
+   * trigger que lo impida -- tiene que romper el sello.
+   */
+  it('cambiar los dias asistidos de UNA persona cambia el hash', () => {
+    // El 20 pasa de 2 dias a 1 -- sin tocar un solo monto de la planilla.
+    const editado: DatosLacrado = {
+      ...conDias,
+      liquidaciones: conDias.liquidaciones.map((l) => (l.colaboradorId === 20 ? { ...l, diasAsistidos: 1 } : l)),
+    };
+    expect(calcularHash(armarContenidoLacrado(editado, 3))).not.toBe(calcularHash(armarContenidoLacrado(conDias, 3)));
+  });
+
+  it('cambiar los dias del inventario cambia el hash: es el denominador de TODAS las multas', () => {
+    const editado: DatosLacrado = { ...conDias, resultado: { ...conDias.resultado!, diasDelInventario: 4 } };
+    expect(calcularHash(armarContenidoLacrado(editado, 3))).not.toBe(calcularHash(armarContenidoLacrado(conDias, 3)));
+  });
+
+  /**
+   * LOS CIERRES DE LA REGLA VIEJA. `diasDelInventario` viene en 0, y eso
+   * significa "no hubo asistencia por dia", NO "duro cero dias". El sello no
+   * puede afirmar lo segundo: un sello vale porque lo que dice es verdad.
+   */
+  describe('un inventario cerrado con la regla vieja (0 dias)', () => {
+    const reglaVieja: DatosLacrado = {
+      ...BASE,
+      resultado: { ...BASE.resultado!, diasDelInventario: 0 },
+      // La columna `dias_asistidos` es `@default(0)`: para estas filas el 0 es
+      // un default que no significa nada, no un dato.
+      liquidaciones: BASE.liquidaciones.map((l) => ({ ...l, diasAsistidos: 0 })),
+    };
+
+    it('sella null, no 0: "esto no se midio", no "no vino nadie"', () => {
+      const v3 = armarContenidoLacrado(reglaVieja, 3);
+      expect((v3['resultado'] as Record<string, unknown>)['diasDelInventario']).toBeNull();
+      for (const fila of v3['liquidaciones'] as Array<Record<string, unknown>>) {
+        expect(fila['diasAsistidos']).toBeNull();
+      }
+    });
+
+    it('el null viaja DENTRO del hash: no es una clave que desaparece', () => {
+      // Con `undefined` la clave se caeria del contenido canonico, y un sello
+      // v3 de un inventario viejo seria indistinguible de uno al que le
+      // borraron el campo. El null afirma, con todas las letras, que no se midio.
+      expect(serializarCanonico(armarContenidoLacrado(reglaVieja, 3))).toContain('diasDelInventario');
+    });
+
+    it('con 0 dias, los diasAsistidos de la base NO cambian el hash: no dicen nada', () => {
+      // Si un inventario de la regla vieja tuviera basura en esa columna, el
+      // sello no la firma como si fuera un dato. Lo que protege a esas
+      // planillas sigue siendo `multaInasistencia`, que ya estaba sellado.
+      const conBasura: DatosLacrado = {
+        ...reglaVieja,
+        liquidaciones: reglaVieja.liquidaciones.map((l) => ({ ...l, diasAsistidos: 7 })),
+      };
+      expect(calcularHash(armarContenidoLacrado(conBasura, 3))).toBe(
+        calcularHash(armarContenidoLacrado(reglaVieja, 3)),
+      );
+    });
+  });
+
+  /**
+   * LA REGRESION QUE IMPORTA, igual que la del sello v1: un inventario lacrado
+   * en v2 tiene que seguir verificando HOY, con el codigo que ya sabe de los
+   * dias.
+   */
+  it('un sello v2 sigue verificando intacto aunque el codigo ya sepa de los dias', () => {
+    const selladoEnV2 = armarContenidoLacrado(BASE, 2);
+    const hashDelSello = calcularHash(selladoEnV2);
+
+    // Hoy `armarDatosLacrado` SIEMPRE lee las columnas nuevas: para un
+    // inventario viejo vienen con su default 0. La reconstruccion para
+    // VERIFICAR tiene que pedirse en la version GUARDADA, no en la ultima.
+    const datosDeHoy: DatosLacrado = {
+      ...BASE,
+      resultado: { ...BASE.resultado!, diasDelInventario: 0 },
+      liquidaciones: BASE.liquidaciones.map((l) => ({ ...l, diasAsistidos: 0 })),
+    };
+    const reconstruidoEnV2 = armarContenidoLacrado(datosDeHoy, 2);
+
+    const v = verificarLacrado(selladoEnV2, hashDelSello, reconstruidoEnV2);
+    expect(v.intacto).toBe(true);
+    expect(v.seccionesAlteradas).toEqual([]);
+  });
+
+  it('la MISMA reconstruccion en v3 SI rompe el hash de un sello v2', () => {
+    // El error que `verificarSello` evita leyendo la version guardada.
+    const selladoEnV2 = armarContenidoLacrado(BASE, 2);
+    expect(
+      verificarLacrado(selladoEnV2, calcularHash(selladoEnV2), armarContenidoLacrado(BASE, 3)).intacto,
+    ).toBe(false);
   });
 });
 

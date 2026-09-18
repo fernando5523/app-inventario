@@ -89,6 +89,17 @@ const AUDITORES: Colaborador[] = Object.values(COLABORADORES)
   .flat()
   .filter((c) => c.rol === 'auditor');
 
+/**
+ * El conteo de `colaboradores` de una tienda, en TODAS las respuestas que la
+ * devuelven: solo los de tienda. Paridad con el backend, donde el login, la
+ * sesión y Tiendas comparten el mismo filtro (sesion.service.ts,
+ * tiendas.service.ts) — el número de una tienda no puede cambiar según la
+ * pantalla que lo muestre.
+ */
+function conConteoDeTienda(sucursal: Sucursal): Sucursal {
+  return { ...sucursal, colaboradores: (COLABORADORES[sucursal.id] ?? []).filter(esDeTienda).length };
+}
+
 function buscarColaborador(colaboradorId: number): { colaborador: Colaborador; sucursal: Sucursal | null } | null {
   const administrador = ADMINISTRADORES.find((a) => a.id === colaboradorId);
   // sucursal: null de verdad (no una "sucursal de sistema" inventada) —
@@ -96,7 +107,7 @@ function buscarColaborador(colaboradorId: number): { colaborador: Colaborador; s
   if (administrador) return { colaborador: administrador, sucursal: null };
   for (const sucursal of SUCURSALES) {
     const colaborador = COLABORADORES[sucursal.id]?.find((c) => c.id === colaboradorId);
-    if (colaborador) return { colaborador, sucursal };
+    if (colaborador) return { colaborador, sucursal: conConteoDeTienda(sucursal) };
   }
   return null;
 }
@@ -107,7 +118,7 @@ export const sesionMemoria: RepositorioSesion = {
   async sucursales() {
     // El conteo de la tarjeta cuenta SOLO a los de tienda: el auditor sembrado
     // en una sucursal no la infla (paridad con listarSucursales del backend).
-    return SUCURSALES.map((s) => ({ ...s, colaboradores: (COLABORADORES[s.id] ?? []).filter(esDeTienda).length }));
+    return SUCURSALES.map(conConteoDeTienda);
   },
 
   async colaboradores(sucursalId) {

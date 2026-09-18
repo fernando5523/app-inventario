@@ -1,0 +1,35 @@
+-- DIAS ASISTIDOS POR PERSONA, congelados en la planilla.
+--
+-- ADITIVA: una columna. No borra, no renombra y no cambia el tipo de nada.
+-- Va aparte de 20260918120000_asistencia_registrada_por_dia porque aquella ya
+-- esta aplicada; el cambio de negocio es el mismo y se lee junto con ella.
+--
+-- POR QUE SE GUARDA ALGO QUE PARECE DERIVABLE, que es la pregunta que este
+-- repo se hace en todos lados (ver el comentario de "conteos" en
+-- schema.prisma): la planilla tiene que poder mostrar "X de Y dias" DESPUES
+-- de liquidada, y el denominador y la tarifa viven en resultados_inventario.
+-- Sin esta columna, la unica forma de recuperar X seria despejarla de la
+-- multa (dias - multa/tarifa), o sea reconstruir una PARTE a partir de un
+-- TOTAL -- al reves de la regla del resto del schema, y fragil: basta con una
+-- tarifa redondeada o una marca tocada para que la cuenta devuelva dias que
+-- nadie trabajo. El total (cuota + multa - bono) se sigue sin guardar.
+--
+-- DEFAULT 0 y sin relleno para atras: en las planillas ya firmadas 0 quiere
+-- decir "se liquido cuando la asistencia no se contaba por dia", no "no vino
+-- nunca" -- esas filas ya responden en "asistio", que era binario. Lo que
+-- distingue un caso del otro es resultados_inventario.dias_del_inventario:
+-- si es 0, el inventario es de los viejos y la fraccion no significa nada.
+--
+-- NO cambia "asistio", ni su tipo ni sus valores, pero SI lo que significa:
+-- era "vino alguna vez", pasa a ser "vino TODOS los dias" (o sea, quien no
+-- paga multa y cobra bono). Lo mismo, y en lockstep, con
+-- resultados_inventario.colaboradores_asistieron: uno es CUANTOS y el otro
+-- QUIENES, y el schema ya decia que no pueden discrepar. Con un inventario de
+-- un solo dia -- el unico caso que existia hasta ahora -- las dos
+-- definiciones coinciden, asi que ninguna fila vieja queda mal leida.
+--
+-- SE QUITO A MANO el ALTER de periodo_anio/periodo_mes que Prisma agrega
+-- solo, igual que en 20260907151454_indices_rendimiento.
+
+-- AlterTable
+ALTER TABLE "liquidaciones_colaborador" ADD COLUMN     "dias_asistidos" INTEGER NOT NULL DEFAULT 0;

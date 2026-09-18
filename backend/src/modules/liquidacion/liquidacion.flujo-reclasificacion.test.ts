@@ -21,7 +21,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const prismaMock = vi.hoisted(() => ({
   inventario: { findUnique: vi.fn(), update: vi.fn() },
   colaborador: { findMany: vi.fn() },
-  hojaConteo: { findMany: vi.fn() },
+  asistenciaInventario: { findMany: vi.fn() },
   liquidacionColaborador: { createMany: vi.fn() },
   diferenciaItem: { findMany: vi.fn(), updateMany: vi.fn() },
   catalogoItem: { findMany: vi.fn() },
@@ -66,6 +66,7 @@ describe('flujo punta a punta: reclasificar despues del cierre -> liquidar -> re
         montoSobranteEmpleado: null,
         colaboradoresAlcanzados: 2,
         colaboradoresAsistieron: 2,
+        diasDelInventario: 2,
         multaInasistencia: decimal(20),
       },
     });
@@ -73,10 +74,13 @@ describe('flujo punta a punta: reclasificar despues del cierre -> liquidar -> re
       { id: 1, nombre: 'Ana', rol: 'conteo' },
       { id: 2, nombre: 'Beto', rol: 'conteo' },
     ]);
-    prismaMock.hojaConteo.findMany.mockResolvedValue([
-      { asignadoAId: 1, asignadoA2Id: null, _count: { conteos: 5 } },
-      { asignadoAId: 2, asignadoA2Id: null, _count: { conteos: 5 } },
-    ]);
+    // Los dos hicieron los dos dias: sin multas ni bonos, para que este
+    // archivo mida solo la reclasificacion.
+    prismaMock.asistenciaInventario.findMany.mockResolvedValue(
+      [1, 2].flatMap((colaboradorId) =>
+        ['2026-09-01', '2026-09-02'].map((d) => ({ colaboradorId, dia: new Date(`${d}T00:00:00.000Z`) })),
+      ),
+    );
 
     // Lo que quedo CONGELADO al cerrar el conteo: las diferencias existen,
     // pero la clasificacion de CatalogoItem (Dynamics, de ESE snapshot) decia

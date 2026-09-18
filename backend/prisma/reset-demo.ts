@@ -12,8 +12,9 @@
  * QUE BORRA
  *   Sucursales, colaboradores (menos administradores), inventarios, hojas,
  *   conteos, productos, catalogo, empaques, resultados, diferencias,
- *   liquidaciones, aprobaciones, lacrados, registros de ERP, sesiones y el
- *   log de auditoria.
+ *   liquidaciones, aprobaciones, lacrados, registros de ERP, ajustes de
+ *   Dynamics importados, marcas de asistencia, sesiones y el log de
+ *   auditoria.
  *
  * QUE DEJA, y por que
  *
@@ -91,11 +92,29 @@ async function borrarTodo(): Promise<Record<string, number>> {
   contar('catalogo_items', await prisma.catalogoItem.deleteMany({}));
 
   // --- Lo que cuelga del inventario ---
+  //
+  // Son NUEVE las FK RESTRICT que apuntan a `inventarios`, y tienen que estar
+  // las nueve o el DELETE final muere con
+  //   violates RESTRICT setting of foreign key constraint "..."
+  // Dos se agregaron tarde y este script se quedo sin ellas: las
+  // importaciones de ajustes (octava) y la asistencia (novena). Contra
+  // pg_constraint, hoy estan cubiertas las nueve; el dia que aparezca una
+  // decima, esta lista es el lugar.
   contar('hojas_conteo', await prisma.hojaConteo.deleteMany({}));
   contar('aprobaciones_cierre', await prisma.aprobacionCierre.deleteMany({}));
   contar('liquidaciones_colaborador', await prisma.liquidacionColaborador.deleteMany({}));
   contar('diferencias_item', await prisma.diferenciaItem.deleteMany({}));
   contar('resultados_inventario', await prisma.resultadoInventario.deleteMany({}));
+  // Las lineas van antes que su importacion: cuelgan de ella, no del
+  // inventario.
+  contar('lineas_ajuste_dynamics', await prisma.lineaAjusteDynamics.deleteMany({}));
+  contar('importaciones_ajustes_dynamics', await prisma.importacionAjustesDynamics.deleteMany({}));
+  // Las marcas de entrada. A diferencia de todo lo de arriba, pueden existir
+  // en un inventario sin un solo conteo: el Coordinador pasa lista cuando la
+  // gente llega. Ademas apuntan a `colaboradores` con otras dos FK RESTRICT
+  // (la persona marcada y quien marco), asi que tienen que caer ANTES del
+  // borrado de colaboradores de mas abajo -- y caen, porque esto va primero.
+  contar('asistencia_inventario', await prisma.asistenciaInventario.deleteMany({}));
   contar('inventarios', await prisma.inventario.deleteMany({}));
 
   // --- Sesiones y auditoria: cuelgan de colaboradores con FK RESTRICT ---

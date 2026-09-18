@@ -1,101 +1,189 @@
 /**
  * La regla del cliente para la asistencia, probada sin base.
  *
- * De acá sale una multa que se le descuenta del sueldo a una persona, así
- * que los cuatro casos de la regla están cubiertos uno por uno -- incluido
- * el que le cuesta plata a alguien que sí fue a trabajar.
+ * De acá sale una multa que se le descuenta del sueldo a una persona, así que
+ * cada regla está cubierta una por una -- incluidas las degeneradas, que son
+ * las que nadie prueba a mano y las que terminan multando a alguien.
+ *
+ * OJO al cambio de régimen: hasta este cambio la asistencia se DEDUCIA de las
+ * hojas y la multa era un monto fijo por persona ausente. Ahora la registra el
+ * coordinador, día por día, y la multa es por día faltado. Los tests viejos
+ * (hoja con conteos = asistió) ya no describen ninguna regla vigente. Ver la
+ * cabecera de `asistencia.ts`.
  */
 
 import { describe, expect, it } from 'vitest';
-import { aHojaParaAsistencia, quienesAsistieron, type HojaParaAsistencia } from './asistencia';
+import {
+  aMarcaAsistencia,
+  diasAsistidosPorColaborador,
+  diasDelInventario,
+  multaPorInasistencia,
+  quienesAsistieronTodo,
+  type MarcaAsistencia,
+} from './asistencia';
 
-const hoja = (parcial: Partial<HojaParaAsistencia> = {}): HojaParaAsistencia => ({
-  asignadoAId: null,
-  asignadoA2Id: null,
-  tieneConteos: false,
-  ...parcial,
-});
+/** Atajo: `marca(7, '2026-09-01')`. */
+const marca = (colaboradorId: number, dia: string): MarcaAsistencia => ({ colaboradorId, dia });
 
-describe('quienesAsistieron', () => {
-  it('contó en la ronda 1: asistió', () => {
-    expect(quienesAsistieron([hoja({ asignadoAId: 7, tieneConteos: true })])).toEqual(new Set([7]));
+/** El escenario canónico del brief: 3 días, Silvia y Óscar 3/3, Delia 1/3. */
+const SILVIA = 1;
+const OSCAR = 2;
+const DELIA = 3;
+const TRES_DIAS: MarcaAsistencia[] = [
+  marca(SILVIA, '2026-09-01'),
+  marca(OSCAR, '2026-09-01'),
+  marca(DELIA, '2026-09-01'),
+  marca(SILVIA, '2026-09-02'),
+  marca(OSCAR, '2026-09-02'),
+  marca(SILVIA, '2026-09-03'),
+  marca(OSCAR, '2026-09-03'),
+];
+
+describe('diasDelInventario', () => {
+  it('cuenta días DISTINTOS, no marcas', () => {
+    // 7 marcas, 3 días. Si contara marcas, el denominador de todas las multas
+    // del inventario sería la cantidad de gente que fue.
+    expect(diasDelInventario(TRES_DIAS)).toBe(3);
   });
 
-  it('contó SOLO en la ronda 2: asistió igual', () => {
-    // El reconteo lo suele hacer OTRA persona, a propósito (las hojas de la
-    // ronda 2 nacen sin asignar). Mirar solo la ronda 1 dejaría afuera a
-    // quien vino especialmente a recontar.
-    //
-    // La regla no distingue rondas: la lista que llega ya las incluye todas.
-    const hojas = [
-      hoja({ asignadoAId: 7, tieneConteos: true }), // ronda 1, otra persona
-      hoja({ asignadoAId: 9, tieneConteos: true }), // ronda 2, esta
-    ];
-    expect(quienesAsistieron(hojas).has(9)).toBe(true);
+  it('un solo día con toda la tienda marcada sigue siendo un día', () => {
+    expect(diasDelInventario([marca(SILVIA, '2026-09-01'), marca(OSCAR, '2026-09-01')])).toBe(1);
   });
 
-  /**
-   * EL COSTO DE LA REGLA, que el cliente aceptó explícitamente. No es un bug
-   * y no hay que "arreglarlo": es el precio de no tener carga manual.
-   */
-  it('asignado pero SIN ningún conteo: falta', () => {
-    expect(quienesAsistieron([hoja({ asignadoAId: 7, tieneConteos: false })])).toEqual(new Set());
+  it('días no consecutivos cuentan igual: no es "del primero al último"', () => {
+    // Un inventario que se corta el sábado y sigue el lunes duró 2 días, no 3.
+    expect(diasDelInventario([marca(SILVIA, '2026-09-04'), marca(SILVIA, '2026-09-06')])).toBe(2);
   });
 
-  it('nunca asignado: falta', () => {
-    // Quien nunca recibió hoja no aparece por ningún lado. En la planilla
-    // igual tiene fila, con asistio: false -- eso lo garantiza el universo
-    // de `liquidar()`, no esta función.
-    expect(quienesAsistieron([hoja({ tieneConteos: true })])).toEqual(new Set());
-  });
-
-  it('las DOS personas de una hoja con conteos asistieron', () => {
-    // `Conteo` no guarda autor: no se puede saber cuál de las dos cargó cada
-    // renglón, y en el conteo de a dos ambas están ahí. Atribuir la hoja a
-    // una sola le costaría una multa a la otra.
-    expect(quienesAsistieron([hoja({ asignadoAId: 7, asignadoA2Id: 9, tieneConteos: true })])).toEqual(
-      new Set([7, 9]),
-    );
-  });
-
-  it('una hoja sin conteos no salva a NINGUNO de sus dos asignados', () => {
-    expect(quienesAsistieron([hoja({ asignadoAId: 7, asignadoA2Id: 9, tieneConteos: false })])).toEqual(new Set());
-  });
-
-  it('con varias hojas, alcanza UNA con conteos', () => {
-    // Alguien con 3 hojas que solo llegó a cargar la primera vino igual.
-    const hojas = [
-      hoja({ asignadoAId: 7, tieneConteos: true }),
-      hoja({ asignadoAId: 7, tieneConteos: false }),
-      hoja({ asignadoAId: 7, tieneConteos: false }),
-    ];
-    expect(quienesAsistieron(hojas)).toEqual(new Set([7]));
-  });
-
-  it('no cuenta dos veces a quien tiene varias hojas', () => {
-    const hojas = [hoja({ asignadoAId: 7, tieneConteos: true }), hoja({ asignadoAId: 7, tieneConteos: true })];
-    expect(quienesAsistieron(hojas).size).toBe(1);
-  });
-
-  it('sin hojas no asistió nadie, y no revienta', () => {
-    // Un inventario sin hojas no puede cerrar (rondas.service.ts lo bloquea
-    // antes), pero devolver un set vacío es más honesto que asumir algo.
-    expect(quienesAsistieron([])).toEqual(new Set());
+  it('sin marcas, cero días', () => {
+    // Un inventario sin una sola marca no dura 0 por error: nadie fue, o nadie
+    // cargó. El cierre de la planilla lo corta antes de multar a alguien.
+    expect(diasDelInventario([])).toBe(0);
   });
 });
 
-describe('aHojaParaAsistencia', () => {
-  it('traduce el _count de Prisma a "tiene conteos"', () => {
-    expect(aHojaParaAsistencia({ asignadoAId: 7, asignadoA2Id: null, _count: { conteos: 12 } })).toEqual({
-      asignadoAId: 7,
-      asignadoA2Id: null,
-      tieneConteos: true,
+describe('diasAsistidosPorColaborador', () => {
+  it('cuenta los días de cada uno', () => {
+    const dias = diasAsistidosPorColaborador(TRES_DIAS);
+    expect(dias.get(SILVIA)).toBe(3);
+    expect(dias.get(OSCAR)).toBe(3);
+    expect(dias.get(DELIA)).toBe(1);
+  });
+
+  it('dos marcas del MISMO día cuentan como un día', () => {
+    // El @@unique lo impide en la base, pero esta función es pura y no puede
+    // apoyarse en eso: una fila repetida le regalaría un día a alguien, y con
+    // eso podría pasar a cobrar bono sin haber venido todos los días.
+    expect(diasAsistidosPorColaborador([marca(SILVIA, '2026-09-01'), marca(SILVIA, '2026-09-01')]).get(SILVIA)).toBe(1);
+  });
+
+  it('quien no tiene marcas NO aparece en el Map', () => {
+    // No se devuelve con 0: esta función no conoce el personal alcanzado. Lo
+    // resuelve la planilla, que recorre a todos y usa `?? 0`.
+    expect(diasAsistidosPorColaborador(TRES_DIAS).has(99)).toBe(false);
+  });
+
+  it('sin marcas devuelve un Map vacío, y no revienta', () => {
+    expect(diasAsistidosPorColaborador([]).size).toBe(0);
+  });
+});
+
+describe('multaPorInasistencia', () => {
+  it('faltó 2 de 3 días a S/20: S/40', () => {
+    // El caso de Delia en el ejemplo canónico del brief.
+    expect(multaPorInasistencia(3, 1, 20)).toBe(40);
+  });
+
+  it('vino todos los días: no paga nada', () => {
+    expect(multaPorInasistencia(3, 3, 20)).toBe(0);
+  });
+
+  it('no vino ningún día: paga el inventario completo', () => {
+    expect(multaPorInasistencia(3, 0, 20)).toBe(60);
+  });
+
+  it('EL CAMBIO DE REGLA: faltar un día ya no cuesta lo mismo que no venir nunca', () => {
+    // Con la regla vieja (monto fijo por ausente) los dos pagaban S/20. Este
+    // test existe para que se note si alguien vuelve al monto fijo.
+    expect(multaPorInasistencia(3, 2, 20)).toBe(20);
+    expect(multaPorInasistencia(3, 0, 20)).toBe(60);
+  });
+
+  it('NUNCA negativa: más días asistidos que días de inventario da 0', () => {
+    // `diasInventario` viene congelado del cierre y los días asistidos de las
+    // marcas de hoy. Una multa negativa sería un PAGO al colaborador que nadie
+    // autorizó.
+    expect(multaPorInasistencia(3, 5, 20)).toBe(0);
+  });
+
+  it('inventario de 0 días no multa a nadie', () => {
+    expect(multaPorInasistencia(0, 0, 20)).toBe(0);
+  });
+
+  it('tarifa con centavos: exacta, sin el arrastre del punto flotante', () => {
+    // 20.10 * 3 da 60.300000000000004 con decimales. Este número entra directo
+    // a la suma que tiene que cerrar contra el fondo de multas.
+    expect(multaPorInasistencia(3, 0, 20.1)).toBe(60.3);
+    expect(multaPorInasistencia(10, 0, 0.1)).toBe(1);
+  });
+
+  it('tarifa en 0: no hay multa aunque haya faltado todo', () => {
+    // Una tarifa en cero es una decisión válida del cliente, no un dato que
+    // falta -- y si fuera un dato que falta, no se arregla multando.
+    expect(multaPorInasistencia(3, 0, 0)).toBe(0);
+  });
+});
+
+describe('quienesAsistieronTodo', () => {
+  it('los del ejemplo canónico: Silvia y Óscar sí, Delia no', () => {
+    expect(quienesAsistieronTodo(TRES_DIAS, 3)).toEqual(new Set([SILVIA, OSCAR]));
+  });
+
+  it('es EXACTAMENTE el conjunto de los que no pagan multa', () => {
+    // La invariante que hace cerrar el fondo: nadie puede cobrar bono Y pagar
+    // multa. Si se rompiera, se repartiría entre gente que además aportó.
+    const dias = diasAsistidosPorColaborador(TRES_DIAS);
+    const conBono = quienesAsistieronTodo(TRES_DIAS, 3);
+    for (const id of [SILVIA, OSCAR, DELIA, 99]) {
+      const multa = multaPorInasistencia(3, dias.get(id) ?? 0, 20);
+      expect(conBono.has(id)).toBe(multa === 0);
+    }
+  });
+
+  it('usa el denominador CONGELADO que le pasan, no el que deduciría de las marcas', () => {
+    // Las marcas dicen 3 días; el resultado congelado dice 4 (el coordinador
+    // borró la última marca de un día después de cerrar). Con 4, nadie vino
+    // todos los días -- y nadie cobra bono. Si esta función dedujera el
+    // denominador de las marcas, Silvia y Óscar cobrarían bono por un día que
+    // el inventario firmado dice que existió y ellos no hicieron.
+    expect(quienesAsistieronTodo(TRES_DIAS, 4)).toEqual(new Set());
+  });
+
+  it('cero días de inventario: no cobra bono nadie', () => {
+    // No hubo inventario que asistir. Sin este corte, `dias >= 0` metería a
+    // todo el mundo -- incluso a quien no tiene una sola marca.
+    expect(quienesAsistieronTodo(TRES_DIAS, 0)).toEqual(new Set());
+  });
+
+  it('sin marcas no cobra nadie, y no revienta', () => {
+    expect(quienesAsistieronTodo([], 3)).toEqual(new Set());
+  });
+});
+
+describe('aMarcaAsistencia', () => {
+  it('traduce la fila de Prisma a YYYY-MM-DD', () => {
+    expect(aMarcaAsistencia({ colaboradorId: 7, dia: new Date('2026-09-03T00:00:00.000Z') })).toEqual({
+      colaboradorId: 7,
+      dia: '2026-09-03',
     });
   });
 
-  it('cero conteos es false, no un 0 que se cuela como falsy en otro lado', () => {
-    expect(aHojaParaAsistencia({ asignadoAId: 7, asignadoA2Id: null, _count: { conteos: 0 } }).tieneConteos).toBe(
-      false,
-    );
+  it('usa UTC, NO la hora local: en Lima (UTC−5) el día se correría para atrás', () => {
+    // `@db.Date` vuelve de Prisma como medianoche UTC. Con los getters locales,
+    // en Lima el 3 se lee como el 2: todas las marcas se corren un día, los
+    // días del inventario se pueden duplicar y alguien paga una multa por un
+    // día que no existió.
+    const medianocheUtc = new Date(Date.UTC(2026, 8, 3));
+    expect(aMarcaAsistencia({ colaboradorId: 7, dia: medianocheUtc }).dia).toBe('2026-09-03');
   });
 });

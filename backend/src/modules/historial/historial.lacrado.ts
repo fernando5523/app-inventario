@@ -24,15 +24,27 @@ import { createHash } from 'node:crypto';
  * reclasifica al liquidar), asi que tienen que quedar bajo el hash como el
  * resto de la planilla.
  *
+ * v2 -> v3 (asistencia registrada por dia, 2026-09-18): se agrega
+ * `resultado.diasDelInventario` y `liquidaciones[].diasAsistidos`.
+ *
+ * EL AGUJERO QUE CIERRA: el sello ya cubria `multaInasistencia` de cada fila
+ * -- la plata -- pero no el "1 de 3 dias" que la justifica. Con la multa por
+ * dia, esos dos numeros SON la multa: `(dias - diasAsistidos) x tarifa`. Un
+ * sello que firma "S/40" sin firmar el "1 de 3" deja que alguien edite
+ * `dias_asistidos` en la base y la multa quede sin explicacion, o peor, con
+ * una explicacion falsa que cuadra igual. Y `liquidaciones_colaborador` no
+ * tiene trigger de inmutabilidad (solo lo tienen `lacrados_inventario` y
+ * `aprobaciones_cierre`): el hash es lo UNICO que protege esa tabla.
+ *
  * SUBIR ESTE NUMERO NO INVALIDA LOS SELLOS VIEJOS: `armarContenidoLacrado`
  * recibe la version a armar y arma la forma DE ESA version -- verificar un
- * sello v1 sigue construyendo el contenido v1 (sin los dos campos nuevos),
- * asi que un inventario ya lacrado (ej. el 45, folio
+ * sello v1 sigue construyendo el contenido v1 (sin los campos nuevos), y uno
+ * v2 el suyo, asi que un inventario ya lacrado (ej. el 45, folio
  * INV-2026-09-CON-10-9A8) sigue dando `intacto: true`. Lo unico que cambia
  * para esos es que ahora se les nota correctamente `versionDistinta: true`
  * -- exactamente para lo que existe ese flag.
  */
-export const VERSION_CONTENIDO_LACRADO = 2;
+export const VERSION_CONTENIDO_LACRADO = 3;
 
 export const ALGORITMO_HASH = 'sha256';
 
@@ -145,6 +157,16 @@ export interface DatosLacrado {
      * funcionalidad) no tienen por que conocerlo.
      */
     montoSobranteEmpleado?: number | null;
+    /**
+     * Cuantos dias duro el inventario: el DENOMINADOR de todas las multas de
+     * la planilla. Entra al hash en `version >= 3` -- mismo motivo que
+     * `liquidaciones[].diasAsistidos`.
+     *
+     * 0 en la base significa "este inventario se cerro cuando la asistencia
+     * se deducia de las hojas", NO "duro cero dias". `armarContenidoLacrado`
+     * lo traduce a `null` antes de sellarlo: ver el comentario ahi.
+     */
+    diasDelInventario?: number;
     colaboradoresAlcanzados: number;
     /** NULL, no 0 -- misma razón que `montoNegativos`, arriba. */
     colaboradoresAsistieron: number | null;
@@ -171,6 +193,13 @@ export interface DatosLacrado {
   liquidaciones: Array<{
     colaboradorId: number;
     asistio: boolean;
+    /**
+     * Dias que asistio esta persona. Entra al hash en `version >= 3` -- es la
+     * JUSTIFICACION de `multaInasistencia`, que ya estaba sellado: con la
+     * multa por dia, `(diasDelInventario - diasAsistidos) x tarifa` ES el
+     * monto. Opcional por lo mismo que `resultado.montoSobranteEmpleado`.
+     */
+    diasAsistidos?: number;
     cuotaBase: number;
     multaInasistencia: number;
     bonoAsistencia: number;
@@ -222,6 +251,29 @@ export function armarContenidoLacrado(
 ): ContenidoLacrado {
   const porNumero = (a: number, b: number): number => a - b;
   const v2 = version >= 2;
+  const v3 = version >= 3;
+
+  /**
+   * SI ESTE INVENTARIO TIENE ASISTENCIA POR DIA, o si es de la regla vieja.
+   *
+   * `diasDelInventario` es `Int @default(0)`, y un 0 ahi NO dice "duro cero
+   * dias": dice "se cerro cuando la asistencia se deducia de las hojas y no
+   * existia el concepto de dia". Sellar ese 0 tal cual seria firmar una
+   * AFIRMACION FALSA sobre el inventario -- y un sello vale justamente porque
+   * lo que dice es verdad.
+   *
+   * Por eso, cuando no hay asistencia por dia, los dos campos nuevos se
+   * sellan en `null`: "esto no se midio". Es la misma distincion que el resto
+   * del sistema hace entre null y 0 (ver `montoNegativos`), y acá pesa mas que
+   * en ningun otro lado.
+   *
+   * `null` y no `undefined`: `undefined` haria desaparecer la clave del
+   * contenido canonico, y entonces un sello v3 de un inventario viejo seria
+   * indistinguible de uno al que le borraron el campo. El `null` explicito
+   * queda bajo el hash y afirma, con todas las letras, que no se midio.
+   */
+  const diasDelInventario = datos.resultado?.diasDelInventario ?? 0;
+  const conAsistenciaPorDia = diasDelInventario > 0;
 
   return {
     version,
@@ -245,11 +297,20 @@ export function armarContenidoLacrado(
             // antes de que este campo existiera. Un `null` explicito SI
             // cambiaria el hash de los sellos viejos.
             montoSobranteEmpleado: v2 ? (datos.resultado.montoSobranteEmpleado ?? null) : undefined,
+            diasDelInventario: v3 ? (conAsistenciaPorDia ? diasDelInventario : null) : undefined,
           },
     diferencias: [...datos.diferencias]
       .sort((a, b) => (a.codigo < b.codigo ? -1 : a.codigo > b.codigo ? 1 : 0))
       .map((d) => ({ ...d, esEmpresa: v2 ? (d.esEmpresa ?? false) : undefined })),
-    liquidaciones: [...datos.liquidaciones].sort((a, b) => porNumero(a.colaboradorId, b.colaboradorId)),
+    liquidaciones: [...datos.liquidaciones]
+      .sort((a, b) => porNumero(a.colaboradorId, b.colaboradorId))
+      // Con asistencia por dia, el 0 de alguien que no vino nunca es un CERO
+      // REAL y se sella como tal; sin ella, la columna entera es un default
+      // que no significa nada y va en `null`. Ver `conAsistenciaPorDia`.
+      .map((l) => ({
+        ...l,
+        diasAsistidos: v3 ? (conAsistenciaPorDia ? (l.diasAsistidos ?? 0) : null) : undefined,
+      })),
     aprobaciones: [...datos.aprobaciones].sort((a, b) => porNumero(a.aprobadorId, b.aprobadorId)),
   };
 }

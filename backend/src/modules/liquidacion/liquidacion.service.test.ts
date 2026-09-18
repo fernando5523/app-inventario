@@ -26,8 +26,8 @@ const prismaMock = vi.hoisted(() => ({
   // todavía no se liquidó, con la misma función que después persiste
   // `liquidar()`. Por defecto vacíos -- cada test que le importe la
   // proyección los llena.
-  colaborador: { findMany: vi.fn(async () => []) },
-  hojaConteo: { findMany: vi.fn(async () => []) },
+  colaborador: { findMany: vi.fn() },
+  asistenciaInventario: { findMany: vi.fn() },
 }));
 vi.mock('../../config/database', () => ({ prisma: prismaMock }));
 
@@ -58,6 +58,7 @@ function resultadoCompleto() {
     montoSobranteEmpleado: null,
     colaboradoresAlcanzados: 10,
     colaboradoresAsistieron: 8,
+    diasDelInventario: 3,
     multaInasistencia: decimal(20),
   };
 }
@@ -76,6 +77,10 @@ function inventarioCon(resultado: unknown, estado: string = 'conteo_cerrado') {
 beforeEach(() => {
   vi.clearAllMocks();
   prismaMock.diferenciaItem.count.mockResolvedValue(0);
+  // Por defecto no hay personal ni marcas: la proyección sale vacía, que es lo
+  // que ya asumían los tests que no son sobre la planilla.
+  prismaMock.colaborador.findMany.mockResolvedValue([]);
+  prismaMock.asistenciaInventario.findMany.mockResolvedValue([]);
 });
 
 describe('deSucursal', () => {
@@ -310,5 +315,111 @@ describe('conciliacion', () => {
 
     expect(r).toEqual(expect.objectContaining({ calculable: true }));
     expect((r as { fondoDeMultas: unknown }).fondoDeMultas).toBeDefined();
+  });
+
+  /**
+   * EL FONDO CIERRA CON DIAS FALTADOS DESIGUALES -- el caso que la formula
+   * vieja no podia reconstruir.
+   *
+   * `recaudado` era `totalFaltas x multaInasistencia`: cuenta PERSONAS por
+   * tarifa. Con la multa por dia eso deja de ser el fondo en cuanto dos
+   * personas faltan distinta cantidad de dias. Acá faltan 1, 2 y 3 dias:
+   * aportan 6 tarifas (S/120), no 3 (S/60).
+   *
+   * Sin el arreglo, la conciliacion habria reportado "no cierra, faltan S/60"
+   * sobre una planilla perfectamente cuadrada -- la peor forma de fallar,
+   * porque manda a auditar lo que esta bien.
+   */
+  it('el fondo cierra aunque cada uno haya faltado una cantidad distinta de días', async () => {
+    // 5 personas, inventario de 3 dias, S/20 por dia. Dos completaron; los
+    // otros tres faltaron 1, 2 y 3 dias.
+    prismaMock.inventario.findFirst.mockResolvedValue(
+      inventarioCon({
+        ...resultadoCompleto(),
+        colaboradoresAlcanzados: 5,
+        colaboradoresAsistieron: 2,
+        diasDelInventario: 3,
+      }),
+    );
+    prismaMock.colaborador.findMany.mockResolvedValue(
+      [1, 2, 3, 4, 5].map((id) => ({ id, nombre: `Colaborador ${id}`, rol: 'conteo' })),
+    );
+    const dia = (d: string) => new Date(`2026-09-0${d}T00:00:00.000Z`);
+    prismaMock.asistenciaInventario.findMany.mockResolvedValue([
+      ...[1, 2].flatMap((colaboradorId) => ['1', '2', '3'].map((d) => ({ colaboradorId, dia: dia(d) }))),
+      ...['1', '2'].map((d) => ({ colaboradorId: 3, dia: dia(d) })), // falto 1
+      { colaboradorId: 4, dia: dia('1') }, // falto 2
+      // El 5 no tiene ninguna marca: falto los 3.
+    ]);
+
+    const r = (await conciliacion(AUDITOR, 1)) as {
+      fondoDeMultas: {
+        recaudado: number;
+        repartido: number;
+        diferencia: number;
+        cierra: boolean;
+        diasFaltados: number;
+        tarifaPorDia: number;
+      };
+      faltaron: number;
+      asistieron: number;
+    };
+
+    // (1 + 2 + 3) dias x S/20. La formula vieja habria dicho 3 x 20 = 60.
+    expect(r.fondoDeMultas.recaudado).toBe(120);
+    expect(r.fondoDeMultas.repartido).toBe(120);
+    expect(r.fondoDeMultas.diferencia).toBe(0);
+    expect(r.fondoDeMultas.cierra).toBe(true);
+    // "Faltaron" cuenta PERSONAS que no completaron, no dias: va al lado de
+    // `asistieron` y `colaboradores`, y los tres tienen que sumar entre si.
+    expect(r.faltaron).toBe(3);
+    expect(r.asistieron).toBe(2);
+    // Los DIAS viajan aparte, con su tarifa, para que la composicion del fondo
+    // se lea sin recalcular: 6 dias x S/20 = S/120.
+    expect(r.fondoDeMultas.diasFaltados).toBe(6);
+    expect(r.fondoDeMultas.tarifaPorDia).toBe(20);
+    expect(r.fondoDeMultas.diasFaltados * r.fondoDeMultas.tarifaPorDia).toBe(r.fondoDeMultas.recaudado);
+  });
+
+  /**
+   * LA TRAMPA QUE ESTE PAR DE CAMPOS EVITA: `totalFaltas x tarifa` NO es el
+   * fondo. Cuenta personas, y cada una falto una cantidad distinta de dias.
+   *
+   * Con 3 personas que faltaron 1, 2 y 3 dias daria S/60 contra los S/120
+   * reales -- la mitad. Por eso `totalFaltas` se quedo en PERSONAS (suma con
+   * `asistieron` y `colaboradores`) y los dias viajan en su propio campo.
+   */
+  it('totalFaltas sigue contando PERSONAS: multiplicarlo por la tarifa NO da el fondo', async () => {
+    prismaMock.inventario.findFirst.mockResolvedValue(
+      inventarioCon({
+        ...resultadoCompleto(),
+        colaboradoresAlcanzados: 5,
+        colaboradoresAsistieron: 2,
+        diasDelInventario: 3,
+      }),
+    );
+    prismaMock.colaborador.findMany.mockResolvedValue(
+      [1, 2, 3, 4, 5].map((id) => ({ id, nombre: `Colaborador ${id}`, rol: 'conteo' })),
+    );
+    const dia = (d: string) => new Date(`2026-09-0${d}T00:00:00.000Z`);
+    prismaMock.asistenciaInventario.findMany.mockResolvedValue([
+      ...[1, 2].flatMap((colaboradorId) => ['1', '2', '3'].map((d) => ({ colaboradorId, dia: dia(d) }))),
+      ...['1', '2'].map((d) => ({ colaboradorId: 3, dia: dia(d) })),
+      { colaboradorId: 4, dia: dia('1') },
+    ]);
+
+    const liq = (await deSucursal(AUDITOR, 1)) as {
+      totalFaltas: number;
+      diasFaltadosEnTotal: number;
+      multaInasistencia: number;
+      planilla: Array<{ asistio: boolean; diasAsistidos: number }>;
+    };
+
+    expect(liq.totalFaltas).toBe(3);
+    expect(liq.diasFaltadosEnTotal).toBe(6);
+    expect(liq.totalFaltas * liq.multaInasistencia).not.toBe(120);
+    expect(liq.diasFaltadosEnTotal * liq.multaInasistencia).toBe(120);
+    // Y cada fila lleva sus dias, que es lo que la pantalla muestra como "2/3".
+    expect(liq.planilla.map((p) => p.diasAsistidos)).toEqual([3, 3, 2, 1, 0]);
   });
 });

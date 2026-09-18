@@ -12,6 +12,7 @@
 
 import { simularLatencia } from './_compartido';
 import { sesionMemoria } from './sesion-memoria';
+import { diasFaltados, multaPorInasistencia } from '../dominio/asistencia';
 import type {
   AjustesDelMes,
   CierreLiquidacion,
@@ -53,19 +54,31 @@ export function limpiarAjustesMemoria(): void {
 
 const SUCURSAL_LUZURIAGA_ID = 1;
 
-/** id de colaborador (ver sesion-memoria.ts) -> si asistió el mes cerrado. Solo Luzuriaga tiene datos de liquidación cargados. */
-const ASISTENCIA_LUZURIAGA: Record<number, boolean> = {
-  101: true, // José Tarazona
-  102: true, // María Rojas
-  103: true, // Gilmer Quispe
-  104: true, // Elena Príncipe
-  105: true, // Walter Norabuena
-  106: true, // Rosa Melgarejo
-  107: false, // Luis Shuan
-  108: true, // Carla Depaz
-  109: false, // Manuel Chávez
-  110: false, // Yeni Sotelo
-  111: true, // Hugo Vergaray
+/**
+ * CUÁNTOS DÍAS asistió cada uno, no si asistió.
+ *
+ * Era un `Record<number, boolean>` -- la asistencia se deducía de las hojas y
+ * solo podía ser sí o no. Ahora el Coordinador la registra día por día, y la
+ * multa es `días faltados x tarifa`: los tres que no vinieron completos deben
+ * montos distintos, que es justo lo que el booleano no podía expresar.
+ *
+ * Solo Luzuriaga tiene datos de liquidación cargados (ver la cabecera).
+ */
+const DIAS_DEL_INVENTARIO_LUZURIAGA = 3;
+
+/** id de colaborador (ver sesion-memoria.ts) -> días asistidos de los 3. */
+const ASISTENCIA_LUZURIAGA: Record<number, number> = {
+  101: 3, // José Tarazona
+  102: 3, // María Rojas
+  103: 3, // Gilmer Quispe
+  104: 3, // Elena Príncipe
+  105: 3, // Walter Norabuena
+  106: 3, // Rosa Melgarejo
+  107: 1, // Luis Shuan -- faltó 2 días
+  108: 3, // Carla Depaz
+  109: 2, // Manuel Chávez -- faltó 1 día
+  110: 0, // Yeni Sotelo -- no vino ningún día
+  111: 3, // Hugo Vergaray
 };
 
 /** El inventario de esa liquidación — sobre el que se cargan los ajustes. */
@@ -93,16 +106,51 @@ export const liquidacionMemoria: RepositorioLiquidacion = {
     const faltanteNeto = faltanteBruto - negativosDelMes - faltanteEmpresa;
     const cuotaBase = faltanteNeto / colaboradores.length;
 
-    const faltaron = colaboradores.filter((c) => !ASISTENCIA_LUZURIAGA[c.id]);
-    const asistieron = colaboradores.length - faltaron.length;
-    // El fondo de multas de quienes faltaron se redistribuye entre quienes
-    // sí asistieron, como bono (baja su cuota) -- no queda sin repartir.
-    const bonoAsistencia = (faltaron.length * multaInasistencia) / asistieron;
+    const diasDelInventario = DIAS_DEL_INVENTARIO_LUZURIAGA;
+    const diasDeCadaUno = colaboradores.map((c) => ({
+      colaborador: c,
+      // Sin dato en el padrón de demo se asume completo, igual que antes:
+      // este mock no es el lugar donde inventar una falta.
+      diasAsistidos: ASISTENCIA_LUZURIAGA[c.id] ?? diasDelInventario,
+    }));
 
-    const planilla: DetalleLiquidacion[] = colaboradores.map((c) => {
-      const asistio = ASISTENCIA_LUZURIAGA[c.id] ?? true;
-      const monto = asistio ? cuotaBase - bonoAsistencia : cuotaBase + multaInasistencia;
-      return { colaboradorId: c.id, nombre: c.nombre, rol: c.rol, asistio, monto };
+    // DOS CIFRAS DISTINTAS, con dos nombres distintos, y espejan al backend:
+    //
+    //  - `totalFaltas`: PERSONAS que no completaron el inventario. Es la que
+    //    sostiene `asistieron + faltaron === colaboradores`. NO sirve para
+    //    reconstruir el fondo.
+    //  - `diasFaltadosEnTotal`: la suma de los días faltados de todos. ESTE es
+    //    el multiplicando del fondo.
+    //
+    // Confundirlas es un bug real de integración: con una sola persona
+    // faltando 2 de 3 días, `totalFaltas` es 1 y el fondo es S/40, no S/20.
+    const diasFaltadosEnTotal = diasDeCadaUno.reduce(
+      (total, d) => total + diasFaltados(diasDelInventario, d.diasAsistidos),
+      0,
+    );
+    const totalFaltas = diasDeCadaUno.filter((d) => diasFaltados(diasDelInventario, d.diasAsistidos) > 0).length;
+    // El bono lo cobra quien vino TODOS los días: es el premio por la jornada
+    // completa, no por haber pasado un rato.
+    const conJornadaCompleta = diasDeCadaUno.length - totalFaltas;
+    // El fondo de multas se redistribuye entre ellos, como bono (baja su
+    // cuota) -- no queda sin repartir.
+    const fondoMultas = diasFaltadosEnTotal * multaInasistencia;
+    const bonoAsistencia = fondoMultas / conJornadaCompleta;
+
+    const planilla: DetalleLiquidacion[] = diasDeCadaUno.map(({ colaborador, diasAsistidos }) => {
+      // La MISMA función que va a usar la pantalla para desglosar la fila: si
+      // el mock calculara la multa por su cuenta, la demo mostraría un monto
+      // que su propio desglose no explica.
+      const multa = multaPorInasistencia(diasDelInventario, diasAsistidos, multaInasistencia);
+      const asistio = multa === 0;
+      return {
+        colaboradorId: colaborador.id,
+        nombre: colaborador.nombre,
+        rol: colaborador.rol,
+        asistio,
+        diasAsistidos,
+        monto: cuotaBase + multa - (asistio ? bonoAsistencia : 0),
+      };
     });
 
     const liquidacion: Liquidacion = {
@@ -119,7 +167,10 @@ export const liquidacionMemoria: RepositorioLiquidacion = {
       cuotaBase,
       multaInasistencia,
       bonoAsistencia,
-      totalFaltas: faltaron.length,
+      diasDelInventario,
+      totalFaltas,
+      diasFaltadosEnTotal,
+      fondoMultas,
       planilla,
       // Los datos en memoria salen de la maqueta, donde todos los ítems
       // tienen precio Y la asistencia de ASISTENCIA_LUZURIAGA ya está
@@ -144,14 +195,17 @@ export const liquidacionMemoria: RepositorioLiquidacion = {
     if (liquidacion.faltanteNeto === null || liquidacion.cuotaBase === null || liquidacion.totalFaltas === null) {
       return { calculable: false, periodo: liquidacion.periodo, advertencia: liquidacion.advertencia };
     }
-    const { faltanteNeto, cuotaBase, totalFaltas, multaInasistencia, planilla } = liquidacion;
+    const { faltanteNeto, cuotaBase, totalFaltas, planilla } = liquidacion;
 
     const sumaPlanilla = redondear(planilla.reduce((total, p) => total + p.monto, 0));
     // Lo que EFECTIVAMENTE recibió cada asistente (cuotaBase - su monto),
     // no bonoAsistencia × asistentes: esa multiplicación es la que no
     // cerraba cuando el reparto no daba parejo.
     const repartido = redondear(planilla.filter((p) => p.asistio).reduce((total, p) => total + (cuotaBase - p.monto), 0));
-    const recaudado = redondear(totalFaltas * multaInasistencia);
+    // El fondo YA VIENE CALCULADO: no se rearma con una multiplicación.
+    // Multiplicar `totalFaltas` (personas) por la tarifa POR DÍA daba de menos
+    // en cuanto alguien faltara más de un día, y es el bug que se arregló acá.
+    const recaudado = redondear(liquidacion.fondoMultas ?? 0);
 
     return {
       calculable: true,
@@ -160,8 +214,11 @@ export const liquidacionMemoria: RepositorioLiquidacion = {
       sumaPlanilla,
       diferenciaPorRedondeo: redondear(faltanteNeto - sumaPlanilla),
       colaboradores: planilla.length,
-      asistieron: planilla.length - totalFaltas,
-      faltaron: totalFaltas,
+      // Se cuentan sobre la planilla y no restando `totalFaltas`: es la
+      // misma unidad, pero contar es lo que garantiza que los dos sumen el
+      // padrón entero (el "-2" del 2026-09-05 salió justo de esa resta).
+      asistieron: planilla.filter((p) => p.asistio).length,
+      faltaron: planilla.filter((p) => !p.asistio).length,
       fondoDeMultas: {
         recaudado,
         repartido,
@@ -213,6 +270,7 @@ export const liquidacionMemoria: RepositorioLiquidacion = {
       colaboradores: planilla.length,
       cuotaBase: liquidacion?.cuotaBase ?? 0,
       bonoAsistencia: liquidacion?.bonoAsistencia ?? 0,
+      // Espeja `totalFaltas`: PERSONAS que no completaron el inventario.
       faltantes: liquidacion?.totalFaltas ?? 0,
       totalDescontado: redondear(planilla.reduce((total, p) => total + p.monto, 0)),
     };

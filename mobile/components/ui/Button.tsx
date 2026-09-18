@@ -28,6 +28,17 @@ export interface ButtonProps {
   iconPosition?: 'left' | 'right';
   loading?: boolean;
   disabled?: boolean;
+  /**
+   * Qué lee el lector de pantalla. Por default NO se pasa ninguno y RN usa el
+   * `label` visible, que es el comportamiento de siempre.
+   *
+   * Existe para las LISTAS: once filas con un botón "Marcar entrada" idéntico
+   * suenan todas igual, y quien navega por voz no tiene cómo saber a quién le
+   * está marcando la entrada. La prop es opt-in a propósito -- este Button lo
+   * usan todas las pantallas, y cambiarle el default cambiaría lo que leen
+   * todas sin que nadie lo haya pedido ahí.
+   */
+  accessibilityLabel?: string;
   style?: StyleProp<ViewStyle>;
 }
 
@@ -60,6 +71,7 @@ export function Button({
   iconPosition = 'left',
   loading = false,
   disabled = false,
+  accessibilityLabel,
   style,
 }: ButtonProps): JSX.Element {
   const v = VARIANTS[variant];
@@ -79,6 +91,7 @@ export function Button({
       onPress={onPress}
       disabled={isDisabled}
       accessibilityRole="button"
+      accessibilityLabel={accessibilityLabel}
       accessibilityState={{ disabled: isDisabled, busy: loading }}
       style={({ pressed }) => [
         styles.base,

@@ -401,12 +401,134 @@ export interface CierreRonda {
   hojas: HojaConteo[];
 }
 
+// ---------------------------------------------------------------------------
+// ASISTENCIA AL INVENTARIO — la registra el Coordinador, día por día
+// ---------------------------------------------------------------------------
+
+/**
+ * Una marca de ENTRADA. Solo entrada: no hay marca de salida, y no es un
+ * olvido -- el cliente cobra por día trabajado, no por horas, así que una
+ * salida sería un dato que nadie usa y que alguien tendría que cargar igual.
+ */
+export interface MarcaAsistencia {
+  colaboradorId: number;
+  /** El día de la jornada, `YYYY-MM-DD`. Sin hora: la hora está en `registradoEn`. */
+  dia: string;
+  /** ISO 8601 — fecha Y hora de la entrada. Una marca sin cuándo no es auditable. */
+  registradoEn: string;
+}
+
+/** Una persona del PERSONAL DE TIENDA alcanzada por el inventario. */
+export interface PersonaDeAsistencia {
+  id: number;
+  nombre: string;
+  rol: Rol;
+}
+
+/**
+ * La asistencia completa de un inventario.
+ *
+ * `dias` viene del servidor y NO se deriva de `marcas` en la pantalla, aunque
+ * salga de ahí: es el DENOMINADOR de la multa de todo el personal, y dos
+ * copias de la misma cuenta es como el encabezado de Liquidación terminó
+ * mostrando un neto distinto del que firmaba la planilla. Una sola fuente.
+ *
+ * `personal` son los de TIENDA (coordinador y conteo): desde el commit
+ * 233f4b7 el auditor y el administrador no cuentan como personal de tienda,
+ * así que no se les marca asistencia ni se les cobra multa.
+ */
+export interface AsistenciaInventario {
+  /** Los días DISTINTOS con al menos una marca, ascendente. Su cantidad es la duración del inventario. */
+  dias: string[];
+  marcas: MarcaAsistencia[];
+  personal: PersonaDeAsistencia[];
+}
+
+/**
+ * Lo usa el Coordinador (app/coordinador/asistencia.tsx). Reemplaza la regla
+ * que ADIVINABA la asistencia a partir de las hojas con conteos -- la que
+ * dejaba como ausente a quien vino y no llegó a contar, y le descontaba del
+ * sueldo por eso.
+ *
+ * No hay variante local con cola de sincronización, al revés que las hojas: la
+ * marca es un hecho puntual del día, no una jornada entera de trabajo que no
+ * se puede perder. Si no hay red, la pantalla lo dice y la persona vuelve a
+ * marcar; encolarla haría que una entrada "registrada" apareciera horas
+ * después, cuando el día ya podría estar cerrado.
+ */
+export interface RepositorioAsistencia {
+  /** Nunca null: un inventario sin ninguna marca devuelve las tres listas vacías, que es un dato. */
+  deInventario(inventarioId: number): Promise<AsistenciaInventario>;
+  /**
+   * Registra la entrada de esa persona ese día. IDEMPOTENTE: volver a
+   * marcarla no mueve la hora de la primera entrada -- la hora que vale es
+   * la de cuando llegó, no la del último toque.
+   *
+   * Devuelve `void` y no la asistencia actualizada a propósito: el contrato
+   * del servidor no define cuerpo de respuesta (201 o 200 según ya existiera),
+   * y armar uno acá sería inventarlo. La pantalla vuelve a pedir
+   * `deInventario` -- una lectura chica contra el dato que de verdad quedó
+   * guardado, en vez de una copia optimista que puede no coincidir.
+   *
+   * Rechaza si quien marca no es Coordinador ni Administrador de esa
+   * sucursal, o si el inventario ya no está en curso: cerrado el conteo, la
+   * asistencia queda firme.
+   */
+  marcar(inventarioId: number, colaboradorId: number, dia: string): Promise<void>;
+  /**
+   * Borra la marca de esa persona ese día -- para el error de tipeo del
+   * Coordinador, no para "corregir" un día trabajado.
+   *
+   * También idempotente: borrar una marca que no existe deja el mismo
+   * estado, así que no truena. Mismas dos guardas que `marcar`.
+   */
+  quitar(inventarioId: number, colaboradorId: number, dia: string): Promise<void>;
+}
+
+// ---------------------------------------------------------------------------
+
 /** Un renglón de la planilla de descuentos (pantalla 6). */
 export interface DetalleLiquidacion {
   colaboradorId: number;
   nombre: string;
   rol: Rol;
+  /**
+   * ASISTENCIA COMPLETA. Cambió de significado con la asistencia por día: ya
+   * no es "tiene alguna hoja con conteos", es **vino TODOS los días del
+   * inventario** -- o sea, multa 0, y por eso es exactamente quien cobra el
+   * bono.
+   *
+   * Un `false` NO quiere decir ausente total: quiere decir que faltó AL MENOS
+   * UN DÍA. Quien vino dos de tres días tiene `asistio: false` y aun así
+   * estuvo dos jornadas completas ahí.
+   *
+   * Sigue siendo un booleano y no se deduce de `diasAsistidos === diasDelInventario`
+   * en la pantalla: quién cobra bono lo decide el servidor al armar la
+   * planilla, y recalcularlo acá sería la segunda copia de esa regla.
+   *
+   * OJO al leerlo en un texto para la persona: alguien con 1 de 3 días SÍ
+   * asistió, solo que no todos los días. Un rótulo "No asistió" sobre esta
+   * bandera diría algo falso de él (ver app/auditor/liquidacion.tsx, donde
+   * los filtros dicen "sin faltas"/"con faltas" y no "asistieron"/"faltaron").
+   */
   asistio: boolean;
+  /**
+   * De cuántos días del inventario tiene marca registrada. El denominador
+   * está en `Liquidacion.diasDelInventario` -- los dos JUNTOS, nunca este
+   * solo: 2 de 2 y 2 de 5 son la diferencia entre cobrar bono y pagar tres
+   * días de multa.
+   *
+   * `null` con el mismo criterio que `Liquidacion.faltanteNeto`: sin
+   * asistencia registrada no se afirma un 0, que se leería como "no vino
+   * ningún día". Espeja `LiquidacionColaborador.diasAsistidos` del backend.
+   */
+  diasAsistidos: number | null;
+  // Sin un campo `multa` por fila: la planilla trae `diasAsistidos`, el
+  // inventario trae `diasDelInventario` y la liquidación la tarifa por día --
+  // con esos tres, la multa de la fila sale de
+  // `dominio/asistencia.ts#multaPorInasistencia`, la misma función que usa el
+  // servidor. Lo que SÍ viene calculado es `monto`, que es lo que de verdad
+  // se descuenta.
   /** Monto a descontar, ya calculado (cuota base ± bono/multa). Nunca se guarda un total suelto sin sus partes. */
   monto: number;
 }
@@ -420,12 +542,18 @@ export interface DetalleLiquidacion {
  * tiene derecho a saber que el número está incompleto — y a saberlo ANTES de
  * firmar, no después.
  *
- * `asistenciaSinRegistrar`/`ajustesSinRegistrar` son la MISMA idea aplicada
- * a que hoy no existe ningún mecanismo para registrar quién asistió al
- * inventario ni para cargar los ajustes del mes: mientras eso no exista,
- * `Liquidacion.faltanteNeto`/`cuotaBase`/`bonoAsistencia`/`totalFaltas`
- * vienen en `null` — NO en 0 — y estos dos flags son la razón, para que la
- * pantalla pueda decir POR QUÉ en vez de mostrar un hueco sin explicación.
+ * `asistenciaSinRegistrar`/`ajustesSinRegistrar` son la MISMA idea aplicada a
+ * los dos datos que la planilla no puede inventar. Mientras falte cualquiera
+ * de los dos, `Liquidacion.faltanteNeto`/`cuotaBase`/`bonoAsistencia`/
+ * `totalFaltas`/`diasDelInventario` vienen en `null` — NO en 0 — y estos dos
+ * flags son la razón, para que la pantalla pueda decir POR QUÉ en vez de
+ * mostrar un hueco sin explicación.
+ *
+ * `asistenciaSinRegistrar` YA NO significa "no existe dónde registrarla":
+ * existe (el Coordinador la marca en app/coordinador/asistencia.tsx). Ahora
+ * significa que en ESTE inventario nadie marcó ninguna entrada, así que no
+ * hay días ni asistentes de los que partir. Un 0 ahí diría "el inventario
+ * duró cero días y nadie vino", que es una afirmación, no un hueco.
  */
 export interface AdvertenciaLiquidacion {
   /** Ítems con diferencia real que no se pudieron valorizar. */
@@ -467,6 +595,20 @@ export interface Liquidacion {
    */
   faltanteNeto: number | null;
   cuotaBase: number | null;
+  /**
+   * LA TARIFA POR DÍA FALTADO, no el monto por persona ausente.
+   *
+   * Cambió con la asistencia registrada: antes eran S/20 fijos para quien no
+   * apareciera en ninguna hoja; ahora son S/20 POR CADA DÍA que la persona no
+   * marcó. Quien faltó dos de tres días paga S/40.
+   *
+   * Es el PRECIO UNITARIO. La multa de una fila sale de multiplicarlo por los
+   * días que esa persona faltó (`dominio/asistencia.ts#multaPorInasistencia`).
+   *
+   * EL FONDO NO SE ARMA MULTIPLICÁNDOLO POR `totalFaltas`: esos son PERSONAS.
+   * El multiplicando correcto es `diasFaltadosEnTotal`, y el monto ya viene
+   * hecho en `fondoMultas` -- ver los dos, abajo.
+   */
   multaInasistencia: number;
   /**
    * El PISO del reparto del fondo de multas, no el promedio.
@@ -480,8 +622,70 @@ export interface Liquidacion {
    * null, mismo criterio que `faltanteNeto`.
    */
   bonoAsistencia: number | null;
-  /** null, mismo criterio que `faltanteNeto`: sin asistencia registrada no hay "cuántos faltaron" que valga. */
+  /**
+   * CUÁNTOS DÍAS duró el inventario: los días distintos con al menos una
+   * marca de asistencia, congelados al cerrar el conteo (espeja
+   * `ResultadoInventario.diasDelInventario`). Es el denominador de
+   * `DetalleLiquidacion.diasAsistidos` en cada fila.
+   *
+   * Se congela y no se recalcula cada vez que alguien abre la pantalla
+   * porque si no la multa de un mes cerrado cambiaría el día que alguien
+   * tocara una marca vieja -- y esa cifra ya se descontó de un sueldo.
+   *
+   * **`0` = inventario cerrado con la REGLA VIEJA**, la que deducía la
+   * asistencia de las hojas y cobraba un monto fijo por persona ausente. No
+   * es "duró cero días": es "este cierre es de antes del cambio", y ahí la
+   * multa de cada fila ya está congelada en la planilla. Es el caso que hace
+   * que la pantalla tenga que elegir entre redactar el fondo en días o en
+   * personas.
+   *
+   * `null`, mismo criterio que `faltanteNeto`.
+   */
+  diasDelInventario: number | null;
+  /**
+   * PERSONAS que no completaron el inventario. Sigue siendo la unidad de
+   * siempre, y el backend la dejó así A PROPÓSITO: es la que sostiene la
+   * invariante `asistieron + faltaron === colaboradores`, que ya se rompió
+   * una vez en producción (el "redistribuido entre los -2 colaboradores" del
+   * 2026-09-05, ver dominio/reparto-visible.ts#resumirAsistencia).
+   *
+   * **NO SIRVE PARA RECONSTRUIR EL FONDO.** Con la multa por día,
+   * `totalFaltas × multaInasistencia` da de menos: una sola persona que faltó
+   * dos de tres días aporta S/40 al fondo y esa cuenta diría S/20 -- la
+   * mitad. Para eso están `diasFaltadosEnTotal` y `fondoMultas`.
+   *
+   * null, mismo criterio que `faltanteNeto`.
+   */
   totalFaltas: number | null;
+  /**
+   * LA SUMA DE LOS DÍAS FALTADOS DE TODO EL PERSONAL -- el multiplicando del
+   * fondo: `diasFaltadosEnTotal × multaInasistencia === fondoMultas`.
+   *
+   * Es otra cifra que `totalFaltas`, y por eso lleva otro nombre: con Fredy
+   * faltando 2 de 3 días, `totalFaltas` es 1 (una persona) y esto es 2 (dos
+   * días). Dos números distintos no pueden compartir rótulo.
+   *
+   * VIENE EN 0 EN LOS INVENTARIOS VIEJOS, los cerrados con la regla anterior
+   * (`diasDelInventario: 0`), y ahí el fondo NO es 0: sale de las multas
+   * fijas por persona que quedaron congeladas en la planilla. Un 0 acá con
+   * `fondoMultas` distinto de 0 no es un error de cuenta -- es un cierre de
+   * antes del cambio, y la pantalla tiene que redactarlo en personas y no en
+   * días.
+   *
+   * null, mismo criterio que `faltanteNeto`.
+   */
+  diasFaltadosEnTotal: number | null;
+  /**
+   * EL FONDO, YA CALCULADO: lo que se recauda por inasistencia y se reparte
+   * entre quienes vinieron todos los días.
+   *
+   * Si lo único que hace falta es el monto, se usa este y NO se multiplica
+   * nada -- es el único que está bien en los dos regímenes (multa por día y
+   * multa fija de los inventarios viejos).
+   *
+   * null, mismo criterio que `faltanteNeto`.
+   */
+  fondoMultas: number | null;
   planilla: DetalleLiquidacion[];
   /**
    * `true` = la planilla todavía NO se firmó: son las filas que `liquidar()`

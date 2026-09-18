@@ -32,6 +32,11 @@ export const ACCESOS_POR_ROL: Record<Rol, DefinicionAcceso[]> = {
     { titulo: 'Mi cuenta', sub: 'Cambiar tu PIN', ruta: '/administrador/mi-cuenta' },
   ],
   coordinador: [
+    // PRIMERO, y no por orden alfabético: es lo primero que pasa en la
+    // jornada -- la gente llega y se le marca la entrada. Y es acceso y no
+    // tab porque el Coordinador ya tiene cuatro (ver tabs.ts): un quinto los
+    // deja tan angostos que "Armar hojas" no entra sin cortarse.
+    { titulo: 'Asistencia del inventario', sub: 'Marcar la entrada de cada día', ruta: '/coordinador/asistencia' },
     { titulo: 'Gestión de hojas', sub: 'Crear y asignar las hojas de conteo', ruta: '/coordinador/hojas' },
     { titulo: 'Ciclo de conteos', sub: 'Embudo de discrepancias entre las 3 pasadas', ruta: '/coordinador/ciclo' },
     { titulo: 'Mi cuenta', sub: 'Cambiar tu PIN', ruta: '/coordinador/mi-cuenta' },
