@@ -7,6 +7,7 @@ import { ActivityIndicator, Alert, Pressable, RefreshControl, ScrollView, StyleS
 
 import { useRefrescoAlEnfocar } from '../hooks/useRefrescoAlEnfocar';
 import { repositorioHistorial, repositorioSesion } from '../../lib/contenedor';
+import { conteoAbierto } from '../../lib/dominio/ajuste-final';
 import { estadoExportacion, nombreArchivoConsolidado, nombreArchivoDiferencias } from '../../lib/dominio/exportar-diferencias';
 import type { Rol, Sucursal } from '../../lib/dominio/tipos';
 import type {
@@ -74,6 +75,11 @@ function aniosDisponibles(): number[] {
  */
 const ESTADOS: Record<EstadoInventario, { etiqueta: string; badge: BadgeVariant; sellado: boolean }> = {
   en_curso: { etiqueta: 'En curso', badge: 'proceso', sellado: false },
+  // Sigue ABIERTO, no cerrado: el auditor está cambiando valores. Va con el
+  // mismo badge `proceso` que "En curso" a propósito -- son la misma cosa
+  // para quien mira el historial (todavía no hay resultado), y pintarlo de
+  // otro color sugeriría un cierre que no ocurrió.
+  ajuste_auditor: { etiqueta: 'Ajuste del auditor', badge: 'proceso', sellado: false },
   conteo_cerrado: { etiqueta: 'Conteo cerrado', badge: 'default', sellado: false },
   liquidado: { etiqueta: 'Liquidado', badge: 'default', sellado: false },
   lacrado: { etiqueta: 'Lacrado', badge: 'ok', sellado: true },
@@ -99,6 +105,7 @@ const NOMBRE_SECCION: Record<SeccionSellada, string> = {
 const FILTROS: { clave: EstadoInventario | 'todos'; etiqueta: string }[] = [
   { clave: 'todos', etiqueta: 'Todos' },
   { clave: 'en_curso', etiqueta: 'En curso' },
+  { clave: 'ajuste_auditor', etiqueta: 'Ajuste del auditor' },
   { clave: 'conteo_cerrado', etiqueta: 'Conteo cerrado' },
   { clave: 'liquidado', etiqueta: 'Liquidado' },
   { clave: 'lacrado', etiqueta: 'Lacrado' },
@@ -302,10 +309,14 @@ export function HistorialScreen({ rol }: HistorialScreenProps): JSX.Element {
     try {
       const det = await repositorioHistorial.detalle(id);
       setDetalle(det);
-      // "En curso" todavía no cerró el conteo: no hay diferencias fijadas
-      // (recién se calculan al cerrar la última ronda) ni planilla (se
-      // liquida después de cerrar). Pedirlas ahí solo traería listas vacías.
-      if (det.estado !== 'en_curso') {
+      // Con el conteo todavía abierto no hay diferencias fijadas (recién se
+      // calculan al cerrar) ni planilla (se liquida después). Pedirlas ahí
+      // solo traería listas vacías.
+      //
+      // `conteoAbierto` y no `!== 'en_curso'`: el ajuste del auditor tampoco
+      // cerró nada, y con la comparación contra el literal se pedían las dos
+      // cosas en medio del ajuste.
+      if (!conteoAbierto(det.estado)) {
         try {
           const [difs, liq] = await Promise.all([repositorioHistorial.diferencias(id), repositorioHistorial.liquidacion(id)]);
           setDiferencias(difs);
@@ -683,7 +694,7 @@ export function HistorialScreen({ rol }: HistorialScreenProps): JSX.Element {
         {/* Se liquida ANTES de lacrar (regla del cliente): un `conteo_cerrado`
             recién cerrado puede no tener planilla todavía -- la sección lo
             dice, no lo esconde. */}
-        {detalle.estado !== 'en_curso' ? (
+        {!conteoAbierto(detalle.estado) ? (
           <>
             <Text style={styles.seccion}>Planilla de liquidación</Text>
             <View style={styles.tarjeta}>
@@ -1031,6 +1042,9 @@ export function HistorialScreen({ rol }: HistorialScreenProps): JSX.Element {
  */
 function sinResultado(estado: EstadoInventario): string {
   if (estado === 'en_curso') return 'Conteo en marcha: los resultados se calculan al cerrar el ciclo.';
+  if (estado === 'ajuste_auditor') {
+    return 'El auditor está haciendo el ajuste final: los resultados se calculan cuando lo cierre.';
+  }
   if (estado === 'conteo_cerrado') return 'Conteo cerrado, pero este inventario es de antes de que se calculara el resultado al cierre.';
   if (estado === 'anulado') return 'Inventario anulado: no produjo resultados.';
   return 'Sin resultados calculados.';

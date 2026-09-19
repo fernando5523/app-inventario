@@ -16,11 +16,13 @@
 
 import type {
   Almacen,
+  ClaseItem,
   Colaborador,
   ConfigSistema,
   Conteo,
   HojaConteo,
   ItemAuditoria,
+  LineaEmpaque,
   Producto,
   Rol,
   Sesion,
@@ -109,9 +111,88 @@ export interface RepositorioCatalogo {
  * a propósito, así que la comparación contra Dynamics necesita su propio
  * puerto en vez de agregarle un campo de stock a `Producto`.
  */
+/**
+ * UN CUADRO de diferencias. Los cuatro del Excel que Gilmer arma a mano
+ * (`requerimiento/INVENTARIO MES DE JULIO 2026 ACTUAL MKT BOLIVAR.xlsx`, hoja
+ * FALTANTES) salen de acá: faltante y sobrante de `unidad` son los "únicos",
+ * y los de `paquete` son "FALTANTE POR PAQUETE" y "SOBRANTE POR PAQUETE".
+ */
+export interface CuadroDeDiferencias {
+  /** Ítems con al menos una unidad EN ESTE cuadro. */
+  items: number;
+  /** Unidades, siempre en positivo. */
+  unidadesFaltantes: number;
+  unidadesSobrantes: number;
+  /** Valorizado a precio de venta, siempre en positivo. */
+  valorFaltante: number;
+  valorSobrante: number;
+}
+
+export interface ResumenPorClase {
+  /** EL DESCUENTO AL PERSONAL SALE DE ACÁ y de ningún otro lado. */
+  unidad: CuadroDeDiferencias;
+  /** Se audita aparte — "quizás se lo descuento al almacenero". */
+  paquete: CuadroDeDiferencias;
+  /** Lo absorbe gerencia (las cervezas). */
+  empresa: CuadroDeDiferencias;
+}
+
+/**
+ * EL RESUMEN DEL SERVIDOR. Espeja `auditoria.calculos.ts#ResumenAuditoria`.
+ *
+ * ---------------------------------------------------------------------------
+ * POR QUÉ SE PIDE EN VEZ DE CALCULARLO ACÁ
+ * ---------------------------------------------------------------------------
+ * La pantalla ya sabía resumir la matriz por su cuenta
+ * (`dominio/auditoria.ts#resumirAuditoria`), y para los CONTEOS eso sigue
+ * estando bien. Pero el reparto entre cuadros NO se puede hacer desde el
+ * teléfono: depende del `umbral` congelado en el inventario, que no viaja en
+ * ninguna respuesta — y aunque viajara, sería una segunda copia de la regla
+ * que decide a quién se le descuenta la plata.
+ *
+ * Así que los MONTOS y los CUADROS vienen del servidor, que es quien los
+ * calcula de verdad. Es la regla de siempre: la cuenta que se muestra es la
+ * que se guarda, y si dos pantallas muestran el mismo número sale de la misma
+ * función.
+ */
+export interface ResumenAuditoriaServidor {
+  items: number;
+  cuadrados: number;
+  conFalta: number;
+  deEmpresa: number;
+  sinDatoErp: number;
+  sinContar: number;
+  auditables: number;
+  porcentajeCuadrado: number;
+  porcentajeAuditable: number;
+  unidadesFaltantes: number;
+  unidadesSobrantes: number;
+  /** El faltante BRUTO del conteo, todos los cuadros juntos. */
+  valorFaltante: number;
+  valorSobrante: number;
+  /**
+   * LO QUE DE VERDAD SE LE DESCUENTA AL PERSONAL: el faltante que no absorbe
+   * la empresa ni sale por el cuadro de paquetes.
+   *
+   * Es EL número que el Auditor necesita, y el que la pantalla no mostraba:
+   * se veía solo el bruto, y con 44 de 46 unidades yéndose al cuadro de
+   * paquetes, "Faltante del conteo -S/460" hacía pensar que se descontaban
+   * S/460 cuando se descuentan S/20.
+   */
+  valorFaltanteDescontable: number;
+  /** Ítems con diferencia que NO se pudieron valorizar: el monto está incompleto y hay que decirlo. */
+  sinPrecio: number;
+  porClase: ResumenPorClase;
+}
+
 export interface RepositorioAuditoria {
-  /** Matriz item por item (ERP vs los 3 conteos) del inventario dado. */
+  /** Matriz ítem por ítem (ERP vs los conteos) del inventario dado. */
   matriz(inventarioId: number): Promise<ItemAuditoria[]>;
+  /**
+   * El resumen CALCULADO POR EL SERVIDOR, con los cuadros. Ver
+   * `ResumenAuditoriaServidor` para por qué no se calcula acá.
+   */
+  resumen(inventarioId: number): Promise<ResumenAuditoriaServidor>;
 }
 
 /**
@@ -325,9 +406,25 @@ export interface RepositorioInventario {
    */
   cerrarRonda(inventarioId: number, ronda: number): Promise<CierreRonda>;
 
-  /** Inventario en curso de una sucursal, o null si el Coordinador todavia no trajo el snapshot. */
+  /**
+   * Inventario ABIERTO de una sucursal, o null si el Coordinador todavia no
+   * trajo el snapshot.
+   *
+   * "Abierto" ya no es solo `en_curso`: incluye `ajuste_auditor`. Antes
+   * filtraba un solo estado, y en cuanto el Auditor arrancaba el ajuste este
+   * método devolvía `null` -- con lo cual Inicio, Mis hojas, Contar, Gestión
+   * de hojas y Auditoría se quedaban sin inventario y mostraban "no hay nada"
+   * sobre un inventario que estaba vivo y en su paso más delicado.
+   */
   activo(sucursalId: number): Promise<{
     inventarioId: number;
+    /**
+     * EN QUÉ FASE está, que decide qué puede hacer cada rol. Viaja explícito
+     * y no se deduce de `rondaActiva`: durante el ajuste no hay ronda activa
+     * y aun así el inventario está abierto, así que un `rondaActiva: null` no
+     * alcanza para distinguir "el Auditor está ajustando" de "esto ya cerró".
+     */
+    estado: EstadoInventario;
     items: number;
     tomadoEn: string;
     tamanoHoja: TamanoHoja | null;
@@ -483,6 +580,107 @@ export interface RepositorioAsistencia {
    * estado, así que no truena. Mismas dos guardas que `marcar`.
    */
   quitar(inventarioId: number, colaboradorId: number, dia: string): Promise<void>;
+}
+
+// ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// CORRECCIONES Y AJUSTE FINAL
+// ---------------------------------------------------------------------------
+
+/**
+ * Un cambio sobre un valor ya contado: el valor nuevo, en las mismas dos
+ * partes que se carga un conteo (empaques cerrados + sueltas), y POR QUÉ.
+ *
+ * ---------------------------------------------------------------------------
+ * EL MOTIVO ES OBLIGATORIO, Y NO ES BUROCRACIA
+ * ---------------------------------------------------------------------------
+ * Estos valores descuentan plata del sueldo de la gente y quedan sellados en
+ * el lacrado. Una corrección sin motivo es un descuento que nadie puede
+ * explicar seis meses después, cuando la persona reclame -- y el sello dirá
+ * que el número es el bueno sin decir de dónde salió.
+ *
+ * La corrección REEMPLAZA el valor, pero queda auditada: quién, qué, antes,
+ * después (ver `registrarAuditoria` en el backend, acción `conteo.corregido`
+ * o `conteo.ajustado`).
+ */
+export interface CorreccionDeConteo {
+  /** Vacío = solo sueltas, igual que en `Conteo`. */
+  empaques: LineaEmpaque[];
+  sueltas: number;
+  /** Obligatorio. Ver la cabecera: sin esto el descuento no se puede defender. */
+  motivo: string;
+}
+
+/**
+ * Las correcciones y el ajuste final del auditor.
+ *
+ * ---------------------------------------------------------------------------
+ * POR QUÉ NO VIVE EN `RepositorioHojas`
+ * ---------------------------------------------------------------------------
+ * `RepositorioHojas` es local-primero con cola de sincronización: el operario
+ * cuenta sin señal y la hoja sube cuando hay WiFi. Una corrección NO puede
+ * viajar por ahí. Encolarla significaría aceptarla en el teléfono y aplicarla
+ * horas más tarde, cuando el Auditor quizá ya cerró la ronda o arrancó el
+ * ajuste -- y el servidor la rechazaría con la persona convencida de que ya
+ * había corregido. Acá "no hay red" tiene que decirse en el momento.
+ *
+ * Es el mismo criterio que `RepositorioAsistencia`: un hecho puntual que se
+ * confirma ahora o no se confirma.
+ *
+ * ---------------------------------------------------------------------------
+ * TODOS DEVUELVEN `void`
+ * ---------------------------------------------------------------------------
+ * El contrato del servidor no define cuerpo de respuesta para ninguno, así
+ * que inventarle una forma acá sería adivinar. La pantalla vuelve a pedir el
+ * dato (la hoja, la matriz) -- una lectura chica contra lo que de verdad
+ * quedó guardado, en vez de una copia optimista que puede no coincidir. Y en
+ * estas operaciones eso importa más que en otras: abrir una ronda o cerrar el
+ * ajuste cambia el estado del inventario entero, no una fila.
+ */
+export interface RepositorioAjuste {
+  /**
+   * COORDINADOR: corrige lo que cargó un contador, en cualquier ronda.
+   *
+   * SIN VER EL STOCK DEL ERP -- ni en la pantalla ni en lo que le llega. El
+   * conteo ciego sigue en pie para él: si pudiera ver el stock mientras
+   * corrige, la corrección dejaría de ser "acá había 12" y pasaría a ser
+   * "pongo lo que dice el sistema", que es justo lo que las tres pasadas
+   * vinieron a evitar.
+   *
+   * Se puede con la ronda ABIERTA y también CERRADA, pero NO una vez que
+   * arrancó el ajuste del auditor: el servidor rechaza y el mensaje lo dice.
+   */
+  corregirConteo(hojaId: number, productoId: number, correccion: CorreccionDeConteo): Promise<void>;
+
+  /**
+   * AUDITOR: abre UNA RONDA MÁS, después de la última cerrada.
+   *
+   * Los 3 conteos dejaron de ser un número fijo: el Auditor abre un 4to o un
+   * 5to cuando el inventario todavía no le cierra. Se decide inventario por
+   * inventario, mirando lo que quedó sin cuadrar -- no se configura por
+   * adelantado.
+   */
+  abrirRondaExtra(inventarioId: number): Promise<void>;
+
+  /**
+   * AUDITOR: arranca el ajuste final -> el inventario pasa a `ajuste_auditor`.
+   *
+   * Es un BOTÓN y no una consecuencia automática de cerrar la última ronda, a
+   * propósito: entre una cosa y la otra queda la ventana en la que el
+   * Coordinador todavía puede corregir. Arrancar el ajuste cierra esa ventana.
+   */
+  iniciarAjuste(inventarioId: number): Promise<void>;
+
+  /**
+   * AUDITOR: cambia el valor de un ítem VIENDO EL STOCK. Es su trabajo
+   * comparar, así que acá el conteo ciego no aplica -- al revés que en
+   * `corregirConteo`.
+   */
+  ajustarItem(inventarioId: number, productoId: number, correccion: CorreccionDeConteo): Promise<void>;
+
+  /** AUDITOR: cierra el ajuste -> `conteo_cerrado`, y de ahí sigue la liquidación. */
+  cerrarAjuste(inventarioId: number): Promise<void>;
 }
 
 // ---------------------------------------------------------------------------
@@ -1136,7 +1334,23 @@ export interface RepositorioConfigDynamics {
  * `lacrado` es el único estado del que no se vuelve: cualquier ajuste
  * posterior entra en el período siguiente.
  */
-export type EstadoInventario = 'en_curso' | 'conteo_cerrado' | 'liquidado' | 'lacrado' | 'anulado';
+/**
+ * `ajuste_auditor` va ENTRE las rondas y `conteo_cerrado`, y es un estado y no
+ * una ronda más porque cambia QUIÉN manda: mientras dura, el Coordinador ya no
+ * puede corregir nada y el único que toca valores es el Auditor, viendo el
+ * stock del ERP.
+ *
+ * No se entra solo al cerrar la última ronda: lo arranca el Auditor con un
+ * botón. Esa demora es a propósito -- es la ventana en la que el Coordinador
+ * todavía corrige con la ronda ya cerrada (decisión del cliente).
+ */
+export type EstadoInventario =
+  | 'en_curso'
+  | 'ajuste_auditor'
+  | 'conteo_cerrado'
+  | 'liquidado'
+  | 'lacrado'
+  | 'anulado';
 
 /**
  * Cifras del cierre. Casi todo es `number | null`: un inventario en curso
@@ -1619,11 +1833,49 @@ export interface FiltroExportConsolidado {
  */
 export type ResponsableDynamics = 'empleado' | 'empresa' | null;
 
+/**
+ * Se re-exporta desde el dominio (`dominio/tipos.ts#ClaseItem`), que es donde
+ * vive: es una regla del negocio, no una forma de transporte. Acá se reexpone
+ * para que quien ya la importaba del puerto siga funcionando.
+ */
+export type { ClaseItem };
+
 /** La excepción VIVA del Auditor sobre un código (backend: ClasificacionProducto). */
 export interface Clasificacion {
   codigo: string;
-  /** `true` = lo asume la EMPRESA (excepción a Dynamics); `false` = del EMPLEADO. */
+  /**
+   * `true` = lo asume la EMPRESA; `false` = del EMPLEADO.
+   *
+   * Lo DERIVA el servidor de `clase`, y sigue viniendo porque lo leen la
+   * auditoría, la liquidación y el sello del lacrado. Mientras las dos viajen
+   * no pueden discrepar: `clase === 'empresa'` es exactamente `esEmpresa`.
+   */
   esEmpresa: boolean;
+  /**
+   * LA EXCEPCIÓN A TRES VÍAS. `null` = excepción VIEJA, cargada antes de este
+   * cambio: la sigue mandando `esEmpresa`.
+   *
+   * NO SE REINTERPRETA. La pantalla la muestra por lo que es (empresa /
+   * no-empresa) y nunca le inventa una tercera vía que nadie eligió -- decir
+   * "unidad" sobre un null sería atribuirle al Auditor una decisión que no
+   * tomó, sobre un dato que mueve plata.
+   */
+  clase: ClaseItem | null;
+  /**
+   * EL EMPAQUE DE COMPRA CORREGIDO A MANO por el Auditor. `null` = sin
+   * corregir: manda `ProductoClasificable.empaqueCompra`, el del snapshot.
+   *
+   * CORREGIR EL EMPAQUE NO ES CORREGIR EL STOCK, y hay que decirlo porque las
+   * dos cosas se parecen y no lo son: el stock del ERP no lo edita nadie nunca
+   * desde ninguna pantalla. El empaque es un ATRIBUTO del producto ("viene en
+   * display de 12") que Dynamics a veces tiene mal.
+   *
+   * NO PISA el del snapshot: los dos viajan juntos y separados, para poder
+   * decir "el ERP dijo 1 y tú lo corregiste a 12" en vez de un número sin
+   * historia. Un `1` puesto a mano NO es lo mismo que `null`: afirma "se
+   * compra suelto", y con eso el ítem nunca va al cuadro de paquetes.
+   */
+  empaqueCompraCorregido: number | null;
   nota: string | null;
   clasificadoPorId: number;
   clasificadoEn: string;
@@ -1639,6 +1891,25 @@ export interface ProductoClasificable {
   descripcion: string;
   categoria: string | null;
   responsableDynamics: ResponsableDynamics;
+  /**
+   * La clase que DERIVÓ EL SNAPSHOT: qué haría el sistema si el Auditor no
+   * pusiera excepción. Va al lado de `responsableDynamics` y por el mismo
+   * motivo — lo del ERP y lo del Auditor separados, ninguno pisa al otro.
+   * Sin esto la pantalla ofrecería tres vías sin decir cuál es la que ya está.
+   */
+  claseDynamics: ClaseItem;
+  /**
+   * EL EMPAQUE DE COMPRA: el denominador con el que se mide el umbral por
+   * paquete. Elegir "Paquete" sin verlo es elegir a ciegas.
+   *
+   * `null` = el snapshot no lo pudo resolver, y NULL NO ES 1: "no se sabe el
+   * tamaño del paquete" es distinto de "se compra por unidad". Con null el
+   * umbral no se puede aplicar, y la pantalla tiene que decirlo en vez de
+   * dejar elegir "Paquete" como si nada.
+   */
+  empaqueCompra: number | null;
+  /** El símbolo tal cual lo tiene Dynamics ("Emp.12", "CJ"): de ahí salió el número. */
+  empaqueCompraSimbolo: string | null;
   /** `null` = sin excepción del Auditor: manda Dynamics. */
   clasificacion: Clasificacion | null;
 }
@@ -1660,7 +1931,26 @@ export interface PaginaClasificacion {
 }
 
 export interface DatosClasificar {
-  esEmpresa: boolean;
+  /**
+   * FORZAR EL CUADRO, y es OPCIONAL. `null` = no se fuerza ninguno: lo decide
+   * el sistema con la clase del snapshot y el empaque efectivo.
+   *
+   * Era obligatoria, y eso dejaba sin camino al caso más común — corregir SOLO
+   * el empaque. Para guardar una corrección había que forzar además un cuadro,
+   * y el cuadro forzado PISA lo derivado: la corrección quedaba escrita y sin
+   * efecto (hallazgo del emulador, producto 100009).
+   *
+   * `esEmpresa` NO viaja: lo deriva el servidor de acá, y es lo que hace que
+   * las dos columnas no puedan discrepar.
+   */
+  clase: ClaseItem | null;
+  /**
+   * El empaque corregido, o `null` para volver al del ERP. Es un PUT: el
+   * cuerpo declara la excepción ENTERA, así que omitirlo borra la corrección
+   * anterior — igual que `nota`. La pantalla manda siempre lo que tiene
+   * cargado, así que no hay forma de perderlo sin haberlo visto.
+   */
+  empaqueCompraCorregido?: number | null;
   nota?: string;
 }
 

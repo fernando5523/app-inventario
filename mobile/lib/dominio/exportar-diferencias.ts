@@ -39,6 +39,17 @@ export type EstadoExportacion = { puedeExportar: true } | { puedeExportar: false
  * dentro de un ternario anidado no se puede probar ninguna.
  */
 export function estadoExportacion(estado: EstadoInventario, cantidadDiferencias: number): EstadoExportacion {
+  if (estado === 'ajuste_auditor') {
+    // NO cae en la rama de abajo. Sin esto, un inventario en ajuste pasaba
+    // derecho a "cuadró contra el ERP: no hay diferencias que exportar" --
+    // que es una afirmación sobre un resultado que todavía no existe, justo
+    // el error que este archivo entero vino a evitar.
+    return {
+      puedeExportar: false,
+      motivo:
+        'El auditor está haciendo el ajuste final: está cambiando valores contra el stock. Las diferencias definitivas salen cuando cierre el ajuste.',
+    };
+  }
   if (estado === 'en_curso') {
     return {
       puedeExportar: false,

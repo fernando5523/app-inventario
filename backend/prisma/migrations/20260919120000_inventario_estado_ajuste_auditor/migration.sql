@@ -1,0 +1,32 @@
+-- EL ESTADO `ajuste_auditor`: la espera entre la ultima ronda y el cierre.
+--
+-- ADITIVA: un valor de enum. No borra, no renombra, no cambia ningun tipo y
+-- no toca una sola fila. Ningun inventario existente queda en el estado nuevo
+-- -- se entra a el por una accion explicita del auditor, nunca por migracion.
+--
+-- QUE SIGNIFICA (el detalle esta en el enum, en schema.prisma): la ultima
+-- ronda cerro y el auditor todavia no decidio si abre otra o arranca el
+-- ajuste final. Antes de esto, cerrar la ultima ronda mandaba el inventario
+-- derecho a `conteo_cerrado` y no habia donde esperar esa decision.
+--
+-- SE ESCRIBE A MANO, y no es capricho: `prisma migrate diff` genera un
+--   ALTER TYPE "estado_inventario" ADD VALUE 'ajuste_auditor';
+-- que en Postgres AGREGA AL FINAL, o sea despues de `anulado`. El orden de
+-- los valores de un enum de Postgres es el orden de declaracion y es el que
+-- usan `<`, `>` y `ORDER BY`. Hoy nadie ordena por `estado` (se verifico), asi
+-- que no cambiaria ningun resultado -- pero el enum de schema.prisma es el
+-- unico lugar del sistema donde el ciclo de vida del inventario esta escrito
+-- en orden, y que la base lo tenga en otro orden convierte esa lista en algo
+-- que hay que desconfiar. `BEFORE 'conteo_cerrado'` deja las dos iguales.
+--
+-- OJO AL ESCRIBIR LA PROXIMA MIGRACION QUE TOQUE ESTE ENUM: Postgres acepta
+-- `ADD VALUE` dentro de una transaccion desde la 12 (y Prisma envuelve cada
+-- migracion en una), pero NO deja USAR el valor nuevo en esa misma
+-- transaccion. Un UPDATE que ponga una fila en 'ajuste_auditor' tiene que ir
+-- en una migracion POSTERIOR, no debajo de este ALTER.
+--
+-- SE QUITO A MANO el ALTER de periodo_anio/periodo_mes que Prisma agrega
+-- solo, igual que en 20260907151454_indices_rendimiento.
+
+-- AlterEnum
+ALTER TYPE "estado_inventario" ADD VALUE 'ajuste_auditor' BEFORE 'conteo_cerrado';

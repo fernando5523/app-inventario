@@ -16,6 +16,7 @@ const prismaMock = vi.hoisted(() => ({
   inventario: { findUnique: vi.fn(), update: vi.fn() },
   colaborador: { findMany: vi.fn() },
   asistenciaInventario: { findMany: vi.fn() },
+  justificacionAsistencia: { findMany: vi.fn() },
   liquidacionColaborador: { createMany: vi.fn() },
   // Liquidacion v2: reclasificacion al liquidar (liquidacion.reclasificacion.ts).
   diferenciaItem: { findMany: vi.fn(), updateMany: vi.fn() },
@@ -104,6 +105,7 @@ describe('armarPlanilla', () => {
         [OSCAR, 3],
         [DELIA, 1],
       ]),
+      diasJustificados: new Map(),
       cuotaBase: resumen.cuotaBase,
       tarifaMultaPorDia: 20,
     });
@@ -168,6 +170,7 @@ describe('armarPlanilla', () => {
       colaboradores: equipo(11),
       diasDelInventario: 2,
       diasAsistidos: new Map([[1, 2]]),
+      diasJustificados: new Map(),
       cuotaBase: 126.36,
       tarifaMultaPorDia: 20,
     });
@@ -184,6 +187,7 @@ describe('armarPlanilla', () => {
         [1, 4],
         [2, 4],
       ]),
+      diasJustificados: new Map(),
       cuotaBase: 10,
       tarifaMultaPorDia: 20,
     });
@@ -200,6 +204,7 @@ describe('armarPlanilla', () => {
         [2, 2],
         [3, 0],
       ]),
+      diasJustificados: new Map(),
       cuotaBase: 10,
       tarifaMultaPorDia: 20,
     });
@@ -217,6 +222,7 @@ describe('armarPlanilla', () => {
         [2, 2],
         [3, 1],
       ]),
+      diasJustificados: new Map(),
       cuotaBase: 10,
       tarifaMultaPorDia: 20,
     });
@@ -241,6 +247,7 @@ describe('armarPlanilla', () => {
         ...[1, 2, 3, 4, 5, 6, 7].map((id): [number, number] => [id, 3]),
         ...[8, 9, 10, 11].map((id): [number, number] => [id, 2]),
       ]),
+      diasJustificados: new Map(),
       cuotaBase: 126.36,
       tarifaMultaPorDia: 20,
     });
@@ -265,6 +272,7 @@ describe('armarPlanilla', () => {
         [4, 1],
         [5, 0],
       ]),
+      diasJustificados: new Map(),
       cuotaBase: 10,
       tarifaMultaPorDia: 20,
     });
@@ -290,6 +298,7 @@ describe('armarPlanilla', () => {
         [2, 1],
         [5, 1],
       ]),
+      diasJustificados: new Map(),
       cuotaBase: 10,
       tarifaMultaPorDia: 20,
     });
@@ -307,6 +316,7 @@ describe('armarPlanilla', () => {
       colaboradores: equipo(1),
       diasDelInventario: 1,
       diasAsistidos: new Map([[1, 1]]),
+      diasJustificados: new Map(),
       cuotaBase: 126.36,
       tarifaMultaPorDia: 20,
     });
@@ -322,6 +332,7 @@ describe('armarPlanilla', () => {
       colaboradores: [{ id: 1, nombre: 'Nancy Quispe', rol: 'coordinador' }],
       diasDelInventario: 3,
       diasAsistidos: new Map([[1, 2]]),
+      diasJustificados: new Map(),
       cuotaBase: 10,
       tarifaMultaPorDia: 20,
     });
@@ -342,6 +353,7 @@ describe('armarPlanilla', () => {
         [1, 2],
         [2, 1],
       ]),
+      diasJustificados: new Map(),
       cuotaBase: 10,
       tarifaMultaPorDia: 20,
     });
@@ -356,6 +368,7 @@ describe('armarPlanilla', () => {
       colaboradores: equipo(3),
       diasDelInventario: 0,
       diasAsistidos: new Map(),
+      diasJustificados: new Map(),
       cuotaBase: 10,
       tarifaMultaPorDia: 20,
     });
@@ -372,6 +385,7 @@ describe('armarPlanilla', () => {
         [2, 0],
         [3, 0],
       ]),
+      diasJustificados: new Map(),
       cuotaBase: 10,
       tarifaMultaPorDia: 20.1,
     });
@@ -448,6 +462,9 @@ describe('liquidar', () => {
       equipo(11).map((c) => ({ id: c.id, nombre: c.nombre, rol: c.rol })),
     );
     prismaMock.asistenciaInventario.findMany.mockResolvedValue(marcasDeAsistencia);
+    // Sin faltas perdonadas salvo que el caso diga lo contrario: la cuenta
+    // nueva tiene que dar exactamente lo mismo que la vieja.
+    prismaMock.justificacionAsistencia.findMany.mockResolvedValue([]);
     prismaMock.diferenciaItem.findMany.mockResolvedValue(diferenciasPorDefecto);
     prismaMock.catalogoItem.findMany.mockResolvedValue(catalogoPorDefecto);
     prismaMock.clasificacionProducto.findMany.mockResolvedValue([]);
@@ -808,5 +825,169 @@ describe('liquidar', () => {
       const suma = data.reduce((total, f) => total + calcularTotalDescuento(f), 0);
       expect(cierre.totalDescontado).toBeCloseTo(suma, 2);
     });
+  });
+});
+
+/**
+ * EL MISMO EJEMPLO CANONICO, PERO CON UNA FALTA JUSTIFICADA.
+ *
+ * Decision del cliente, textual: *"si cobra el bono de distribucion, es como
+ * si hubiera asistido"*. Un dia perdonado vale como asistido para los DOS
+ * efectos -- no paga multa y cobra bono.
+ *
+ * 3 dias, neto S/229 entre 3 personas (cuota S/76.33). Silvia 3/3, Oscar 3/3,
+ * Delia 1/3 PERO con sus 2 faltas justificadas por el auditor:
+ *
+ *   |        | Cuota | Multa | Bono | Paga  |
+ *   | Silvia | 76.33 |     0 |    0 | 76.33 |
+ *   | Oscar  | 76.33 |     0 |    0 | 76.33 |
+ *   | Delia  | 76.33 |     0 |    0 | 76.34 |
+ *
+ * El fondo de multas queda en CERO -- no hay multa que recaudar -- asi que no
+ * hay bono que repartir. La planilla sigue sumando exactamente el neto: eso
+ * es lo que no se puede romper.
+ */
+describe('el ejemplo canonico con la falta de Delia justificada', () => {
+  const NETO = 229;
+  const SILVIA = 1;
+  const OSCAR = 2;
+  const DELIA = 3;
+
+  const personal: ColaboradorParaLiquidar[] = [
+    { id: SILVIA, nombre: 'Silvia Huerta', rol: 'conteo' },
+    { id: OSCAR, nombre: 'Oscar Maguina', rol: 'coordinador' },
+    { id: DELIA, nombre: 'Delia Ramos', rol: 'conteo' },
+  ];
+
+  const resumen = calcularResumenLiquidacion({
+    montoFaltanteBruto: NETO,
+    montoNegativos: 0,
+    montoFaltanteEmpresa: 0,
+    colaboradoresAlcanzados: personal.length,
+    colaboradoresAsistieron: 3,
+    multaInasistencia: 20,
+  });
+
+  const filas = armarPlanilla({
+    colaboradores: personal,
+    diasDelInventario: 3,
+    diasAsistidos: new Map([
+      [SILVIA, 3],
+      [OSCAR, 3],
+      [DELIA, 1],
+    ]),
+    diasJustificados: new Map([[DELIA, 2]]),
+    cuotaBase: resumen.cuotaBase,
+    tarifaMultaPorDia: 20,
+  });
+  const porId = new Map(filas.map((f) => [f.colaboradorId, f]));
+
+  it('Delia no paga multa: sus 2 faltas estan perdonadas', () => {
+    // Sin el perdon pagaria S/40 -- es el mismo escenario del ejemplo de
+    // arriba, y la unica diferencia es la justificacion.
+    expect(porId.get(DELIA)?.multaInasistencia).toBe(0);
+  });
+
+  it('y COBRA: `asistio` es true aunque solo haya venido 1 de 3 dias', () => {
+    // La otra mitad de la decision del cliente. Media medida -- perdonarle la
+    // multa pero no darle el bono -- seria otra regla, y ademas romperia la
+    // equivalencia que hace cerrar el fondo.
+    expect(porId.get(DELIA)?.asistio).toBe(true);
+  });
+
+  it('pero `diasAsistidos` NO se infla: sigue diciendo 1, que es lo que paso', () => {
+    // EL PUNTO DE TODO EL DISENO. `diasAsistidos` entra al sello del lacrado;
+    // si ahi dijera 3, el documento firmado afirmaria que Delia estuvo dos
+    // dias que no estuvo -- y ese sello existe para defender la planilla
+    // cuando alguien reclama.
+    expect(porId.get(DELIA)?.diasAsistidos).toBe(1);
+    expect(porId.get(DELIA)?.diasJustificados).toBe(2);
+  });
+
+  it('sin multas no hay fondo, asi que nadie cobra bono', () => {
+    expect(fondoDeLaPlanilla(filas)).toBe(0);
+    expect(filas.every((f) => f.bonoAsistencia === 0)).toBe(true);
+  });
+
+  it('LA INVARIANTE: la planilla sigue sumando el neto', () => {
+    // Lo unico que no se puede romper. Con el residuo del redondeo de la
+    // cuota, igual que en el ejemplo sin justificaciones.
+    // `residuoCentavos` ya viene en SOLES (0.01), no en centavos -- mismo uso
+    // que en el ejemplo sin justificaciones, unas lineas mas arriba.
+    const suma = redondear(filas.reduce((total, f) => total + calcularTotalDescuento(f), 0));
+    expect(redondear(suma + resumen.residuoCentavos)).toBe(NETO);
+  });
+
+  it('nadie cobra bono Y paga multa, tampoco con perdones de por medio', () => {
+    // Si alguna vez pasara, el fondo se repartiria entre gente que ademas
+    // aporto, y la planilla dejaria de sumar el neto.
+    for (const f of filas) {
+      expect(f.bonoAsistencia > 0 && f.multaInasistencia > 0).toBe(false);
+    }
+  });
+});
+
+/**
+ * PERDON PARCIAL: queda multa, queda fondo, y el reparto tiene que cerrar
+ * igual. Es el caso realista -- se justifica un dia, no todos.
+ */
+describe('perdon parcial: Delia 1/3 con UN dia justificado', () => {
+  const NETO = 229;
+  const SILVIA = 1;
+  const OSCAR = 2;
+  const DELIA = 3;
+
+  const personal: ColaboradorParaLiquidar[] = [
+    { id: SILVIA, nombre: 'Silvia Huerta', rol: 'conteo' },
+    { id: OSCAR, nombre: 'Oscar Maguina', rol: 'coordinador' },
+    { id: DELIA, nombre: 'Delia Ramos', rol: 'conteo' },
+  ];
+
+  const resumen = calcularResumenLiquidacion({
+    montoFaltanteBruto: NETO,
+    montoNegativos: 0,
+    montoFaltanteEmpresa: 0,
+    colaboradoresAlcanzados: personal.length,
+    colaboradoresAsistieron: 2,
+    multaInasistencia: 20,
+  });
+
+  const filas = armarPlanilla({
+    colaboradores: personal,
+    diasDelInventario: 3,
+    diasAsistidos: new Map([
+      [SILVIA, 3],
+      [OSCAR, 3],
+      [DELIA, 1],
+    ]),
+    diasJustificados: new Map([[DELIA, 1]]),
+    cuotaBase: resumen.cuotaBase,
+    tarifaMultaPorDia: 20,
+  });
+  const porId = new Map(filas.map((f) => [f.colaboradorId, f]));
+
+  it('Delia paga UN dia, no dos: el perdon cubre uno solo', () => {
+    expect(porId.get(DELIA)?.multaInasistencia).toBe(20);
+    expect(porId.get(DELIA)?.asistio).toBe(false);
+  });
+
+  it('el fondo es la suma real de las multas, y se reparte entre los dos que cobran', () => {
+    expect(fondoDeLaPlanilla(filas)).toBe(20);
+    expect(porId.get(SILVIA)?.bonoAsistencia).toBe(10);
+    expect(porId.get(OSCAR)?.bonoAsistencia).toBe(10);
+  });
+
+  it('LA INVARIANTE: suma(multa) === fondo === suma(bono)', () => {
+    const multas = filas.reduce((t, f) => t + f.multaInasistencia, 0);
+    const bonos = filas.reduce((t, f) => t + f.bonoAsistencia, 0);
+    expect(multas).toBe(fondoDeLaPlanilla(filas));
+    expect(bonos).toBe(multas);
+  });
+
+  it('y la planilla sigue sumando el neto', () => {
+    // `residuoCentavos` ya viene en SOLES (0.01), no en centavos -- mismo uso
+    // que en el ejemplo sin justificaciones, unas lineas mas arriba.
+    const suma = redondear(filas.reduce((total, f) => total + calcularTotalDescuento(f), 0));
+    expect(redondear(suma + resumen.residuoCentavos)).toBe(NETO);
   });
 });

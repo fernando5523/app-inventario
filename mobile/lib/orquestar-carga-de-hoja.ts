@@ -1,5 +1,7 @@
+import { faseDeCierre } from './dominio/ajuste-final';
 import type { HojaConteo } from './dominio/tipos';
 import { ORDINAL } from './dominio/texto-cierre-ronda';
+import type { EstadoInventario } from './puertos/repositorios';
 
 /**
  * Orquesta la resolución de "qué hoja le toca ver al Contador ahora mismo"
@@ -26,7 +28,13 @@ import { ORDINAL } from './dominio/texto-cierre-ronda';
  * en hojas-sqlite.ts, que siempre protege el trabajo del Contador).
  */
 export interface AccionesCargaHoja {
-  activo: () => Promise<{ inventarioId: number; rondaActiva: number | null } | null>;
+  /**
+   * `estado` es imprescindible, no un extra: `rondaActiva` es la última ronda
+   * que EXISTE (`max(numeroConteo)`), así que sigue siendo un número mientras
+   * el Auditor ajusta. Sin el estado, el Contador entraba a "contar" la ronda
+   * 3 de un inventario que ya no admite conteos.
+   */
+  activo: () => Promise<{ inventarioId: number; estado: EstadoInventario; rondaActiva: number | null } | null>;
   /** Sin red (u otra falla de `activo`): cae al inventario/ronda que ya se descargó localmente alguna vez. */
   inventarioIdSinRed: () => Promise<number | null>;
   rondaActivaSinRed: (inventarioId: number) => Promise<number | null>;
@@ -37,6 +45,13 @@ export interface AccionesCargaHoja {
 /**
  * Por qué NO hay hoja para mostrar:
  *   'sin-inventario'  no hay inventario/ronda en curso todavía.
+ *   'conteo-terminado' HAY inventario abierto, pero ya no hay ninguna ronda
+ *                     para contar: cerró la última y el auditor todavía no
+ *                     decidió, o ya está haciendo el ajuste final. Es un
+ *                     motivo aparte de 'sin-inventario' porque la salida es
+ *                     distinta: esperar a que asignen hojas NO va a funcionar
+ *                     nunca, y decirle eso a quien cuenta lo deja mirando una
+ *                     pantalla que no va a cambiar.
  *   'sin-hoja'        hay ronda, pero a esta persona no le asignaron ninguna.
  *   'hoja-vieja'      la que estaba abierta ya no es de la ronda activa (o se
  *                     reasignó): se saca de la vista con un aviso.
@@ -45,7 +60,7 @@ export interface AccionesCargaHoja {
  *                     este motivo, la excepción escapaba sin control y dejaba
  *                     la pantalla de Contar con el spinner girando para siempre.
  */
-export type MotivoSinHoja = 'sin-inventario' | 'sin-hoja' | 'hoja-vieja' | 'error';
+export type MotivoSinHoja = 'sin-inventario' | 'conteo-terminado' | 'sin-hoja' | 'hoja-vieja' | 'error';
 
 export interface EstadoCargaHoja {
   inventarioId: number | null;
@@ -85,10 +100,15 @@ export async function cargarHojaActiva(
 ): Promise<EstadoCargaHoja> {
   let inventarioId: number | null;
   let ronda: number | null;
+  /** `true` = el inventario está abierto pero ya no se cuenta (ajuste del auditor, o cerrado). */
+  let yaNoSeCuenta = false;
   try {
     const activo = await acciones.activo();
     inventarioId = activo?.inventarioId ?? null;
     ronda = activo?.rondaActiva ?? null;
+    // La FASE, no la ronda: durante el ajuste `rondaActiva` sigue trayendo la
+    // última ronda que existe, y contarla otra vez daría 403 en cada ítem.
+    yaNoSeCuenta = activo !== null && faseDeCierre(activo.estado, activo.rondaActiva) !== 'contando';
   } catch {
     // Sin red (u otra falla): no hay forma de preguntarle al servidor cuál es
     // la ronda activa, pero el avance de hoy puede estar completo en SQLite —
@@ -97,8 +117,16 @@ export async function cargarHojaActiva(
     ronda = inventarioId ? await acciones.rondaActivaSinRed(inventarioId) : null;
   }
 
-  if (!inventarioId || ronda === null) {
+  if (!inventarioId) {
     return { inventarioId, ronda, hojaId: null, hoja: null, motivo: 'sin-inventario', rondaVieja: estadoActual.ronda };
+  }
+  // HAY inventario pero NO hay ronda abierta: el conteo terminó y lo que sigue
+  // lo decide el auditor. Antes caía en 'sin-inventario' junto con "todavía no
+  // armaron nada", y las dos situaciones daban el mismo mensaje pese a tener
+  // salidas opuestas -- en una hay que esperar que asignen hojas, en la otra
+  // esperar es inútil porque ya no se cuenta más.
+  if (ronda === null || yaNoSeCuenta) {
+    return { inventarioId, ronda, hojaId: null, hoja: null, motivo: 'conteo-terminado', rondaVieja: estadoActual.ronda };
   }
 
   // Se resuelve SIEMPRE contra `mias()` de la ronda ACTIVA. El número de hoja

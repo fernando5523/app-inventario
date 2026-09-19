@@ -43,6 +43,22 @@ export const exportarDiferencias = asyncHandler(async (req: RequestAutenticado, 
   res.send(buffer);
 });
 
+/**
+ * El .xlsx CON EL FORMATO DEL CLIENTE (cuatro cuadros + empresa + descuento).
+ * Ver historial.service.ts#exportarCuadros.
+ *
+ * Es OTRO archivo que `/diferencias/exportar`, no su reemplazo: aquel es la
+ * tabla plana para tablas dinamicas, este es el que el cliente pone al lado
+ * del suyo para comparar. Los dos salen del mismo calculo.
+ */
+export const exportarCuadros = asyncHandler(async (req: RequestAutenticado, res: Response) => {
+  const { id } = req.params as unknown as ParametrosInventario;
+  const { buffer, nombreArchivo } = await service.exportarCuadros(req.colaborador!, id);
+  res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+  res.setHeader('Content-Disposition', `attachment; filename="${nombreArchivo}"`);
+  res.send(buffer);
+});
+
 /** El .xlsx de varias tiendas (o todas) en un mismo período -- ver historial.service.ts#exportarDiferenciasConsolidado. */
 export const exportarDiferenciasConsolidado = asyncHandler(async (req: RequestAutenticado, res: Response) => {
   const { buffer, nombreArchivo } = await service.exportarDiferenciasConsolidado(

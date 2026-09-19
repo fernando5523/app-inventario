@@ -78,9 +78,46 @@ describe('PUT/DELETE /api/clasificacion/:codigo: clasificar y desclasificar', ()
     const r = await fetch(`${baseUrl}/api/clasificacion/CERV-001`, {
       method: 'PUT',
       headers: json(AUDITOR),
-      body: JSON.stringify({ esEmpresa: true, nota: 'La asume la empresa' }),
+      body: JSON.stringify({ clase: 'empresa', nota: 'La asume la empresa' }),
     });
     expect(r.status).toBe(200);
+  });
+
+  it.each(['empresa', 'paquete', 'unidad'] as const)('auditor clasifica con clase %s, pasa', async (clase) => {
+    await iniciar();
+    const r = await fetch(`${baseUrl}/api/clasificacion/CERV-001`, {
+      method: 'PUT',
+      headers: json(AUDITOR),
+      body: JSON.stringify({ clase }),
+    });
+    expect(r.status).toBe(200);
+  });
+
+  /**
+   * `esEmpresa` DEJO DE ACEPTARSE en el cuerpo: se deriva de la clase. Un
+   * cliente viejo que lo siga mandando tiene que fallar con 400, no quedar
+   * clasificado como otra cosa en silencio -- la invariante
+   * (`clase == 'empresa'` <=> `esEmpresa`) se cumple porque solo hay UNA
+   * fuente, y aceptar las dos abriria la puerta a que discrepen.
+   */
+  it('un cuerpo con esEmpresa (el contrato viejo) falla con 400, no se ignora', async () => {
+    await iniciar();
+    const r = await fetch(`${baseUrl}/api/clasificacion/CERV-001`, {
+      method: 'PUT',
+      headers: json(AUDITOR),
+      body: JSON.stringify({ esEmpresa: true }),
+    });
+    expect(r.status).toBe(400);
+  });
+
+  it('una clase que no existe falla con 400', async () => {
+    await iniciar();
+    const r = await fetch(`${baseUrl}/api/clasificacion/CERV-001`, {
+      method: 'PUT',
+      headers: json(AUDITOR),
+      body: JSON.stringify({ clase: 'caja' }),
+    });
+    expect(r.status).toBe(400);
   });
 
   it('auditor desclasifica (DELETE), pasa', async () => {
@@ -94,8 +131,56 @@ describe('PUT/DELETE /api/clasificacion/:codigo: clasificar y desclasificar', ()
     const r = await fetch(`${baseUrl}/api/clasificacion/CERV-001`, {
       method: 'PUT',
       headers: json(COORDINADOR),
-      body: JSON.stringify({ esEmpresa: true }),
+      body: JSON.stringify({ clase: 'empresa' }),
     });
     expect(r.status).toBe(403);
+  });
+});
+
+/**
+ * El cuerpo tiene que decir ALGO: o fuerza un cuadro, o corrige el empaque.
+ * Sin esa regla, un cuerpo vacio dejaria una fila `clase NULL + empaque NULL`,
+ * que es la forma exacta de una EXCEPCION VIEJA -- y las dos quedarian
+ * indistinguibles.
+ */
+describe('PUT /api/clasificacion/:codigo: el cuadro es OPCIONAL, pero algo hay que decir', () => {
+  it('solo el empaque corregido, sin cuadro: pasa', async () => {
+    await iniciar();
+    const r = await fetch(`${baseUrl}/api/clasificacion/105621`, {
+      method: 'PUT',
+      headers: json(AUDITOR),
+      body: JSON.stringify({ empaqueCompraCorregido: 12 }),
+    });
+    expect(r.status).toBe(200);
+  });
+
+  it('con la clase en null explicito, tambien', async () => {
+    await iniciar();
+    const r = await fetch(`${baseUrl}/api/clasificacion/105621`, {
+      method: 'PUT',
+      headers: json(AUDITOR),
+      body: JSON.stringify({ clase: null, empaqueCompraCorregido: 12 }),
+    });
+    expect(r.status).toBe(200);
+  });
+
+  it('un cuerpo vacio falla con 400: no hay nada que guardar', async () => {
+    await iniciar();
+    const r = await fetch(`${baseUrl}/api/clasificacion/105621`, {
+      method: 'PUT',
+      headers: json(AUDITOR),
+      body: JSON.stringify({}),
+    });
+    expect(r.status).toBe(400);
+  });
+
+  it('solo una nota tampoco alcanza: una nota no clasifica nada', async () => {
+    await iniciar();
+    const r = await fetch(`${baseUrl}/api/clasificacion/105621`, {
+      method: 'PUT',
+      headers: json(AUDITOR),
+      body: JSON.stringify({ nota: 'algo' }),
+    });
+    expect(r.status).toBe(400);
   });
 });

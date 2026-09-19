@@ -61,10 +61,14 @@
 
 import { prisma } from '../../config/database';
 import {
+  aJustificacionAsistencia,
   aMarcaAsistencia,
   diasAsistidosPorColaborador,
+  diasFaltadosCobrables,
+  diasJustificadosPorColaborador,
   multaPorInasistencia,
   SELECT_ASISTENCIA,
+  SELECT_JUSTIFICACIONES,
 } from '../../dominio/asistencia';
 import { bonoBase, repartirExacto } from '../../dominio/reparto-de-fondo';
 import { registrarAuditoria } from '../../shared/auditoria';
@@ -117,6 +121,19 @@ export interface EntradaPlanilla {
    * `colaboradores`, no este Map.
    */
   diasAsistidos: ReadonlyMap<number, number>;
+  /**
+   * `colaboradorId -> dias distintos que el AUDITOR le perdono`
+   * (`dominio/asistencia.ts#diasJustificadosPorColaborador`).
+   *
+   * Va SEPARADO de `diasAsistidos` y no sumado adentro, aunque para la plata
+   * se sumen: `FilaPlanilla.diasAsistidos` termina en el sello del lacrado, y
+   * un sello que afirma que alguien estuvo un dia que no estuvo deja de
+   * servir justo cuando hace falta (ver JustificacionAsistencia en el
+   * schema). Se suman en `diasFaltadosCobrables`, donde se ve.
+   *
+   * Quien no esta en el Map no tiene ninguna falta perdonada.
+   */
+  diasJustificados: ReadonlyMap<number, number>;
   cuotaBase: number;
   /**
    * La multa POR DIA faltado, no por persona ausente.
@@ -134,9 +151,16 @@ export interface FilaPlanilla {
   nombreAlLiquidar: string;
   rolAlLiquidar: Rol;
   /**
-   * CUMPLIO LA ASISTENCIA COMPLETA: vino LOS `diasDelInventario` dias. NO es
-   * "vino alguna vez" -- Delia, que hizo 1 de 3, tiene `asistio: false` y
+   * CUBRIO EL INVENTARIO COMPLETO: entre lo que vino y lo que le perdonaron,
+   * llego a los `diasDelInventario` dias. NO es "vino alguna vez" -- Delia,
+   * que hizo 1 de 3 sin justificaciones, tiene `asistio: false` y
    * `diasAsistidos: 1`.
+   *
+   * UN DIA JUSTIFICADO CUENTA ACA, y es la decision textual del cliente: "si
+   * cobra el bono de distribucion, es como si hubiera asistido". Por eso el
+   * nombre del campo se queda corto a proposito -- lo que afirma es que esta
+   * persona COBRA, no que estuvo. Quien necesite "estuvo" tiene
+   * `diasAsistidos`, que nunca se infla.
    *
    * Se eligio asi y no por "vino al menos un dia" porque este booleano es el
    * que usan la pantalla y el historico para contar entre cuantos se reparte
@@ -161,8 +185,16 @@ export interface FilaPlanilla {
    * Misma razon por la que `nombreAlLiquidar` y `rolAlLiquidar` se congelan.
    */
   diasAsistidos: number;
+  /**
+   * Dias que FALTO y el auditor le perdono, congelados igual que
+   * `diasAsistidos` y por separado de ellos. Es la otra mitad de lo que hace
+   * auditable la multa: con `diasAsistidos: 1`, `diasJustificados: 2` y
+   * `diasDelInventario: 3`, la multa 0 se explica sola. Sin esta columna, esa
+   * misma fila es un cero que nadie puede justificar.
+   */
+  diasJustificados: number;
   cuotaBase: number;
-  /** Ya NO es el monto fijo: es `dias faltados x tarifa` (puede ser 0, 20, 40...). */
+  /** `(dias - asistidos - justificados) x tarifa` (puede ser 0, 20, 40...). */
   multaInasistencia: number;
   bonoAsistencia: number;
 }
@@ -211,11 +243,14 @@ export interface FilaPlanilla {
 export function armarPlanilla(e: EntradaPlanilla): FilaPlanilla[] {
   // La multa de cada uno, ANTES de repartir nada: el fondo es su suma, asi
   // que no se puede repartir sin haberlas calculado todas.
+  const diasDe = (colaboradorId: number) => ({
+    diasInventario: e.diasDelInventario,
+    diasAsistidos: e.diasAsistidos.get(colaboradorId) ?? 0,
+    diasJustificados: e.diasJustificados.get(colaboradorId) ?? 0,
+  });
+
   const multaPorColaborador = new Map(
-    e.colaboradores.map((c) => [
-      c.id,
-      multaPorInasistencia(e.diasDelInventario, e.diasAsistidos.get(c.id) ?? 0, e.tarifaMultaPorDia),
-    ]),
+    e.colaboradores.map((c) => [c.id, multaPorInasistencia(diasDe(c.id), e.tarifaMultaPorDia)]),
   );
 
   // En CENTAVOS para sumar: `reparto-de-fondo.ts` existe justamente porque
@@ -227,10 +262,20 @@ export function armarPlanilla(e: EntradaPlanilla): FilaPlanilla[] {
   const bonoPorPersona = repartirExacto(fondoMultas, idsConBono);
 
   return e.colaboradores.map((c) => {
+    const dias = diasDe(c.id);
     const multaInasistencia = multaPorColaborador.get(c.id) ?? 0;
-    // Quien cumplio la asistencia completa no paga multa; quien falto un dia
-    // no cobra bono. Nunca los dos -- ver el comentario de `asistio`.
-    const asistio = multaInasistencia === 0;
+    /**
+     * Quien cubrio el inventario completo no paga multa; a quien le quedo un
+     * dia sin cubrir no cobra bono. Nunca los dos -- ver `asistio`.
+     *
+     * Sale de `diasFaltadosCobrables` y NO de `multaInasistencia === 0`,
+     * aunque hoy den lo mismo: con una tarifa en 0 -- que la config permite
+     * -- todas las multas serian 0 y TODOS cobrarian bono, incluido quien no
+     * fue un solo dia. El fondo seria 0 y el bono tambien, asi que la plata
+     * cerraria igual, pero `asistio` es lo que la pantalla y el historico
+     * muestran como "cumplio": diria que cumplio quien falto a todo.
+     */
+    const asistio = diasFaltadosCobrables(dias) === 0;
     return {
       colaboradorId: c.id,
       // Nombre y rol CONGELADOS: es lo que decia el recibo de sueldo de ese
@@ -239,7 +284,8 @@ export function armarPlanilla(e: EntradaPlanilla): FilaPlanilla[] {
       nombreAlLiquidar: c.nombre,
       rolAlLiquidar: c.rol,
       asistio,
-      diasAsistidos: e.diasAsistidos.get(c.id) ?? 0,
+      diasAsistidos: dias.diasAsistidos,
+      diasJustificados: dias.diasJustificados,
       cuotaBase: e.cuotaBase,
       multaInasistencia,
       bonoAsistencia: asistio ? (bonoPorPersona.get(c.id) ?? 0) : 0,
@@ -341,6 +387,15 @@ export async function proyectarPlanilla(
   const marcas = (
     await prisma.asistenciaInventario.findMany({ where: { inventarioId }, select: SELECT_ASISTENCIA })
   ).map(aMarcaAsistencia);
+  // LAS FALTAS PERDONADAS por el auditor, que se leen ACA y no en el cierre
+  // del conteo: la ventana para justificar sigue abierta hasta que se
+  // liquida, asi que el numero bueno es el de este momento. Ver
+  // `JustificacionAsistencia` en el schema.
+  const diasJustificados = diasJustificadosPorColaborador(
+    (
+      await prisma.justificacionAsistencia.findMany({ where: { inventarioId }, select: SELECT_JUSTIFICACIONES })
+    ).map(aJustificacionAsistencia),
+  );
   const diasAsistidos = diasAsistidosPorColaborador(marcas);
 
   const resumen = calcularResumenLiquidacion(entrada);
@@ -349,6 +404,7 @@ export async function proyectarPlanilla(
     colaboradores: colaboradores.map((c) => ({ id: c.id, nombre: c.nombre, rol: c.rol as Rol })),
     diasDelInventario,
     diasAsistidos,
+    diasJustificados,
     cuotaBase: resumen.cuotaBase,
     // `multaInasistencia` del resultado congelado ES la tarifa por dia desde
     // este cambio -- el campo de la base no se renombro, el de acá si, para
@@ -495,6 +551,7 @@ export async function liquidar(
       // liquidar -- se sigue leyendo tal cual quedo en el resultado, sin tocar.
       montoNegativos: r.montoNegativos!.toNumber(),
       montoFaltanteEmpresa: montos.montoFaltanteEmpresa,
+          montoFaltantePaquete: montos.montoFaltantePaquete,
       montoSobranteEmpleado: montos.montoSobranteEmpleado,
       colaboradoresAlcanzados: r.colaboradoresAlcanzados,
       colaboradoresAsistieron: r.colaboradoresAsistieron!,
@@ -572,6 +629,7 @@ export async function liquidar(
         rolAlLiquidar: f.rolAlLiquidar,
         asistio: f.asistio,
         diasAsistidos: f.diasAsistidos,
+        diasJustificados: f.diasJustificados,
         cuotaBase: f.cuotaBase,
         multaInasistencia: f.multaInasistencia,
         bonoAsistencia: f.bonoAsistencia,
@@ -586,7 +644,36 @@ export async function liquidar(
       where: { inventarioId },
       data: {
         montoFaltanteEmpresa: montos.montoFaltanteEmpresa,
+        // `montoFaltantePaquete` NO se escribe: no hay columna, a proposito.
+        // Se DERIVA de lo que si queda congelado -- `DiferenciaItem.clase` mas
+        // el `empaqueCompra` del snapshot y el umbral del inventario (ver
+        // `liquidacion.reclasificacion.ts#montoPaqueteCongelado`). Guardar el
+        // total al lado de sus partes es lo que este repo evita en todos lados.
         montoSobranteEmpleado: montos.montoSobranteEmpleado,
+        /**
+         * `colaboradoresAsistieron` SE REESCRIBE ACA, y no es que se rompa el
+         * congelado: se termina de congelar.
+         *
+         * Lo dejo escrito el cierre del conteo (rondas.service.ts) contando
+         * quienes cobraban bono con lo que se sabia ENTONCES. Pero la ventana
+         * para justificar una falta sigue abierta hasta este mismo momento
+         * -- es mas: justificar DESPUES del cierre del conteo es el caso
+         * normal, porque el reclamo aparece cuando el auditor mira la
+         * planilla. Cada justificacion puede sumar a alguien al grupo que
+         * cobra bono.
+         *
+         * Sin esta linea, el numero congelado diria 5 y la planilla que se
+         * esta escribiendo al lado tendria 6 filas con `asistio: true`. Los
+         * dos van al sello del lacrado (historial.lacrado.ts): el documento
+         * firmado se contradiria a si mismo, y `liquidacion.service.ts`
+         * repartiria el bono "de cartel" entre un numero de gente distinto
+         * del real.
+         *
+         * Va en la MISMA transaccion que las filas de donde sale, que es lo
+         * unico que garantiza que no puedan discrepar. Despues de esto nadie
+         * mas lo toca: liquidar es el fin de la ventana.
+         */
+        colaboradoresAsistieron: asistentes.length,
       },
     }),
     // `esEmpresaPorCodigo` nunca es null aca: ver el comentario de arriba.

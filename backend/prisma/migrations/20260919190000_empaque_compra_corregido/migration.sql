@@ -1,0 +1,52 @@
+-- EL AUDITOR CORRIGE EL EMPAQUE DE COMPRA.
+--
+-- ADITIVA: una columna nullable. No borra, no renombra, no cambia ningun tipo
+-- y no toca una sola fila existente.
+--
+-- ===========================================================================
+-- CORREGIR EL EMPAQUE NO ES CORREGIR EL STOCK
+-- ===========================================================================
+-- Hay que decirlo con todas las letras porque el dia que alguien lea esto las
+-- dos cosas se van a parecer y NO LO SON. El stock que viene del ERP no lo
+-- edita nadie, nunca, desde ninguna pantalla: es lo que el sistema conto
+-- contra lo que el inventario mide, y una app que lo deje tocar deja de poder
+-- auditar nada. El empaque de compra es otra cosa -- un ATRIBUTO del producto
+-- ("viene en display de 12"), que Dynamics a veces tiene mal y que el cliente
+-- pidio explicitamente poder corregir (reunion 2; Fernando: "claro que tu
+-- edites el empaque y ya cambia el resultado").
+--
+-- ===========================================================================
+-- POR QUE UNA COLUMNA NUEVA Y NO SOBREESCRIBIR CatalogoItem.empaqueCompra
+-- ===========================================================================
+-- Porque `CatalogoItem` es el SNAPSHOT CONGELADO y tiene que seguir diciendo
+-- lo que dijo Dynamics, por la misma razon por la que `stockErp` no se
+-- recalcula. El dia que alguien discuta un descuento, la respuesta tiene que
+-- poder ser "el ERP dijo 1 y el Auditor lo corrigio a 12 el 19/09" -- dos
+-- hechos con fecha, no un numero sin historia.
+--
+-- Va en `ClasificacionProducto` y encaja por las tres razones que ya estan
+-- escritas en ese modelo: es POR CODIGO y cross-tienda (el empaque de un
+-- producto no cambia segun la sucursal), se evalua EN VIVO al liquidar, y la
+-- fila ya guarda quien y cuando sin default.
+--
+-- ===========================================================================
+-- POR QUE NULLABLE Y SIN DEFAULT
+-- ===========================================================================
+-- NULL = "no lo toco nadie", y es distinto de cualquier numero. Un default 1
+-- diria "el Auditor afirmo que se compra suelto", que es una afirmacion CON
+-- CONSECUENCIA: con empaque 1 el item nunca va al cuadro de paquetes (ver
+-- dominio/faltante-por-paquete.ts#claseEfectiva). Poner 1 a mano es valido y
+-- significa eso; que lo ponga la migracion en 20.000 filas, no.
+--
+-- MEDIDO ANTES DE ESCRIBIR ESTO (base de la demostracion viva): los 20
+-- CatalogoItem tienen `empaque_compra` en NULL. O sea que hoy NINGUN producto
+-- puede ir al cuadro de paquetes, y esta columna es justo lo que lo destraba
+-- sin esperar a que D365 se corrija.
+ALTER TABLE "clasificaciones_producto" ADD COLUMN "empaque_compra_corregido" INTEGER;
+
+-- El >= 1 tambien en la base, no solo en Zod: la API no es el unico camino a
+-- esta tabla (los scripts entran por Prisma). Un empaque 0 seria una division
+-- por cero en la razon del umbral, y uno negativo no significa nada.
+ALTER TABLE "clasificaciones_producto"
+  ADD CONSTRAINT "clasificaciones_producto_empaque_compra_corregido_min"
+  CHECK ("empaque_compra_corregido" IS NULL OR "empaque_compra_corregido" >= 1);

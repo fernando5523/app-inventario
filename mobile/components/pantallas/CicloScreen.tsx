@@ -1,10 +1,11 @@
 import { router } from 'expo-router';
-import { AlertTriangle, ArrowRightCircle, Check, FileText, Lock } from 'lucide-react-native';
+import { AlertTriangle, ArrowRightCircle, Check, FileText, Lock, PlusCircle, Scale } from 'lucide-react-native';
 import { useCallback, useEffect, useState, type JSX } from 'react';
 import { ActivityIndicator, Alert, Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { cargarSeguro } from '../../lib/adaptadores/_http';
-import { repositorioHistorial, repositorioInventario, repositorioSesion } from '../../lib/contenedor';
+import { repositorioAjuste, repositorioHistorial, repositorioInventario, repositorioSesion } from '../../lib/contenedor';
+import { elAuditorPuedeDecidir, faseDeCierre, type FaseDeCierre } from '../../lib/dominio/ajuste-final';
 import { comparativoDeRonda } from '../../lib/dominio/comparativo-ronda';
 import { inventarioDelCiclo } from '../../lib/dominio/inventario-del-ciclo';
 import { sucursalEnFoco } from '../../lib/dominio/sucursal-en-foco';
@@ -98,6 +99,24 @@ interface PasoCicloProps {
   avance?: { pct: number; texto: string };
   /** Nota honesta cuando falta un dato -- nunca un numero inventado en su lugar. */
   notaSinDato?: string;
+}
+
+/**
+ * Por qué el servidor dijo que no. Paleta `proceso` (el estado de ATENCIÓN del
+ * design system), nunca el rojo de marca -- el rojo acá es el botón que se
+ * acaba de tocar, y si el aviso también fuera rojo competirían.
+ *
+ * El texto llega del backend sin traducir: nombra la regla real ("todavía
+ * queda una ronda abierta", "no queda nada por recontar"), y una de esas ni
+ * siquiera es un error -- es el caso feliz. Un genérico borraría las dos cosas.
+ */
+function AvisoMotivo({ mensaje }: { mensaje: string }): JSX.Element {
+  return (
+    <View style={styles.avisoMotivo}>
+      <AlertTriangle size={15} color={colors.proceso} />
+      <Text style={styles.avisoMotivoTexto}>{mensaje}</Text>
+    </View>
+  );
 }
 
 /** Tarjeta de un paso del embudo (`.tarjeta` + `.embudo-*` en la maqueta). */
@@ -203,6 +222,25 @@ export function CicloScreen({ rol }: CicloScreenProps): JSX.Element {
   // cae a 1 por defecto ("no hay ronda" ≠ "ronda 1"). Con el inventario ya
   // cerrado también es null, y el embudo de las 3 pasadas se muestra igual.
   const [rondaActiva, setRondaActiva] = useState<number | null>(null);
+  /**
+   * EN QUÉ FASE está el cierre. `null` = todavía no se sabe (sin inventario,
+   * o el ciclo salió del historial). No se deduce de `rondaActiva`: durante el
+   * ajuste del auditor tampoco hay ronda activa, y los dos casos habilitan
+   * cosas distintas (ver dominio/ajuste-final.ts).
+   */
+  const [fase, setFase] = useState<FaseDeCierre | null>(null);
+  const [accionAuditor, setAccionAuditor] = useState<'ronda' | 'ajuste' | null>(null);
+  /**
+   * POR QUÉ NO SE PUDO, con el texto del servidor y donde se tocó el botón.
+   *
+   * El backend ya explica cada negativa con una frase de negocio: que todavía
+   * queda una ronda abierta, que el ajuste ya arrancó, o que no queda nada por
+   * recontar -- y esa última no es un error, es el caso feliz. Un botón que
+   * falla y solo deja un cartel que se descarta manda a adivinar; acá el
+   * motivo queda A LA VISTA, pegado al botón que lo produjo, hasta el próximo
+   * intento o la próxima recarga.
+   */
+  const [motivoRechazo, setMotivoRechazo] = useState<{ cual: 'ronda' | 'ajuste'; mensaje: string } | null>(null);
   const esCoordinador = rol === 'coordinador';
 
   // El Auditor NO tiene tienda: elige la sucursal cuyo ciclo mira (el
@@ -245,8 +283,14 @@ export function CicloScreen({ rol }: CicloScreenProps): JSX.Element {
    */
   const [resumenPorRonda, setResumenPorRonda] = useState<Record<number, ResumenRonda | null>>({});
 
-  const cargarResumenDeRondas = useCallback(async (invId: number): Promise<void> => {
-    const rondas = [1, 2, 3];
+  /**
+   * `hastaRonda` ya no es 3 fijo: el Auditor puede abrir un 4to o un 5to
+   * conteo, y con el techo clavado esas rondas se contaban en el servidor pero
+   * no se veían acá -- el embudo se quedaba mostrando tres pasos sobre un
+   * inventario que ya iba por el quinto.
+   */
+  const cargarResumenDeRondas = useCallback(async (invId: number, hastaRonda: number): Promise<void> => {
+    const rondas = Array.from({ length: Math.max(RONDA_MAX, hastaRonda) }, (_, i) => i + 1);
     const resultados = await Promise.all(
       rondas.map(async (r) => {
         try {
@@ -277,6 +321,7 @@ export function CicloScreen({ rol }: CicloScreenProps): JSX.Element {
     }
     setCargando(true);
     setErrorCarga(null);
+    setMotivoRechazo(null);
 
     async function cargar(): Promise<void> {
       const error = await cargarSeguro(async () => {
@@ -295,6 +340,10 @@ export function CicloScreen({ rol }: CicloScreenProps): JSX.Element {
         setTamanoHoja(delCiclo?.tamanoHoja ?? null);
         setInventarioId(delCiclo?.inventarioId ?? null);
         setRondaActiva(delCiclo?.rondaActiva ?? null);
+        // La fase sale del inventario ABIERTO. Si el ciclo vino del historial
+        // (no hay `activo`), ese inventario ya cerró y no hay nada que abrir
+        // ni que ajustar.
+        setFase(activo ? faseDeCierre(activo.estado, activo.rondaActiva) : delCiclo ? 'cerrado' : null);
         if (!delCiclo) {
           setResumenPorRonda({});
           return;
@@ -303,7 +352,7 @@ export function CicloScreen({ rol }: CicloScreenProps): JSX.Element {
         // El embudo de las 3 rondas, del servidor. Lo ven los DOS roles: es el
         // ciclo del inventario, no una herramienta de cierre. El preview del
         // cierre sale de este mismo objeto (resumenPorRonda[rondaActiva]).
-        await cargarResumenDeRondas(delCiclo.inventarioId);
+        await cargarResumenDeRondas(delCiclo.inventarioId, delCiclo.rondaActiva ?? RONDA_MAX);
       });
       if (!vigente) return;
       // INCONDICIONAL: con cargarSeguro, `error` nunca deja escapar una
@@ -352,7 +401,8 @@ export function CicloScreen({ rol }: CicloScreenProps): JSX.Element {
       // embudo de las 3 pasadas (resumenPorRonda) se recarga y se sigue viendo.
       const activo = await repositorioInventario.activo(sucursalId!);
       setRondaActiva(activo?.rondaActiva ?? null);
-      await cargarResumenDeRondas(inventarioId);
+      setFase(activo ? faseDeCierre(activo.estado, activo.rondaActiva) : 'cerrado');
+      await cargarResumenDeRondas(inventarioId, activo?.rondaActiva ?? RONDA_MAX);
     } catch (error) {
       // El backend rechaza con mensaje claro (hojas sin finalizar, o ya
       // cerrada): se muestra tal cual, no un "no se pudo" genérico.
@@ -361,6 +411,109 @@ export function CicloScreen({ rol }: CicloScreenProps): JSX.Element {
       setCerrandoRonda(false);
     }
   }
+
+  /**
+   * LAS DOS DECISIONES DEL AUDITOR, cuando la última ronda ya cerró.
+   *
+   * Se recarga entero después de cada una: abrir una ronda cambia la ronda
+   * activa y el embudo; iniciar el ajuste cambia el ESTADO del inventario, y
+   * con él lo que puede hacer el Coordinador en otra pantalla. Tocar solo el
+   * estado local dejaría la pantalla diciendo algo que el servidor ya no dice.
+   */
+  async function ejecutarAccionAuditor(cual: 'ronda' | 'ajuste'): Promise<void> {
+    if (inventarioId === null) return;
+    setAccionAuditor(cual);
+    // Se limpia el motivo anterior ANTES de intentar: dejar el de la vez pasada
+    // mientras corre el nuevo intento haría leer un rechazo viejo como si
+    // fuera el de ahora.
+    setMotivoRechazo(null);
+    try {
+      if (cual === 'ronda') {
+        await repositorioAjuste.abrirRondaExtra(inventarioId);
+      } else {
+        await repositorioAjuste.iniciarAjuste(inventarioId);
+      }
+      const activo = await repositorioInventario.activo(sucursalId!);
+      setRondaActiva(activo?.rondaActiva ?? null);
+      setFase(activo ? faseDeCierre(activo.estado, activo.rondaActiva) : 'cerrado');
+      await cargarResumenDeRondas(inventarioId, activo?.rondaActiva ?? RONDA_MAX);
+      if (cual === 'ronda') {
+        Alert.alert(
+          `${ORDINAL[activo?.rondaActiva ?? 0]} conteo abierto`,
+          'Las hojas nuevas nacen sin asignar: el coordinador las reparte desde Gestión de hojas.',
+        );
+      } else {
+        Alert.alert(
+          'Ajuste final iniciado',
+          'Desde ahora los valores los cambias tú, comparando contra el stock. El coordinador ya no puede corregir.',
+        );
+      }
+    } catch (error) {
+      // EL MENSAJE DEL SERVIDOR, TAL CUAL Y EN LA TARJETA. Dice qué regla se
+      // topó -- "todavía queda una ronda abierta", "el ajuste ya empezó", "no
+      // queda nada por recontar" -- y eso es justamente lo que la persona
+      // necesita leer dos veces. Va inline y no en un Alert: el aviso tiene
+      // que quedar donde está el botón que lo produjo, no detrás de un
+      // "Aceptar" que lo borra.
+      setMotivoRechazo({
+        cual,
+        mensaje: error instanceof Error ? error.message : 'No se pudo completar. Revisa la conexión con la tienda.',
+      });
+    } finally {
+      setAccionAuditor(null);
+    }
+  }
+
+  function confirmarAjuste(): void {
+    Alert.alert(
+      'Empezar el ajuste final',
+      'A partir de ahora el coordinador ya no puede corregir los conteos de este inventario: los valores los cambias tú, viendo el stock. Se puede empezar una sola vez.',
+      [
+        { text: 'Todavía no', style: 'cancel' },
+        { text: 'Empezar el ajuste', onPress: () => void ejecutarAccionAuditor('ajuste') },
+      ],
+    );
+  }
+
+  /**
+   * Las rondas MÁS ALLÁ de la 3ra que EXISTEN de verdad: las que el Auditor
+   * abrió y ya tienen resumen del servidor.
+   *
+   * Sale de lo que respondió el backend y no de `rondaActiva`, a propósito: si
+   * se dibujaran todas las posiciones hasta la ronda activa, una ronda que se
+   * abrió pero todavía no tiene un solo conteo cargado aparecería igual que
+   * las demás -- y un paso vacío en el embudo se lee como "acá no cuadró
+   * nada", que es una afirmación, no un hueco.
+   */
+  const rondasExtra = Object.keys(resumenPorRonda)
+    .map(Number)
+    .filter((ronda) => ronda > RONDA_MAX && resumenPorRonda[ronda] != null)
+    .sort((a, b) => a - b);
+
+  /**
+   * CUÁNTAS PASADAS CORRIERON de verdad: las que tienen resumen del servidor.
+   * No es `RONDA_MAX` ni `rondaActiva`, y la diferencia importa en los dos
+   * sentidos -- un inventario que cuadró en la 1ra tuvo UNA pasada, y uno al
+   * que el Auditor le abrió un 4to tuvo cuatro.
+   */
+  const pasadasCorridas = Object.values(resumenPorRonda).filter((r) => r != null).length;
+
+  /**
+   * LA RONDA QUE ADMITE CONTEO -- la única que puede estar "en curso".
+   *
+   * BUG REAL (emulador, inventario 8040 en `ajuste_auditor`): el Paso 3 decía
+   * "En curso" con la ronda 3 ya cerrada. `activo().rondaActiva` es
+   * `max(numeroConteo)` de las hojas, así que sigue devolviendo 3 mientras el
+   * Auditor ajusta -- y `estadoDePaso(3, 3, …)` lo leía como la ronda activa.
+   * El comentario del puerto decía "si viene un numero, esa ronda todavia
+   * admite conteo": `ajuste_auditor` rompió esa garantía.
+   *
+   * Se corrige acá y no en el puerto porque es una lectura, no un dato nuevo:
+   * solo en la fase `contando` hay una ronda abierta. En las otras tres no se
+   * cuenta más, y `null` es exactamente lo que `estadoDePaso` espera para
+   * marcar los pasos como cerrados.
+   */
+  const rondaQueAdmiteConteo = fase === null ? rondaActiva : fase === 'contando' ? rondaActiva : null;
 
   const totalT1 = items ?? 0;
 
@@ -397,7 +550,15 @@ export function CicloScreen({ rol }: CicloScreenProps): JSX.Element {
       <BarraApp
         rotulo={rol === 'auditor' ? 'Auditoría · Ciclo de conteos' : 'Gestión masiva'}
         sede={nombreSucursal}
-        cifras={items ? `${nf.format(items)} ítem${items === 1 ? '' : 's'} · 3 pasadas de cierre` : undefined}
+        // La cantidad de pasadas REAL, no un 3 fijo: el Auditor puede abrir
+        // un 4to o un 5to conteo, y el encabezado sería el primer lugar donde
+        // se notaría que la app cuenta una historia distinta de la del
+        // inventario.
+        cifras={
+          items
+            ? `${nf.format(items)} ítem${items === 1 ? '' : 's'} · ${pasadasCorridas} pasada${pasadasCorridas === 1 ? '' : 's'}`
+            : undefined
+        }
         onSalir={salir}
       />
 
@@ -429,7 +590,7 @@ export function CicloScreen({ rol }: CicloScreenProps): JSX.Element {
             descripcion="100% del catálogo, comparado contra el stock de Dynamics a medida que se cuenta."
             // MISMA fuente que los pasos 2 y 3: el resumen del servidor de la
             // ronda 1 (sobre TODOS los conteos), no el SQLite local del que mira.
-            estado={estadoDePaso(1, rondaActiva, comparativoT1 != null)}
+            estado={estadoDePaso(1, rondaQueAdmiteConteo, comparativoT1 != null)}
             // El cálculo de hojas Y, cuando ya hay conteos, el comparativo
             // contra el ERP: cuántos cuadraron y cuántos pasarían al 2do.
             calculo={[textoCalculoHojasT1, comparativoT1?.detalle].filter(Boolean).join(' ')}
@@ -444,7 +605,7 @@ export function CicloScreen({ rol }: CicloScreenProps): JSX.Element {
           <PasoCiclo
             titulo="Paso 2 · 2do Reconteo"
             descripcion="Solo los ítems que no coincidieron con el stock de Dynamics en el 1er conteo."
-            estado={estadoDePaso(2, rondaActiva, comparativoT2 != null)}
+            estado={estadoDePaso(2, rondaQueAdmiteConteo, comparativoT2 != null)}
             calculo={comparativoT2?.detalle}
             avance={comparativoT2?.avance}
             notaSinDato={
@@ -455,9 +616,13 @@ export function CicloScreen({ rol }: CicloScreenProps): JSX.Element {
           />
 
           <PasoCiclo
-            titulo="Paso 3 · 3er Reconteo Definitivo"
-            descripcion={`Los ítems que persistieron tras la 2da pasada, auditados directamente${rol === 'auditor' ? ' por ti' : ''}. Las cantidades resultantes quedan fijas para la liquidación — no hay un 4to conteo.`}
-            estado={estadoDePaso(3, rondaActiva, comparativoT3 != null)}
+            titulo="Paso 3 · 3er Reconteo"
+            // DECÍA "no hay un 4to conteo", y dejó de ser cierto: el Auditor
+            // abre los que hagan falta. La frase vieja hacía que el
+            // Coordinador cerrara la 3ra creyendo que ese número ya era el
+            // definitivo.
+            descripcion={`Los ítems que persistieron tras la 2da pasada, auditados directamente${rol === 'auditor' ? ' por ti' : ''}. Al cerrarlo, el auditor decide: otro conteo, o el ajuste final.`}
+            estado={estadoDePaso(3, rondaQueAdmiteConteo, comparativoT3 != null)}
             calculo={comparativoT3?.detalle}
             avance={comparativoT3?.avance}
             notaSinDato={
@@ -466,6 +631,113 @@ export function CicloScreen({ rol }: CicloScreenProps): JSX.Element {
                 : 'El 3er conteo todavía no empezó: se abre al cerrar el 2do, y solo si quedan ítems sin cuadrar.'
             }
           />
+
+          {/*
+            LAS RONDAS EXTRA. El ciclo automático llega hasta la 3ra; de ahí en
+            más las abre el Auditor una por una, así que no se pueden dibujar
+            tres pasos fijos y listo. Solo aparecen las que EXISTEN (tienen
+            resumen): una ronda vacía dibujada por las dudas sería un paso que
+            nadie abrió.
+          */}
+          {rondasExtra.map((ronda) => {
+            const comparativo = comparativoVisible(resumenPorRonda[ronda] ?? null);
+            return (
+              <PasoCiclo
+                key={ronda}
+                titulo={`Paso ${ronda} · ${ORDINAL[ronda]} Conteo`}
+                descripcion={`Conteo extra abierto por el auditor, solo con los ítems que seguían sin cuadrar tras el ${ORDINAL[ronda - 1]}.`}
+                estado={estadoDePaso(ronda, rondaQueAdmiteConteo, comparativo != null)}
+                {...(comparativo?.detalle !== undefined ? { calculo: comparativo.detalle } : {})}
+                {...(comparativo?.avance !== undefined ? { avance: comparativo.avance } : {})}
+              />
+            );
+          })}
+
+          {/*
+            LAS DOS DECISIONES DEL AUDITOR. Aparecen solo con la última ronda
+            cerrada y el ajuste sin empezar -- que es exactamente la ventana en
+            la que el Coordinador todavía corrige. Antes de eso no hay nada que
+            decidir; después, ya se decidió.
+          */}
+          {rol === 'auditor' && fase !== null && elAuditorPuedeDecidir(fase) ? (
+            <View style={styles.tarjeta}>
+              <View style={styles.tarjetaCabecera}>
+                <Text style={styles.tarjetaTitulo}>¿Qué sigue con este conteo?</Text>
+                <Badge label="Te toca decidir" variant="proceso" />
+              </View>
+              <Text style={styles.tarjetaTexto}>
+                Cuando cierre la última ronda, el inventario te espera: puedes mandar otra pasada de conteo, o fijar tú
+                mismo los valores comparando contra el stock. Mientras no empieces el ajuste, el coordinador todavía
+                puede corregir lo que cargaron los contadores.
+              </Text>
+              {/* LA PRECONDICIÓN, dicha en vez de adivinada. Desde el teléfono
+                  no se puede saber si la última ronda ya cerró (ver
+                  dominio/ajuste-final.ts#faseDeCierre), así que se avisa acá y
+                  el servidor es el que corta -- con su mensaje, que se muestra
+                  tal cual. Antes esto era un candado, y como nunca se abría, el
+                  Auditor no tenía ningún botón para decidir. */}
+              <Text style={styles.notaPrecondicion}>
+                Las dos necesitan que la última ronda esté cerrada. Si todavía está abierta, te lo va a decir.
+              </Text>
+              <Button
+                label={accionAuditor === 'ronda' ? 'Abriendo el conteo…' : `Abrir el ${ORDINAL[(rondaActiva ?? RONDA_MAX) + 1]} conteo`}
+                icon={PlusCircle}
+                variant="outline"
+                onPress={() => void ejecutarAccionAuditor('ronda')}
+                disabled={accionAuditor !== null}
+                loading={accionAuditor === 'ronda'}
+              />
+              {/* El motivo va PEGADO al botón que falló, no arriba de la
+                  tarjeta: con dos botones, un aviso suelto no dice de cuál de
+                  los dos habla. */}
+              {motivoRechazo?.cual === 'ronda' ? <AvisoMotivo mensaje={motivoRechazo.mensaje} /> : null}
+              <Button
+                label={accionAuditor === 'ajuste' ? 'Iniciando el ajuste…' : 'Empezar el ajuste final'}
+                icon={Scale}
+                onPress={confirmarAjuste}
+                disabled={accionAuditor !== null}
+                loading={accionAuditor === 'ajuste'}
+              />
+              {motivoRechazo?.cual === 'ajuste' ? <AvisoMotivo mensaje={motivoRechazo.mensaje} /> : null}
+            </View>
+          ) : null}
+
+          {/*
+            EL ACCESO AL AJUSTE, siempre que el Auditor esté mirando un
+            inventario -- no solo cuando esta pantalla logró detectar que el
+            ajuste ya empezó.
+            BUG REAL (emulador, inventario 8040): el inventario estaba en
+            `ajuste_auditor` y acá no aparecía NINGÚN botón, ni para abrir otra
+            ronda ni para ajustar. Al ajuste solo se llegaba por el acceso de
+            Inicio -- desde la pantalla que dice "el auditor decide" no había
+            forma de decidir nada.
+
+            Ahora el acceso no se condiciona a la fase: la fase solo cambia lo
+            que el texto AFIRMA. Si la pantalla se equivoca sobre la fase, el
+            peor caso es un texto de más; con el acceso condicionado, el peor
+            caso era quedarse sin salida.
+          */}
+          {rol === 'auditor' && inventarioId !== null && fase !== 'cerrado' ? (
+            <View style={styles.tarjeta}>
+              <View style={styles.tarjetaCabecera}>
+                <Text style={styles.tarjetaTitulo}>
+                  {fase === 'ajuste' ? 'Ajuste final en curso' : 'Ajuste final del conteo'}
+                </Text>
+                {fase === 'ajuste' ? <Badge label="Solo tú" variant="proceso" /> : null}
+              </View>
+              <Text style={styles.tarjetaTexto}>
+                {fase === 'ajuste'
+                  ? 'El coordinador ya no puede corregir este inventario. Fija los valores definitivos y cierra el ajuste para que pase a la liquidación.'
+                  : 'Ahí fijas los valores definitivos comparando contra el stock del ERP. La pantalla te dice si el ajuste ya empezó o todavía no.'}
+              </Text>
+              <Button
+                label={fase === 'ajuste' ? 'Ir al ajuste final' : 'Ver el ajuste final'}
+                icon={Scale}
+                variant={fase === 'ajuste' ? 'primary' : 'outline'}
+                onPress={() => router.push('/auditor/ajuste')}
+              />
+            </View>
+          ) : null}
 
           {esCoordinador && resumenActivo && rondaActiva !== null ? (
             <View style={styles.tarjeta}>
@@ -537,12 +809,12 @@ export function CicloScreen({ rol }: CicloScreenProps): JSX.Element {
                   Al cierre del {ORDINAL[ultimoComparativo.ronda]} conteo: {ultimoComparativo.datos.detalle}
                   {ultimoComparativo.datos.avance.pct >= 100
                     ? ' El ciclo puede cerrarse: no queda nada por recontar.'
-                    : ` Los que no cuadren tras el ${ORDINAL[RONDA_MAX]} quedan como diferencia definitiva para la liquidación.`}
+                    : ` Los que no cuadren tras el ${ORDINAL[RONDA_MAX]} pasan al auditor, que decide si manda otra pasada o los ajusta él.`}
                 </Text>
               ) : (
                 <Text style={styles.tarjetaTexto}>
-                  El resultado final de las 3 pasadas se arma a medida que se cuenta: todavía no hay ningún conteo
-                  cargado en este inventario.
+                  El resultado se arma a medida que se cuenta: todavía no hay ningún conteo cargado en este
+                  inventario.
                 </Text>
               )}
             </View>
@@ -555,7 +827,7 @@ export function CicloScreen({ rol }: CicloScreenProps): JSX.Element {
               accessibilityRole="button"
             >
               <FileText size={17} color={colors.blanco} />
-              <Text style={styles.ctaAuditoriaTexto}>Ver comparativo de los 3 conteos en auditoría</Text>
+              <Text style={styles.ctaAuditoriaTexto}>Ver el comparativo de los conteos en auditoría</Text>
               <ArrowRightCircle size={17} color={colors.dorado} />
             </Pressable>
           ) : null}
@@ -581,6 +853,21 @@ const styles = StyleSheet.create({
   },
   tarjetaCabecera: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
   tarjetaTitulo: { flex: 1, fontSize: 14.5, color: colors.tinta, fontFamily: fonts.bold },
+  /** La precondición de las acciones del Auditor: aclaración, no alarma. */
+  notaPrecondicion: { fontSize: 11.5, lineHeight: 16, color: colors.grisClaro, fontFamily: fonts.regular },
+  avisoMotivo: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: spacing.sm,
+    padding: 11,
+    borderRadius: radius.sm,
+    backgroundColor: colors.procesoSuave,
+    borderWidth: 1,
+    borderColor: colors.proceso,
+  },
+  // `flex: 1` sin `numberOfLines`: el mensaje del servidor envuelve todas las
+  // líneas que necesite. Un aviso cortado a la mitad no advierte nada.
+  avisoMotivoTexto: { flex: 1, fontSize: 12, lineHeight: 17, color: colors.tinta, fontFamily: fonts.regular },
   tarjetaTexto: { fontSize: 12.5, lineHeight: 18, color: colors.gris, fontFamily: fonts.regular },
 
   embudoBarra: { height: 8, borderRadius: radius.full, backgroundColor: colors.procesoSuave, overflow: 'hidden' },

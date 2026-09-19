@@ -312,7 +312,7 @@ describe('armarContenidoLacrado: version 2 (liquidacion v2)', () => {
 
   it('sin version explicita, usa la ultima (VERSION_CONTENIDO_LACRADO)', () => {
     expect((armarContenidoLacrado(conCamposNuevos) as { version: number }).version).toBe(VERSION_CONTENIDO_LACRADO);
-    expect(VERSION_CONTENIDO_LACRADO).toBe(3);
+    expect(VERSION_CONTENIDO_LACRADO).toBe(4);
   });
 });
 
@@ -500,5 +500,99 @@ describe('parsearAprobacionesRequeridas', () => {
 
   it('el mensaje de error cita el valor invalido tal cual vino, para poder corregirlo en el .env', () => {
     expect(() => parsearAprobacionesRequeridas('abc')).toThrow(/"abc"/);
+  });
+});
+
+/**
+ * V4: LAS FALTAS JUSTIFICADAS ENTRAN AL SELLO.
+ *
+ * Por que tienen que entrar, en una linea: sin ellas el documento firmado se
+ * CONTRADICE. La v3 sella la multa y la cuenta que la produce -- `(dias -
+ * diasAsistidos) x tarifa` --, y con una falta perdonada esa cuenta ya no da.
+ * Una fila con 1 de 3 dias y multa 0 es perfectamente legitima, y quien
+ * verifique el sello de buena fe va a concluir que la planilla se manipulo.
+ *
+ * Y al reves: `justificaciones_asistencia` NO entra al sello (es el respaldo,
+ * no la plata), asi que sin `diasJustificados` bajo el hash se le puede
+ * perdonar una falta a alguien DESPUES de lacrar y el sello sigue diciendo
+ * `intacto` -- mientras la multa de esa persona baja y el bono de todas las
+ * demas cambia.
+ */
+describe('armarContenidoLacrado: version 4 (faltas justificadas)', () => {
+  const conJustificaciones: DatosLacrado = {
+    ...BASE,
+    resultado: { ...BASE.resultado!, diasDelInventario: 3 },
+    liquidaciones: [
+      // El 20 vino 1 de 3 y le perdonaron los otros 2: multa 0 con 1 solo dia
+      // asistido. Es la fila que sin `diasJustificados` no se puede explicar.
+      { ...BASE.liquidaciones[0]!, diasAsistidos: 1, diasJustificados: 2, multaInasistencia: 0 },
+      { ...BASE.liquidaciones[1]!, diasAsistidos: 3, diasJustificados: 0 },
+    ],
+  };
+
+  it('v3 NO incluye diasJustificados: los sellos viejos siguen dando el mismo hash', () => {
+    // La regla de siempre al subir de version: verificar un sello v3 tiene que
+    // reconstruir la forma v3, sin los campos que entonces no existian.
+    const v3 = armarContenidoLacrado(conJustificaciones, 3);
+    expect(serializarCanonico(v3)).not.toContain('diasJustificados');
+
+    const sinJustificar: DatosLacrado = {
+      ...conJustificaciones,
+      liquidaciones: conJustificaciones.liquidaciones.map(({ diasJustificados: _, ...l }) => l),
+    };
+    expect(calcularHash(v3)).toBe(calcularHash(armarContenidoLacrado(sinJustificar, 3)));
+  });
+
+  it('v4 SI lo incluye, por fila', () => {
+    const v4 = armarContenidoLacrado(conJustificaciones, 4);
+    const filas = v4['liquidaciones'] as Array<Record<string, unknown>>;
+    // Ordenadas por colaboradorId: primero el 10 (3/3, sin perdones).
+    expect(filas[0]?.['diasJustificados']).toBe(0);
+    expect(filas[1]?.['diasJustificados']).toBe(2);
+  });
+
+  it('EL AGUJERO QUE CIERRA: perdonar una falta despues de lacrar cambia el hash', () => {
+    // Sin esto, ese perdon baja una multa y cambia el bono de todos los demas
+    // sin que el sello se entere.
+    const conUnPerdonMas: DatosLacrado = {
+      ...conJustificaciones,
+      liquidaciones: conJustificaciones.liquidaciones.map((l) =>
+        l.colaboradorId === 20 ? { ...l, diasJustificados: 3 } : l,
+      ),
+    };
+    expect(calcularHash(armarContenidoLacrado(conUnPerdonMas, 4))).not.toBe(
+      calcularHash(armarContenidoLacrado(conJustificaciones, 4)),
+    );
+  });
+
+  it('la cuenta de la multa CIERRA dentro del contenido sellado', () => {
+    // Lo que el sello tiene que poder demostrar solo, sin ir a buscar nada a
+    // la base: `(dias - asistidos - justificados) x tarifa === multa`.
+    const v4 = armarContenidoLacrado(conJustificaciones, 4);
+    const resultado = v4['resultado'] as Record<string, unknown>;
+    const dias = resultado['diasDelInventario'] as number;
+    const tarifa = resultado['multaInasistencia'] as number;
+
+    for (const fila of v4['liquidaciones'] as Array<Record<string, unknown>>) {
+      const faltados = Math.max(
+        0,
+        dias - (fila['diasAsistidos'] as number) - (fila['diasJustificados'] as number),
+      );
+      expect(fila['multaInasistencia']).toBe(faltados * tarifa);
+    }
+  });
+
+  it('sin asistencia por dia (regla vieja), diasJustificados se sella en null y no en 0', () => {
+    // Mismo criterio que `diasAsistidos`: con `diasDelInventario` en 0 la
+    // columna entera es un default que no significa nada. Un sello que
+    // afirmara "0 faltas perdonadas" estaria afirmando algo que nadie midio.
+    const reglaVieja: DatosLacrado = {
+      ...BASE,
+      resultado: { ...BASE.resultado!, diasDelInventario: 0 },
+      liquidaciones: BASE.liquidaciones.map((l) => ({ ...l, diasAsistidos: 0, diasJustificados: 0 })),
+    };
+    for (const fila of armarContenidoLacrado(reglaVieja, 4)['liquidaciones'] as Array<Record<string, unknown>>) {
+      expect(fila['diasJustificados']).toBeNull();
+    }
   });
 });

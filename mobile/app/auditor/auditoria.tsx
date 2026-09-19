@@ -1,5 +1,5 @@
 import { router } from 'expo-router';
-import { BarChart3 } from 'lucide-react-native';
+import { BarChart3, ChevronRight, PencilLine } from 'lucide-react-native';
 import { useCallback, useEffect, useMemo, useRef, useState, type JSX } from 'react';
 import { ActivityIndicator, FlatList, Pressable, RefreshControl, StyleSheet, Text, View } from 'react-native';
 
@@ -16,34 +16,51 @@ import {
   type OpcionChip,
 } from '../../components/ui';
 import { repositorioAuditoria, repositorioInventario, repositorioSesion } from '../../lib/contenedor';
-import { resumirAuditoria } from '../../lib/dominio/auditoria';
+import { cuadroDelItem, resumirAuditoria } from '../../lib/dominio/auditoria';
 import { pluralizar } from '../../lib/dominio/plural';
 import { sucursalEnFoco } from '../../lib/dominio/sucursal-en-foco';
 import type { ItemAuditoria, Sucursal, VeredictoAuditoria } from '../../lib/dominio/tipos';
+import type { CuadroDeDiferencias, ResumenAuditoriaServidor } from '../../lib/puertos/repositorios';
 import { useSesion } from '../../lib/sesion-contexto';
 import { useSucursalAuditada } from '../../lib/sucursal-auditada-contexto';
 import { colors, fonts, radius } from '../../lib/theme';
 
-type FiltroId = 'todos' | 'cuadrado' | 'falta' | 'empresa' | 'sin_dato';
+/**
+ * LOS FILTROS SIGUEN A LOS CUADROS, no al veredicto de dos vías.
+ *
+ * Estaban en Todos / Cuadrados / Faltante / Empresa, que es el mundo de antes
+ * de que el faltante se repartiera: "Faltante" juntaba en un solo chip lo que
+ * se le descuenta al personal y lo que sale por paquetes -- dos cosas que el
+ * cliente audita por separado y que en el inventario 8059 son S/20 y S/440.
+ *
+ * Ahora los tres chips del medio son los tres CUADROS, así que coinciden con
+ * la tarjeta de totales de arriba: si esa dice "por paquete: 2 ítems", el chip
+ * dice 2 y la lista muestra esos 2.
+ */
+type FiltroId = 'todos' | 'cuadrado' | 'personal' | 'paquetes' | 'empresa' | 'sin_dato';
 
 const FILTROS: { id: FiltroId; etiqueta: string }[] = [
   { id: 'todos', etiqueta: 'Todos' },
   { id: 'cuadrado', etiqueta: 'Cuadrados' },
-  { id: 'falta', etiqueta: 'Faltante' },
+  { id: 'personal', etiqueta: 'Al personal' },
+  { id: 'paquetes', etiqueta: 'Por paquete' },
   { id: 'empresa', etiqueta: 'Empresa' },
   // Los que todavía no se pueden auditar: sin conteo o sin stock del ERP.
   { id: 'sin_dato', etiqueta: 'Sin dato' },
 ];
 
-/** `sin_dato` junta los dos veredictos de "no sé"; el resto mapea 1 a 1. */
-function coincideFiltro(v: VeredictoAuditoria, filtro: Exclude<FiltroId, 'todos'>): boolean {
+/**
+ * Si un ítem entra en un filtro. Los de cuadro salen del REPARTO del servidor
+ * (`cuadroDelItem`) y no del veredicto: son ejes distintos, y un ítem con
+ * veredicto `falta` puede caer en cualquiera de los dos cuadros.
+ */
+function coincideFiltro(item: ItemAuditoria, v: VeredictoAuditoria, filtro: Exclude<FiltroId, 'todos'>): boolean {
   if (filtro === 'sin_dato') return v === 'sin_contar' || v === 'sin_erp';
-  return v === filtro;
-}
-
-function formatoMoneda(valor: number): string {
-  const signo = valor < 0 ? '-' : '+';
-  return `${signo}S/ ${formatoNumeroMoneda(Math.abs(valor))}`;
+  if (filtro === 'cuadrado') return v === 'cuadrado';
+  const cuadro = cuadroDelItem(item.atribucion);
+  if (filtro === 'personal') return cuadro === 'personal';
+  if (filtro === 'paquetes') return cuadro === 'paquetes';
+  return cuadro === 'empresa';
 }
 
 /**
@@ -53,11 +70,85 @@ function formatoMoneda(valor: number): string {
  * no a quien audita — el Auditor existe justamente para comparar contra
  * Dynamics.
  */
+/**
+ * Un monto del servidor. `undefined` = todavía no llegó, y ahí va "—", NUNCA
+ * "S/ 0,00": un cero inventado sobre un faltante dice "no falta nada", que es
+ * una afirmación distinta de "todavía no lo sé".
+ */
+function montoOSinDato(valor: number | undefined, esFaltante: boolean): string {
+  if (valor === undefined) return '—';
+  // `formatoNumeroMoneda` (el crudo) y no el `formatoMoneda` de este archivo:
+  // ese ya antepone el signo, y acá lo decide `esFaltante` -- el servidor manda
+  // los montos SIEMPRE en positivo (ver `CuadroDeDiferencias` en el puerto).
+  return `${esFaltante && valor !== 0 ? '-' : ''}S/ ${formatoNumeroMoneda(valor)}`;
+}
+
+/**
+ * Una fila de cuadro: su total y de cuántos ítems salió. Espeja una de las
+ * tablas del Excel de Gilmer, que siempre termina en un total.
+ *
+ * Muestra faltante y sobrante por separado y NO su resta: en su Excel son dos
+ * cuadros distintos, y netearlos escondería que hay 877 de faltante debajo de
+ * un neto chico.
+ */
+function CuadroFila({
+  titulo,
+  cuadro,
+  destacado = false,
+}: {
+  titulo: string;
+  cuadro: CuadroDeDiferencias;
+  destacado?: boolean;
+}): JSX.Element {
+  return (
+    <View style={[styles.cuadro, destacado && styles.cuadroDestacado]}>
+      <Text style={[styles.cuadroTitulo, destacado && styles.cuadroTituloDestacado]}>{titulo}</Text>
+      {cuadro.items === 0 ? (
+        // "Nada en este cuadro" es información, no un hueco: significa que
+        // ninguna diferencia cayó acá, y eso el Auditor lo quiere saber.
+        <Text style={styles.cuadroVacio}>Sin diferencias en este cuadro</Text>
+      ) : (
+        <>
+          <View style={styles.cuadroFila}>
+            <Text style={styles.cuadroEtiqueta}>
+              Faltante · {cuadro.unidadesFaltantes} {pluralizar(cuadro.unidadesFaltantes, 'unidad', 'unidades')}
+            </Text>
+            <Text style={[styles.cuadroValor, cuadro.valorFaltante !== 0 && { color: colors.proceso }]}>
+              -S/ {formatoNumeroMoneda(cuadro.valorFaltante)}
+            </Text>
+          </View>
+          {cuadro.unidadesSobrantes > 0 ? (
+            <View style={styles.cuadroFila}>
+              <Text style={styles.cuadroEtiqueta}>
+                Sobrante · {cuadro.unidadesSobrantes} {pluralizar(cuadro.unidadesSobrantes, 'unidad', 'unidades')}
+              </Text>
+              <Text style={[styles.cuadroValor, { color: colors.ok }]}>+S/ {formatoNumeroMoneda(cuadro.valorSobrante)}</Text>
+            </View>
+          ) : null}
+          <Text style={styles.cuadroPie}>
+            {cuadro.items} {pluralizar(cuadro.items, 'ítem', 'ítems')}
+          </Text>
+        </>
+      )}
+    </View>
+  );
+}
+
 export default function AuditoriaScreen(): JSX.Element {
   const { sesion, cerrar } = useSesion();
   const [cargando, setCargando] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [items, setItems] = useState<ItemAuditoria[]>([]);
+  /**
+   * EL RESUMEN DEL SERVIDOR: los montos y los cuadros.
+   *
+   * Los CONTEOS se siguen resumiendo acá (`resumirAuditoria` sobre la matriz),
+   * pero el reparto entre cuadros no se puede hacer desde el teléfono: depende
+   * del umbral congelado en el inventario, que no viaja en ninguna respuesta.
+   * `null` mientras no llegó, y ahí los montos se muestran como "—": un 0
+   * inventado diría "no falta nada".
+   */
+  const [resumenServidor, setResumenServidor] = useState<ResumenAuditoriaServidor | null>(null);
   const [filtro, setFiltro] = useState<FiltroId>('todos');
 
   // El Auditor NO tiene tienda: audita toda la cadena y ELIGE cuál mirar. El
@@ -84,6 +175,7 @@ export default function AuditoriaScreen(): JSX.Element {
     // quedar en pantalla cuando ya se pidió la de Carhuaz.
     if (sucursalId === null) {
       setItems([]);
+      setResumenServidor(null);
       setCargando(false);
       return;
     }
@@ -92,11 +184,18 @@ export default function AuditoriaScreen(): JSX.Element {
       const activo = await repositorioInventario.activo(sucursalId);
       if (!activo) {
         setItems([]);
+        setResumenServidor(null);
         setCargando(false);
         return;
       }
-      const matriz = await repositorioAuditoria.matriz(activo.inventarioId);
+      // Las dos en paralelo: no dependen entre sí, y el resumen es el que
+      // trae los montos y los cuadros.
+      const [matriz, resumen] = await Promise.all([
+        repositorioAuditoria.matriz(activo.inventarioId),
+        repositorioAuditoria.resumen(activo.inventarioId),
+      ]);
       setItems(matriz);
+      setResumenServidor(resumen);
     } catch (e) {
       // Sin esto, un fallo sin red dejaba el spinner girando para siempre:
       // la excepción cortaba la función antes de llegar al
@@ -130,6 +229,7 @@ export default function AuditoriaScreen(): JSX.Element {
       return;
     }
     setItems([]);
+    setResumenServidor(null);
     setCargando(true);
     void cargar();
   }, [cargar]);
@@ -172,26 +272,39 @@ export default function AuditoriaScreen(): JSX.Element {
    * puede hacer que el encabezado diga "3 de 3 auditados".
    */
   const resumen = useMemo(() => resumirAuditoria(items), [items]);
-  const { cuadrados, auditables, contados, sinContar, sinDatoErp, conDiferencia, faltanteNeto, sobranteNeto, asumidoEmpresa } =
-    resumen;
+  const { cuadrados, auditables, contados, sinContar, sinDatoErp, conDiferencia } = resumen;
+  /**
+   * LOS MONTOS SALEN DEL SERVIDOR, no de `resumen`.
+   *
+   * `resumirAuditoria` sabe sumar faltantes, pero no sabe repartirlos entre
+   * cuadros -- y mostrar su total al lado de los cuadros del servidor daría
+   * dos números con el mismo nombre. Acá se usa el local SOLO para los
+   * conteos y el `veredictoPorId` del filtro, que el servidor no manda.
+   */
+  const cuadros = resumenServidor?.porClase ?? null;
 
   const opciones: OpcionChip[] = useMemo(
     () =>
       FILTROS.map((f) => ({
         id: f.id,
         etiqueta: f.etiqueta,
+        // Los contadores de los CUADROS salen del resumen del servidor -- los
+        // mismos números de la tarjeta de totales. Contarlos acá sobre la
+        // matriz daría una segunda cuenta que puede discrepar de la de arriba.
         contador:
           f.id === 'todos'
             ? items.length
             : f.id === 'cuadrado'
               ? resumen.cuadrados
-              : f.id === 'falta'
-                ? resumen.conFalta
-                : f.id === 'empresa'
-                  ? resumen.deEmpresa
-                  : resumen.sinContar + resumen.sinDatoErp,
+              : f.id === 'sin_dato'
+                ? resumen.sinContar + resumen.sinDatoErp
+                : f.id === 'personal'
+                  ? cuadros?.unidad.items
+                  : f.id === 'paquetes'
+                    ? cuadros?.paquete.items
+                    : cuadros?.empresa.items,
       })),
-    [items.length, resumen],
+    [items.length, resumen, cuadros],
   );
 
   // Filtra usando el veredicto YA CALCULADO en `resumen` (Map, lookup O(1))
@@ -202,7 +315,7 @@ export default function AuditoriaScreen(): JSX.Element {
         ? items
         : items.filter((it) => {
             const v = resumen.veredictoPorId.get(it.productoId);
-            return v !== undefined && coincideFiltro(v, filtro);
+            return v !== undefined && coincideFiltro(it, v, filtro);
           }),
     [items, filtro, resumen],
   );
@@ -298,28 +411,97 @@ export default function AuditoriaScreen(): JSX.Element {
                     <Text style={[styles.resumenValor, styles.resumenNeutro]}>{sinDatoErp}</Text>
                   </View>
                 ) : null}
+                {/*
+                  EL BRUTO Y EL DESCONTABLE, SEPARADOS.
+                  Se veía solo el bruto, y con 44 de 46 unidades yéndose al
+                  cuadro de paquetes "Faltante del conteo -S/460" hacía pensar
+                  que se le descontaban S/460 al personal cuando se le
+                  descuentan S/20. El número que le importa al Auditor es el
+                  segundo, así que va destacado y con su explicación.
+                */}
                 <View style={styles.resumenFila}>
                   {/* "del conteo", NO "neto": esta cifra es el faltante que surge de
                       comparar el conteo contra el ERP, ANTES de los ajustes de la
                       liquidación. El neto que se descuenta es otro número y sale de
                       la pantalla de Liquidación (ver la nota de abajo). */}
-                  <Text style={styles.resumenEtiqueta}>Faltante del conteo</Text>
-                  <Text style={[styles.resumenValor, faltanteNeto !== 0 && { color: colors.proceso }]}>{formatoMoneda(faltanteNeto)}</Text>
+                  <Text style={styles.resumenEtiqueta}>Faltante del conteo (bruto)</Text>
+                  <Text style={styles.resumenValor}>{montoOSinDato(resumenServidor?.valorFaltante, true)}</Text>
                 </View>
+                <View style={[styles.resumenFila, styles.resumenFilaDestacada]}>
+                  <Text style={styles.resumenEtiquetaFuerte}>Se le descuenta al personal</Text>
+                  <Text style={[styles.resumenValor, styles.resumenValorFuerte]}>
+                    {montoOSinDato(resumenServidor?.valorFaltanteDescontable, true)}
+                  </Text>
+                </View>
+                <Text style={styles.resumenNota}>
+                  La diferencia entre los dos sale por los cuadros de abajo: lo que va a paquetes se audita aparte y lo
+                  que asume la empresa no se le descuenta a nadie.
+                </Text>
                 <View style={styles.resumenFila}>
                   <Text style={styles.resumenEtiqueta}>Sobrante del conteo</Text>
-                  <Text style={[styles.resumenValor, sobranteNeto !== 0 && { color: colors.ok }]}>{formatoMoneda(sobranteNeto)}</Text>
+                  <Text style={[styles.resumenValor, { color: colors.ok }]}>
+                    {montoOSinDato(resumenServidor?.valorSobrante, false)}
+                  </Text>
                 </View>
-                {asumidoEmpresa !== 0 ? (
-                  <View style={styles.resumenFila}>
-                    <Text style={styles.resumenEtiqueta}>Asumido por la empresa</Text>
-                    <Text style={styles.resumenValor}>{formatoMoneda(asumidoEmpresa)}</Text>
-                  </View>
-                ) : null}
                 <Text style={styles.resumenNota}>
                   El monto que se le descuenta a cada persona sale de la Liquidación, que también tiene en cuenta los ajustes del mes y los sobrantes.
                 </Text>
               </View>
+
+              {/*
+                LOS CUADROS, como los arma Gilmer a mano.
+                Su Excel de julio (hoja FALTANTES) tiene cuatro tablas con su
+                total: PRODUCTOS FALTANTES ÚNICOS, FALTANTE POR PAQUETE,
+                SOBRANTE POR PAQUETE y los sobrantes únicos, más la hoja
+                EMPRESA. Esta tarjeta es eso: dónde cayó cada sol, y cuál de
+                los cuatro es el único que toca un sueldo.
+              */}
+              {cuadros ? (
+                <View style={styles.tarjetaResumen}>
+                  <Text style={styles.resumenTitulo}>A qué cuadro fue cada diferencia</Text>
+                  <CuadroFila
+                    titulo="Únicos — se le descuentan al personal"
+                    cuadro={cuadros.unidad}
+                    destacado
+                  />
+                  <CuadroFila
+                    titulo="Por paquete — se auditan aparte, fuera del descuento"
+                    cuadro={cuadros.paquete}
+                  />
+                  {/* El de empresa solo si tiene algo: un cuadro en cero que
+                      aparece siempre le agrega ruido a la pantalla sin decir
+                      nada. Los otros dos van siempre porque su ausencia SÍ es
+                      información ("no hubo nada por paquete"). */}
+                  {cuadros.empresa.items > 0 ? (
+                    <CuadroFila titulo="Empresa — los absorbe gerencia" cuadro={cuadros.empresa} />
+                  ) : null}
+                  <Text style={styles.resumenNota}>
+                    Un ítem va entero a un solo cuadro: el faltante no se parte. Lo que cae en “por paquete” se revisa
+                    aparte y no entra al descuento del personal.
+                  </Text>
+                </View>
+              ) : null}
+
+              {/*
+                EL CAMINO A CORREGIR, DONDE SE ENCUENTRA EL PROBLEMA.
+                Esta matriz es el lugar donde el Auditor ve que un ítem no
+                cuadra; mandarlo a buscar la pantalla de corrección por el menú
+                de Inicio es pedirle que se acuerde de que existe. La pantalla
+                de destino explica la regla (se corrige lo CONTADO, el stock no
+                se toca) y dice si la ventana ya se cerró.
+              */}
+              <Pressable
+                style={styles.irACorregir}
+                onPress={() => router.push('/auditor/corregir')}
+                accessibilityRole="button"
+                accessibilityLabel="Corregir lo contado"
+              >
+                <PencilLine size={16} color={colors.tinta} />
+                <Text style={styles.irACorregirTexto}>
+                  ¿Un conteo quedó mal cargado? Corrígelo — el stock no se toca
+                </Text>
+                <ChevronRight size={16} color={colors.gris} />
+              </Pressable>
 
               <View style={styles.seccion}>
                 <Text style={styles.seccionTitulo}>Matriz comparativa</Text>
@@ -361,6 +543,34 @@ const styles = StyleSheet.create({
   resumenNeutro: { color: colors.gris },
   resumenPct: { fontSize: 11.5, color: colors.gris, fontFamily: fonts.medium },
   resumenNota: { fontSize: 11.5, lineHeight: 16, color: colors.gris, fontFamily: fonts.regular, marginTop: 2 },
+  /** Acceso a la corrección: `outline` neutro, no el rojo de acción — la acción principal de esta pantalla sigue siendo el lacrado del pie. */
+  irACorregir: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 9,
+    paddingVertical: 11,
+    paddingHorizontal: 13,
+    borderWidth: 1,
+    borderColor: colors.borde,
+    borderRadius: radius.md,
+    backgroundColor: colors.campo,
+  },
+  irACorregirTexto: { flex: 1, fontSize: 12.5, lineHeight: 17, color: colors.tinta, fontFamily: fonts.semibold },
+  cuadro: { gap: 3, padding: 11, borderRadius: radius.md, backgroundColor: colors.esperaSuave },
+  /** El de `unidad` es el ÚNICO que toca un sueldo: se destaca con la paleta de atención. */
+  cuadroDestacado: { backgroundColor: colors.procesoSuave, borderWidth: 1, borderColor: colors.proceso },
+  cuadroTitulo: { fontSize: 12, color: colors.gris, fontFamily: fonts.semibold, lineHeight: 16 },
+  cuadroTituloDestacado: { color: colors.tinta, fontFamily: fonts.bold },
+  cuadroFila: { flexDirection: 'row', alignItems: 'baseline', justifyContent: 'space-between', gap: 8 },
+  cuadroEtiqueta: { flex: 1, fontSize: 12, color: colors.gris, fontFamily: fonts.regular },
+  cuadroValor: { fontSize: 14.5, color: colors.tinta, fontFamily: fonts.bold, fontVariant: ['tabular-nums'] },
+  cuadroPie: { fontSize: 10.5, color: colors.grisClaro, fontFamily: fonts.regular },
+  cuadroVacio: { fontSize: 11.5, color: colors.grisClaro, fontFamily: fonts.regular },
+
+  resumenFilaDestacada: { paddingTop: 7, borderTopWidth: 1, borderTopColor: colors.borde },
+  resumenEtiquetaFuerte: { fontSize: 12.5, color: colors.tinta, fontFamily: fonts.bold },
+  resumenValorFuerte: { fontSize: 17, color: colors.proceso },
+
   seccion: { flexDirection: 'row', alignItems: 'baseline', justifyContent: 'space-between', gap: 10 },
   seccionTitulo: { fontSize: 11, letterSpacing: 1.3, textTransform: 'uppercase', color: colors.gris, fontFamily: fonts.semibold },
   seccionTotal: { fontSize: 11.5, color: colors.grisClaro, fontFamily: fonts.regular },

@@ -3,7 +3,9 @@ import {
   agruparBarcodesPorItem,
   agruparConversionesPorProducto,
   criteriosDelSnapshot,
+  clasificarItem,
   elegirEmpaques,
+  empaqueDeCompra,
   mapearProducto,
   obtenerCatalogoEjemplo,
 } from './d365-catalogo.service';
@@ -217,5 +219,157 @@ describe('criteriosDelSnapshot: que filtros corrieron DE VERDAD', () => {
 
   it('ANUAL: porResponsable en false aunque haya responsables -- ahi se cuenta todo a proposito', () => {
     expect(criteriosDelSnapshot({ tipo: 'anual', cantidadResponsables: 8000, filtrarPorStock: true }).porResponsable).toBe(false);
+  });
+});
+
+/**
+ * EL EMPAQUE DE COMPRA. Es el denominador de la regla del faltante por
+ * paquete, y de el depende a QUIEN se le descuenta un faltante: si falta
+ * menos de media unidad de paquete se le descuenta al trabajador; si falta
+ * mas, sale del descuento al personal y va al cuadro del almacenero.
+ *
+ * Gilmer lo dijo tres veces: es el de COMPRA, no el de venta. Su ejemplo es
+ * un chocolate con empaque de compra 540 y display de venta 20 -- con esa
+ * diferencia, 10 unidades faltantes caen de un lado o del otro de la regla.
+ */
+describe('empaqueDeCompra', () => {
+  it('toma el factor del PurchaseUnitSymbol A LA UNIDAD BASE', () => {
+    const conversiones: D365UnitConversion[] = [
+      { ProductNumber: '110605', FromUnitSymbol: 'U', ToUnitSymbol: 'U.', Factor: 1 },
+      { ProductNumber: '110605', FromUnitSymbol: 'Emp.12', ToUnitSymbol: 'U', Factor: 12 },
+    ];
+    expect(empaqueDeCompra(conversiones, producto)).toEqual({ unidades: 12, simbolo: 'Emp.12' });
+  });
+
+  /**
+   * LA TRAMPA, con datos reales (item 100016): el mismo simbolo de compra
+   * tiene DOS conversiones, una a otro empaque y otra a la unidad. Tomar "la
+   * primera que coincida" devuelve 4 -- cuantos Emp.12 entran en un Emp.48 --
+   * en vez de 48. Con 4, media unidad de paquete son 2 unidades en vez de 24:
+   * la regla cambiaria de lado para casi cualquier faltante.
+   */
+  it('NO se queda con la conversion a otro empaque: pide la que va a la unidad suelta', () => {
+    const item100016: D365ReleasedProduct = {
+      ItemNumber: '100016',
+      SearchName: 'X',
+      InventoryUnitSymbol: 'U.',
+      PurchaseUnitSymbol: 'Emp.48',
+    };
+    const conversiones: D365UnitConversion[] = [
+      { ProductNumber: '100016', FromUnitSymbol: 'Emp.48', ToUnitSymbol: 'Emp.12', Factor: 4 },
+      { ProductNumber: '100016', FromUnitSymbol: 'Emp.48', ToUnitSymbol: 'U', Factor: 48 },
+    ];
+    expect(empaqueDeCompra(conversiones, item100016)?.unidades).toBe(48);
+  });
+
+  /**
+   * EL CASO QUE MOTIVA TODO, con datos reales (item 101127): el catalogo
+   * guarda hoy el MAYOR factor de las conversiones -- 1000 -- y el empaque de
+   * compra es 20. Medir el umbral con el de hoy daria 500 unidades de
+   * tolerancia en vez de 10.
+   */
+  it('NO es el mayor empaque del producto: el de compra puede ser mucho mas chico', () => {
+    const item101127: D365ReleasedProduct = {
+      ItemNumber: '101127',
+      SearchName: 'X',
+      InventoryUnitSymbol: 'U.',
+      PurchaseUnitSymbol: 'Emp.20',
+    };
+    const conversiones: D365UnitConversion[] = [
+      { ProductNumber: '101127', FromUnitSymbol: 'Emp.1000', ToUnitSymbol: 'U', Factor: 1000 },
+      { ProductNumber: '101127', FromUnitSymbol: 'Emp.20', ToUnitSymbol: 'U', Factor: 20 },
+    ];
+    expect(empaqueDeCompra(conversiones, item101127)?.unidades).toBe(20);
+    // Y lo que el catalogo guarda hoy como empaque sigue siendo el de gondola.
+    expect(elegirEmpaques(conversiones, item101127)[0]?.factor).toBe(1000);
+  });
+
+  it('comprado por unidad ("U") es un paquete de 1, y eso es un DATO', () => {
+    // 457 de los primeros 2.000 items del catalogo real. No es un caso de
+    // borde ni un dato faltante: se compra suelto.
+    const suelto: D365ReleasedProduct = {
+      ItemNumber: '100033',
+      SearchName: 'X',
+      InventoryUnitSymbol: 'U.',
+      PurchaseUnitSymbol: 'U',
+    };
+    expect(empaqueDeCompra([], suelto)).toEqual({ unidades: 1, simbolo: 'U' });
+  });
+
+  it('sin conversion a la unidad base, cae al numero del nombre ("Emp.12" -> 12)', () => {
+    // El mismo respaldo que ya usa `elegirEmpaques`: 3.728 de 11.835
+    // productos no tienen ninguna conversion cargada.
+    expect(empaqueDeCompra([], producto)).toEqual({ unidades: 12, simbolo: 'Emp.12' });
+  });
+
+  it('sin nada de donde sacarlo devuelve NULL, que NO es 1', () => {
+    // "No se sabe el tamano del paquete" es distinto de "se compra por
+    // unidad". Con 1, el item entraria a la regla como suelto y se le
+    // descontaria el faltante entero al personal sin que nadie lo decida.
+    const sinNada: D365ReleasedProduct = {
+      ItemNumber: '999',
+      SearchName: 'X',
+      InventoryUnitSymbol: 'U.',
+      PurchaseUnitSymbol: 'SA',
+    };
+    expect(empaqueDeCompra([], sinNada)).toBeNull();
+  });
+
+  it('sin simbolo de compra, NULL', () => {
+    const sinSimbolo: D365ReleasedProduct = { ItemNumber: '999', SearchName: 'X', InventoryUnitSymbol: 'U.' };
+    expect(empaqueDeCompra([], sinSimbolo)).toBeNull();
+  });
+});
+
+/**
+ * LAS TRES VIAS. Reemplazan al booleano `esEmpresa`: la regla del cliente ya
+ * no es "se descuenta o no", son tres destinos distintos para el faltante.
+ */
+describe('clasificarItem', () => {
+  it('lo de la empresa es `empresa`, tenga el empaque que tenga', () => {
+    expect(clasificarItem(true, 12)).toBe('empresa');
+    expect(clasificarItem(true, 1)).toBe('empresa');
+    expect(clasificarItem(true, null)).toBe('empresa');
+  });
+
+  it('con empaque de compra mayor que 1 es `paquete`: le aplica la regla del umbral', () => {
+    expect(clasificarItem(false, 12)).toBe('paquete');
+    expect(clasificarItem(false, 2)).toBe('paquete');
+  });
+
+  it('comprado por unidad es `unidad`: no hay paquete contra el cual medir media unidad', () => {
+    expect(clasificarItem(false, 1)).toBe('unidad');
+  });
+
+  /**
+   * SIN EMPAQUE DA `unidad`, que es el tratamiento de SIEMPRE. No se manda al
+   * cuadro del almacenero por no tener el dato: eso sacaria plata del
+   * descuento al personal sin que nadie lo haya decidido. La columna
+   * `empaqueCompra` queda en null al lado, asi que el caso se puede encontrar.
+   */
+  it('sin empaque resuelto es `unidad`, no `paquete`: no se inventa un paquete', () => {
+    expect(clasificarItem(false, null)).toBe('unidad');
+  });
+});
+
+describe('mapearProducto: las columnas nuevas viajan con el item', () => {
+  it('trae el empaque de compra, su simbolo y la clase, junto a los empaques de gondola', () => {
+    const conversiones: D365UnitConversion[] = [
+      { ProductNumber: '110605', FromUnitSymbol: 'Emp.12', ToUnitSymbol: 'U', Factor: 12 },
+    ];
+    const item = mapearProducto(producto, [], conversiones);
+    expect(item.empaqueCompra).toBe(12);
+    expect(item.empaqueCompraSimbolo).toBe('Emp.12');
+    expect(item.clase).toBe('paquete');
+  });
+
+  it('`clase === empresa` y `esEmpresa === true` son el mismo hecho: no pueden discrepar', () => {
+    // Se escriben juntas y de la misma fuente. Mientras el booleano siga
+    // existiendo, esta equivalencia es lo que impide que la auditoria y el
+    // calculo nuevo lean cosas distintas del mismo item.
+    const deEmpresa = mapearProducto(producto, [], [], 'Company');
+    const deEmpleado = mapearProducto(producto, [], [], 'Employee');
+    expect(deEmpresa.esEmpresa).toBe(deEmpresa.clase === 'empresa');
+    expect(deEmpleado.esEmpresa).toBe(deEmpleado.clase === 'empresa');
   });
 });

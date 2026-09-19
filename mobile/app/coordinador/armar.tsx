@@ -4,6 +4,7 @@ import { useCallback, useMemo, useRef, useState, type JSX, type ReactNode } from
 import { ActivityIndicator, Alert, Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { PantallaConTabs } from '../../components/navegacion/PantallaConTabs';
+import { faseDeCierre, type FaseDeCierre } from '../../lib/dominio/ajuste-final';
 import { AvanceFila, BarraApp, Badge, Button, formatoFechaHora, formatoMiles, type BadgeVariant } from '../../components/ui';
 import { inventarioIdSinRed } from '../../lib/adaptadores/hojas-sqlite';
 import { repositorioHojas, repositorioInventario, repositorioSesion } from '../../lib/contenedor';
@@ -18,6 +19,7 @@ import {
   type AvanceSnapshot,
   type CriteriosSnapshot,
   type DesgloseSnapshot,
+  type EstadoInventario,
   type TipoInventario,
 } from '../../lib/puertos/repositorios';
 import { useSesion } from '../../lib/sesion-contexto';
@@ -245,6 +247,16 @@ export default function ArmarHojasScreen(): JSX.Element {
   // ese número sin apellido mostraba las cifras de la ronda 1 en las rondas
   // 2 y 3 (BUG B).
   const [ronda, setRonda] = useState(1);
+  /**
+   * La fase del cierre. `null` = todavía no se sabe (o no hay inventario).
+   *
+   * El armado solo tiene sentido mientras haya una ronda abierta. Antes eso
+   * se daba por hecho -- `activo()` solo devolvía inventarios `en_curso` con
+   * ronda -- y ahora ya no: entre la última ronda cerrada y el ajuste del
+   * auditor, y durante el ajuste, el inventario sigue abierto pero no hay
+   * nada que crear ni repartir. Ver dominio/ajuste-final.ts.
+   */
+  const [fase, setFase] = useState<FaseDeCierre | null>(null);
   const [contadores, setContadores] = useState<Colaborador[]>([]);
 
   const [tipoElegido, setTipoElegido] = useState<TipoInventario>('mensual');
@@ -272,7 +284,12 @@ export default function ArmarHojasScreen(): JSX.Element {
     let inventarioActivo: number | null;
     let itemsSnapshot: number | null = null;
     let tomadoEnSnapshot: string | null = null;
-    let rondaActiva = 1;
+    // `null` y NO 1: "no hay ronda" y "ronda 1" son cosas distintas, y desde
+    // que el conteo puede terminar con el inventario todavía abierto, el
+    // default a 1 traía las hojas de la PRIMERA ronda y las rotulaba como si
+    // se estuvieran armando ahora.
+    let rondaActiva: number | null = null;
+    let estadoActivo: EstadoInventario | null = null;
     // Distingue "el servidor contestó y no hay inventario todavía" (estado
     // normal: hay que tomar el snapshot en el paso 1) de "no se pudo ni
     // preguntar" (sin red) — confundirlas mostraría "no se pudo conectar"
@@ -283,7 +300,8 @@ export default function ArmarHojasScreen(): JSX.Element {
       inventarioActivo = activo?.inventarioId ?? null;
       itemsSnapshot = activo?.items ?? null;
       tomadoEnSnapshot = activo?.tomadoEn ?? null;
-      rondaActiva = activo?.rondaActiva ?? 1;
+      rondaActiva = activo?.rondaActiva ?? null;
+      estadoActivo = activo?.estado ?? null;
     } catch {
       activoFallo = true;
       inventarioActivo = await inventarioIdSinRed();
@@ -304,16 +322,23 @@ export default function ArmarHojasScreen(): JSX.Element {
       setInventarioId(inventarioActivo);
       setItems(itemsSnapshot);
       setTomadoEn(tomadoEnSnapshot);
-      setRonda(rondaActiva);
-      try {
-        // Las hojas de la ronda activa (`?? 1`: si todavía no hay hojas,
-        // rondaActiva es null y no hay ninguna que traer de ninguna ronda —
-        // el 1 es inocuo). Acá solo se usan para saber en qué paso está el
-        // armado (2 y 3) -- la LISTA en sí vive en la pantalla "Hojas".
-        const todas = await repositorioHojas.todas(inventarioActivo, rondaActiva);
-        setHojas(todas);
-      } catch (e) {
-        setErrorInicial(e instanceof Error ? e.message : 'No se pudo cargar el estado del armado.');
+      setRonda(rondaActiva ?? 1);
+      setFase(estadoActivo === null ? null : faseDeCierre(estadoActivo, rondaActiva));
+      if (rondaActiva === null) {
+        // Sin ronda abierta no hay hojas que traer: o todavía no se creó
+        // ninguna (paso 1), o el conteo ya terminó. Pedir las de la ronda 1
+        // en el segundo caso mostraría hojas viejas como si fueran el armado
+        // en curso.
+        setHojas([]);
+      } else {
+        try {
+          // Las hojas de la ronda activa. Acá solo se usan para saber en qué
+          // paso está el armado (2 y 3) -- la LISTA en sí vive en "Hojas".
+          const todas = await repositorioHojas.todas(inventarioActivo, rondaActiva);
+          setHojas(todas);
+        } catch (e) {
+          setErrorInicial(e instanceof Error ? e.message : 'No se pudo cargar el estado del armado.');
+        }
       }
     } else if (activoFallo) {
       // Sin red Y sin nada descargado localmente: ahí sí es un fallo real
@@ -541,6 +566,13 @@ export default function ArmarHojasScreen(): JSX.Element {
   // mezclaba bajo el mismo texto, y alguien que solo mirara la barra de
   // arriba podía leer una previsualización como un hecho ya consumado.
   const sufijoPlural = (n: number) => (n === 1 ? '' : 's');
+  /**
+   * Hay inventario abierto pero ninguna ronda: el armado no aplica. No se
+   * confunde con "todavía no hay inventario" (donde el paso 1 SÍ aplica: hay
+   * que traer el catálogo), ni con "no se sabe" por falta de red.
+   */
+  const conteoTerminado = fase !== null && fase !== 'contando';
+
   const cifras = items
     ? hojas.length > 0
       ? `${formatoMiles(hojas.length)} hoja${sufijoPlural(hojas.length)} creada${sufijoPlural(hojas.length)} · ${formatoMiles(items)} ítem${sufijoPlural(items)}`
@@ -555,6 +587,27 @@ export default function ArmarHojasScreen(): JSX.Element {
 
       {cargandoInicial ? (
         <ActivityIndicator color={colors.rojo} style={styles.cargandoInicial} />
+      ) : conteoTerminado ? (
+        /*
+          EL CONTEO TERMINÓ: los tres pasos del armado no aplican y el
+          servidor los rechazaría. Se reemplaza el wizard entero en vez de
+          dejarlo deshabilitado -- tres pasos grises sin explicación hacen
+          pensar que algo se rompió, y acá no se rompió nada: el inventario
+          avanzó de etapa.
+
+          Lo que SÍ le queda al Coordinador -- corregir valores mientras el
+          auditor no empiece el ajuste -- se dice acá, porque es la única
+          acción que le queda y no es evidente desde esta pantalla.
+        */
+        <View style={styles.tarjeta}>
+          <Text style={styles.tarjetaTitulo}>El conteo de este inventario terminó</Text>
+          <Text style={styles.tarjetaTexto}>
+            {fase === 'ajuste'
+              ? 'El auditor está haciendo el ajuste final: fija él los valores definitivos contra el stock. Ya no se crean ni se reparten hojas, y tampoco se pueden corregir conteos.'
+              : 'Se cerraron todas las rondas y el auditor decide qué sigue: otra pasada de conteo, o el ajuste final. Mientras no empiece el ajuste, todavía puedes corregir valores desde las hojas de la última ronda.'}
+          </Text>
+          <Button label="Ir a Gestión de hojas" variant="outline" onPress={() => router.push('/coordinador/hojas')} />
+        </View>
       ) : errorInicial ? (
         <View style={styles.tarjeta}>
           <Text style={styles.tarjetaTitulo}>No se pudo cargar el armado</Text>

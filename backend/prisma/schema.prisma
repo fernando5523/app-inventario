@@ -67,11 +67,30 @@ enum EstadoSync {
 /// no se puede saltear -- cada transicion es una accion distinta con su
 /// propio responsable (docs/pantallas.md, Pantallas 4/6/7):
 ///
-///   en_curso       Snapshot tomado, hojas en juego, las 3 rondas de conteo
-///                  todavia se pueden tocar. Es el unico estado en el que
-///                  el inventario acepta escrituras de conteo.
-///   conteo_cerrado La 3ra ronda quedo fija (cierre de Gilmer): las
-///                  cantidades ya no se recuentan, se liquidan.
+///   en_curso       Snapshot tomado, hojas en juego, las rondas de conteo
+///                  todavia se pueden tocar. Es el estado en el que el
+///                  inventario acepta escrituras de conteo, y tambien en el
+///                  que el Coordinador CORRIGE lo que cargaron los
+///                  contadores -- con la ronda abierta o ya cerrada.
+///   ajuste_auditor La ultima ronda cerro y el AUDITOR TODAVIA NO DECIDIO
+///                  que hacer. Es una espera con nombre, no un tramite: al
+///                  cerrar la ultima ronda el inventario ya NO pasa solo a
+///                  `conteo_cerrado`; se queda aca hasta que el auditor
+///                  elija entre las dos salidas que tiene --
+///                    - abrir OTRA ronda (una 4ta, una 5ta: las abre el, de
+///                      a una, cuando el recuento no termina de cuadrar), y
+///                      el inventario vuelve a `en_curso`; o
+///                    - iniciar el AJUSTE FINAL, donde el auditor cambia los
+///                      valores contados VIENDO el stock del ERP -- lo unico
+///                      que el conteo ciego le niega a todos los demas.
+///                  El ajuste arranca con un boton suyo y no automaticamente
+///                  al cerrar la ronda, y de esa decision del cliente sale la
+///                  ventana en la que el Coordinador todavia puede corregir
+///                  con la ronda ya cerrada. Desde que se entra aca el
+///                  Coordinador queda bloqueado: a partir de este punto los
+///                  valores los toca el auditor y nadie mas.
+///   conteo_cerrado El ajuste del auditor cerro: las cantidades ya no se
+///                  recuentan ni se corrigen, se liquidan.
 ///   liquidado      La planilla de descuentos esta calculada y confirmada
 ///                  (Pantalla 6). Falta la firma.
 ///   lacrado        CERRADO E INMUTABLE (Pantalla 7). Ver LacradoInventario:
@@ -85,6 +104,10 @@ enum EstadoSync {
 ///                  para siempre por el @@unique([sucursalId, abierto]).
 enum EstadoInventario {
   en_curso
+  /// Va ENTRE las rondas y el cierre a proposito: el orden de los valores de
+  /// un enum de Postgres es el orden en que se declaran, y este es el unico
+  /// lugar del sistema donde el ciclo de vida esta escrito en orden.
+  ajuste_auditor
   conteo_cerrado
   liquidado
   lacrado
@@ -120,6 +143,45 @@ enum ResponsableItem {
   empresa
 
   @@map("responsable_item")
+}
+
+/// COMO SE TRATA EL FALTANTE DE ESTE ITEM. Tres vias, y reemplazan al
+/// booleano `esEmpresa`: la regla del cliente (Gilmer, reunion 2) ya no es
+/// "se descuenta o no", son tres destinos distintos.
+///
+///   empresa  El faltante lo absorbe la empresa y no se descuenta a nadie.
+///            Es exactamente lo que hoy dice `esEmpresa = true`.
+///   paquete  Item que VIENE EN PAQUETE. Aca se aplica la regla nueva: si
+///            falta MENOS de media unidad de paquete se le descuenta al
+///            personal; si falta MAS, sale del descuento al personal y va al
+///            cuadro de FALTANTE POR PAQUETE, que se audita aparte y quizas
+///            se le descuenta al almacenero.
+///   unidad   Item que se compra por unidad (empaque de compra = 1). No hay
+///            paquete contra el cual medir media unidad, asi que la regla del
+///            umbral NO aplica: su faltante se descuenta al personal como
+///            siempre. Son 457 de los primeros 2.000 items del catalogo real
+///            -- no es un caso de borde.
+///
+/// El eje es OTRO que el de `ResponsableItem`: aquel dice QUIEN responde
+/// segun el ERP (empleado/empresa), este dice COMO se trata el faltante. Se
+/// cruzan en `empresa` y nada mas.
+/// Que parte de la navegacion configura una fila: las tarjetas del home o la
+/// barra de abajo. Van en la MISMA tabla porque el Administrador las maneja
+/// igual (prender, apagar, reordenar) y separarlas serian dos tablas
+/// identicas con dos endpoints identicos.
+enum TipoNavegacion {
+  acceso
+  tab
+
+  @@map("tipo_navegacion")
+}
+
+enum ClaseItem {
+  empresa
+  paquete
+  unidad
+
+  @@map("clase_item")
 }
 
 // ---------------------------------------------------------------------------
@@ -227,6 +289,14 @@ model Colaborador {
   /// alguien una asistencia que solo registro.
   asistencias             AsistenciaInventario[]       @relation("ColaboradorMarcado")
   asistenciasRegistradas  AsistenciaInventario[]       @relation("AsistenciaRegistradaPor")
+  /// Justificaciones: las faltas que le perdonaron y -- si es Auditor -- las
+  /// que perdono. Dos relaciones nombradas a la misma tabla, por lo mismo que
+  /// arriba: confundirlas le perdonaria una falta a quien solo firmo el
+  /// perdon de otro.
+  /// Cambios de navegacion que firmo (solo el Administrador toca esto).
+  navegacionActualizada   ConfiguracionNavegacion[]    @relation("NavegacionActualizadaPor")
+  faltasJustificadas      JustificacionAsistencia[]    @relation("ColaboradorJustificado")
+  justificacionesFirmadas JustificacionAsistencia[]    @relation("JustificacionRegistradaPor")
 
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
@@ -262,23 +332,63 @@ model Configuracion {
 /// cuentas, altas o cambios de tienda, cambios de configuracion): si se
 /// puede dar de alta gente que despues cuenta inventario, tiene que quedar
 /// registro de quien lo hizo y cuando. `entidad` + `entidadId` apuntan a
-/// filas de distintas tablas (Colaborador, Sucursal, Configuracion) --
-/// Prisma no modela relaciones polimorficas, asi que queda como puntero
-/// libre en vez de una FK; cada *.service.ts arma el valor correcto, nunca
-/// se acepta del cliente.
+/// filas de distintas tablas (Colaborador, Sucursal, Configuracion,
+/// Conteo) -- Prisma no modela relaciones polimorficas, asi que queda como
+/// puntero libre en vez de una FK; cada *.service.ts arma el valor correcto,
+/// nunca se acepta del cliente.
+///
+/// ---------------------------------------------------------------------------
+/// YA NO ES SOLO ADMINISTRACION, Y ESO LE SUBE EL PESO A ESTA TABLA
+/// ---------------------------------------------------------------------------
+/// Desde las correcciones de conteo, aca tambien entran acciones
+/// OPERATIVAS: `conteo.corregido` (el Coordinador arregla lo que cargo un
+/// contador, sin ver el stock) y `conteo.ajustado` (el Auditor cambia el
+/// valor final, viendo el stock). Las dos con `entidad: 'conteo'` y
+/// `entidadId` = el id del Conteo.
+///
+/// Y la consecuencia que hay que entender antes de tocar nada aca: la
+/// correccion REEMPLAZA el valor contado -- decision del cliente --, asi que
+/// el numero original NO SOBREVIVE EN NINGUNA OTRA TABLA. `Conteo` queda con
+/// el valor corregido y el lacrado sella ese. Lo que el contador conto de
+/// verdad existe unicamente en el `detalle` de la fila de auditoria.
+///
+/// O sea que esta tabla dejo de ser un registro "por las dudas" y paso a ser
+/// la unica prueba de un numero que descuenta plata del sueldo de alguien. De
+/// ahi salen tres cosas que no hay que hacer: no purgarla sin pensarlo (hoy
+/// no hay purga, y no la agregues sin resolver esto primero), no borrar sus
+/// filas cuando se borra un conteo, y no aflojar el `motivo`.
+///
+/// El `motivo` de cada correccion es OBLIGATORIO y viaja dentro de `detalle`
+/// -- Postgres no lo exige, lo exige la capa de aplicacion, mismo criterio
+/// que el `sucursalId` obligatorio de Colaborador. Un cambio sin motivo es un
+/// descuento que nadie puede explicar seis meses despues.
+///
+/// El @@index([entidad, entidadId]) de abajo ya cubre la consulta nueva
+/// ("todas las correcciones de ESTE conteo"): no hace falta indice extra.
 model RegistroAuditoria {
   id        Int         @id @default(autoincrement())
   actorId   Int         @map("actor_id")
   actor     Colaborador @relation("ActorAuditoria", fields: [actorId], references: [id])
   /// "colaborador.creado" | "colaborador.habilitado" | "colaborador.deshabilitado"
   /// | "colaborador.pin_reseteado" | "sucursal.creada" | "sucursal.actualizada"
-  /// | "configuracion.actualizada" -- string libre, no enum: quien agrega un
-  /// modulo de administracion nuevo no deberia migrar este enum para loguear.
+  /// | "configuracion.actualizada" | "conteo.corregido" | "conteo.ajustado"
+  /// -- string libre, no enum: quien agrega un modulo de administracion nuevo
+  /// no deberia migrar este enum para loguear. Por eso tampoco hay un CHECK
+  /// en la base que exija `motivo` segun la accion: ataria esta tabla a dos
+  /// nombres de accion concretos y se perderia justamente eso.
   accion    String
   entidad   String
   entidadId Int      @map("entidad_id")
   /// Nunca el PIN en claro (ver comentario de pinHash arriba): un reseteo
   /// de PIN audita QUE paso y A QUIEN, jamas el valor nuevo.
+  ///
+  /// En una correccion de conteo lleva
+  ///   { productoId, codigo, ronda, valorAnterior, valorNuevo, motivo }
+  /// y `valorAnterior`/`valorNuevo` NO son un numero: un conteo son sus
+  /// lineas por empaque MAS las sueltas (ver Conteo y LineaConteo). Guardar
+  /// solo el total en unidades perderia con que empaques se conto, que es la
+  /// mitad de lo que hay que poder reconstruir. `ronda` sale de
+  /// `HojaConteo.numeroConteo`: Conteo no la guarda, cuelga de la hoja.
   detalle   Json?
   createdAt DateTime @default(now()) @map("created_at")
 
@@ -365,12 +475,39 @@ model Inventario {
   /// items por hoja se conto ESE mes.
   tamanoHoja       Int            @default(50) @map("tamano_hoja")
 
+  /// EL UMBRAL DE "MEDIA UNIDAD DE PAQUETE", congelado al abrir el inventario.
+  ///
+  /// Es la perilla que ya existia y no movia nada: la configuracion
+  /// `UMBRAL_MEDIA_UNIDAD_PAQUETE` se valida (config.validadores.ts), se
+  /// guarda y se edita desde la pantalla del Administrador, pero NINGUN
+  /// calculo la leia. Estaba la perilla y no el mecanismo. Esta columna es el
+  /// cable: el calculo del faltante por paquete lee de acá, no de la config
+  /// viva.
+  ///
+  /// SE COPIA, no se lee en vivo, por lo mismo que `tamanoHoja`: dentro de
+  /// seis meses la config va a valer otra cosa y el historico tiene que poder
+  /// decir con que umbral se decidio cada descuento. Recalcular una
+  /// liquidacion con la perilla de hoy le cambiaria el sueldo a alguien de
+  /// agosto.
+  ///
+  /// 0.5 = "media unidad", que es como lo dijo el cliente. Es configurable
+  /// porque el propio Auditor aclaro que lo ajusta caso por caso
+  /// (docs/pantallas.md, pregunta 1).
+  ///
+  /// Decimal y no Float, mismo criterio que toda la plata del schema. Con
+  /// (4,3) entra cualquier fraccion entre 0.001 y 0.999, que es el rango que
+  /// el validador ya exige (mayor que 0, menor que 1).
+  umbralMediaUnidadPaquete Decimal @default(0.5) @map("umbral_media_unidad_paquete") @db.Decimal(4, 3)
+
   snapshotItems    Int?           @map("snapshot_items")
   snapshotTomadoEn DateTime?      @map("snapshot_tomado_en")
 
   /// Apertura y cierre del CONTEO (no del lacrado: eso vive en
-  /// LacradoInventario.lacradoEn). `cerradoEn`/`cerradoPor` se llenan
-  /// cuando la 3ra ronda queda fija y las cantidades pasan a liquidacion.
+  /// LacradoInventario.lacradoEn). `cerradoEn`/`cerradoPor` se llenan cuando
+  /// las cantidades quedan fijas y pasan a liquidacion -- o sea al cerrar el
+  /// AJUSTE DEL AUDITOR, que es el ultimo paso del conteo. No al cerrar la
+  /// ultima ronda: ahi el inventario queda en `ajuste_auditor` esperando que
+  /// el auditor decida, y todavia puede abrirse otra ronda.
   abiertoEn        DateTime       @default(now()) @map("abierto_en")
   cerradoEn        DateTime?      @map("cerrado_en")
   cerradoPorId     Int?           @map("cerrado_por_id")
@@ -416,6 +553,9 @@ model Inventario {
   /// Las marcas de entrada del personal. Pueden existir ANTES que la primera
   /// hoja y que el primer conteo: se pasa lista cuando la gente llega.
   asistencias          AsistenciaInventario[]
+  /// Las faltas que el Auditor perdono. Misma salvedad que `asistencias`:
+  /// pueden existir sin una sola hoja ni un solo conteo.
+  justificaciones      JustificacionAsistencia[]
 
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
@@ -495,7 +635,11 @@ model CatalogoItem {
   // entero: `Producto` es lo que ve la persona que cuenta -- por eso no
   // tiene stock ni precio, y no puede tenerlos nunca. `CatalogoItem` es el
   // snapshot crudo de Dynamics, que solo consumen el backend y la pantalla
-  // del Auditor DESPUES de cerrado el ciclo de 3 conteos.
+  // del Auditor -- durante su AJUSTE FINAL (estado `ajuste_auditor`) y
+  // despues de cerrado el conteo. Ver el ajuste como la excepcion que es: el
+  // auditor cambia valores VIENDO el stock, y es el unico que puede. El
+  // Coordinador tambien corrige lo que cargaron los contadores, pero a ciegas
+  // -- sin estas columnas, ni en la pantalla ni en el DTO.
   //
   // Si estas tres columnas estuvieran en `Producto`, cualquier endpoint de
   // conteo podria filtrarlas a un contador sin que nadie lo note, y los 3
@@ -532,6 +676,61 @@ model CatalogoItem {
   /// null = D365 dijo 'None', o el item nunca sincronizo esta entidad.
   /// Aditiva: `esEmpresa` sigue existiendo tal cual, no se toca.
   responsable ResponsableItem? @map("responsable")
+
+  /// EL EMPAQUE DE COMPRA, en unidades sueltas. 12 = la caja trae 12.
+  ///
+  /// ES EL DENOMINADOR DE LA REGLA DEL UMBRAL, y tiene que ser el de COMPRA,
+  /// no el de venta. Gilmer lo dijo tres veces en la reunion 2 -- "lo que
+  /// estoy hablando aca es el empaque de compra, que no se base al empaque de
+  /// venta" -- y lo aterrizo en el ERP: "eso depende de lo que hayan marcado
+  /// en Dynamics, si ellos lo tienen marcado 540, te va a decir 540". Su
+  /// ejemplo es un chocolate con empaque de compra 540 y display de venta 20:
+  /// con esa diferencia, 10 unidades faltantes son media caja de venta (se
+  /// descuenta) o 1/54 de la de compra (no se descuenta). No es un matiz.
+  ///
+  /// DE DONDE SALE, medido contra el tenant real (scripts/explorar-empaque-compra.ts):
+  /// `ReleasedProductsV2.PurchaseUnitSymbol` da el NOMBRE de la unidad de
+  /// compra ("Emp.12"), y `ProductSpecificUnitOfMeasureConversions` da el
+  /// factor de ESE simbolo A LA UNIDAD BASE. Lo segundo importa: un mismo
+  /// simbolo tiene varias filas de conversion (Emp.48->Emp.12=4 y
+  /// Emp.48->U=48), y la que sirve es la que va a la unidad suelta, porque en
+  /// unidades sueltas se cuenta.
+  ///
+  /// NO ES el empaque que guarda `EmpaqueCatalogo`: esos son los de conteo en
+  /// gondola (todas las conversiones, de mayor a menor). Medido sobre 2.000
+  /// items reales, en 328 el empaque de compra DIFIERE del mayor de esa lista
+  /// -- item 110628 compra 24 contra 36, item 100000 compra 6 contra 12. Usar
+  /// aquel en vez de este cambia a quien se le descuenta el faltante.
+  ///
+  /// NULL = no se pudo resolver (ni conversion a la unidad base, ni numero en
+  /// el nombre del simbolo). NULL no es 1: "no se sabe el tamano del paquete"
+  /// es distinto de "se compra por unidad", y con NULL la regla del umbral no
+  /// se puede aplicar -- el calculo tiene que decidir que hace, no asumir.
+  empaqueCompra       Int?    @map("empaque_compra")
+  /// El simbolo tal cual lo tiene Dynamics ("Emp.12", "CJ"). Viaja al lado del
+  /// numero para poder auditar de donde salio: si manana alguien discute un
+  /// descuento, la respuesta es "el ERP dice Emp.12", no "el sistema calculo 12".
+  empaqueCompraSimbolo String? @map("empaque_compra_simbolo")
+
+  /// COMO SE TRATA EL FALTANTE de este item -- ver el enum `ClaseItem`.
+  ///
+  /// Se congela con el snapshot, igual que `esEmpresa` y por la misma razon:
+  /// si manana cambia la clasificacion en Dynamics, el inventario de agosto
+  /// tiene que seguir diciendo con que regla se liquido.
+  ///
+  /// Se DERIVA al tomar el snapshot: `empresa` si el ERP dice que responde la
+  /// empresa; si no, `paquete` cuando el empaque de compra es mayor que 1 y
+  /// `unidad` cuando es exactamente 1. Con el empaque en NULL queda `unidad`,
+  /// que es el tratamiento de siempre -- no se inventa un paquete que nadie
+  /// midio.
+  ///
+  /// RELACION CON `esEmpresa`, que sigue existiendo: `clase == empresa` es
+  /// exactamente `esEmpresa == true`, y se escriben juntas. La columna vieja
+  /// queda porque la leen la auditoria, la liquidacion y el SELLO del lacrado;
+  /// sacarla es parte del cambio del calculo, no de este. Mientras las dos
+  /// existan NO PUEDEN DISCREPAR: las escribe el mismo snapshot, de la misma
+  /// fuente, en la misma fila.
+  clase ClaseItem @default(unidad)
 
   /// SIN USO -- nadie la escribe ni la lee. Se diseno para copiar aca la
   /// excepcion del Auditor al traer el snapshot, pero despues se decidio
@@ -570,9 +769,12 @@ model EmpaqueCatalogo {
   @@map("empaques_catalogo")
 }
 
-/// tipos.ts#HojaConteo. `numeroConteo` es la ronda (1, 2 o 3): el schema
-/// viejo solo tenia conteo1/conteo2 como columnas fijas; este dominio pide
-/// TRES rondas (la 3ra es la de auditoria/reconciliacion, ver Rol.auditor),
+/// tipos.ts#HojaConteo. `numeroConteo` es la ronda, y NO tiene tope: el
+/// schema viejo solo tenia conteo1/conteo2 como columnas fijas; este dominio
+/// arranca con TRES rondas (`CANTIDAD_CONTEOS_CICLO`, configurable) y el
+/// AUDITOR puede abrir mas -- una 4ta, una 5ta -- de a una, cuando el
+/// recuento no termina de cuadrar. Que sea una ronda mas y no una columna es
+/// justamente lo que hace que eso no cueste una migracion,
 /// asi que se modela como una ronda mas -- no como columnas hardcodeadas --
 /// para no repetir el problema del schema viejo si algun dia hay una 4ta.
 model HojaConteo {
@@ -818,6 +1020,70 @@ model AsistenciaInventario {
   @@map("asistencia_inventario")
 }
 
+/// UNA FALTA PERDONADA POR EL AUDITOR. Una fila = "esta persona no vino este
+/// dia, y no se le cobra".
+///
+/// Decision del cliente, textual: "si cobra el bono de distribucion, es como
+/// si hubiera asistido". O sea que un dia justificado vale como asistido para
+/// LOS DOS efectos: no paga multa POR ese dia y, si con eso completa el
+/// inventario, cobra el bono. No es media medida -- no existe "te perdono la
+/// multa pero no cobras bono".
+///
+/// POR QUE UNA TABLA APARTE, Y NO UNA MARCA MAS EN `asistencia_inventario`:
+/// porque son dos hechos distintos y uno de ellos se firma. Una marca afirma
+/// "esta persona ESTUVO"; una justificacion afirma "no estuvo, y esta bien".
+/// Meter las justificaciones entre las marcas haria que
+/// `LiquidacionColaborador.diasAsistidos` -- que va DENTRO DEL SELLO del
+/// lacrado (historial.lacrado.ts) -- dijera que alguien estuvo un dia que no
+/// estuvo. Ese sello existe para poder defender la planilla cuando alguien
+/// reclama; si para cuadrar la plata afirma un hecho falso, deja de servir
+/// justo el dia que hace falta. Para la PLATA se suman; para el RELATO, no.
+///
+/// Y de yapa, separadas se puede responder "cuantos dias falto Delia y
+/// cuantos se le perdonaron", que es exactamente la pregunta del reclamo.
+///
+/// SOLO EL AUDITOR justifica (asistencia.permisos.ts). No el Coordinador, que
+/// es quien pasa lista: quien registra la ausencia no puede ser el mismo que
+/// la perdona, o el control se vuelve una formalidad. Es el mismo criterio
+/// por el que el Coordinador no se marca a si mismo presente.
+///
+/// LA VENTANA SE CIERRA AL LIQUIDAR. Despues la planilla esta firmada y los
+/// montos descontados: una justificacion tardia cambiaria un descuento que ya
+/// salio en un recibo de sueldo. Mientras tanto SI se puede justificar con el
+/// conteo ya cerrado -- es cuando el auditor mira la planilla y aparece el
+/// reclamo.
+model JustificacionAsistencia {
+  id               Int        @id @default(autoincrement())
+  inventarioId     Int        @map("inventario_id")
+  inventario       Inventario @relation(fields: [inventarioId], references: [id])
+
+  /// A quien se le perdona la falta.
+  colaboradorId    Int         @map("colaborador_id")
+  colaborador      Colaborador @relation("ColaboradorJustificado", fields: [colaboradorId], references: [id])
+
+  /// El dia que se perdona, sin hora -- el mismo formato y el mismo
+  /// significado que `AsistenciaInventario.dia`, para poder cruzarlos.
+  dia              DateTime    @db.Date
+
+  /// POR QUE se perdona. OBLIGATORIO, y no es burocracia: esta fila le saca
+  /// plata de la multa a una persona y se la agrega al bono de todas las
+  /// demas (el fondo se reparte entre menos gente o entre mas). Un perdon sin
+  /// motivo es un movimiento de plata entre companeros que nadie puede
+  /// explicar. Va en la fila y NO solo en el log de auditoria porque es parte
+  /// del dato, no de su historia.
+  motivo           String
+
+  justificadoEn    DateTime    @default(now()) @map("justificado_en")
+  justificadoPorId Int         @map("justificado_por_id")
+  justificadoPor   Colaborador @relation("JustificacionRegistradaPor", fields: [justificadoPorId], references: [id])
+
+  /// UN perdon por persona y dia. Hace la carga idempotente y, sobre todo,
+  /// impide que dos justificaciones del mismo dia le descuenten DOS dias de
+  /// multa a alguien que solo falto uno.
+  @@unique([inventarioId, colaboradorId, dia])
+  @@map("justificaciones_asistencia")
+}
+
 // ---------------------------------------------------------------------------
 // Historico: cierre, lacrado y resultados
 //
@@ -977,15 +1243,31 @@ model ResultadoInventario {
   inventarioId Int        @unique @map("inventario_id")
   inventario   Inventario @relation(fields: [inventarioId], references: [id])
 
-  /// -- Embudo de los 3 conteos (docs/pantallas.md, Pantalla 4) --
+  /// -- Embudo de los conteos (docs/pantallas.md, Pantalla 4) --
   /// Universo contado en la 1ra ronda (8.000 en el ejemplo del cliente).
   itemsTotales       Int @map("items_totales")
-  /// Los que quedaron con diferencia DESPUES de la 3ra ronda (130 en el
+  /// Los que quedaron con diferencia DESPUES de la ULTIMA ronda (130 en el
   /// ejemplo). Los cuadrados se derivan restando.
   itemsConDiferencia Int @map("items_con_diferencia")
   /// Cuantos entraron a cada reconteo -- es el embudo que dibuja la
   /// Pantalla 4 y lo que permite comparar "cuanto mejoro el 2do conteo
   /// respecto de agosto" entre periodos.
+  ///
+  /// ESTAS DOS COLUMNAS SE QUEDARON EN TRES RONDAS, y hay que saberlo antes
+  /// de leer un embudo: desde que el Auditor puede abrir una 4ta y una 5ta,
+  /// no hay donde anotar quienes entraron a esas. El efecto no es un hueco,
+  /// es un numero MAL ATRIBUIDO: historial.calculos.ts#calcularEmbudo calcula
+  /// `resueltosEnTercero = itemsTercerConteo - itemsConDiferencia`, asi que
+  /// en un inventario de 5 rondas le adjudica a la 3ra todo lo que se
+  /// resolvio en la 3ra, la 4ta y la 5ta.
+  ///
+  /// Queda anotado y no arreglado a proposito: arreglarlo es cambiar la forma
+  /// de lo que se guarda (una columna por ronda no escala; lo que escala es
+  /// una lista, como ya hizo el dominio con `ItemAuditoria.conteos`), eso
+  /// entra al sello del lacrado y obliga a subir VERSION_CONTENIDO_LACRADO.
+  /// Es una decision del equipo, no de este archivo. Mientras tanto, un
+  /// inventario de 3 rondas -- el caso normal -- sigue dando el embudo
+  /// correcto.
   itemsSegundoConteo Int @map("items_segundo_conteo")
   itemsTercerConteo  Int @map("items_tercer_conteo")
 
@@ -1159,7 +1441,9 @@ model DiferenciaItem {
   codigo      String
   descripcion String
 
-  /// Lo que decia el ERP contra lo que fijo el 3er conteo.
+  /// Lo que decia el ERP contra el valor que quedo FIJO al cerrar el conteo:
+  /// la ultima ronda, o el ajuste del auditor si lo hubo (el ajuste reemplaza
+  /// el valor contado, ver RegistroAuditoria).
   stockSistema Int @map("stock_sistema")
   conteoFinal  Int @map("conteo_final")
   /// conteoFinal - stockSistema. Negativo = faltante, positivo = sobrante.
@@ -1169,8 +1453,10 @@ model DiferenciaItem {
   /// query impide usar un indice.
   diferencia   Int
 
-  /// En que ronda quedo resuelto (1, 2 o 3). Permite responder "cuantos se
-  /// arreglaron solos en el 2do conteo" sin recorrer las hojas.
+  /// En que ronda quedo resuelto. Es un NUMERO de ronda y no tiene tope --
+  /// puede ser 4 o 5 si el auditor abrio rondas extra (ver
+  /// HojaConteo.numeroConteo). Permite responder "cuantos se arreglaron solos
+  /// en el 2do conteo" sin recorrer las hojas.
   resueltoEnConteo Int @map("resuelto_en_conteo")
 
   /// El precio unitario con el que se valorizo esta diferencia, congelado al
@@ -1217,10 +1503,24 @@ model DiferenciaItem {
   /// valor con el que esos inventarios calcularon montoFaltanteEmpresa.
   esEmpresa Boolean @default(false) @map("es_empresa")
 
+  /// La clase EFECTIVA con la que se liquido este item -- ver `ClaseItem`.
+  ///
+  /// Congelada junto al resto de la fila y por la misma razon que `esEmpresa`
+  /// al lado: es lo que explica por que el faltante de este item se le
+  /// descontó al personal, fue al cuadro de faltante por paquete, o no se
+  /// descontó a nadie.
+  ///
+  /// NULL en las diferencias congeladas ANTES de que existieran las tres
+  /// vias, y ahi NULL significa "se cerro con la regla de dos vias": manda
+  /// `esEmpresa`. NO se rellena para atras, mismo criterio que
+  /// `ResultadoInventario.montoSobranteEmpleado` -- ponerle un valor a un
+  /// inventario ya liquidado afirmaria una regla que no se uso.
+  clase        ClaseItem? @map("clase")
+
   createdAt DateTime @default(now()) @map("created_at")
 
   /// Un item aparece una sola vez por inventario: la diferencia es el
-  /// resultado FINAL del ciclo de 3 conteos, no una fila por ronda.
+  /// resultado FINAL del ciclo de conteos, no una fila por ronda.
   @@unique([inventarioId, codigo])
   /// El indice que hace barata la pregunta del cliente: el historico de UN
   /// articulo a traves de todos los inventarios.
@@ -1244,12 +1544,52 @@ model DiferenciaItem {
 /// montoSobranteEmpleado. Sin fila = sin excepcion, manda Dynamics. El
 /// historial de cambios vive en RegistroAuditoria: esta tabla dice lo que
 /// vale HOY.
+/// (Ver `clase` mas abajo: la excepcion del Auditor tambien pasa a tres vias.)
 model ClasificacionProducto {
   id        Int     @id @default(autoincrement())
   /// ItemNumber de Dynamics -- la identidad estable entre periodos (ver
   /// DiferenciaItem.codigo).
   codigo    String  @unique
   esEmpresa Boolean @map("es_empresa")
+  /// LA EXCEPCION, A TRES VIAS -- ver el enum `ClaseItem`.
+  ///
+  /// Con el booleano solo se podia decir "esto lo paga la empresa" o "no". La
+  /// regla del faltante por paquete agrega una tercera respuesta que el
+  /// Auditor necesita poder dar: "esto viene en paquete, medile el umbral".
+  /// Un item mal clasificado como `unidad` se descuenta entero al personal
+  /// aunque falte media caja, que es justo lo que el cliente pidio cambiar.
+  ///
+  /// NULLABLE y aditiva: las excepciones cargadas antes de este cambio tienen
+  /// NULL y las sigue mandando `esEmpresa` -- no se reinterpretan solas. Las
+  /// nuevas escriben las dos, y `clase == empresa` tiene que coincidir con
+  /// `esEmpresa == true` por lo mismo que en CatalogoItem: mientras las dos
+  /// existan, no pueden discrepar.
+  clase     ClaseItem? @map("clase")
+
+  /// EL EMPAQUE DE COMPRA CORREGIDO A MANO por el Auditor.
+  ///
+  /// CORREGIR EL EMPAQUE NO ES CORREGIR EL STOCK, y conviene decirlo acá
+  /// porque el dia que alguien lea esto las dos cosas se van a parecer y no lo
+  /// son: el stock del ERP no lo edita nadie nunca desde ninguna pantalla. El
+  /// empaque de compra es un ATRIBUTO del producto ("viene en display de 12")
+  /// que Dynamics a veces tiene mal, y que el cliente pidio poder corregir.
+  ///
+  /// NO PISA `CatalogoItem.empaqueCompra`: ese es el snapshot congelado y
+  /// tiene que seguir diciendo lo que dijo Dynamics. Los dos numeros conviven
+  /// para que se pueda responder "el ERP dijo 1 y el Auditor lo corrigio a 12
+  /// el 19/09", que es una historia, no un numero suelto.
+  ///
+  /// NULL = sin corregir, manda el del snapshot. Un 1 puesto a mano NO es lo
+  /// mismo que NULL: afirma "este se compra suelto", y con eso el item nunca
+  /// va al cuadro de paquetes (dominio/faltante-por-paquete.ts#claseEfectiva).
+  ///
+  /// PRECEDENCIA, el contrato con el calculo:
+  ///   1. `clase` (el cuadro forzado a mano) -- manda sobre todo
+  ///   2. `empaqueCompraCorregido` (esta columna)
+  ///   3. `CatalogoItem.empaqueCompra` (el snapshot del ERP)
+  ///   4. NULL -> `unidad` (no se inventa un paquete)
+  empaqueCompraCorregido Int? @map("empaque_compra_corregido")
+
   nota      String?
 
   /// Quien y cuando, SIEMPRE juntos y explicitos (sin default): una
@@ -1399,6 +1739,25 @@ model LiquidacionColaborador {
   /// es de los viejos y la fraccion no significa nada.
   diasAsistidos Int @default(0) @map("dias_asistidos")
 
+  /// DIAS QUE FALTO Y EL AUDITOR LE PERDONO, congelados igual que
+  /// `diasAsistidos` y POR SEPARADO de ellos a proposito (ver
+  /// JustificacionAsistencia: el sello afirma `diasAsistidos`, y sumarlos ahi
+  /// haria que el documento diga que alguien estuvo un dia que no estuvo).
+  ///
+  /// Para la PLATA se suman a los asistidos, en los dos efectos:
+  ///     multa   = max(0, dias - diasAsistidos - diasJustificados) x tarifa
+  ///     asistio = diasAsistidos + diasJustificados >= diasDelInventario
+  ///
+  /// Sin esta columna, "S/0 de multa con 1 de 3 dias" es una fila que no
+  /// cierra y que nadie puede explicar seis meses despues. Misma razon que
+  /// `diasAsistidos`: no se despeja de la multa, se guarda.
+  ///
+  /// 0 en las planillas firmadas antes de que existieran las
+  /// justificaciones, y ahi significa "no habia justificaciones", que es el
+  /// mismo numero que corresponde -- a diferencia de `diasAsistidos`, aca el
+  /// 0 viejo no miente.
+  diasJustificados Int @default(0) @map("dias_justificados")
+
   /// Las PARTES del descuento. El total (cuota + multa - bono) no se
   /// guarda: se calcula en historial.calculos.ts, misma regla que el
   /// `total` ausente de Conteo.
@@ -1466,4 +1825,83 @@ model ConfigDynamics {
   updatedAt DateTime @updatedAt @map("updated_at")
 
   @@map("config_dynamics")
+}
+
+// ---------------------------------------------------------------------------
+// Navegacion configurable
+// ---------------------------------------------------------------------------
+
+/// QUE VE CADA ROL EN EL HOME Y EN LA BARRA DE ABAJO, y en que orden.
+///
+/// Pedido del cliente, textual: "en la app actualmente tiene accesos rapidos,
+/// que estos pueden ser manejados por el administrador por medio de roles al
+/// igual que los menus, pero DEJAR LOS ROLES QUE YA TENEMOS Y SUS ACCESOS. De
+/// esta manera como administrador controlamos todo esto y no esta
+/// hardcodeado".
+///
+/// ---------------------------------------------------------------------------
+/// ESTO ES PRESENTACION, NO AUTORIZACION
+/// ---------------------------------------------------------------------------
+/// Esconder una tarjeta es una comodidad; mostrarla NO es un permiso. Quien
+/// decide que puede hacer cada rol sigue siendo el backend -- el
+/// `requiereRol` de cada router y los `*.permisos.ts`. Apagar un acceso no le
+/// saca a nadie un permiso y prenderlo no se lo da: si alguien entra igual por
+/// otro camino, el backend lo frena lo mismo.
+///
+/// ---------------------------------------------------------------------------
+/// LO QUE ESTA TABLA NO PUEDE HACER, Y ES A PROPOSITO
+/// ---------------------------------------------------------------------------
+/// No puede darle a un rol un elemento de otro. La lista blanca de cada rol
+/// son las rutas de SU grupo (`mobile/app/<rol>/`, ver
+/// navegacion.lista-blanca.ts): `/auditor/auditoria` no existe dentro de
+/// `app/coordinador/`, asi que no hay forma de darsela. Eso protege el CONTEO
+/// CIEGO -- si el Coordinador viera el stock del ERP con el ciclo abierto, le
+/// alcanzaria con decir "ahi tendrian que ser 120" para que el inventario
+/// cuadre sin haberse contado.
+///
+/// ---------------------------------------------------------------------------
+/// QUE GUARDA Y QUE NO
+/// ---------------------------------------------------------------------------
+/// Guarda SOLO lo que el Administrador cambia: el orden y el prendido. El
+/// texto de cada elemento (titulo, subtitulo, etiqueta) vive en el catalogo
+/// del codigo (`navegacion.catalogo.ts`), que es la misma lista que el movil
+/// lleva compilada como respaldo. Guardar el texto acá lo duplicaria, y el dia
+/// que alguien corrija un subtitulo tendria que acordarse de correr una
+/// migracion.
+///
+/// La fila NACE de la siembra con lo que hoy esta hardcodeado, en su orden
+/// actual: el dia 1 despues de este cambio los cuatro roles ven exactamente lo
+/// mismo que veian antes.
+model ConfiguracionNavegacion {
+  id      Int            @id @default(autoincrement())
+  rol     Rol
+  tipo    TipoNavegacion
+  /// La CLAVE ESTABLE del elemento: la ruta para un acceso
+  /// (`/auditor/ajuste`), el nombre de archivo para un tab (`ciclo`). No es un
+  /// texto que se muestre -- es lo que une esta fila con el catalogo del
+  /// codigo. Renombrarla es perder la configuracion de ese elemento.
+  clave   String
+  /// De menor a mayor. Se guardan enteros consecutivos al reordenar; el
+  /// espacio entre numeros no significa nada.
+  orden   Int
+  /// Apagado NO es borrado: la fila queda, con su orden, para que el
+  /// Administrador pueda volver a prenderla sin tener que acordarse de donde
+  /// estaba. Un elemento que desaparece de la pantalla de configuracion no se
+  /// puede recuperar.
+  visible Boolean @default(true)
+
+  /// Quien lo toco por ultima vez. NULL = como lo dejo la siembra, nadie lo
+  /// cambio nunca. El detalle de cada cambio (que habia antes) vive en
+  /// `registro_auditoria`: sacarle un acceso a un rol puede dejar a alguien
+  /// sin poder trabajar un lunes a las 7 de la mañana.
+  actualizadoPorId Int?         @map("actualizado_por_id")
+  actualizadoPor   Colaborador? @relation("NavegacionActualizadaPor", fields: [actualizadoPorId], references: [id])
+  actualizadoEn    DateTime     @updatedAt @map("actualizado_en")
+
+  /// Un elemento aparece UNA vez por rol. Es lo que hace que la siembra sea
+  /// idempotente y que reordenar no pueda duplicar una tarjeta.
+  @@unique([rol, tipo, clave])
+  /// La consulta de la app al iniciar sesion: "lo mio, en orden".
+  @@index([rol, tipo, orden])
+  @@map("configuracion_navegacion")
 }

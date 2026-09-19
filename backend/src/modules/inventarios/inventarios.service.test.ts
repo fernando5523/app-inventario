@@ -16,7 +16,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const prismaMock = vi.hoisted(() => ({
   inventario: { findUnique: vi.fn(), findFirst: vi.fn(), update: vi.fn() },
   catalogoItem: { findMany: vi.fn() },
-  hojaConteo: { findMany: vi.fn(), findFirst: vi.fn(), create: vi.fn(), deleteMany: vi.fn(), update: vi.fn(), aggregate: vi.fn() },
+  hojaConteo: { findMany: vi.fn(), findFirst: vi.fn(), create: vi.fn(), deleteMany: vi.fn(), update: vi.fn(), aggregate: vi.fn(), count: vi.fn() },
   producto: { deleteMany: vi.fn() },
   empaque: { deleteMany: vi.fn() },
   conteo: { count: vi.fn() },
@@ -456,11 +456,162 @@ describe('activo', () => {
     expect(r!.rondaActiva).toBe(3);
   });
 
-  it('solo mira inventarios EN CURSO, no el ultimo cerrado', async () => {
+  /**
+   * ESTE TEST PEDIA `estado: 'en_curso'` A SECAS y ahora pide los dos estados
+   * activos. Lo que cuida NO cambio: que un inventario CERRADO no vuelva a
+   * aparecer como activo, o el Coordinador reabriria por error el del mes
+   * pasado. Lo que cambio es que "activo" dejo de ser un solo estado.
+   *
+   * `ajuste_auditor` tiene que entrar: es el tramo en que el Auditor ajusta
+   * valores, y la tienda sigue trabajando ese inventario. Sin el, apenas se
+   * inicia el ajuste la pantalla del Auditor se queda sin el inventario que
+   * esta ajustando y la del Coordinador dice "no hay inventario en curso".
+   */
+  it('mira los inventarios ACTIVOS (en curso y en ajuste), nunca uno ya cerrado', async () => {
     prismaMock.inventario.findFirst.mockResolvedValue(null);
     await activo(1);
-    expect(prismaMock.inventario.findFirst).toHaveBeenCalledWith(
-      expect.objectContaining({ where: { sucursalId: 1, estado: 'en_curso' } }),
-    );
+
+    const [args] = prismaMock.inventario.findFirst.mock.calls[0] as [{ where: { estado: { in: string[] } } }];
+    expect(args.where.estado.in).toEqual(['en_curso', 'ajuste_auditor']);
+    for (const cerrado of ['conteo_cerrado', 'liquidado', 'lacrado', 'anulado']) {
+      expect(args.where.estado.in).not.toContain(cerrado);
+    }
+  });
+
+  it('devuelve el estado para que la pantalla sepa de quien es el turno', async () => {
+    prismaMock.inventario.findFirst.mockResolvedValue({
+      id: 9,
+      estado: 'ajuste_auditor',
+      snapshotItems: 100,
+      snapshotTomadoEn: new Date(),
+      createdAt: new Date(),
+      tamanoHoja: 30,
+      _count: { hojas: 3 },
+    });
+    prismaMock.hojaConteo.aggregate.mockResolvedValue({ _max: { numeroConteo: 3 } });
+
+    expect((await activo(1))!.estado).toBe('ajuste_auditor');
+  });
+});
+
+/**
+ * EL BIT QUE FALTABA: distinguir "se esta contando la ronda 3" de "la ronda 3
+ * cerro y el inventario espera al Auditor".
+ *
+ * Los dos son `estado: 'en_curso'` con `rondaActiva: 3` -- llegaban al
+ * telefono exactamente iguales, y la pantalla del ciclo mostraba "Paso 3 · En
+ * curso" sobre una ronda ya cerrada. `admiteConteo` los separa.
+ */
+describe('admiteConteo: se puede contar en la ronda activa, o ya cerro', () => {
+  function inventarioConHojas(estado = 'en_curso') {
+    prismaMock.inventario.findFirst.mockResolvedValue({
+      id: 9,
+      estado,
+      snapshotItems: 100,
+      snapshotTomadoEn: new Date(),
+      createdAt: new Date(),
+      tamanoHoja: 30,
+      _count: { hojas: 3 },
+    });
+    prismaMock.hojaConteo.aggregate.mockResolvedValue({ _max: { numeroConteo: 3 } });
+  }
+
+  it('con hojas todavia sin finalizar, true: se esta contando', async () => {
+    inventarioConHojas();
+    prismaMock.hojaConteo.count.mockResolvedValue(2);
+
+    const r = await activo(1);
+    expect(r).toMatchObject({ rondaActiva: 3, admiteConteo: true });
+  });
+
+  it('con todas finalizadas y subidas, false: la ronda 3 cerro y espera al Auditor', async () => {
+    inventarioConHojas();
+    prismaMock.hojaConteo.count.mockResolvedValue(0);
+
+    const r = await activo(1);
+    // El NUMERO de ronda se conserva: durante la espera, lo util de mostrar
+    // es "la ronda 3 cerro", y con `rondaActiva: null` no habria con que
+    // escribir el 3.
+    expect(r).toMatchObject({ rondaActiva: 3, admiteConteo: false });
+  });
+
+  /**
+   * LA MISMA CONDICION QUE EXIGE EL SERVIDOR, no una aproximacion: una hoja
+   * finalizada pero todavia en la cola del telefono deja la ronda abierta,
+   * igual que `exigirUltimaRondaTerminada` se lo rechaza al Auditor. Si se
+   * separaran, el boton que la pantalla habilita dejaria de ser el que el
+   * backend acepta -- que es el problema que este campo vino a cerrar.
+   */
+  it('cuenta las no finalizadas Y las no sincronizadas, igual que la guarda del Auditor', async () => {
+    inventarioConHojas();
+    prismaMock.hojaConteo.count.mockResolvedValue(0);
+    await activo(1);
+
+    expect(prismaMock.hojaConteo.count).toHaveBeenCalledWith({
+      where: {
+        inventarioId: 9,
+        numeroConteo: 3,
+        OR: [{ estado: { not: 'finalizada' } }, { sync: { not: 'sincronizado' } }],
+      },
+    });
+  });
+
+  /**
+   * Con el inventario en ajuste no es un caso especial: para llegar ahi
+   * todas las hojas tienen que estar finalizadas y subidas, asi que la misma
+   * cuenta da 0.
+   */
+  it('en ajuste_auditor, false', async () => {
+    inventarioConHojas('ajuste_auditor');
+    prismaMock.hojaConteo.count.mockResolvedValue(0);
+
+    const r = await activo(1);
+    expect(r).toMatchObject({ estado: 'ajuste_auditor', admiteConteo: false });
+  });
+
+  /**
+   * SIN HOJAS NO HAY AMBIGUEDAD, y es la razon por la que este campo va AL
+   * LADO de `rondaActiva` en vez de reemplazarlo por null al cerrar:
+   * `rondaActiva: null` ya significa "paso 1 del wizard". Los dos campos
+   * juntos no dejan ningun caso sin distinguir.
+   */
+  it('sin ninguna hoja: rondaActiva null y admiteConteo false, sin consultar hojas', async () => {
+    prismaMock.inventario.findFirst.mockResolvedValue({
+      id: 9,
+      estado: 'en_curso',
+      snapshotItems: 100,
+      snapshotTomadoEn: new Date(),
+      createdAt: new Date(),
+      tamanoHoja: 30,
+      _count: { hojas: 0 },
+    });
+
+    const r = await activo(1);
+    expect(r).toMatchObject({ rondaActiva: null, admiteConteo: false });
+    expect(prismaMock.hojaConteo.count).not.toHaveBeenCalled();
+  });
+
+  it('los tres casos son distinguibles entre si', async () => {
+    const leer = async (hojas: number, sinTerminar: number) => {
+      prismaMock.inventario.findFirst.mockResolvedValue({
+        id: 9,
+        estado: 'en_curso',
+        snapshotItems: 100,
+        snapshotTomadoEn: new Date(),
+        createdAt: new Date(),
+        tamanoHoja: 30,
+        _count: { hojas },
+      });
+      prismaMock.hojaConteo.aggregate.mockResolvedValue({ _max: { numeroConteo: 3 } });
+      prismaMock.hojaConteo.count.mockResolvedValue(sinTerminar);
+      const r = await activo(1);
+      return `${r!.rondaActiva}/${r!.admiteConteo}`;
+    };
+
+    const paso1 = await leer(0, 0);
+    const contando = await leer(3, 2);
+    const esperando = await leer(3, 0);
+
+    expect(new Set([paso1, contando, esperando]).size).toBe(3);
   });
 });

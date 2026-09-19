@@ -19,8 +19,22 @@ export interface RegistroAuditoriaInput {
   detalle: Record<string, unknown> | null;
 }
 
-export async function registrarAuditoria(input: RegistroAuditoriaInput): Promise<void> {
-  await prisma.registroAuditoria.create({
+/**
+ * `tx` OPCIONAL, para cuando el hecho auditado va adentro de una transaccion.
+ *
+ * Sin esto, el registro se escribe con el cliente global y queda FUERA de la
+ * transaccion de quien llama: si esa transaccion hace rollback, el log afirma
+ * que paso algo que no paso. Es el caso de `sacarDeLaRondaSiguienteSiCuadro`,
+ * donde el cambio de valor y la limpieza de la ronda son un solo hecho.
+ *
+ * Por defecto sigue siendo el cliente global, asi que los llamadores que no
+ * estan en transaccion no cambian en nada.
+ */
+export async function registrarAuditoria(
+  input: RegistroAuditoriaInput,
+  tx: Prisma.TransactionClient = prisma,
+): Promise<void> {
+  await tx.registroAuditoria.create({
     data: {
       actorId: input.actorId,
       accion: input.accion,

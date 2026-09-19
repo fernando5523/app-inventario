@@ -13,6 +13,7 @@ import {
 import { Baloo2_700Bold } from '@expo-google-fonts/baloo-2';
 
 import { iniciarSincronizador } from '../lib/contenedor';
+import { NavegacionProvider } from '../lib/navegacion-contexto';
 import { SesionProvider } from '../lib/sesion-contexto';
 import { colors } from '../lib/theme';
 
@@ -48,6 +49,10 @@ export default function RootLayout() {
 
   return (
     <SesionProvider>
+      {/* ADENTRO de SesionProvider: la navegación depende del rol de la
+          sesión. Y envuelve al Stack entero porque la consumen tanto el home
+          (InicioScreen) como los layouts de tabs de cada grupo. */}
+      <NavegacionProvider>
       <View style={styles.root}>
         <StatusBar style="dark" backgroundColor={colors.fondo} />
         <Stack
@@ -64,6 +69,7 @@ export default function RootLayout() {
           <Stack.Screen name="auditor" />
         </Stack>
       </View>
+      </NavegacionProvider>
     </SesionProvider>
   );
 }

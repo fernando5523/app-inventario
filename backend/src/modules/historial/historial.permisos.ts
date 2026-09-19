@@ -9,8 +9,22 @@
 import { Conflicto, Prohibido, SolicitudInvalida } from '../../shared/errores';
 import type { ColaboradorAutenticado, Rol } from '../../shared/tipos';
 
-/** Estados del inventario (prisma/schema.prisma#EstadoInventario). */
-export type EstadoInventario = 'en_curso' | 'conteo_cerrado' | 'liquidado' | 'lacrado' | 'anulado';
+/**
+ * Estados del inventario (prisma/schema.prisma#EstadoInventario).
+ *
+ * En el MISMO orden que el enum de Postgres, que es el del ciclo de vida.
+ * `ajuste_auditor` se sumo tarde -- el enum de la base lo tuvo desde
+ * 20260919120000 y esta union no, asi que durante esa ventana un inventario
+ * en ajuste no era ni siquiera representable acá y los `as EstadoInventario`
+ * que lo castean estaban mintiendo en silencio.
+ */
+export type EstadoInventario =
+  | 'en_curso'
+  | 'ajuste_auditor'
+  | 'conteo_cerrado'
+  | 'liquidado'
+  | 'lacrado'
+  | 'anulado';
 
 /**
  * Quien lee el historico. `conteo` y `coordinador` NO estan, y no es una

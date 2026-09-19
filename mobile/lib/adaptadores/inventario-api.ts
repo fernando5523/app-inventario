@@ -68,6 +68,7 @@ import {
   type CodigoErrorSnapshot,
   type CriteriosSnapshot,
   type DesgloseSnapshot,
+  type EstadoInventario,
   type OpcionesTraerSnapshot,
   type RepositorioInventario,
   type ResumenRonda,
@@ -114,6 +115,13 @@ interface InventarioActivoDto extends SnapshotDto {
   // hojas). `activo()` devuelve el DTO tal cual, así que el campo pasa
   // derecho — no hay traducción, solo declararlo para que el tipo cierre.
   rondaActiva: number | null;
+  /**
+   * EN QUÉ FASE está. Desde el ajuste final del auditor, `activo()` devuelve
+   * también los inventarios en `ajuste_auditor`, y sin este campo la pantalla
+   * no puede distinguirlos de uno que se sigue contando: durante el ajuste no
+   * hay ronda activa, igual que cuando la última ronda cerró.
+   */
+  estado: EstadoInventario;
 }
 
 /**

@@ -271,9 +271,68 @@ export interface Sesion {
  * contra el snapshot completo. Es lo que faltaba modelar para que el rol
  * Auditor pudiera tener datos reales en vez de un dataset fijo.
  *
- * `conteo1`/`conteo2`/`conteo3` son null cuando ese item no llego a
- * necesitar esa pasada (cuadro antes, ver dominio/auditoria.ts#conteoFinal).
+ * SE ACABARON LOS TRES CONTEOS FIJOS. Esto era `conteo1`/`conteo2`/`conteo3`,
+ * y con eso el Auditor no puede abrir un 4to ni un 5to conteo -- que es
+ * exactamente lo que pidió el cliente. Ahora es una LISTA por ronda, del
+ * mismo largo que rondas haya tenido el inventario, y la capa que la muestra
+ * dibuja las que vengan en vez de tres celdas clavadas.
+ *
+ * El ciclo ya generalizaba (`ciclo-conteos.ts#conteoQueManda` recibe una
+ * lista porque `CANTIDAD_CONTEOS_CICLO` es configurable); lo que no
+ * generalizaba era esta capa.
  */
+/**
+ * CÓMO SE TRATA EL FALTANTE de un ítem. Espeja el enum `ClaseItem` del backend.
+ *
+ * Pedido textual del cliente (reunión 2): "ponga empresa y se va al cuadro de
+ * empresa, ponga paquetes se va al cuadro de paquetes, unidad se queda ahí
+ * unidad para el descuento del personal".
+ *
+ * Vive acá y no en el puerto porque es una regla del NEGOCIO, no una forma de
+ * transporte — y porque `tipos.ts` no importa de nadie, con lo cual el puerto
+ * puede usarlo sin que se arme un ciclo.
+ */
+export type ClaseItem = 'empresa' | 'paquete' | 'unidad';
+
+/**
+ * El reparto de la diferencia de UN ítem, tal cual lo resolvió el servidor.
+ *
+ * EXACTAMENTE UNA de las tres `unidadesA*` es distinta de cero: el ítem va
+ * entero a un cuadro, el faltante no se parte (regla del cliente). Las tres en
+ * cero = no hay diferencia que repartir — sin stock del ERP, sin contar, o
+ * cuadró.
+ */
+export interface AtribucionItem {
+  /** La clase efectiva: la del snapshot, re-derivada con el empaque, o la forzada por el Auditor. */
+  clase: ClaseItem;
+  /**
+   * EL EMPAQUE QUE SE USÓ para medir: el EFECTIVO, o sea el corregido por el
+   * Auditor si lo hay. `null` = no había ninguno y la razón no se pudo calcular.
+   */
+  empaqueUsado: number | null;
+  /**
+   * El símbolo del ERP ("Emp.6"). OJO: describe el empaque DEL SNAPSHOT, no el
+   * corregido — con `empaqueEsCorregido` en true, el número es del Auditor y
+   * el símbolo sigue siendo el viejo, así que mostrarlos juntos diría algo
+   * falso ("12 (U)" leería como "doce unidades sueltas").
+   */
+  empaqueSimbolo: string | null;
+  /**
+   * `true` = el empaque usado DIFIERE del que trajo el snapshot.
+   *
+   * No es "existe una corrección": si el Auditor corrigió a 6 un ítem que el
+   * ERP ya traía en 6, esto es `false` — y así la fila no anuncia un cambio
+   * que no ocurrió.
+   */
+  empaqueEsCorregido: boolean;
+  /** `|diferencia| / empaqueUsado` — el número que DECIDIÓ el destino. `null` si no se pudo calcular. */
+  razon: number | null;
+  /** Con signo: negativo = faltante, positivo = sobrante. */
+  unidadesAlPersonal: number;
+  unidadesAPaquetes: number;
+  unidadesAEmpresa: number;
+}
+
 export interface ItemAuditoria {
   productoId: number;
   codigo: string;
@@ -283,9 +342,28 @@ export interface ItemAuditoria {
   precioVenta: number | null;
   /** null = el snapshot no trajo stock: este ítem NO se puede auditar (veredicto `sin_erp`). */
   stockErp: number | null;
-  conteo1: number | null;
-  conteo2: number | null;
-  conteo3: number | null;
+  /**
+   * UN ELEMENTO POR RONDA, EN ORDEN: `conteos[0]` es la 1ra pasada.
+   * `null` = ese ítem no se contó en esa ronda (cuadró antes, o la hoja de
+   * esa ronda nunca lo incluyó). Ver dominio/auditoria.ts#conteoFinal.
+   *
+   * El ÚLTIMO elemento puede ser el AJUSTE FINAL del auditor: para la cuenta
+   * da igual (sigue siendo "el último no nulo manda"), y por eso no lleva una
+   * marca aparte -- quién lo tocó y por qué vive en la auditoría del cambio,
+   * no en esta cifra.
+   */
+  conteos: ReadonlyArray<number | null>;
+  /**
+   * A QUÉ CUADRO FUE LA DIFERENCIA DE ESTE ÍTEM, y por qué. Lo calcula el
+   * SERVIDOR (`auditoria.calculos.ts#repartoDelItem`) y llega resuelto.
+   *
+   * No se deriva acá, y no es por comodidad: el destino depende de la razón
+   * contra el `umbral` CONGELADO en el inventario, que no viaja en ninguna
+   * respuesta. Y aunque viajara, recalcularlo sería una segunda copia de la
+   * regla que decide a quién se le descuenta la plata — con el riesgo de que
+   * la fila diga un cuadro y el total de arriba diga otro.
+   */
+  atribucion: AtribucionItem;
   /**
    * true = la categoria la asume la empresa por orden de gerencia (ej.
    * cervezas, por seguimiento de robo) — dato configurado en Dynamics

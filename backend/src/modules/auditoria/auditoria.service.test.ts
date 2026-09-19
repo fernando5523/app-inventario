@@ -27,10 +27,29 @@ import { matriz } from './auditoria.service';
 
 const AUDITOR: ColaboradorAutenticado = { colaboradorId: 5, sucursalId: null, rol: 'auditor' };
 
-const CERVEZA = { codigo: 'CERVEZA', descripcion: 'Cerveza 620ml', stockErp: 20, precioVenta: { toNumber: () => 10 }, esEmpresa: false };
+const CERVEZA = {
+  codigo: 'CERVEZA',
+  descripcion: 'Cerveza 620ml',
+  stockErp: 20,
+  precioVenta: { toNumber: () => 10 },
+  esEmpresa: false,
+  // Sin empaque de compra resoluble: `unidad`, que es el caso de 457 de los
+  // primeros 2.000 items reales. Estos tests son sobre la CLASIFICACION
+  // empresa/empleado, no sobre el reparto por paquete.
+  clase: 'unidad' as const,
+  empaqueCompra: null,
+  empaqueCompraSimbolo: null,
+};
 
 function mockInventario(estado: string): void {
-  prismaMock.inventario.findUnique.mockResolvedValue({ id: 45, sucursalId: 1, estado });
+  prismaMock.inventario.findUnique.mockResolvedValue({
+    id: 45,
+    sucursalId: 1,
+    estado,
+    // CONGELADO al abrir el inventario (ver schema.prisma). `Decimal` de
+    // Prisma, por eso el `toNumber`.
+    umbralMediaUnidadPaquete: { toNumber: () => 0.5 },
+  });
 }
 
 const QUERY_DEFECTO = { filtro: 'todos' as const, desplazamiento: 0, limite: 50 };

@@ -23,6 +23,7 @@ import { resolverCodigoEnHoja, type CoincidenciaEscaneo } from '../../lib/domini
 import { aplicarFiltro, contarFiltrosActivos, FILTRO_VACIO, textoFiltroActivo, type FiltroProductos } from '../../lib/dominio/filtro-productos';
 import { avance, puedeEditar, puedeFinalizar } from '../../lib/dominio/hoja';
 import { pluralizar } from '../../lib/dominio/plural';
+import { TEXTO_TRAS_FINALIZAR } from '../../lib/dominio/ajuste-final';
 import { ORDINAL } from '../../lib/dominio/texto-cierre-ronda';
 import type { Conteo, HojaConteo, Producto } from '../../lib/dominio/tipos';
 import { cargarHojaActiva, textoHojaVieja, type MotivoSinHoja } from '../../lib/orquestar-carga-de-hoja';
@@ -212,6 +213,21 @@ export default function ContarScreen(): JSX.Element {
     // 'hoja-vieja': la que estaba abierta ya no es de la ronda activa o se
     // reasignó — se saca de la vista con un aviso que dice qué pasó y a dónde
     // ir, en vez de dejar contar en el vacío (cada conteo daría 403).
+    // 'conteo-terminado': ya no hay ronda abierta. NO dice "elige una hoja"
+    // ni invita a volver: no va a haber ninguna. Dice qué pasó con el
+    // inventario, que es lo único cierto y lo que evita que se quede mirando
+    // una pantalla que no va a cambiar.
+    if (motivo === 'conteo-terminado') {
+      return (
+        <PantallaConTabs contentStyle={styles.centrado}>
+          <EmptyState
+            icon={ClipboardList}
+            title="El conteo de este inventario terminó"
+            subtitle="Se cerraron todas las rondas. Lo que sigue lo revisa el auditor, así que ya no hay hojas para contar."
+          />
+        </PantallaConTabs>
+      );
+    }
     const hojaVieja = motivo === 'hoja-vieja' && ronda !== null;
     return (
       <PantallaConTabs contentStyle={styles.centrado}>
@@ -511,9 +527,18 @@ export default function ContarScreen(): JSX.Element {
           <View style={styles.modalFinalizarCaja}>
             <Text style={styles.modalFinalizarTitulo}>Finalizar hoja #{hoja.numero}</Text>
             <Text style={styles.modalFinalizarAlerta}>{textoFinalizar}</Text>
-            <Text style={styles.modalFinalizarNota}>
-              Después de finalizar, la hoja queda congelada: ningún ítem se puede volver a editar.
-            </Text>
+            {/*
+              DECÍA "la hoja queda congelada: ningún ítem se puede volver a
+              editar", y dejó de ser cierto el día que el Coordinador pudo
+              corregir. Una promesa falsa acá cuesta en las dos direcciones:
+              quien cree que no hay vuelta atrás no finaliza una hoja que ya
+              terminó -- y traba el cierre de la ronda para todo el equipo --,
+              y quien descubre que sí se podía deja de creerle al resto de los
+              avisos. El texto vive en el dominio (`TEXTO_TRAS_FINALIZAR`)
+              porque dice una REGLA, no una frase: si mañana cambia quién puede
+              corregir, cambia ahí y no en cada pantalla que lo repita.
+            */}
+            <Text style={styles.modalFinalizarNota}>{TEXTO_TRAS_FINALIZAR}</Text>
             <View style={styles.modalFinalizarAcciones}>
               <Pressable
                 style={[styles.accion, styles.accionSecundaria]}

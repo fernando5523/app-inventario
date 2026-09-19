@@ -12,7 +12,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const prismaMock = vi.hoisted(() => ({
-  inventario: { findFirst: vi.fn() },
+  inventario: { findUnique: vi.fn(),  findFirst: vi.fn() },
   diferenciaItem: { count: vi.fn(), findMany: vi.fn(async () => []) },
   // Los usa `resolverMontosDeClasificacion` (liquidacion.reclasificacion.ts)
   // cuando el inventario TODAVÍA no está liquidado: `deSucursal` recalcula
@@ -28,6 +28,9 @@ const prismaMock = vi.hoisted(() => ({
   // proyección los llena.
   colaborador: { findMany: vi.fn() },
   asistenciaInventario: { findMany: vi.fn() },
+  // Las faltas perdonadas por el auditor. Vacio por defecto: sin
+  // justificaciones, la cuenta nueva da exactamente lo mismo que la vieja.
+  justificacionAsistencia: { findMany: vi.fn(async () => []) },
 }));
 vi.mock('../../config/database', () => ({ prisma: prismaMock }));
 
@@ -133,10 +136,14 @@ describe('deSucursal', () => {
     // Nada se proyecta: mandan las filas firmadas.
     expect(prismaMock.colaborador.findMany).not.toHaveBeenCalled();
     // Y `faltanteEmpresa`/`faltanteNeto` NUNCA se recalculan con la
-    // clasificación de hoy para un inventario ya liquidado -- congelado
-    // manda, ni una consulta a `ClasificacionProducto`/`CatalogoItem`.
+    // clasificación de HOY para un inventario ya liquidado.
     expect(r!.faltanteEmpresa).toBe(100);
-    expect(prismaMock.catalogoItem.findMany).not.toHaveBeenCalled();
+    // LO QUE NO SE CONSULTA ES `ClasificacionProducto`: la excepción VIGENTE
+    // del Auditor, que es lo único que podría cambiarle el número a un
+    // inventario ya pagado. `CatalogoItem` SÍ se lee ahora -- el cuadro de
+    // paquetes se deriva del `empaqueCompra` del snapshot, que está congelado
+    // igual que el resto y no puede cambiar (ver `montoPaqueteCongelado`).
+    expect(prismaMock.clasificacionProducto.findMany).not.toHaveBeenCalled();
     expect(prismaMock.clasificacionProducto.findMany).not.toHaveBeenCalled();
   });
 

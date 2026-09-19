@@ -27,6 +27,7 @@ import {
   type FiltroHojasModal,
 } from '../../lib/dominio/filtro-hojas';
 import { pluralizar } from '../../lib/dominio/plural';
+import { faseDeCierre } from '../../lib/dominio/ajuste-final';
 import { ORDINAL } from '../../lib/dominio/texto-cierre-ronda';
 import type { HojaConteo } from '../../lib/dominio/tipos';
 import type { EstadoCola } from '../../lib/puertos/repositorios';
@@ -40,7 +41,7 @@ import { colors, fonts, radius } from '../../lib/theme';
  * criterio que `app/conteo/mis-hojas.tsx` -- el mensaje "neutro" es el único
  * que cambia (acá no hay nada que "el Coordinador te asigne").
  */
-function estadoVacio(motivo: 'sin-red' | 'sesion-vencida' | 'error' | 'incompleta' | null): {
+function estadoVacio(motivo: 'sin-red' | 'sesion-vencida' | 'error' | 'incompleta' | 'conteo-terminado' | null): {
   icon: typeof WifiOff;
   title: string;
   subtitle: string;
@@ -73,6 +74,18 @@ function estadoVacio(motivo: 'sin-red' | 'sesion-vencida' | 'error' | 'incomplet
       subtitle: 'La descarga de las hojas se cortó a mitad de camino y no se guardó ninguna. Vuelve a entrar a esta pantalla para reintentar.',
     };
   }
+  if (motivo === 'conteo-terminado') {
+    // Mandar a "Armar hojas" acá sería mandarlo a hacer algo que el servidor
+    // va a rechazar: el conteo cerró. Lo que sí puede hacer -- corregir lo que
+    // ya se cargó, mientras el auditor no empiece el ajuste -- se dice acá,
+    // porque es la única acción que le queda y no es evidente.
+    return {
+      icon: ClipboardList,
+      title: 'El conteo de este inventario terminó',
+      subtitle:
+        'Se cerraron todas las rondas y el auditor decide qué sigue. Si encuentras un error, todavía puedes corregir valores desde las hojas de la última ronda, hasta que empiece el ajuste final.',
+    };
+  }
   return {
     icon: ClipboardList,
     title: 'Todavía no hay hojas en esta ronda',
@@ -99,7 +112,9 @@ export default function HojasScreen(): JSX.Element {
   const [hojas, setHojas] = useState<HojaConteo[]>([]);
   // Mismas cuatro razones que `mis-hojas.tsx` -- ver ese archivo para el
   // detalle de por qué no pueden caer todas en un solo cartel genérico.
-  const [motivoSinHojas, setMotivoSinHojas] = useState<'sin-red' | 'sesion-vencida' | 'error' | 'incompleta' | null>(null);
+  const [motivoSinHojas, setMotivoSinHojas] = useState<
+    'sin-red' | 'sesion-vencida' | 'error' | 'incompleta' | 'conteo-terminado' | null
+  >(null);
   const [descargaIncompleta, setDescargaIncompleta] = useState(false);
   const [rondaActual, setRondaActual] = useState<number | null>(null);
   const [estadoCola, setEstadoCola] = useState<EstadoCola>(sincronizador.estado());
@@ -111,10 +126,15 @@ export default function HojasScreen(): JSX.Element {
     let inventarioId: number | null;
     let ronda: number | null;
     let sinRedYsinLocal = false;
+    let yaNoSeCuenta = false;
     try {
       const activo = await repositorioInventario.activo(sesion.sucursal!.id);
       inventarioId = activo?.inventarioId ?? null;
       ronda = activo?.rondaActiva ?? null;
+      // La FASE, no la ronda: `rondaActiva` es la última ronda que EXISTE, así
+      // que sigue siendo un número mientras el auditor ajusta. Sin esto, la
+      // pantalla ofrecía las hojas de una ronda que ya no admite conteos.
+      yaNoSeCuenta = activo !== null && faseDeCierre(activo.estado, activo.rondaActiva) !== 'contando';
     } catch {
       // Sin red (u otra falla): el avance de hoy puede estar completo en
       // SQLite -- se sigue con eso en vez de dejar la lista colgada
@@ -125,9 +145,12 @@ export default function HojasScreen(): JSX.Element {
       sinRedYsinLocal = inventarioId === null;
     }
     setRondaActual(ronda);
-    if (!inventarioId || ronda === null) {
+    if (!inventarioId || ronda === null || yaNoSeCuenta) {
       setHojas([]);
-      setMotivoSinHojas(sinRedYsinLocal ? 'sin-red' : null);
+      // Mismo criterio que mis-hojas.tsx: con inventario y sin ronda abierta
+      // el conteo terminó, y mandar a armar hojas ahí sería mandar a hacer
+      // algo que el servidor va a rechazar.
+      setMotivoSinHojas(sinRedYsinLocal ? 'sin-red' : inventarioId ? 'conteo-terminado' : null);
       setDescargaIncompleta(false);
       setCargando(false);
       return;
@@ -249,6 +272,17 @@ export default function HojasScreen(): JSX.Element {
                   contados={hoja.conteos.length}
                   total={hoja.productos.length}
                   habilitada={hoja.productos.length > 0}
+                  // La tarjeta ERA de solo lectura: el Coordinador miraba el
+                  // avance y nada más. Ahora abre la corrección -- es la única
+                  // entrada a esa pantalla, que necesita saber QUÉ hoja y de
+                  // QUÉ ronda (los números de hoja se repiten en cada ronda,
+                  // así que sin la ronda "Hoja #001" lleva a la de otra).
+                  onPress={() =>
+                    router.push({
+                      pathname: '/coordinador/corregir',
+                      params: { hojaId: String(hoja.id), ronda: String(rondaActual ?? 1) },
+                    })
+                  }
                 />
               ))}
             </View>

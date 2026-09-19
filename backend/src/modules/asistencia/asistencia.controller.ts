@@ -4,9 +4,11 @@ import type { RequestAutenticado } from '../../shared/tipos';
 import * as service from './asistencia.service';
 import type {
   BorrarMarcaQuery,
+  JustificarFaltaInput,
   MarcarAsistenciaInput,
   ParametrosInventario,
   ParametrosMarca,
+  QuitarJustificacionQuery,
 } from './asistencia.schema';
 
 export const listar = asyncHandler(async (req: RequestAutenticado, res: Response) => {
@@ -37,4 +39,29 @@ export const borrar = asyncHandler(async (req: RequestAutenticado, res: Response
   const { inventarioId, colaboradorId } = req.params as unknown as ParametrosMarca;
   const { dia } = req.query as unknown as BorrarMarcaQuery;
   res.json(await service.borrar(req.colaborador!, inventarioId, colaboradorId, dia));
+});
+
+/**
+ * 201 si el perdón se registró, 200 si ya estaba -- misma semántica que
+ * `marcar`, y por lo mismo: el POST es idempotente y la pantalla tiene que
+ * poder distinguir "listo" de "ya estaba justificado" sin adivinar.
+ */
+export const justificar = asyncHandler(async (req: RequestAutenticado, res: Response) => {
+  const { inventarioId } = req.params as unknown as ParametrosInventario;
+  const { colaboradorId, dia, motivo } = req.body as JustificarFaltaInput;
+  const { creada, asistencia } = await service.justificar(
+    req.colaborador!,
+    inventarioId,
+    colaboradorId,
+    dia,
+    motivo,
+  );
+  res.status(creada ? 201 : 200).json(asistencia);
+});
+
+/** 200 con el estado completo, no 204: la pantalla repinta (igual que `borrar`). */
+export const quitarJustificacion = asyncHandler(async (req: RequestAutenticado, res: Response) => {
+  const { inventarioId, colaboradorId } = req.params as unknown as ParametrosMarca;
+  const { dia } = req.query as unknown as QuitarJustificacionQuery;
+  res.json(await service.quitarJustificacion(req.colaborador!, inventarioId, colaboradorId, dia));
 });

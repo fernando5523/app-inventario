@@ -9,6 +9,7 @@ import { AvanceFila, BandaSync, BarraApp, Button, EmptyState, TarjetaHoja, sincr
 import { cargarSeguro } from '../../lib/adaptadores/_http';
 import { inventarioIdSinRed, rondaActivaSinRed, ultimaDescarga } from '../../lib/adaptadores/hojas-sqlite';
 import { pluralizar } from '../../lib/dominio/plural';
+import { faseDeCierre } from '../../lib/dominio/ajuste-final';
 import { ORDINAL } from '../../lib/dominio/texto-cierre-ronda';
 import { repositorioHojas, repositorioInventario, sincronizador } from '../../lib/contenedor';
 import type { HojaConteo } from '../../lib/dominio/tipos';
@@ -21,7 +22,7 @@ import { colors, fonts } from '../../lib/theme';
  * reconectando a la WiFi de la tienda, así que cada motivo tiene su propio
  * mensaje en vez de caer todos en el cartel de "sin conexión".
  */
-function estadoVacio(motivo: 'sin-red' | 'sesion-vencida' | 'error' | 'incompleta' | null): {
+function estadoVacio(motivo: 'sin-red' | 'sesion-vencida' | 'error' | 'incompleta' | 'conteo-terminado' | null): {
   icon: typeof WifiOff;
   title: string;
   subtitle: string;
@@ -54,6 +55,16 @@ function estadoVacio(motivo: 'sin-red' | 'sesion-vencida' | 'error' | 'incomplet
       subtitle: 'La descarga de tus hojas se cortó a mitad de camino y no se guardó ninguna. Vuelve a entrar a esta pantalla para reintentar.',
     };
   }
+  if (motivo === 'conteo-terminado') {
+    // Esperar NO va a servir: el conteo cerró. El mensaje neutro de abajo
+    // ("cuando el coordinador te asigne") invitaba a quedarse mirando una
+    // pantalla que ya no iba a cambiar.
+    return {
+      icon: ClipboardList,
+      title: 'El conteo de este inventario terminó',
+      subtitle: 'Se cerraron todas las rondas. Lo que sigue lo revisa el auditor, así que ya no hay hojas para contar.',
+    };
+  }
   return {
     icon: ClipboardList,
     title: 'Todavía no tienes hojas asignadas',
@@ -73,7 +84,9 @@ export default function MisHojasScreen(): JSX.Element {
   //   - sesión vencida → decirle que vuelva a entrar con su PIN.
   //   - el servidor respondió mal (500, etc.) → error genérico, reintentar.
   //   - con red y sin error, pero de verdad no tiene ninguna asignada → mensaje neutro.
-  const [motivoSinHojas, setMotivoSinHojas] = useState<'sin-red' | 'sesion-vencida' | 'error' | 'incompleta' | null>(null);
+  const [motivoSinHojas, setMotivoSinHojas] = useState<
+    'sin-red' | 'sesion-vencida' | 'error' | 'incompleta' | 'conteo-terminado' | null
+  >(null);
   // Caso distinto del de arriba: la descarga se cortó a medias pero SÍ
   // alcanzó a guardar algunas hojas antes del corte — la lista no está
   // vacía (por eso `estadoVacio` no aplica acá), pero mostrarla sin avisar
@@ -91,10 +104,15 @@ export default function MisHojasScreen(): JSX.Element {
     let inventarioId: number | null;
     let ronda: number | null;
     let sinRedYsinLocal = false;
+    let yaNoSeCuenta = false;
     try {
       const activo = await repositorioInventario.activo(sesion.sucursal!.id);
       inventarioId = activo?.inventarioId ?? null;
       ronda = activo?.rondaActiva ?? null;
+      // La FASE, no la ronda: `rondaActiva` es la última ronda que EXISTE, así
+      // que sigue siendo un número mientras el auditor ajusta. Sin esto, la
+      // pantalla ofrecía tus hojas de una ronda que ya no admite conteos.
+      yaNoSeCuenta = activo !== null && faseDeCierre(activo.estado, activo.rondaActiva) !== 'contando';
     } catch {
       // Sin red (u otra falla): el avance de hoy puede estar completo en
       // SQLite — se sigue con eso en vez de dejar la lista colgada
@@ -105,13 +123,15 @@ export default function MisHojasScreen(): JSX.Element {
       sinRedYsinLocal = inventarioId === null;
     }
     setRondaActual(ronda);
-    if (!inventarioId || ronda === null) {
+    if (!inventarioId || ronda === null || yaNoSeCuenta) {
       setHojas([]);
-      // Sin esto, "sin conexión y nunca se descargó nada" caería en el
-      // mensaje neutro de "todavía no tenés hojas asignadas" — que invita
-      // a esperar a que el coordinador reparta, cuando el problema real es
-      // que no hay señal.
-      setMotivoSinHojas(sinRedYsinLocal ? 'sin-red' : null);
+      // Tres situaciones distintas que terminan en cero hojas y NO se pueden
+      // confundir, porque la salida de cada una es distinta:
+      //   sin red      → hace falta señal.
+      //   hay inventario y ninguna ronda abierta → el conteo terminó, esperar
+      //                  a que asignen hojas no va a servir nunca.
+      //   el resto     → todavía no le asignaron ninguna: esperar SÍ sirve.
+      setMotivoSinHojas(sinRedYsinLocal ? 'sin-red' : inventarioId ? 'conteo-terminado' : null);
       setDescargaIncompleta(false);
       setCargando(false);
       return;

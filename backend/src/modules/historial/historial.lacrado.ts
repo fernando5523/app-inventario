@@ -27,6 +27,27 @@ import { createHash } from 'node:crypto';
  * v2 -> v3 (asistencia registrada por dia, 2026-09-18): se agrega
  * `resultado.diasDelInventario` y `liquidaciones[].diasAsistidos`.
  *
+ * v3 -> v4 (faltas justificadas por el auditor, 2026-09-19): se agrega
+ * `liquidaciones[].diasJustificados`.
+ *
+ * POR QUE TIENE QUE ENTRAR, y no es "por las dudas": la v3 sella la multa y
+ * la cuenta que la produce, `(diasDelInventario - diasAsistidos) x tarifa`.
+ * Con las justificaciones esa cuenta ya no da. Una fila con 1 de 3 dias y
+ * multa 0 -- perfectamente legitima, con dos faltas perdonadas -- convierte
+ * al sello v3 en un documento que se CONTRADICE: firma un monto que sus
+ * propios numeros firmados no explican. Quien lo verifique de buena fe va a
+ * concluir que la planilla se manipulo.
+ *
+ * Y al reves es peor: `justificaciones_asistencia` no entra al sello (no es
+ * plata, es el respaldo), asi que sin `diasJustificados` bajo el hash se le
+ * puede perdonar una falta a alguien DESPUES de lacrar y el sello sigue
+ * dando `intacto`. El perdon mueve plata de verdad -- baja una multa y, con
+ * ella, el fondo que se reparte entre todos los demas.
+ *
+ * Se sella el NUMERO de dias, no los motivos ni quien firmo cada perdon: eso
+ * vive en la tabla y en el log de auditoria. Al sello le toca la parte que
+ * sostiene el monto.
+ *
  * EL AGUJERO QUE CIERRA: el sello ya cubria `multaInasistencia` de cada fila
  * -- la plata -- pero no el "1 de 3 dias" que la justifica. Con la multa por
  * dia, esos dos numeros SON la multa: `(dias - diasAsistidos) x tarifa`. Un
@@ -44,7 +65,7 @@ import { createHash } from 'node:crypto';
  * para esos es que ahora se les nota correctamente `versionDistinta: true`
  * -- exactamente para lo que existe ese flag.
  */
-export const VERSION_CONTENIDO_LACRADO = 3;
+export const VERSION_CONTENIDO_LACRADO = 4;
 
 export const ALGORITMO_HASH = 'sha256';
 
@@ -200,6 +221,19 @@ export interface DatosLacrado {
      * monto. Opcional por lo mismo que `resultado.montoSobranteEmpleado`.
      */
     diasAsistidos?: number;
+    /**
+     * Dias que falto y el auditor le perdono. Entra al hash en `version >= 4`.
+     * Es la pieza que vuelve a hacer verificable la cuenta de la multa:
+     * `(diasDelInventario - diasAsistidos - diasJustificados) x tarifa`.
+     *
+     * VA SEPARADO de `diasAsistidos` y no sumado adentro, que es toda la
+     * decision de diseno de esta funcionalidad: el sello afirma hechos, y
+     * "asistio 3 de 3" sobre alguien que vino 1 dia es un hecho falso. El
+     * documento tiene que poder decir "vino 1, le perdonaron 2, por eso no
+     * paga" -- que es exactamente lo que hay que mostrar cuando alguien
+     * reclama.
+     */
+    diasJustificados?: number;
     cuotaBase: number;
     multaInasistencia: number;
     bonoAsistencia: number;
@@ -252,6 +286,7 @@ export function armarContenidoLacrado(
   const porNumero = (a: number, b: number): number => a - b;
   const v2 = version >= 2;
   const v3 = version >= 3;
+  const v4 = version >= 4;
 
   /**
    * SI ESTE INVENTARIO TIENE ASISTENCIA POR DIA, o si es de la regla vieja.
@@ -310,6 +345,11 @@ export function armarContenidoLacrado(
       .map((l) => ({
         ...l,
         diasAsistidos: v3 ? (conAsistenciaPorDia ? (l.diasAsistidos ?? 0) : null) : undefined,
+        // Mismo criterio que `diasAsistidos`: con asistencia por dia, un 0 es
+        // un CERO REAL ("no le perdonaron nada") y se sella como tal; sin
+        // ella, la columna entera es un default que no significa nada y va
+        // en `null`. Ver `conAsistenciaPorDia`.
+        diasJustificados: v4 ? (conAsistenciaPorDia ? (l.diasJustificados ?? 0) : null) : undefined,
       })),
     aprobaciones: [...datos.aprobaciones].sort((a, b) => porNumero(a.aprobadorId, b.aprobadorId)),
   };

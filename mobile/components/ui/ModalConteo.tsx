@@ -2,6 +2,7 @@ import { ScanLine, X } from 'lucide-react-native';
 import { useEffect, useState, type JSX } from 'react';
 import { Keyboard, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 
+import { errorDeMotivo, STOCK_NO_SE_CORRIGE } from '../../lib/dominio/ajuste-final';
 import { desgloseConteo, lineasDeTotal, validarConteo } from '../../lib/dominio/empaque';
 import type { Conteo, LineaEmpaque, Producto } from '../../lib/dominio/tipos';
 import { colors, fonts, fontSize, radius, shadow, spacing } from '../../lib/theme';
@@ -21,7 +22,47 @@ export interface ModalConteoProps {
    * empaque para un registro NUEVO — nunca pisa un conteo que ya existía.
    */
   empaquePreseleccionado?: string;
-  onGuardar: (conteo: Conteo) => void;
+  /**
+   * PIDE UN MOTIVO OBLIGATORIO antes de guardar. `false` por default, o sea:
+   * el conteo de siempre sigue funcionando exactamente igual.
+   *
+   * Opt-in a propósito, que es la regla para una prop que cambia el
+   * comportamiento de un componente COMPARTIDO: este modal lo usan el
+   * Contador (que carga el valor original) y las dos pantallas de corrección
+   * (Coordinador y Auditor). Pedirle el motivo al Contador por cada producto
+   * de una hoja de 50 sería insoportable y no aportaría nada: su valor es el
+   * primero, no cambia ninguno anterior. El motivo importa cuando se PISA un
+   * valor que ya existía, porque es lo único que va a explicar el descuento
+   * seis meses después.
+   */
+  pedirMotivo?: boolean;
+  /** Qué se está por cambiar, arriba del campo de motivo. Solo con `pedirMotivo`. */
+  tituloMotivo?: string;
+  /**
+   * EL STOCK DEL ERP, SOLO COMO REFERENCIA. Ausente por default, y ausente es
+   * lo que pasan el Contador y el Coordinador: para ellos rige el conteo
+   * ciego, y este modal no sabe qué es el stock salvo que alguien se lo diga.
+   *
+   * SOLO lo pasa la corrección del AUDITOR. Él ve el stock porque su trabajo
+   * es comparar; esconderle el número no protegería nada y le haría imposible
+   * la tarea. Que sea una prop opcional y no un dato que el modal busque por
+   * su cuenta es justamente lo que mantiene la garantía: para ver el stock
+   * hay que pedirlo explícitamente desde una pantalla que tenga derecho.
+   *
+   * `null` = el snapshot no trajo stock para ese ítem: se muestra "—", nunca
+   * un 0 (que afirmaría que el ERP dice que no hay ninguno).
+   *
+   * NUNCA es editable. Ver `STOCK_NO_SE_CORRIGE` en dominio/ajuste-final.ts:
+   * corregir lo contado no es corregir el stock, y la pantalla no puede dejar
+   * lugar a esa confusión.
+   */
+  stockErpDeReferencia?: number | null;
+  /**
+   * `motivo` llega vacío cuando `pedirMotivo` es false. Quien no lo pide
+   * puede seguir recibiendo un handler de un solo parámetro -- por eso
+   * `contar.tsx` no cambió ni una línea.
+   */
+  onGuardar: (conteo: Conteo, motivo: string) => void;
   onCerrar: () => void;
 }
 
@@ -57,9 +98,13 @@ export function ModalConteo({
   conteoInicial,
   confirmadoPorEscaner,
   empaquePreseleccionado,
+  pedirMotivo = false,
+  tituloMotivo,
+  stockErpDeReferencia,
   onGuardar,
   onCerrar,
 }: ModalConteoProps): JSX.Element | null {
+  const [motivo, setMotivo] = useState('');
   const [cantidades, setCantidades] = useState<Record<string, number>>({});
   const [textos, setTextos] = useState<Record<string, string>>({});
   const [erroresCantidad, setErroresCantidad] = useState<Record<string, string | null>>({});
@@ -69,6 +114,10 @@ export function ModalConteo({
 
   useEffect(() => {
     if (!visible) return;
+    // El motivo NO se arrastra de un producto al anterior: cada cambio tiene
+    // el suyo, y reusar el de la fila de arriba sería firmar un cambio con la
+    // explicación de otro.
+    setMotivo('');
     const iniciales: Record<string, number> = {};
     const textosIniciales: Record<string, string> = {};
     for (const linea of conteoInicial?.empaques ?? []) {
@@ -148,11 +197,15 @@ export function ModalConteo({
   const hayValorIngresado =
     textoSueltas.trim() !== '' || producto.empaques.some((e) => (textos[e.nombre]?.trim() ?? '') !== '');
   const hayError = errorSueltas !== null || Object.values(erroresCantidad).some((m) => m !== null);
-  const puedeGuardar = hayValorIngresado && !hayError;
+  // `errorDeMotivo` es la MISMA regla que valida el adaptador: si la pantalla
+  // aceptara lo que el adaptador rechaza, la persona vería el modal cerrarse
+  // y el cambio fallar después, sin entender cuál de las dos cosas pasó.
+  const faltaMotivo = pedirMotivo ? errorDeMotivo(motivo) : null;
+  const puedeGuardar = hayValorIngresado && !hayError && faltaMotivo === null;
 
   function guardar(): void {
     if (!puedeGuardar) return;
-    onGuardar({ ...conteoBorrador, contadoEn: new Date().toISOString() });
+    onGuardar({ ...conteoBorrador, contadoEn: new Date().toISOString() }, motivo.trim());
   }
 
   return (
@@ -168,7 +221,15 @@ export function ModalConteo({
       <Pressable style={styles.fondo} onPress={onCerrar} />
       <View pointerEvents="box-none" style={styles.centrado}>
         <View style={[styles.caja, shadow.modal]}>
-          <ScrollView showsVerticalScrollIndicator={false}>
+          {/*
+            `keyboardShouldPersistTaps="handled"`: por default es "never", y
+            con el teclado abierto el PRIMER toque en cualquier hijo se
+            consume para bajarlo -- el botón de guardar no lo recibe. Acá se
+            salvaba de casualidad (el modal es corto y el teclado no tapaba el
+            botón), pero en el modal de ajuste del auditor la misma trampa
+            hizo imposible guardar: se arregló en los dos.
+          */}
+          <ScrollView showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
             <View style={styles.cabecera}>
               <Text style={styles.titulo}>{conteoInicial ? 'Editar conteo' : 'Registrar conteo'}</Text>
               <Pressable onPress={onCerrar} style={styles.cerrar} accessibilityLabel="Cerrar">
@@ -200,6 +261,31 @@ export function ModalConteo({
                     ? `Producto confirmado con la cámara, y el código era el del empaque ${empaquePreseleccionado}. Ajusta la cantidad si tienes más de uno.`
                     : 'Producto confirmado con la cámara. El código no dice cuántas hay: indica abajo cuántos empaques cerrados y cuántas unidades sueltas tienes.'}
                 </Text>
+              </View>
+            ) : null}
+
+            {/*
+              EL STOCK, ARRIBA DE LOS CAMPOS Y FUERA DE ELLOS.
+              Va en una celda inerte —un `View` con un `Text`, no un input— y
+              con el rótulo "referencia" y la frase del dominio debajo. El
+              cliente fue textual: corregir lo CONTADO no es corregir el STOCK,
+              y la pantalla no puede dejar lugar a esa confusión. Un campo con
+              borde al lado de los otros dos, aunque estuviera deshabilitado,
+              ya la dejaría.
+
+              Separado del bloque de campos por su propio recuadro para que se
+              lea como lo que es: un dato traído, no algo que esta persona
+              cargó ni puede cargar.
+            */}
+            {stockErpDeReferencia !== undefined ? (
+              <View style={styles.referenciaErp}>
+                <View style={styles.referenciaFila}>
+                  <Text style={styles.referenciaEtiqueta}>Stock del sistema (referencia)</Text>
+                  <Text style={styles.referenciaValor}>
+                    {stockErpDeReferencia === null ? '—' : stockErpDeReferencia}
+                  </Text>
+                </View>
+                <Text style={styles.referenciaNota}>{STOCK_NO_SE_CORRIGE}</Text>
               </View>
             ) : null}
 
@@ -265,17 +351,55 @@ export function ModalConteo({
               <Text style={styles.totalValor}>TOTAL {total} und</Text>
             </View>
 
+            {/*
+              EL MOTIVO, pegado al botón y no arriba del todo: es lo último
+              que se completa y lo que habilita el guardado, así que tiene que
+              estar donde la vista ya está cuando el valor nuevo ya se tecleó.
+              Multilínea porque "contó dos cajas de la góndola de al lado" no
+              entra en una sola.
+            */}
+            {pedirMotivo ? (
+              <View style={styles.campo}>
+                <Text style={styles.campoEtiqueta}>Motivo del cambio</Text>
+                <TextInput
+                  style={[styles.input, styles.inputMotivo, faltaMotivo && motivo.length > 0 ? styles.inputError : null]}
+                  multiline
+                  numberOfLines={2}
+                  // Un motivo no lleva saltos de línea: la tecla de Enter se
+                  // usa para CERRAR el teclado, que es la única salida propia
+                  // que tiene un campo multilínea.
+                  submitBehavior="blurAndSubmit"
+                  returnKeyType="done"
+                  onSubmitEditing={() => Keyboard.dismiss()}
+                  // Sin autoFocus: el teclado no se abre solo al entrar, misma
+                  // regla que el buscador de los selects (ver la skill).
+                  value={motivo}
+                  placeholder="Por qué cambias este valor"
+                  placeholderTextColor={colors.grisClaro}
+                  onChangeText={setMotivo}
+                  accessibilityLabel="Motivo del cambio"
+                />
+                <Text style={styles.motivoAyuda}>
+                  {tituloMotivo ?? 'Queda registrado junto al cambio, con tu nombre y la hora.'}
+                </Text>
+              </View>
+            ) : null}
+
             <Pressable
               style={[styles.guardar, !puedeGuardar && styles.guardarDeshabilitado]}
               onPress={guardar}
               disabled={!puedeGuardar}
             >
               <Text style={[styles.guardarTexto, !puedeGuardar && styles.guardarTextoDeshabilitado]}>
-                Guardar registro en hoja
+                {pedirMotivo ? 'Guardar el cambio' : 'Guardar registro en hoja'}
               </Text>
             </Pressable>
+            {/* QUÉ falta, no "no se puede": el botón apagado sin motivo deja
+                a la persona tocándolo sin saber qué le pide. */}
             {!hayValorIngresado ? (
               <Text style={styles.hintGuardar}>Ingresa la cantidad. Si miraste y no había ninguno, teclea 0.</Text>
+            ) : faltaMotivo !== null ? (
+              <Text style={styles.hintGuardar}>{faltaMotivo}</Text>
             ) : null}
           </ScrollView>
         </View>
@@ -296,6 +420,19 @@ const styles = StyleSheet.create({
     backgroundColor: colors.campo,
     borderRadius: radius.xl,
   },
+  inputMotivo: { minHeight: 62, paddingTop: 10, textAlignVertical: 'top' },
+  /**
+   * La referencia del ERP. Paleta NEUTRA (`esperaSuave`), nunca la de un
+   * campo (`campo` + borde): tiene que leerse como un dato traído, no como
+   * algo que se pueda tocar. Sin `borderWidth` a propósito -- un recuadro con
+   * borde es, en esta app, la forma de un input.
+   */
+  referenciaErp: { marginTop: 12, gap: 4, padding: 11, borderRadius: radius.sm, backgroundColor: colors.esperaSuave },
+  referenciaFila: { flexDirection: 'row', alignItems: 'baseline', justifyContent: 'space-between', gap: spacing.sm },
+  referenciaEtiqueta: { flex: 1, fontSize: 12, color: colors.gris, fontFamily: fonts.semibold },
+  referenciaValor: { fontSize: 17, color: colors.tinta, fontFamily: fonts.bold, fontVariant: ['tabular-nums'] },
+  referenciaNota: { fontSize: 11, lineHeight: 15, color: colors.grisClaro, fontFamily: fonts.regular },
+  motivoAyuda: { marginTop: 4, fontSize: 11, lineHeight: 15, color: colors.grisClaro, fontFamily: fonts.regular },
   cabecera: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: spacing.sm, marginBottom: 12 },
   titulo: { fontSize: 15, color: colors.tinta, fontFamily: fonts.bold },
   cerrar: { width: 30, height: 30, alignItems: 'center', justifyContent: 'center', borderRadius: radius.sm },

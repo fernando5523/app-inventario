@@ -28,7 +28,7 @@ vi.mock('../sesion/sesion.service', () => ({
   },
 }));
 vi.mock('./inventarios.controller', () =>
-  controllerFalso(['activo', 'crearHojas', 'asignarHojas', 'resumenRonda', 'cerrarRonda']),
+  controllerFalso(['activo', 'crearHojas', 'asignarHojas', 'resumenRonda', 'cerrarRonda', 'abrirRondaExtra', 'iniciarAjuste', 'ajustarConteo', 'cerrarAjuste']),
 );
 
 import { inventariosRouter, sucursalesInventariosRouter } from './inventarios.routes';
@@ -259,5 +259,86 @@ describe('POST /api/inventarios/:id/hojas/asignar: repartir entre los contadores
   it('administrador, pasa el middleware', async () => {
     await iniciar();
     expect((await fetch(`${baseUrl}/api/inventarios/9/hojas/asignar`, asignar(ADMIN))).status).toBe(200);
+  });
+});
+
+/**
+ * LAS CUATRO RUTAS DEL AUDITOR, montadas y alcanzables.
+ *
+ * NO llevan `requiereRol` a proposito: ninguna de las cuatro se decide solo
+ * con el rol -- todas dependen ADEMAS del estado del inventario (`en_curso`
+ * contra `ajuste_auditor`), y esas ventanas viven juntas en
+ * `ajuste.permisos.ts` para que no se contradigan. Poner media regla acá
+ * seria la mitad que alguien actualiza sin mirar la otra.
+ *
+ * Lo que SI se prueba acá es lo unico que este archivo puede probar: que la
+ * ruta exista (un 404 significaria que el `app.use` nunca la registro) y que
+ * exija sesion. Quien puede y cuando lo prueban `ajuste.permisos.test.ts` y
+ * los tests de los services, sin base.
+ */
+describe('el tramo del Auditor: rutas montadas y con sesion obligatoria', () => {
+  async function iniciar(): Promise<void> {
+    const app = appDePrueba('/api/inventarios', inventariosRouter);
+    ({ baseUrl, cerrar } = await levantar(app));
+  }
+
+  const RUTAS: Array<{ metodo: string; url: string; cuerpo?: unknown }> = [
+    { metodo: 'POST', url: '/api/inventarios/8039/rondas/abrir' },
+    { metodo: 'POST', url: '/api/inventarios/8039/ajuste/iniciar' },
+    { metodo: 'PATCH', url: '/api/inventarios/8039/ajuste/512', cuerpo: { sueltas: 3, motivo: 'stock real' } },
+    { metodo: 'POST', url: '/api/inventarios/8039/ajuste/cerrar' },
+  ];
+
+  it.each(RUTAS)('$metodo $url existe y deja pasar al Auditor', async ({ metodo, url, cuerpo }) => {
+    await iniciar();
+    const r = await fetch(`${baseUrl}${url}`, {
+      method: metodo,
+      headers: { ...autorizacion(AUDITOR), 'Content-Type': 'application/json' },
+      ...(cuerpo ? { body: JSON.stringify(cuerpo) } : {}),
+    });
+    // 404 aca significaria que la ruta no se registro en el router.
+    expect(r.status).toBe(200);
+  });
+
+  it.each(RUTAS)('$metodo $url sin sesion, 401', async ({ metodo, url, cuerpo }) => {
+    await iniciar();
+    const r = await fetch(`${baseUrl}${url}`, {
+      method: metodo,
+      headers: { 'Content-Type': 'application/json' },
+      ...(cuerpo ? { body: JSON.stringify(cuerpo) } : {}),
+    });
+    expect(r.status).toBe(401);
+  });
+
+  /**
+   * El `motivo` es obligatorio en el ajuste y lo corta el middleware de
+   * validacion, antes de llegar al service: un cambio sin motivo es un
+   * descuento que nadie puede explicar seis meses despues.
+   */
+  it('PATCH del ajuste sin motivo, 400 antes de tocar nada', async () => {
+    await iniciar();
+    const r = await fetch(`${baseUrl}/api/inventarios/8039/ajuste/512`, {
+      method: 'PATCH',
+      headers: { ...autorizacion(AUDITOR), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sueltas: 3 }),
+    });
+    expect(r.status).toBe(400);
+  });
+
+  /**
+   * `/ajuste/cerrar` y `/ajuste/:productoId` comparten prefijo: si el orden
+   * de registro estuviera mal, un POST a `cerrar` podria caer en el handler
+   * del producto. Son metodos distintos (POST contra PATCH), asi que no se
+   * pisan -- pero conviene que un test lo fije.
+   */
+  it('POST /ajuste/cerrar no cae en el handler de /ajuste/:productoId', async () => {
+    await iniciar();
+    const r = await fetch(`${baseUrl}/api/inventarios/8039/ajuste/cerrar`, {
+      method: 'POST',
+      headers: autorizacion(AUDITOR),
+    });
+    // Si cayera en el del producto, el schema de params pediria un
+    // productoId numerico y esto seria 400.
+    expect(r.status).toBe(200);
   });
 });

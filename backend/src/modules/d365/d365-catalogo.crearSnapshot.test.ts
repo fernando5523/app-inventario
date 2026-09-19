@@ -19,6 +19,11 @@ vi.mock('../../config/database', () => ({
     sucursal: { findUnique: vi.fn() },
     inventario: { findFirst: vi.fn(), create: vi.fn() },
     catalogoItem: { create: vi.fn() },
+    // El umbral de media unidad de paquete se COPIA de la config al
+    // inventario al tomar el snapshot (ver crearSnapshot). Por defecto sin
+    // fila: el snapshot tiene que seguir funcionando y quedarse con el
+    // default de la columna, no caerse porque falte una perilla.
+    configuracion: { findUnique: vi.fn().mockResolvedValue(null) },
     $transaction: vi.fn((arg: unknown) => (Array.isArray(arg) ? Promise.all(arg) : (arg as () => unknown)())),
   },
 }));

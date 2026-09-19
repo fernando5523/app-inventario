@@ -22,6 +22,7 @@ const prismaMock = vi.hoisted(() => ({
   inventario: { findUnique: vi.fn(), update: vi.fn() },
   colaborador: { findMany: vi.fn() },
   asistenciaInventario: { findMany: vi.fn() },
+  justificacionAsistencia: { findMany: vi.fn() },
   liquidacionColaborador: { createMany: vi.fn() },
   diferenciaItem: { findMany: vi.fn(), updateMany: vi.fn() },
   catalogoItem: { findMany: vi.fn() },
@@ -76,6 +77,7 @@ describe('flujo punta a punta: reclasificar despues del cierre -> liquidar -> re
     ]);
     // Los dos hicieron los dos dias: sin multas ni bonos, para que este
     // archivo mida solo la reclasificacion.
+    prismaMock.justificacionAsistencia.findMany.mockResolvedValue([]);
     prismaMock.asistenciaInventario.findMany.mockResolvedValue(
       [1, 2].flatMap((colaboradorId) =>
         ['2026-09-01', '2026-09-02'].map((d) => ({ colaboradorId, dia: new Date(`${d}T00:00:00.000Z`) })),
@@ -133,7 +135,11 @@ describe('flujo punta a punta: reclasificar despues del cierre -> liquidar -> re
     });
     expect(prismaMock.resultadoInventario.update).toHaveBeenCalledWith({
       where: { inventarioId: INVENTARIO_ID },
-      data: { montoFaltanteEmpresa: 100, montoSobranteEmpleado: 0 },
+      // `colaboradoresAsistieron` se reescribe con el valor FINAL, en esta
+      // misma transaccion: la ventana para justificar faltas se cierra recien
+      // al liquidar, asi que el numero que congelo el cierre del conteo puede
+      // haber quedado corto. Ver liquidacion.cierre.ts#liquidar.
+      data: { montoFaltanteEmpresa: 100, montoSobranteEmpleado: 0, colaboradoresAsistieron: 2 },
     });
 
     // TODO O NADA: la reclasificacion viaja en la MISMA transaccion que la

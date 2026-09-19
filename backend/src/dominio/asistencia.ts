@@ -50,10 +50,30 @@
  *    que asistió" dejó de ser una categoría: casi todos asistieron algún día.
  *    El bono premia la asistencia completa, que es lo único que sigue siendo
  *    binario.
+ * 5. El AUDITOR puede JUSTIFICAR una falta, y ese día deja de cobrarse.
+ *    Decisión del cliente, textual: *"si cobra el bono de distribución, es
+ *    como si hubiera asistido"*. Un día justificado vale como asistido para
+ *    LOS DOS efectos -- no paga multa por él y, si con eso completa el
+ *    inventario, cobra el bono. No existe la media medida "te perdono la
+ *    multa pero no cobrás bono": el cliente la descartó en esa misma frase.
  *
  * El fondo de multas SE SIGUE REDISTRIBUYENDO entre quienes lo cobran, al
  * centavo (`dominio/reparto-de-fondo.ts`). Eso NO cambió, y no se puede
  * sacar: es lo que hace que la planilla sume el faltante neto y no más.
+ *
+ * ---------------------------------------------------------------------------
+ * ASISTIDO Y JUSTIFICADO SE SUMAN PARA LA PLATA, NUNCA PARA EL RELATO
+ * ---------------------------------------------------------------------------
+ * Los días justificados viven en OTRA tabla y viajan en OTRO parámetro. En
+ * ningún lado de este archivo se los mete adentro de `diasAsistidos`, y no es
+ * prolijidad: `LiquidacionColaborador.diasAsistidos` entra al sello del
+ * lacrado (`historial.lacrado.ts`), que existe para poder defender la
+ * planilla cuando alguien reclama. Un sello que dice "asistió 3 de 3" sobre
+ * alguien que vino 1 día y tuvo 2 perdonados afirma un hecho falso, y deja de
+ * servir justo el día que hace falta.
+ *
+ * Por eso las dos cuentas de abajo reciben los dos números por separado y los
+ * suman *ahí*, donde se ve.
  */
 
 /**
@@ -108,12 +128,65 @@ export function diasDelInventario(marcas: readonly MarcaAsistencia[]): number {
  * sabe la planilla, que recorre a todos y resuelve el faltante con `?? 0`.
  */
 export function diasAsistidosPorColaborador(marcas: readonly MarcaAsistencia[]): Map<number, number> {
+  return contarDiasDistintos(marcas);
+}
+
+/**
+ * Una falta PERDONADA por el auditor: "esta persona no vino este día, y no se
+ * le cobra".
+ *
+ * Tiene la misma forma que `MarcaAsistencia` y es un tipo aparte igual, para
+ * que el compilador no deje pasar una lista por la otra. Afirman cosas
+ * opuestas -- una dice que estuvo, la otra que no -- y confundirlas le
+ * regalaría a alguien un día de asistencia que nunca ocurrió, justo el dato
+ * que el sello del lacrado firma.
+ */
+export interface JustificacionAsistencia {
+  colaboradorId: number;
+  /** La jornada perdonada, `YYYY-MM-DD`. */
+  dia: string;
+  /**
+   * SIEMPRE `true`, y es OBLIGATORIO a propósito. Es lo que hace que los dos
+   * tipos sean de verdad incompatibles: con un campo opcional, TypeScript
+   * acepta una lista de marcas donde se esperan justificaciones (el chequeo
+   * de propiedades de más sólo corre sobre literales), y el error que este
+   * tipo existe para evitar pasaría igual. Con él obligatorio, no compila.
+   */
+  readonly justificada: true;
+}
+
+/**
+ * Cuántos días distintos le PERDONARON a cada persona.
+ *
+ * Misma cuenta que `diasAsistidosPorColaborador` -- días distintos, no filas
+ * -- y por las mismas razones, así que comparten el helper. Son dos funciones
+ * y no una con un parámetro porque el resultado significa cosas distintas y
+ * el que llama tiene que elegir cuál pide: uno es "estuvo", el otro es "no
+ * estuvo y está bien".
+ */
+export function diasJustificadosPorColaborador(
+  justificaciones: readonly JustificacionAsistencia[],
+): Map<number, number> {
+  return contarDiasDistintos(justificaciones);
+}
+
+/**
+ * Días DISTINTOS por colaborador. Privado: lo que se exporta son las dos
+ * lecturas con nombre, no la cuenta cruda.
+ *
+ * Cuenta días distintos y no filas porque el `@@unique([inventarioId,
+ * colaboradorId, dia])` de las dos tablas ya lo impide en la base, pero estas
+ * funciones son puras y no pueden apoyarse en eso: las reciben tests, y el
+ * día que las alimente otra consulta (un `findMany` con join mal armado, un
+ * import) dos filas repetidas le regalarían un día a alguien.
+ */
+function contarDiasDistintos(filas: readonly { colaboradorId: number; dia: string }[]): Map<number, number> {
   const diasPorColaborador = new Map<number, Set<string>>();
 
-  for (const marca of marcas) {
-    const dias = diasPorColaborador.get(marca.colaboradorId);
-    if (dias) dias.add(marca.dia);
-    else diasPorColaborador.set(marca.colaboradorId, new Set([marca.dia]));
+  for (const fila of filas) {
+    const dias = diasPorColaborador.get(fila.colaboradorId);
+    if (dias) dias.add(fila.dia);
+    else diasPorColaborador.set(fila.colaboradorId, new Set([fila.dia]));
   }
 
   return new Map([...diasPorColaborador].map(([colaboradorId, dias]) => [colaboradorId, dias.size]));
@@ -134,20 +207,59 @@ export function diasAsistidosPorColaborador(marcas: readonly MarcaAsistencia[]):
  * este número entra directo a la suma que tiene que cerrar contra el fondo.
  * Con centavos es exacto por construcción, no por suerte del redondeo.
  */
-export function multaPorInasistencia(
-  diasInventario: number,
-  diasAsistidos: number,
-  tarifaPorDia: number,
-): number {
-  const diasFaltados = Math.max(0, diasInventario - diasAsistidos);
-  return (Math.round(tarifaPorDia * 100) * diasFaltados) / 100;
+export function multaPorInasistencia(dias: DiasDeUnaPersona, tarifaPorDia: number): number {
+  return (Math.round(tarifaPorDia * 100) * diasFaltadosCobrables(dias)) / 100;
 }
 
 /**
- * QUIENES COBRAN BONO: los que vinieron todos los días, o sea los que no
- * pagan multa. Las dos frases describen el mismo conjunto y tiene que seguir
- * siendo así -- si alguna vez alguien pudiera cobrar bono Y pagar multa, el
- * fondo dejaría de cerrar (se repartiría entre gente que además aportó).
+ * Los días de una persona en un inventario. UN OBJETO y no tres parámetros
+ * sueltos a propósito: son tres enteros que el compilador no puede
+ * distinguir entre sí, y pasarlos en el orden equivocado no rompe nada --
+ * devuelve una multa distinta, sin error, sobre un sueldo.
+ */
+export interface DiasDeUnaPersona {
+  /** El denominador CONGELADO del inventario (`ResultadoInventario.diasDelInventario`). */
+  diasInventario: number;
+  /** Días que estuvo de verdad: marcas del coordinador. */
+  diasAsistidos: number;
+  /** Días que faltó y el auditor le perdonó. Se SUMAN a los asistidos, acá. */
+  diasJustificados: number;
+}
+
+/**
+ * LOS DÍAS QUE DE VERDAD SE COBRAN: `dias − asistidos − justificados`, nunca
+ * negativo.
+ *
+ * Existe como función propia -- en vez de estar suelta adentro de la multa --
+ * porque la misma resta decide DOS cosas que no pueden discrepar: cuánta
+ * multa paga alguien y si cobra bono. `quienesCobranBono` la usa también, así
+ * que "no paga multa" y "cobra bono" son literalmente el mismo cálculo. El
+ * día que dejen de serlo, el fondo se reparte entre gente que además aportó y
+ * la planilla deja de sumar el neto.
+ *
+ * EL RECORTE A 0 NO ES DEFENSIVO DE ADORNO: `diasInventario` viene congelado
+ * del cierre del conteo y los otros dos salen de las tablas de hoy. Con una
+ * marca o una justificación de más -- un día fuera del inventario, un padrón
+ * que cambió -- alguien tendría más días cubiertos que días de inventario, y
+ * una multa negativa es un PAGO al colaborador que nadie autorizó.
+ */
+export function diasFaltadosCobrables(dias: DiasDeUnaPersona): number {
+  return Math.max(0, dias.diasInventario - dias.diasAsistidos - dias.diasJustificados);
+}
+
+/**
+ * QUIENES COBRAN BONO: los que cubrieron todos los días del inventario --
+ * viniendo o con la falta perdonada --, o sea los que no pagan multa. Las dos
+ * frases describen el mismo conjunto y tiene que seguir siendo así: si alguna
+ * vez alguien pudiera cobrar bono Y pagar multa, el fondo dejaría de cerrar
+ * (se repartiría entre gente que además aportó). Por eso el criterio es
+ * `diasFaltadosCobrables(...) === 0` y no una comparación escrita de nuevo
+ * acá: es la MISMA función que calcula la multa.
+ *
+ * SE LLAMABA `quienesAsistieronTodo`, y se renombró con las justificaciones.
+ * El nombre viejo pasó a ser mentira: quien tiene los tres días perdonados
+ * está en este conjunto y no asistió ni uno. Lo que el conjunto describe es
+ * quién COBRA, no quién estuvo -- y ese es el dato que se usa para repartir.
  *
  * `diasInventario` llega por parámetro en vez de calcularse de `marcas`
  * porque el número que manda es el CONGELADO al cerrar el conteo. Derivarlo
@@ -160,18 +272,29 @@ export function multaPorInasistencia(
  * asistir. Es el caso degenerado que el cierre de la planilla corta antes de
  * escribir una fila.
  */
-export function quienesAsistieronTodo(
-  marcas: readonly MarcaAsistencia[],
-  diasInventario: number,
-): Set<number> {
-  const completos = new Set<number>();
-  if (diasInventario <= 0) return completos;
+export function quienesCobranBono(e: {
+  marcas: readonly MarcaAsistencia[];
+  justificaciones: readonly JustificacionAsistencia[];
+  diasInventario: number;
+}): Set<number> {
+  const conBono = new Set<number>();
+  if (e.diasInventario <= 0) return conBono;
 
-  for (const [colaboradorId, dias] of diasAsistidosPorColaborador(marcas)) {
-    if (dias >= diasInventario) completos.add(colaboradorId);
+  const asistidos = diasAsistidosPorColaborador(e.marcas);
+  const justificados = diasJustificadosPorColaborador(e.justificaciones);
+
+  // El universo son las dos listas juntas: alguien que faltó todos los días y
+  // tiene TODOS perdonados cobra bono, y no aparece en las marcas.
+  for (const colaboradorId of new Set([...asistidos.keys(), ...justificados.keys()])) {
+    const dias = {
+      diasInventario: e.diasInventario,
+      diasAsistidos: asistidos.get(colaboradorId) ?? 0,
+      diasJustificados: justificados.get(colaboradorId) ?? 0,
+    };
+    if (diasFaltadosCobrables(dias) === 0) conBono.add(colaboradorId);
   }
 
-  return completos;
+  return conBono;
 }
 
 /**
@@ -189,6 +312,26 @@ export const SELECT_ASISTENCIA = {
   colaboradorId: true,
   dia: true,
 } as const;
+
+/**
+ * La consulta de las JUSTIFICACIONES, por lo mismo y en el mismo lugar. No
+ * trae `motivo` ni quién firmó: para la plata sólo cuenta qué días son de
+ * quién. El motivo es para la pantalla y para el reclamo, y lo lee el módulo
+ * de asistencia.
+ */
+export const SELECT_JUSTIFICACIONES = {
+  colaboradorId: true,
+  dia: true,
+} as const;
+
+/** Traduce la fila de Prisma a una justificación. Mismo cuidado con el día. */
+export function aJustificacionAsistencia(fila: { colaboradorId: number; dia: Date }): JustificacionAsistencia {
+  return {
+    colaboradorId: fila.colaboradorId,
+    dia: fila.dia.toISOString().slice(0, 10),
+    justificada: true,
+  };
+}
 
 /**
  * Traduce la fila de Prisma a lo que la regla entiende.

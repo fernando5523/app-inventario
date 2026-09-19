@@ -22,7 +22,7 @@ vi.mock('../sesion/sesion.service', () => ({
     }
   },
 }));
-vi.mock('./asistencia.controller', () => controllerFalso(['listar', 'marcar', 'borrar']));
+vi.mock('./asistencia.controller', () => controllerFalso(['listar', 'marcar', 'borrar', 'justificar', 'quitarJustificacion']));
 
 import { asistenciaRouter } from './asistencia.routes';
 
@@ -69,10 +69,10 @@ describe('GET /api/inventarios/:id/asistencia: ver la lista', () => {
     expect(r.status).toBe(200);
   });
 
-  it('auditor, 403 -- no estuvo en la jornada; la planilla que cierra se apoya en estas marcas', async () => {
+  it('auditor, 200 -- desde que justifica faltas necesita ver a quién le perdona qué día', async () => {
     await iniciar();
     const r = await fetch(`${baseUrl}/api/inventarios/8021/asistencia`, { headers: autorizacion(AUDITOR) });
-    expect(r.status).toBe(403);
+    expect(r.status).toBe(200);
   });
 
   it('conteo, 403 -- nadie se marca a sí mismo presente', async () => {
@@ -93,7 +93,7 @@ describe('POST /api/inventarios/:id/asistencia: marcar la entrada', () => {
     expect((await marcar(CONTEO)).status).toBe(403);
   });
 
-  it('auditor, 403', async () => {
+  it('auditor, 403 -- lee la lista pero no pasa lista: él no estuvo en la jornada', async () => {
     await iniciar();
     expect((await marcar(AUDITOR)).status).toBe(403);
   });
@@ -140,5 +140,99 @@ describe('DELETE /api/inventarios/:id/asistencia/:colaboradorId: corregir una ma
       headers: autorizacion(CONTEO),
     });
     expect(r.status).toBe(403);
+  });
+});
+
+/** POST de una justificación con el cuerpo que corresponda. */
+function justificar(actor: ColaboradorAutenticado, cuerpo: unknown): Promise<Response> {
+  return fetch(`${baseUrl}/api/inventarios/8021/justificaciones`, {
+    method: 'POST',
+    headers: { ...autorizacion(actor), 'Content-Type': 'application/json' },
+    body: JSON.stringify(cuerpo),
+  });
+}
+
+const JUSTIFICACION_VALIDA = { colaboradorId: 102, dia: '2026-09-18', motivo: 'Licencia médica' };
+
+describe('POST /api/inventarios/:id/justificaciones: perdonar una falta', () => {
+  it('auditor, pasa el middleware', async () => {
+    await iniciar();
+    expect((await justificar(AUDITOR, JUSTIFICACION_VALIDA)).status).toBe(200);
+  });
+
+  it('coordinador, 403 -- quien pasa lista no perdona faltas', async () => {
+    await iniciar();
+    expect((await justificar(COORDINADOR, JUSTIFICACION_VALIDA)).status).toBe(403);
+  });
+
+  /**
+   * El administrador SÍ pasa lista (entra por soporte) y acá NO entra:
+   * perdonar una multa es una decisión de negocio sobre la plata de una
+   * persona, no una tarea operativa que haya que destrabar.
+   */
+  it('administrador, 403 -- aunque sí pueda pasar lista', async () => {
+    await iniciar();
+    expect((await justificar(ADMIN, JUSTIFICACION_VALIDA)).status).toBe(403);
+  });
+
+  it('conteo, 403', async () => {
+    await iniciar();
+    expect((await justificar(CONTEO, JUSTIFICACION_VALIDA)).status).toBe(403);
+  });
+
+  /**
+   * EL MOTIVO ES OBLIGATORIO y lo corta el schema, antes de llegar al
+   * service. Un perdón sin motivo es un descuento menos que nadie puede
+   * explicar seis meses después.
+   */
+  it('sin motivo, 400', async () => {
+    await iniciar();
+    const r = await justificar(AUDITOR, { colaboradorId: 102, dia: '2026-09-18' });
+    expect(r.status).toBe(400);
+  });
+
+  it('motivo vacío o de relleno, 400 -- "." no explica nada', async () => {
+    await iniciar();
+    expect((await justificar(AUDITOR, { ...JUSTIFICACION_VALIDA, motivo: '' })).status).toBe(400);
+    expect((await justificar(AUDITOR, { ...JUSTIFICACION_VALIDA, motivo: '  .  ' })).status).toBe(400);
+  });
+
+  it('un día que no existe en el calendario, 400', async () => {
+    // Mismo cuidado que al marcar: `2026-02-31` pasa cualquier regex y
+    // JavaScript lo convierte en el 3 de marzo sin avisar.
+    await iniciar();
+    expect((await justificar(AUDITOR, { ...JUSTIFICACION_VALIDA, dia: '2026-02-31' })).status).toBe(400);
+  });
+
+  it('un campo de más, 400 -- el body es estricto', async () => {
+    await iniciar();
+    expect((await justificar(AUDITOR, { ...JUSTIFICACION_VALIDA, loQueSea: 1 })).status).toBe(400);
+  });
+});
+
+describe('DELETE /api/inventarios/:id/justificaciones/:colaboradorId', () => {
+  const quitar = (actor: ColaboradorAutenticado, query = '?dia=2026-09-18'): Promise<Response> =>
+    fetch(`${baseUrl}/api/inventarios/8021/justificaciones/102${query}`, {
+      method: 'DELETE',
+      headers: autorizacion(actor),
+    });
+
+  it('auditor, pasa el middleware', async () => {
+    await iniciar();
+    expect((await quitar(AUDITOR)).status).toBe(200);
+  });
+
+  it('coordinador, 403', async () => {
+    await iniciar();
+    expect((await quitar(COORDINADOR)).status).toBe(403);
+  });
+
+  /**
+   * Sin `?dia=` es 400, nunca un borrado masivo: se levanta el perdón de UN
+   * día, jamás todos los de una persona de una sola vez.
+   */
+  it('sin ?dia=, 400 y no un borrado masivo silencioso', async () => {
+    await iniciar();
+    expect((await quitar(AUDITOR, '')).status).toBe(400);
   });
 });

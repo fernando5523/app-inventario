@@ -87,6 +87,23 @@ export interface EntradaLiquidacion {
    * explicito significa "se calculo y no habia sobrante", que SI resta.
    */
   montoSobranteEmpleado?: number | null;
+  /**
+   * EL CUADRO DE PAQUETES: el faltante que sale del descuento al personal
+   * porque completa cajas enteras (decision del cliente, reunion 1 00:18:30 y
+   * reunion 2 00:23:41 -- *"lo quito este paquete de aca y le pongo en otro
+   * cuadro"*). Se audita aparte y quizas se le descuenta al almacenero.
+   *
+   * RESTA DEL NETO igual que `montoFaltanteEmpresa`, y por el mismo motivo:
+   * es faltante real que existe y se reporta, pero que NO va a nomina. Si no
+   * se restara, se le seguiria descontando al personal un monto que el cuadro
+   * de paquetes dice que no le corresponde -- o sea, se cobraria dos veces.
+   *
+   * `undefined`/`null` = SIN CUADRO DE PAQUETES, no cero: los inventarios
+   * liquidados antes de esta regla no lo tienen, y la formula tiene que
+   * devolver el mismo neto de siempre para ellos. Mismo criterio que
+   * `montoSobranteEmpleado`.
+   */
+  montoFaltantePaquete?: number | null;
   /** TODO el personal habilitado de la tienda, no solo quien asistio. */
   colaboradoresAlcanzados: number;
   colaboradoresAsistieron: number;
@@ -126,7 +143,7 @@ export function resumirAsistencia(alcanzados: number, asistieron: number): Asist
 
 export interface ResumenLiquidacion {
   /**
-   * bruto - negativos - empresa - sobranteEmpleado. SIN RECORTAR a cero:
+   * bruto - negativos - empresa - sobranteEmpleado - paquetes. SIN RECORTAR a cero:
    * decision del cliente -- si los sobrantes y negativos superan al
    * faltante, el neto se muestra negativo tal cual da.
    */
@@ -162,7 +179,11 @@ export interface ResumenLiquidacion {
 
 export function calcularResumenLiquidacion(e: EntradaLiquidacion): ResumenLiquidacion {
   const montoFaltanteNeto = redondear(
-    e.montoFaltanteBruto - e.montoNegativos - e.montoFaltanteEmpresa - (e.montoSobranteEmpleado ?? 0),
+    e.montoFaltanteBruto -
+      e.montoNegativos -
+      e.montoFaltanteEmpresa -
+      (e.montoSobranteEmpleado ?? 0) -
+      (e.montoFaltantePaquete ?? 0),
   );
 
   const cuotaBase = e.colaboradoresAlcanzados === 0 ? 0 : redondear(montoFaltanteNeto / e.colaboradoresAlcanzados);

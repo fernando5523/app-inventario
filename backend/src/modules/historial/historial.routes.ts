@@ -67,6 +67,22 @@ historialRouter.get(
 );
 
 /**
+ * El .xlsx CON EL FORMATO DEL CLIENTE: los cuatro cuadros (únicos y por
+ * paquete, faltante y sobrante), empresa aparte y la hoja de descuento -- tal
+ * como Gilmer arma su planilla a mano todos los meses.
+ *
+ * MISMOS PERMISOS Y MISMA VENTANA que `/diferencias/exportar` de arriba, y por
+ * la misma razón: son dos formatos del MISMO hecho, y darle a uno un permiso
+ * distinto obligaría a explicar por qué se puede ver el dato de una forma y no
+ * de la otra. Ver historial.service.ts#exportarCuadros.
+ */
+historialRouter.get(
+  '/inventarios/:id/cuadros/exportar',
+  validar(parametrosInventarioSchema, 'params'),
+  controller.exportarCuadros,
+);
+
+/**
  * El .xlsx de VARIAS tiendas (o todas) en un mismo período -- pedido del
  * cliente 2026-09-09: una tienda, un subconjunto, o todas. Una sola hoja con
  * la columna `Sucursal` (ya existe en el formato de arriba) distinguiendo

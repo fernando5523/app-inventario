@@ -5,6 +5,9 @@ vi.mock('../../config/database', () => ({
     diferenciaItem: { findMany: vi.fn(), updateMany: vi.fn() },
     catalogoItem: { findMany: vi.fn() },
     clasificacionProducto: { findMany: vi.fn() },
+    // `umbralDelInventario`: el umbral CONGELADO del inventario, que
+    // `resolverMontosDeClasificacion` necesita para repartir por paquete.
+    inventario: { findUnique: vi.fn() },
   },
 }));
 
@@ -37,8 +40,8 @@ describe('reclasificarAlLiquidar', () => {
     // montoFaltanteBruto (rondas.service.ts) YA incluye este faltante; lo que
     // esta funcion devuelve es el monto A RESTAR aparte, no una resta interna.
     const filas: FilaDiferenciaParaReclasificar[] = [
-      { codigo: 'CERVEZA', diferencia: -10, montoDiferencia: -100, esEmpresaCatalogo: true },
-      { codigo: 'ARROZ', diferencia: -2, montoDiferencia: -20, esEmpresaCatalogo: false },
+      { codigo: 'CERVEZA', diferencia: -10, montoDiferencia: -100, esEmpresaCatalogo: true, claseCatalogo: 'unidad' as const, empaqueCompra: null, empaqueCompraCorregido: null },
+      { codigo: 'ARROZ', diferencia: -2, montoDiferencia: -20, esEmpresaCatalogo: false, claseCatalogo: 'unidad' as const, empaqueCompra: null, empaqueCompraCorregido: null },
     ];
     const r = reclasificarAlLiquidar(filas, new Map());
     expect(r.montoFaltanteEmpresa).toBe(100);
@@ -48,8 +51,8 @@ describe('reclasificarAlLiquidar', () => {
 
   it('sobrante que compensa: solo de items NO empresa, a favor del empleado', () => {
     const filas: FilaDiferenciaParaReclasificar[] = [
-      { codigo: 'YOGUR', diferencia: 5, montoDiferencia: 50, esEmpresaCatalogo: false },
-      { codigo: 'CERVEZA', diferencia: 3, montoDiferencia: 30, esEmpresaCatalogo: true },
+      { codigo: 'YOGUR', diferencia: 5, montoDiferencia: 50, esEmpresaCatalogo: false, claseCatalogo: 'unidad' as const, empaqueCompra: null, empaqueCompraCorregido: null },
+      { codigo: 'CERVEZA', diferencia: 3, montoDiferencia: 30, esEmpresaCatalogo: true, claseCatalogo: 'unidad' as const, empaqueCompra: null, empaqueCompraCorregido: null },
     ];
     const r = reclasificarAlLiquidar(filas, new Map());
     // Solo el sobrante de YOGUR (no empresa) compensa; el de CERVEZA (empresa) no.
@@ -58,7 +61,7 @@ describe('reclasificarAlLiquidar', () => {
 
   it('la reclasificacion manual del Auditor mueve un item de faltante-descontable a faltante-empresa', () => {
     const filas: FilaDiferenciaParaReclasificar[] = [
-      { codigo: 'CERVEZA', diferencia: -10, montoDiferencia: -100, esEmpresaCatalogo: false },
+      { codigo: 'CERVEZA', diferencia: -10, montoDiferencia: -100, esEmpresaCatalogo: false, claseCatalogo: 'unidad' as const, empaqueCompra: null, empaqueCompraCorregido: null },
     ];
     const sinExcepcion = reclasificarAlLiquidar(filas, new Map());
     expect(sinExcepcion.montoFaltanteEmpresa).toBe(0);
@@ -70,7 +73,7 @@ describe('reclasificarAlLiquidar', () => {
 
   it('items sin precio (montoDiferencia null) SI se clasifican, pero no aportan a los montos', () => {
     const filas: FilaDiferenciaParaReclasificar[] = [
-      { codigo: 'SIN-PRECIO', diferencia: -3, montoDiferencia: null, esEmpresaCatalogo: true },
+      { codigo: 'SIN-PRECIO', diferencia: -3, montoDiferencia: null, esEmpresaCatalogo: true, claseCatalogo: 'unidad' as const, empaqueCompra: null, empaqueCompraCorregido: null },
     ];
     const r = reclasificarAlLiquidar(filas, new Map());
     expect(r.montoFaltanteEmpresa).toBe(0);
@@ -86,7 +89,12 @@ describe('reclasificarAlLiquidar', () => {
 });
 
 describe('datosParaReclasificar (Prisma mockeado)', () => {
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(prisma.inventario.findUnique).mockResolvedValue({
+      umbralMediaUnidadPaquete: { toNumber: () => 0.5 },
+    } as never);
+  });
 
   it('cruza DiferenciaItem con el CatalogoItem de ESE inventario por codigo', async () => {
     vi.mocked(prisma.diferenciaItem.findMany).mockResolvedValue([
@@ -101,8 +109,8 @@ describe('datosParaReclasificar (Prisma mockeado)', () => {
     const filas = await datosParaReclasificar(7);
 
     expect(filas).toEqual([
-      { codigo: 'A1', diferencia: -5, montoDiferencia: -50, esEmpresaCatalogo: true },
-      { codigo: 'A2', diferencia: 2, montoDiferencia: null, esEmpresaCatalogo: false },
+      { codigo: 'A1', diferencia: -5, montoDiferencia: -50, esEmpresaCatalogo: true, claseCatalogo: 'unidad' as const, empaqueCompra: null, empaqueCompraCorregido: null },
+      { codigo: 'A2', diferencia: 2, montoDiferencia: null, esEmpresaCatalogo: false, claseCatalogo: 'unidad' as const, empaqueCompra: null, empaqueCompraCorregido: null },
     ]);
   });
 
@@ -143,7 +151,12 @@ describe('clasificacionManualVigente (Prisma mockeado)', () => {
  * y ya esta probado por separado).
  */
 describe('resolverMontosDeClasificacion', () => {
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(prisma.inventario.findUnique).mockResolvedValue({
+      umbralMediaUnidadPaquete: { toNumber: () => 0.5 },
+    } as never);
+  });
 
   const CERVEZA = 'CERVEZA';
   const OTRO = 'OTRO-SOBRANTE';
@@ -188,15 +201,72 @@ describe('resolverMontosDeClasificacion', () => {
     expect(montos.montoSobranteEmpleado).toBe(50);
   });
 
-  it('DESPUES de liquidar (liquidado): CONGELADO -- ignora la clasificacion vigente, ni toca Prisma', async () => {
+  /**
+   * EL REGIMEN CONGELADO SIGUE SIENDO CONGELADO, pero ya no es "no toca
+   * Prisma": el cuadro de paquetes se DERIVA de lo que quedo firmado
+   * (`DiferenciaItem.clase` + `diferencia`/`montoDiferencia` + el
+   * `empaqueCompra` del snapshot + el umbral del inventario). Las cuatro
+   * entradas estan congeladas, asi que el resultado no puede cambiar -- lo
+   * que cambia es que hay que ir a buscarlas.
+   *
+   * Lo que NO se toca sigue sin tocarse: `ClasificacionProducto`, la
+   * excepcion VIGENTE del Auditor, que es lo que haria que un inventario ya
+   * pagado cambiara de numero.
+   */
+  it('DESPUES de liquidar (liquidado): CONGELADO -- ignora la clasificacion VIGENTE', async () => {
+    vi.mocked(prisma.diferenciaItem.findMany).mockResolvedValue([]);
+    vi.mocked(prisma.catalogoItem.findMany).mockResolvedValue([]);
+
     const montos = await resolverMontosDeClasificacion(45, 'liquidado', {
       montoFaltanteEmpresa: 30,
       montoSobranteEmpleado: 50,
     });
 
-    expect(montos).toEqual({ montoFaltanteEmpresa: 30, montoSobranteEmpleado: 50, esEmpresaPorCodigo: null });
-    expect(prisma.diferenciaItem.findMany).not.toHaveBeenCalled();
+    expect(montos).toEqual({
+      montoFaltanteEmpresa: 30,
+      montoFaltantePaquete: 0,
+      montoSobranteEmpleado: 50,
+      esEmpresaPorCodigo: null,
+      clasePorCodigo: null,
+    });
     expect(prisma.clasificacionProducto.findMany).not.toHaveBeenCalled();
+  });
+
+  it('CONGELADO: el cuadro de paquetes sale de la clase FIRMADA en DiferenciaItem', async () => {
+    // Faltan 23 de un empaque de 6, a S/10: los 23 pasan a paquetes (residuo 5
+    // > 3), o sea S/230 que NO se le descontaron al personal. El historico
+    // tiene que mostrar el mismo neto que se firmo.
+    vi.mocked(prisma.diferenciaItem.findMany).mockResolvedValue([
+      { codigo: 'ACEITE', diferencia: -23, montoDiferencia: { toNumber: () => -230 }, clase: 'paquete' },
+    ] as never);
+    vi.mocked(prisma.catalogoItem.findMany).mockResolvedValue([
+      { codigo: 'ACEITE', empaqueCompra: 6 },
+    ] as never);
+
+    const montos = await resolverMontosDeClasificacion(45, 'liquidado', {
+      montoFaltanteEmpresa: 0,
+      montoSobranteEmpleado: 0,
+    });
+
+    expect(montos.montoFaltantePaquete).toBe(230);
+  });
+
+  it('CONGELADO: una fila con clase NULL (liquidada antes de la regla) aporta 0', async () => {
+    // Esos inventarios se liquidaron sin cuadro de paquetes -- 0 es
+    // exactamente lo que se les descontó.
+    vi.mocked(prisma.diferenciaItem.findMany).mockResolvedValue([
+      { codigo: 'ACEITE', diferencia: -23, montoDiferencia: { toNumber: () => -230 }, clase: null },
+    ] as never);
+    vi.mocked(prisma.catalogoItem.findMany).mockResolvedValue([
+      { codigo: 'ACEITE', empaqueCompra: 6 },
+    ] as never);
+
+    const montos = await resolverMontosDeClasificacion(45, 'liquidado', {
+      montoFaltanteEmpresa: 0,
+      montoSobranteEmpleado: 0,
+    });
+
+    expect(montos.montoFaltantePaquete).toBe(0);
   });
 
   it('lacrado: mismo regimen congelado que liquidado', async () => {
@@ -204,7 +274,13 @@ describe('resolverMontosDeClasificacion', () => {
       montoFaltanteEmpresa: 30,
       montoSobranteEmpleado: 50,
     });
-    expect(montos).toEqual({ montoFaltanteEmpresa: 30, montoSobranteEmpleado: 50, esEmpresaPorCodigo: null });
+    expect(montos).toEqual({
+      montoFaltanteEmpresa: 30,
+      montoFaltantePaquete: 0,
+      montoSobranteEmpleado: 50,
+      esEmpresaPorCodigo: null,
+      clasePorCodigo: null,
+    });
   });
 
   it('inventario YA liquidado antes de esta regla (montoSobranteEmpleado NULL en la base): da 0, no null ni error', async () => {
@@ -212,7 +288,13 @@ describe('resolverMontosDeClasificacion', () => {
       montoFaltanteEmpresa: 10,
       montoSobranteEmpleado: null,
     });
-    expect(montos).toEqual({ montoFaltanteEmpresa: 10, montoSobranteEmpleado: 0, esEmpresaPorCodigo: null });
+    expect(montos).toEqual({
+      montoFaltanteEmpresa: 10,
+      montoFaltantePaquete: 0,
+      montoSobranteEmpleado: 0,
+      esEmpresaPorCodigo: null,
+      clasePorCodigo: null,
+    });
   });
 });
 
@@ -224,10 +306,17 @@ describe('resolverMontosDeClasificacion', () => {
  * fuente que `resolverMontosDeClasificacion`, aplicada por item.
  */
 describe('aplicarClasificacionVigente', () => {
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(prisma.inventario.findUnique).mockResolvedValue({
+      umbralMediaUnidadPaquete: { toNumber: () => 0.5 },
+    } as never);
+  });
 
-  const CERVEZA = { codigo: 'CERVEZA', esEmpresa: false }; // Dynamics: EMPLEADO
-  const ARROZ = { codigo: 'ARROZ', esEmpresa: false };
+  // `clase` es la del SNAPSHOT. Los dos entran como `unidad`, que es lo que
+  // D365 devuelve para un item sin empaque de compra resoluble.
+  const CERVEZA = { codigo: 'CERVEZA', esEmpresa: false, clase: 'unidad' as const, claseForzada: null, empaqueCompraCorregido: null }; // Dynamics: EMPLEADO
+  const ARROZ = { codigo: 'ARROZ', esEmpresa: false, clase: 'unidad' as const, claseForzada: null, empaqueCompraCorregido: null };
 
   it('VIGENTE (conteo_cerrado): aplica ClasificacionProducto por encima de Dynamics', async () => {
     vi.mocked(prisma.clasificacionProducto.findMany).mockResolvedValue([{ codigo: 'CERVEZA', esEmpresa: true }] as never);
@@ -245,6 +334,126 @@ describe('aplicarClasificacionVigente', () => {
     const resultado = await aplicarClasificacionVigente(45, 'conteo_cerrado', [CERVEZA]);
 
     expect(resultado[0]!.esEmpresa).toBe(false);
+    expect(resultado[0]!.clase).toBe('unidad');
+  });
+
+  /**
+   * LA CLASE DE TRES VIAS pasa por el mismo regimen que `esEmpresa`, y por la
+   * misma razon: si la matriz resolviera la excepcion del Auditor por su lado y
+   * la planilla por el suyo, el mismo item podria caer en cuadros distintos.
+   */
+  it('VIGENTE: la excepcion `paquete` del Auditor pisa a la clase del snapshot', async () => {
+    vi.mocked(prisma.clasificacionProducto.findMany).mockResolvedValue([
+      { codigo: 'ARROZ', esEmpresa: false, clase: 'paquete' },
+    ] as never);
+
+    const resultado = await aplicarClasificacionVigente(45, 'conteo_cerrado', [CERVEZA, ARROZ]);
+
+    // La forzada viaja APARTE de la del snapshot: desde que el empaque
+    // re-deriva la clase, fundirlas haria que la re-derivacion pise al
+    // Auditor. Quien las combina es `claseEfectiva`, que sabe en que orden
+    // pesan.
+    expect(resultado.find((i) => i.codigo === 'ARROZ')?.claseForzada).toBe('paquete');
+    expect(resultado.find((i) => i.codigo === 'ARROZ')?.clase).toBe('unidad');
+    expect(resultado.find((i) => i.codigo === 'CERVEZA')?.claseForzada).toBeNull();
+  });
+
+  it('VIGENTE: una excepcion VIEJA sin clase no toca la clase del snapshot', async () => {
+    // NULL = excepcion de cuando esto era un booleano. Traducirla a `unidad`
+    // seria inventar una decision: el Auditor dijo algo sobre la empresa, nunca
+    // dijo nada sobre paquetes.
+    vi.mocked(prisma.clasificacionProducto.findMany).mockResolvedValue([
+      { codigo: 'ARROZ', esEmpresa: false, clase: null },
+    ] as never);
+
+    const resultado = await aplicarClasificacionVigente(45, 'conteo_cerrado', [
+      { ...ARROZ, clase: 'paquete' as const },
+    ]);
+
+    expect(resultado[0]!.clase).toBe('paquete');
+    expect(resultado[0]!.esEmpresa).toBe(false);
+  });
+
+  /**
+   * EL CASO QUE ROMPIA, y no es hipotetico: una excepcion VIEJA del Auditor
+   * marca `esEmpresa: true` y deja `clase` en NULL. Sin conciliar, el item
+   * quedaba "lo absorbe la empresa" para el veredicto Y su faltante caia en el
+   * cuadro `unidad` -- descontado al personal. La misma fila diciendo dos cosas.
+   */
+  it('VIGENTE: una excepcion vieja de EMPRESA arrastra la clase a `empresa`', async () => {
+    vi.mocked(prisma.clasificacionProducto.findMany).mockResolvedValue([
+      { codigo: 'ARROZ', esEmpresa: true, clase: null },
+    ] as never);
+
+    const resultado = await aplicarClasificacionVigente(45, 'conteo_cerrado', [
+      { ...ARROZ, clase: 'paquete' as const },
+    ]);
+
+    expect(resultado[0]!.esEmpresa).toBe(true);
+    expect(resultado[0]!.clase).toBe('empresa');
+  });
+
+  it('VIGENTE: sacar la excepcion de empresa saca la clase de `empresa` tambien', async () => {
+    // El snapshot decia `empresa` y ya no hay excepcion vigente: el faltante
+    // vuelve al circuito normal. `unidad` es el destino conservador.
+    vi.mocked(prisma.clasificacionProducto.findMany).mockResolvedValue([]);
+
+    const resultado = await aplicarClasificacionVigente(45, 'conteo_cerrado', [
+      { codigo: 'ARROZ', esEmpresa: false, clase: 'empresa' as const, claseForzada: null, empaqueCompraCorregido: null },
+    ]);
+
+    expect(resultado[0]!.clase).toBe('unidad');
+  });
+
+  /**
+   * LA CORRECCION DEL EMPAQUE es EN VIVO y CROSS-TIENDA, como la clase: si el
+   * ERP trae mal el empaque de un producto, lo trae mal en todas las tiendas.
+   */
+  it('VIGENTE: trae el empaque corregido por el Auditor, sin pisar el del ERP', async () => {
+    vi.mocked(prisma.clasificacionProducto.findMany).mockResolvedValue([
+      { codigo: 'ARROZ', esEmpresa: false, clase: null, empaqueCompraCorregido: 12 },
+    ] as never);
+
+    const resultado = await aplicarClasificacionVigente(45, 'conteo_cerrado', [ARROZ]);
+
+    expect(resultado[0]!.empaqueCompraCorregido).toBe(12);
+  });
+
+  it('VIGENTE sin correccion: queda en null y manda el snapshot', async () => {
+    vi.mocked(prisma.clasificacionProducto.findMany).mockResolvedValue([
+      { codigo: 'ARROZ', esEmpresa: false, clase: null, empaqueCompraCorregido: null },
+    ] as never);
+
+    const resultado = await aplicarClasificacionVigente(45, 'conteo_cerrado', [ARROZ]);
+
+    expect(resultado[0]!.empaqueCompraCorregido).toBeNull();
+  });
+
+  /**
+   * LA FRONTERA: una correccion de HOY no puede cambiarle el descuento a un
+   * mes ya pagado. Misma razon por la que el regimen congelado no mira la
+   * clase vigente.
+   */
+  it('CONGELADO: la correccion del empaque NO alcanza a un inventario liquidado', async () => {
+    vi.mocked(prisma.diferenciaItem.findMany).mockResolvedValue([]);
+    vi.mocked(prisma.catalogoItem.findMany).mockResolvedValue([]);
+
+    const resultado = await aplicarClasificacionVigente(45, 'liquidado', [ARROZ]);
+
+    expect(resultado[0]!.empaqueCompraCorregido).toBeNull();
+    expect(prisma.clasificacionProducto.findMany).not.toHaveBeenCalled();
+  });
+
+  it('CONGELADO: una fila vieja con clase NULL conserva la del snapshot', async () => {
+    // Las filas escritas ANTES de las tres vias tienen `clase` en NULL. Para
+    // esos inventarios el snapshot dice `unidad`, que es como se liquidaron.
+    vi.mocked(prisma.diferenciaItem.findMany).mockResolvedValue([
+      { codigo: 'ARROZ', esEmpresa: false, clase: null },
+    ] as never);
+
+    const resultado = await aplicarClasificacionVigente(45, 'liquidado', [ARROZ]);
+
+    expect(resultado[0]!.clase).toBe('unidad');
   });
 
   it('CONGELADO (liquidado): lee DiferenciaItem.esEmpresa, ignora la clasificacion vigente', async () => {

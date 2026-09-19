@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { corregirConteoSchema, RONDA_MAXIMA_ACEPTADA } from '../hojas/hojas.schema';
 
 /**
  * Los tamaños de hoja que el sistema ofrece. Espeja
@@ -47,11 +48,50 @@ export const asignarHojasSchema = z
 export type AsignarHojasInput = z.infer<typeof asignarHojasSchema>;
 
 /**
- * La ronda del ciclo, en la URL. 1 a 3 (RONDAS_DEL_CICLO): un `ronda=7` es
- * un error de quien llama, no una ronda que todavia no existe.
+ * LA RONDA EN LA URL, SIN TECHO EN 3.
+ *
+ * Esto valia `.max(3)` y el comentario decia que un `ronda=7` era "un error
+ * de quien llama, no una ronda que todavia no existe". ESO YA NO ES CIERTO:
+ * el cliente pidio que el Auditor pueda abrir un 4to y un 5to conteo cuando
+ * haga falta, inventario por inventario, asi que una ronda 7 puede existir
+ * perfectamente y el schema no puede seguir siendo quien decide que no.
+ *
+ * Quien decide ahora es la BASE: el service pregunta si esa ronda tiene hojas
+ * y responde 404 si no. El techo que queda (`RONDA_MAXIMA_ACEPTADA`) es de
+ * forma y esta explicado en hojas.schema.ts, que es el modulo dueno de
+ * `HojaConteo.numeroConteo`.
  */
 export const parametrosRondaSchema = z.object({
   inventarioId: z.coerce.number().int().positive(),
-  ronda: z.coerce.number().int().min(1).max(3),
+  ronda: z.coerce.number().int().min(1).max(RONDA_MAXIMA_ACEPTADA),
 });
 export type ParametrosRonda = z.infer<typeof parametrosRondaSchema>;
+
+/**
+ * `/:inventarioId/ajuste/:productoId` -- el producto que el Auditor ajusta.
+ *
+ * El `productoId` es de la ULTIMA ronda, que es la que el ajuste corrige. Que
+ * pertenezca de verdad a ese inventario y a esa ronda no se valida aca (zod
+ * no conoce la base): lo valida el service, que tiene el dato a mano.
+ */
+export const parametrosAjusteSchema = z.object({
+  inventarioId: z.coerce.number().int().positive(),
+  productoId: z.coerce.number().int().positive(),
+});
+export type ParametrosAjuste = z.infer<typeof parametrosAjusteSchema>;
+
+/**
+ * El cuerpo del ajuste final del Auditor: EL MISMO que el de la correccion
+ * del Coordinador (`hojas.schema.ts#corregirConteoSchema`).
+ *
+ * Se reexporta en vez de redeclararse porque son la misma operacion vista
+ * desde dos roles -- reemplazar un conteo dejando dicho por que. Dos schemas
+ * gemelos serian dos lugares donde agregar un campo, y el dia que uno se
+ * quede atras el Auditor y el Coordinador empezarian a mandar cosas
+ * distintas por endpoints que escriben la misma tabla.
+ *
+ * Lo que NO comparten es quien puede llamarlos ni cuando: eso vive en
+ * `ajuste.permisos.ts`, que es donde se lee la ventana de cada rol.
+ */
+export const ajustarConteoSchema = corregirConteoSchema;
+export type AjustarConteoInput = z.infer<typeof ajustarConteoSchema>;

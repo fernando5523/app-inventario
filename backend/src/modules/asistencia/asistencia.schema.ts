@@ -52,6 +52,46 @@ export type MarcarAsistenciaInput = z.infer<typeof marcarAsistenciaSchema>;
 export const borrarMarcaQuerySchema = z.object({ dia: diaSchema });
 export type BorrarMarcaQuery = z.infer<typeof borrarMarcaQuerySchema>;
 
+/**
+ * EL MOTIVO DE UNA JUSTIFICACIÓN. OBLIGATORIO, y con un mínimo real.
+ *
+ * Perdonar una falta mueve plata en dos direcciones a la vez: le baja la
+ * multa a esa persona y le cambia el bono a TODAS las demás (el fondo se
+ * reparte entre otra cantidad de gente). Seis meses después, cuando alguien
+ * pregunte por qué a Delia no le descontaron nada, la respuesta tiene que
+ * estar en esta columna.
+ *
+ * El mínimo de 3 caracteres no pretende evaluar la calidad del motivo -- eso
+ * no lo puede hacer un schema -- sino frenar el `"."` o el `"x"` que sirven
+ * sólo para saltear el campo. Es el mismo criterio del `nota` obligatorio de
+ * los ajustes del mes: un texto corto igual explica ("gripe"), uno vacío no.
+ */
+export const motivoJustificacionSchema = z
+  .string()
+  .trim()
+  .min(3, 'El motivo tiene que decir por qué se justifica la falta.')
+  // El tope es para que no entre un archivo entero en una columna de texto,
+  // no una restricción de negocio.
+  .max(500, 'El motivo no puede pasar de 500 caracteres.');
+
+export const justificarFaltaSchema = z
+  .object({
+    /** Por id y no por nombre, misma razón que `marcarAsistenciaSchema`. */
+    colaboradorId: z.number().int().positive(),
+    dia: diaSchema,
+    motivo: motivoJustificacionSchema,
+  })
+  .strict();
+export type JustificarFaltaInput = z.infer<typeof justificarFaltaSchema>;
+
+/**
+ * El día de la justificación que se da de baja, en la query -- igual que al
+ * borrar una marca, y por lo mismo: se levanta el perdón de UN día, nunca
+ * todos los de una persona de una sola vez.
+ */
+export const quitarJustificacionQuerySchema = z.object({ dia: diaSchema });
+export type QuitarJustificacionQuery = z.infer<typeof quitarJustificacionQuerySchema>;
+
 // ---------------------------------------------------------------------------
 // El día, entre el cable y la base
 // ---------------------------------------------------------------------------

@@ -1,5 +1,5 @@
 /**
- * El CICLO DE 3 CONTEOS: qué cantidad vale para un ítem, qué pasa cuando se
+ * El CICLO DE CONTEOS: qué cantidad vale para un ítem, qué pasa cuando se
  * cierra una ronda y qué ítems vuelven a contarse en la siguiente.
  *
  * PURO -- sin Prisma ni Express -- para poder probar las reglas de verdad
@@ -13,6 +13,25 @@
  * lo dudoso. En el ejemplo del cliente: 8.000 ítems en la 1ra ronda, 650 en
  * la 2da, 130 en la 3ra (docs/pantallas.md, Pantalla 4). El embudo es el
  * mecanismo, no un adorno del mockup.
+ *
+ * ---------------------------------------------------------------------------
+ * YA NO SON TRES PASADAS Y SE ACABO. DECISION DEL CLIENTE (2026-09-19)
+ * ---------------------------------------------------------------------------
+ * El AUDITOR puede abrir MAS conteos de los configurados -- un 4to, un 5to --
+ * inventario por inventario, cuando haga falta. No es un número fijo decidido
+ * por adelantado: es una decisión que se toma mirando lo que quedó sin cuadrar.
+ *
+ * Eso parte en dos lo que antes era una sola pregunta. `RONDAS_DEL_CICLO`
+ * dejó de ser el techo del inventario y pasó a ser el final del tramo
+ * AUTOMATICO -- hasta ahí el ciclo se encadena solo al cerrar cada ronda.
+ * Después no se termina nada: el inventario queda esperando al Auditor, que
+ * decide entre abrir otra pasada (`puedeAuditorAbrirOtraRonda`) o arrancar su
+ * ajuste final. Por eso hay DOS funciones y no una con un parámetro más:
+ * quien pregunta "¿sigo solo?" y quien pregunta "¿puedo abrir otra?" no son
+ * la misma persona ni el mismo momento.
+ *
+ * Las reglas de acá abajo ya eran indiferentes a la cantidad de rondas --
+ * todas trabajan sobre la lista de conteos, no sobre tres campos.
  */
 
 /**
@@ -33,7 +52,10 @@ export interface ItemDeRonda {
    * porque no entró, o porque la hoja se finalizó sin contarlo).
    *
    * Es una lista y no tres campos sueltos porque `CANTIDAD_CONTEOS_CICLO` es
-   * configurable: el día que el cliente pida 4 rondas, esto no cambia.
+   * configurable. Ese día llegó (2026-09-19: el Auditor abre rondas extra) y
+   * efectivamente no hubo que cambiar nada acá -- la lista puede tener 3
+   * elementos o 7. Lo que sí hubo que cambiar fue `auditoria.calculos.ts`,
+   * que tenía los tres campos sueltos.
    */
   conteos: ReadonlyArray<number | null>;
 }
@@ -222,29 +244,141 @@ export function resumirRonda(items: readonly ItemDeRonda[]): ResumenDeRonda {
   return r;
 }
 
-/** Cuántas rondas tiene el ciclo. Config CANTIDAD_CONTEOS_CICLO, default 3. */
+/**
+ * Hasta dónde llega el tramo AUTOMATICO del ciclo. Es el DEFAULT: el valor
+ * real sale de la config `CANTIDAD_CONTEOS_CICLO` y viaja por parámetro.
+ *
+ * NO es el máximo de rondas de un inventario. Desde que el Auditor puede
+ * abrir pasadas extra, este número solo dice hasta dónde se encadenan las
+ * rondas solas al cerrar cada una. Un inventario puede terminar con 6 rondas
+ * y este valor seguir en 3.
+ */
 export const RONDAS_DEL_CICLO = 3;
 
+/** La respuesta a las dos preguntas de abajo. `motivo` explica el `false`. */
+export interface AperturaDeRonda {
+  puede: boolean;
+  motivo: string | null;
+}
+
 /**
- * Si se puede abrir otra ronda después de cerrar `ronda`.
+ * NADA QUE RECONTAR: el final feliz del ciclo, y vale para los dos que
+ * pueden abrir una ronda.
  *
- * Dos motivos para que no: ya se llegó a la última pasada del ciclo, o no
- * quedó nada por recontar. El segundo es el caso feliz -- todo cuadró y el
- * ciclo termina antes de tiempo, que es exactamente lo que uno quiere.
+ * Se factoriza porque es la MISMA regla en las dos preguntas y tiene que dar
+ * lo mismo: si todo cuadró, no hay ronda que abrir, la pida el ciclo o la
+ * pida el Auditor. Contar de nuevo un universo vacío no es cero trabajo --
+ * es mandar gente a la tienda a mirar una lista sin renglones.
+ */
+function siHayAlgoQueRecontar(itemsARecontar: number): AperturaDeRonda | null {
+  if (itemsARecontar === 0) {
+    return { puede: false, motivo: 'Todos los ítems cuadraron contra el ERP: no queda nada para recontar.' };
+  }
+  return null;
+}
+
+/**
+ * ¿SIGUE SOLO EL CICLO después de cerrar `ronda`? La pregunta del
+ * Coordinador, que es quien cierra las rondas.
+ *
+ * OJO CON EL SIGNIFICADO DE `puede: false`, QUE CAMBIO. Antes quería decir
+ * "se terminó el conteo, andá a auditar". Ahora quiere decir "hasta acá llega
+ * lo automático": el inventario NO pasa a cerrado, queda esperando al
+ * Auditor, que abre otra pasada o arranca su ajuste final. Un llamador que
+ * lea este `false` como "cerrá el conteo" se saltea al Auditor -- que es
+ * justamente el paso que el cliente pidió agregar.
+ *
+ * Los dos motivos del `false` siguen siendo los mismos y siguen en ese orden:
+ * primero "no quedó nada" (el caso feliz, y el mensaje más útil), después el
+ * límite del tramo automático.
  */
 export function puedeAbrirRondaSiguiente(
   ronda: number,
   itemsARecontar: number,
   totalRondas: number = RONDAS_DEL_CICLO,
-): { puede: boolean; motivo: string | null } {
-  if (itemsARecontar === 0) {
-    return { puede: false, motivo: 'Todos los ítems cuadraron contra el ERP: no queda nada para recontar.' };
-  }
+): AperturaDeRonda {
+  const nadaQueRecontar = siHayAlgoQueRecontar(itemsARecontar);
+  if (nadaQueRecontar !== null) return nadaQueRecontar;
+
   if (ronda >= totalRondas) {
     return {
       puede: false,
-      motivo: `La ronda ${ronda} es la última del ciclo (${totalRondas} conteos). Lo que sigue es cerrar el conteo y auditar.`,
+      motivo:
+        `La ronda ${ronda} es la última del ciclo automático (${totalRondas} conteos). ` +
+        'Sigue el Auditor: puede abrir otra pasada o iniciar el ajuste final.',
     };
   }
   return { puede: true, motivo: null };
+}
+
+/**
+ * ¿PUEDE EL AUDITOR ABRIR OTRA PASADA? La pregunta del botón nuevo
+ * (`POST /api/inventarios/:id/rondas/abrir`).
+ *
+ * NO MIRA EL LIMITE DEL CICLO, a propósito: ese límite es el del tramo
+ * automático y el Auditor existe justamente para pasarlo. Que la ronda 4
+ * exista es la funcionalidad, no una excepción que haya que justificar.
+ *
+ * Lo único que lo frena es que no quede nada por recontar -- la misma regla
+ * que frena al ciclo, por la misma razón.
+ *
+ * LO QUE ESTA FUNCION NO SABE, y tiene que chequear quien la llame: en qué
+ * estado está el inventario. El Auditor abre rondas ANTES de iniciar su
+ * ajuste; una vez en `ajuste_auditor` ya no se vuelve atrás. Ese dato es de
+ * la capa de servicio (`Inventario.estado`) y este dominio no lo conoce, por
+ * la misma razón que no conoce Prisma.
+ */
+export function puedeAuditorAbrirOtraRonda(itemsARecontar: number): AperturaDeRonda {
+  return siHayAlgoQueRecontar(itemsARecontar) ?? { puede: true, motivo: null };
+}
+
+/**
+ * ¿YA EMPEZÓ A CONTARSE ESTA RONDA?
+ *
+ * La pregunta la hace la corrección: cuando se corrige un conteo con la ronda
+ * ya cerrada y el ítem pasa a cuadrar, se lo saca de la ronda siguiente para
+ * que nadie lo recuente al pedo -- que es textual para lo que el cliente pidió
+ * la corrección: *"puedes corregirlo para que ya no salga en mi segundo
+ * conteo"*. Pero solo si esa ronda todavía no arrancó.
+ *
+ * EL PORQUÉ, que es lo que decide todos los bordes: NO SE LE CAMBIA LA HOJA A
+ * ALGUIEN QUE YA LA TIENE EN LA MANO. Sacar un renglón de una hoja que alguien
+ * está recorriendo es peor que dejar un renglón de más -- el de más se cuenta
+ * y cuadra, el que desaparece deja a la persona buscando un producto que ya no
+ * figura, o peor, corre la numeración de lo que tiene anotado en papel.
+ *
+ * ---------------------------------------------------------------------------
+ * POR RONDA, NO POR PRODUCTO
+ * ---------------------------------------------------------------------------
+ * Alcanza con que UNA hoja de la ronda haya arrancado para que no se saque
+ * NADA, ni siquiera un ítem que en esa ronda todavía nadie tocó. Es la
+ * decisión del usuario, preguntada explícitamente: mirar producto por producto
+ * corrige más casos, pero le modifica la hoja a alguien que ya está trabajando
+ * en ella, y eso es justo lo que no se quiere.
+ *
+ * ---------------------------------------------------------------------------
+ * LAS DOS CONDICIONES, Y POR QUÉ NINGUNA ALCANZA SOLA
+ * ---------------------------------------------------------------------------
+ *   - `estado !== 'pendiente'` cubre a la persona que abrió la hoja y está
+ *     caminando la góndola sin haber cargado nada todavía. Solo con los
+ *     conteos, esa hoja parecería intacta.
+ *   - `conteos > 0` cubre el caso contrario: un estado que quedó atrás. La
+ *     hoja nace `pendiente` (ver `materializarRonda`) y pasa a `en_proceso` al
+ *     guardar el primer conteo, pero apoyarse solo en el estado es confiar en
+ *     que esa transición nunca falló ni se salteó por otro camino.
+ *
+ * Una ronda SIN NINGUNA HOJA da `false` -- no empezó. En la práctica no se
+ * llega con ese caso (si no hay hojas no hay ronda siguiente que limpiar), y
+ * `false` es igual la respuesta honesta: nadie empezó a contar algo que no
+ * existe.
+ */
+export interface HojaDeLaRonda {
+  /** `HojaConteo.estado` (schema.prisma#EstadoHoja). La hoja nace `pendiente`. */
+  estado: 'pendiente' | 'en_proceso' | 'finalizada';
+  /** Cuántas filas `Conteo` tiene la hoja. */
+  conteos: number;
+}
+
+export function rondaEmpezo(hojas: readonly HojaDeLaRonda[]): boolean {
+  return hojas.some((h) => h.estado !== 'pendiente' || h.conteos > 0);
 }

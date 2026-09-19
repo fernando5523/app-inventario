@@ -53,9 +53,14 @@ export interface HistoricoParaCiclo {
 }
 
 /**
- * Los estados de un inventario que YA terminó de contar: su ciclo de 3 pasadas
+ * Los estados de un inventario que YA terminó de contar: su ciclo de pasadas
  * está completo y su embudo es historia real, aunque no haya ronda activa.
- * `en_curso` lo trae `activo()`; `anulado` nunca tuvo ciclo que mostrar.
+ *
+ * `en_curso` y `ajuste_auditor` NO están acá, y no es un olvido: los dos los
+ * trae `activo()`, así que se resuelven por la rama de arriba con su ronda y
+ * su estado reales. Meter `ajuste_auditor` en este set lo mandaría a buscarse
+ * al historial y la pantalla mostraría el ciclo del mes ANTERIOR mientras el
+ * auditor ajusta el de este. `anulado` nunca tuvo ciclo que mostrar.
  */
 const CERRADOS: ReadonlySet<EstadoInventario> = new Set(['conteo_cerrado', 'liquidado', 'lacrado']);
 

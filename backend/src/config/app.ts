@@ -11,6 +11,7 @@ import { hojasRouter } from '../modules/hojas';
 import { d365Router } from '../modules/d365';
 import { historialRouter } from '../modules/historial';
 import { liquidacionRouter, reporteGerenciaRouter } from '../modules/liquidacion';
+import { navegacionRouter } from '../modules/navegacion';
 import { sesionRouter } from '../modules/sesion';
 import { tiendasRouter } from '../modules/tiendas';
 import { usuariosRouter } from '../modules/usuarios';
@@ -29,6 +30,7 @@ export function crearApp(): Express {
   app.use('/api/usuarios', usuariosRouter);
   app.use('/api/tiendas', tiendasRouter);
   app.use('/api/config', configRouter);
+  app.use('/api/navegacion', navegacionRouter);
   app.use('/api/hojas', hojasRouter);
   // Pasos 2 y 3 del wizard del Coordinador. Van juntos y en dos monturas
   // porque `activo` cuelga de /api/sucursales/:id, no de /api/inventarios.

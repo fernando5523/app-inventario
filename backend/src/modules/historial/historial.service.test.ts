@@ -24,6 +24,7 @@ const prismaMock = vi.hoisted(() => ({
   // hay planilla, no hay marcas" -- cada test que le importe los llena.
   liquidacionColaborador: { aggregate: vi.fn() },
   asistenciaInventario: { count: vi.fn() },
+  justificacionAsistencia: { count: vi.fn() },
 }));
 vi.mock('../../config/database', () => ({ prisma: prismaMock }));
 
@@ -79,6 +80,7 @@ beforeEach(() => {
   // Por defecto: no hay planilla firmada ni marcas -- `fondoYBonoReales` da 0.
   prismaMock.liquidacionColaborador.aggregate.mockResolvedValue({ _count: 0, _sum: { multaInasistencia: null } });
   prismaMock.asistenciaInventario.count.mockResolvedValue(0);
+  prismaMock.justificacionAsistencia.count.mockResolvedValue(0);
   prismaMock.diferenciaItem.findMany.mockResolvedValue([
     { codigo: CERVEZA, diferencia: -1, montoDiferencia: { toNumber: () => -30 } },
     { codigo: OTRO, diferencia: 1, montoDiferencia: { toNumber: () => 50 } },

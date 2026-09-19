@@ -5,7 +5,9 @@ import {
   destinoTrasRonda,
   itemsParaLaRondaSiguiente,
   puedeAbrirRondaSiguiente,
+  puedeAuditorAbrirOtraRonda,
   resumirRonda,
+  rondaEmpezo,
   RONDAS_DEL_CICLO,
   type ItemDeRonda,
 } from './ciclo-conteos';
@@ -66,6 +68,17 @@ describe('conteoQueManda — el ÚLTIMO conteo manda', () => {
 
   it('un cero en el medio no tapa al conteo posterior', () => {
     expect(conteoQueManda([30, 0, 28])).toBe(28);
+  });
+
+  it('con las rondas extra del Auditor manda la ultima igual: 5ta, 7ma, la que sea', () => {
+    // La lista nunca tuvo largo fijo. Es la razon por la que este dominio no
+    // hubo que tocarlo cuando el cliente pidio rondas extra (2026-09-19), y
+    // por la que `auditoria.calculos.ts` si -- tenia tres campos sueltos.
+    expect(conteoQueManda([18, 12, 17, 15, 16])).toBe(16);
+    expect(conteoQueManda([18, 12, 17, null, null, 9])).toBe(9);
+    // El ajuste final del Auditor es la ultima posicion: si no mandara, el
+    // ajuste no cambiaria la liquidacion y el boton no serviria para nada.
+    expect(conteoQueManda([18, 12, 17, 20])).toBe(20);
   });
 });
 
@@ -349,10 +362,17 @@ describe('puedeAbrirRondaSiguiente', () => {
     expect(puedeAbrirRondaSiguiente(2, 130).puede).toBe(true);
   });
 
-  it('NO deja abrir una 4ta: el ciclo son 3 pasadas', () => {
+  it('NO encadena una 4ta sola: hasta ahi llega el tramo automatico', () => {
     const r = puedeAbrirRondaSiguiente(3, 12);
     expect(r.puede).toBe(false);
-    expect(r.motivo).toMatch(/última del ciclo/i);
+    expect(r.motivo).toMatch(/última del ciclo automático/i);
+  });
+
+  it('ese `false` NO dice "cerrá el conteo": dice que sigue el Auditor', () => {
+    // El significado cambió con las rondas extra (2026-09-19). Un llamador que
+    // lea este false como "se terminó el conteo" se saltea al Auditor, que es
+    // justo el paso que el cliente pidió agregar.
+    expect(puedeAbrirRondaSiguiente(3, 12).motivo).toMatch(/Sigue el Auditor/);
   });
 
   it('NO deja abrir otra ronda si todo cuadró -- y ese es el caso feliz', () => {
@@ -369,5 +389,80 @@ describe('puedeAbrirRondaSiguiente', () => {
     expect(RONDAS_DEL_CICLO).toBe(3);
     expect(puedeAbrirRondaSiguiente(3, 5, 5).puede).toBe(true);
     expect(puedeAbrirRondaSiguiente(5, 5, 5).puede).toBe(false);
+  });
+});
+
+/**
+ * LAS RONDAS EXTRA DEL AUDITOR (decisión del cliente, 2026-09-19). El límite
+ * del ciclo es el del tramo AUTOMATICO; el Auditor existe para pasarlo.
+ */
+describe('puedeAuditorAbrirOtraRonda', () => {
+  it('deja abrir una 4ta pasada aunque el ciclo sean 3: ESE es el cambio', () => {
+    // La misma situación en la que `puedeAbrirRondaSiguiente` dice que no.
+    expect(puedeAbrirRondaSiguiente(3, 12).puede).toBe(false);
+    expect(puedeAuditorAbrirOtraRonda(12)).toEqual({ puede: true, motivo: null });
+  });
+
+  it('y una 7ma tambien: no hay techo, la decisión es del Auditor', () => {
+    // Que la ronda 7 exista es la funcionalidad, no una excepción.
+    expect(puedeAuditorAbrirOtraRonda(3).puede).toBe(true);
+  });
+
+  it('NO deja abrir si todo cuadró: la misma regla que frena al ciclo', () => {
+    // Contar de nuevo un universo vacío no es cero trabajo: es mandar gente a
+    // la tienda a mirar una lista sin renglones.
+    const r = puedeAuditorAbrirOtraRonda(0);
+    expect(r.puede).toBe(false);
+    expect(r.motivo).toMatch(/cuadraron/i);
+  });
+
+  it('el motivo de "no queda nada" es IDENTICO al del ciclo', () => {
+    // Es la misma regla, escrita una sola vez: si divergieran, el Coordinador
+    // y el Auditor leerían dos explicaciones distintas del mismo hecho.
+    expect(puedeAuditorAbrirOtraRonda(0).motivo).toBe(puedeAbrirRondaSiguiente(1, 0).motivo);
+  });
+});
+
+/**
+ * La pregunta que decide si una corrección con la ronda cerrada saca el ítem
+ * de la ronda siguiente. El porqué está en el comentario de `rondaEmpezo`: no
+ * se le cambia la hoja a alguien que ya la tiene en la mano.
+ */
+describe('rondaEmpezo: ¿alguien ya está contando esta ronda?', () => {
+  const pendiente = { estado: 'pendiente' as const, conteos: 0 };
+
+  it('todas pendientes y sin un solo conteo: NO empezó', () => {
+    expect(rondaEmpezo([pendiente, pendiente, pendiente])).toBe(false);
+  });
+
+  /**
+   * El caso que el estado cubre y los conteos no: alguien abrió la hoja y
+   * está caminando la góndola sin haber cargado nada todavía. Sacarle un
+   * renglón ahí es cambiarle la lista que tiene en la mano.
+   */
+  it('una hoja en proceso SIN conteos: YA empezó', () => {
+    expect(rondaEmpezo([pendiente, { estado: 'en_proceso', conteos: 0 }])).toBe(true);
+  });
+
+  /** Y el contrario: un conteo cargado en una hoja cuyo estado quedó atrás. */
+  it('una hoja pendiente CON un conteo: YA empezó', () => {
+    expect(rondaEmpezo([pendiente, { estado: 'pendiente', conteos: 1 }])).toBe(true);
+  });
+
+  it('una finalizada también cuenta como empezada', () => {
+    expect(rondaEmpezo([{ estado: 'finalizada', conteos: 20 }])).toBe(true);
+  });
+
+  /**
+   * POR RONDA, NO POR PRODUCTO: alcanza con que UNA hoja haya arrancado para
+   * que no se saque nada de ninguna. Decisión del usuario.
+   */
+  it('con 9 hojas intactas y 1 empezada, la ronda entera cuenta como empezada', () => {
+    const hojas = [...Array<typeof pendiente>(9).fill(pendiente), { estado: 'en_proceso' as const, conteos: 0 }];
+    expect(rondaEmpezo(hojas)).toBe(true);
+  });
+
+  it('sin ninguna hoja: no empezó -- nadie cuenta algo que no existe', () => {
+    expect(rondaEmpezo([])).toBe(false);
   });
 });

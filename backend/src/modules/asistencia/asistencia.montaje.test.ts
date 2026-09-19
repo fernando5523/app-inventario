@@ -24,8 +24,8 @@ vi.mock('../../modules/sesion/sesion.service', async (orig) => ({
   verificarToken: async (t: string) => { try { return JSON.parse(t); } catch { return null; } },
 }));
 vi.mock('../../modules/inventarios/inventarios.controller', () =>
-  controllerFalso(['crearHojas', 'asignarHojas', 'resumenRonda', 'cerrarRonda', 'activo']));
-vi.mock('./asistencia.controller', () => controllerFalso(['listar', 'marcar', 'borrar']));
+  controllerFalso(['crearHojas', 'asignarHojas', 'resumenRonda', 'cerrarRonda', 'activo', 'abrirRondaExtra', 'iniciarAjuste', 'ajustarConteo', 'cerrarAjuste']));
+vi.mock('./asistencia.controller', () => controllerFalso(['listar', 'marcar', 'borrar', 'justificar', 'quitarJustificacion']));
 
 import { inventariosRouter } from '../../modules/inventarios/inventarios.routes';
 import { asistenciaRouter } from './asistencia.routes';
@@ -59,9 +59,19 @@ describe('dos routers en /api/inventarios', () => {
     expect(r.status).toBe(200);
   });
 
-  it('el auditor sigue SIN entrar a la asistencia', async () => {
+  it('el auditor SI entra a leer la asistencia: la necesita para justificar faltas', async () => {
     await iniciar();
     const r = await fetch(`${baseUrl}/api/inventarios/8021/asistencia`, { headers: autorizacion(AUDITOR) });
+    expect(r.status).toBe(200);
+  });
+
+  it('pero el auditor sigue SIN poder pasar lista: leer y escribir son dos permisos', async () => {
+    await iniciar();
+    const r = await fetch(`${baseUrl}/api/inventarios/8021/asistencia`, {
+      method: 'POST',
+      headers: { ...autorizacion(AUDITOR), 'content-type': 'application/json' },
+      body: JSON.stringify({ colaboradorId: 102, dia: '2026-09-18' }),
+    });
     expect(r.status).toBe(403);
   });
 

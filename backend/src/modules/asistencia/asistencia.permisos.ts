@@ -20,18 +20,60 @@ import type { EstadoInventario } from '../historial/historial.permisos';
  * descuento. La toma el coordinador, que es quien está en la tienda mirando
  * quién llegó -- es el mismo criterio con el que ya reparte las hojas.
  *
- * EL `auditor` TAMPOCO. No es por desconfianza ni por alcance de sucursal
- * (el auditor audita toda la cadena, ver `auditoria.permisos.ts`): es que él
- * no estuvo en la jornada. El auditor revisa lo que otros hicieron, y la
- * planilla que cierra se apoya en estas marcas -- si además las cargara,
- * estaría auditando su propio dato. Necesita LEERLAS, y eso lo resuelve la
- * liquidación, que es suya; no necesita escribirlas.
+ * EL `auditor` TAMPOCO PASA LISTA. No es por desconfianza ni por alcance de
+ * sucursal (el auditor audita toda la cadena, ver `auditoria.permisos.ts`):
+ * es que él no estuvo en la jornada. El auditor revisa lo que otros hicieron,
+ * y la planilla que cierra se apoya en estas marcas -- si además las cargara,
+ * estaría auditando su propio dato.
+ *
+ * Lo que SÍ hace, desde las justificaciones: LEER la lista y PERDONAR faltas
+ * (`ROLES_QUE_JUSTIFICAN`, más abajo). Son dos permisos distintos sobre la
+ * misma pantalla y la separación es el control entero: quien registra la
+ * ausencia no es quien la perdona. Si el coordinador pudiera justificar,
+ * marcaría ausente a alguien y le perdonaría la falta sin que nadie más
+ * intervenga, y la multa dejaría de depender de dos personas.
  *
  * El `administrador` entra por soporte, igual que en `inventarios.routes.ts`:
  * es quien destraba una tienda cuando el coordinador no puede entrar. Queda
  * en el log de auditoría como cualquier otra marca.
  */
 const ROLES_QUE_PASAN_LISTA: readonly Rol[] = ['coordinador', 'administrador'];
+
+/**
+ * QUIÉN JUSTIFICA UNA FALTA: el auditor, y nadie más.
+ *
+ * Decisión del cliente: el auditor puede perdonar una inasistencia y entonces
+ * no se aplica el descuento. Es coherente con el resto de su rol -- la
+ * liquidación entera es suya (`liquidacion.permisos.ts`) y el perdón es una
+ * decisión sobre la planilla, no sobre la jornada.
+ *
+ * EL `administrador` NO ESTÁ, y acá sí es a propósito aunque en
+ * `ROLES_QUE_PASAN_LISTA` entre por soporte. Pasar lista es una tarea
+ * operativa que alguien tiene que poder destrabar; perdonar una multa es una
+ * decisión de negocio sobre la plata de una persona, y el administrador es un
+ * rol técnico que no participa del proceso de inventario (mismo criterio que
+ * `liquidacion.permisos.ts`, que también lo deja afuera).
+ */
+const ROLES_QUE_JUSTIFICAN: readonly Rol[] = ['auditor'];
+
+/**
+ * Los estados en los que TODAVÍA se puede justificar: hasta antes de liquidar.
+ *
+ * `en_curso` y `ajuste_auditor` mientras se cuenta, y `conteo_cerrado` --
+ * que es el caso NORMAL, no la excepción: el reclamo aparece cuando el
+ * auditor mira la planilla, y eso pasa con el conteo ya cerrado.
+ *
+ * `liquidado` y `lacrado` quedan afuera, y ahí está el límite de verdad: la
+ * planilla ya se firmó y los montos ya se descontaron de un sueldo. Una
+ * justificación tardía cambiaría un descuento que ya salió en un recibo. Y
+ * `anulado` tampoco: ese inventario no produce histórico contable, no hay
+ * multa que perdonar.
+ */
+const ESTADOS_QUE_ADMITEN_JUSTIFICAR: readonly EstadoInventario[] = [
+  'en_curso',
+  'ajuste_auditor',
+  'conteo_cerrado',
+];
 
 /** Lo mínimo del inventario que hace falta para decidir acceso. */
 export interface InventarioParaPermisos {
@@ -66,6 +108,12 @@ export function validarSucursal(actor: ColaboradorAutenticado, sucursalIdDelInve
  * `liquidacion.permisos.ts`) sería dejarlo sin la respuesta.
  */
 export function validarLectura(actor: ColaboradorAutenticado, inventario: InventarioParaPermisos): void {
+  // El AUDITOR lee sin recorte de sucursal: audita toda la cadena (corrección
+  // del cliente, 2026-09-09), y desde que puede justificar faltas necesita
+  // ver la lista para saber a quién le está perdonando qué día. Escribir
+  // marcas sigue sin poder -- eso lo corta `validarRegistro`.
+  if (ROLES_QUE_JUSTIFICAN.includes(actor.rol)) return;
+
   if (!ROLES_QUE_PASAN_LISTA.includes(actor.rol)) {
     // Decir quién SÍ: quien lee esto tiene que saber a quién pedírselo
     // (mismo criterio que `liquidacion.permisos.ts#validarAcceso`).
@@ -92,12 +140,46 @@ export function validarLectura(actor: ColaboradorAutenticado, inventario: Invent
  * necesita saber que el problema no se arregla pidiendo permisos.
  */
 export function validarRegistro(actor: ColaboradorAutenticado, inventario: InventarioParaPermisos): void {
-  validarLectura(actor, inventario);
+  // NO se apoya en `validarLectura`: desde que el auditor lee, esa función lo
+  // deja pasar, y pasar lista sigue sin ser suyo. El rol se vuelve a chequear
+  // acá contra la lista corta.
+  if (!ROLES_QUE_PASAN_LISTA.includes(actor.rol)) {
+    throw new Prohibido('La asistencia la registra el coordinador de la tienda: tu rol no tiene acceso.');
+  }
+  validarSucursal(actor, inventario.sucursalId);
 
   if (inventario.estado !== 'en_curso') {
     throw new Conflicto(
       'El conteo de este inventario ya cerró: la asistencia quedó firme y no se puede cambiar. ' +
         'Si falta o sobra una marca, es un reclamo para el auditor.',
+    );
+  }
+}
+
+/**
+ * JUSTIFICAR (o dar de baja una justificación): sólo el auditor, y sólo hasta
+ * antes de liquidar.
+ *
+ * Sin recorte por sucursal, igual que el resto de lo que hace el auditor: no
+ * hay tienda que le sea ajena.
+ *
+ * Los dos errores dicen cosas distintas a propósito. `Prohibido` (403) es
+ * "este no es tu rol" y no se arregla esperando; `Conflicto` (409) es "el rol
+ * es el correcto, lo que no da es el momento", y quien se lo encuentra tiene
+ * que entender que pedir permisos no lo va a destrabar -- el mismo criterio
+ * que `validarRegistro`.
+ */
+export function validarJustificacion(actor: ColaboradorAutenticado, inventario: InventarioParaPermisos): void {
+  if (!ROLES_QUE_JUSTIFICAN.includes(actor.rol)) {
+    throw new Prohibido(
+      'Las faltas las justifica el auditor: tu rol no puede perdonar una multa por inasistencia.',
+    );
+  }
+
+  if (!ESTADOS_QUE_ADMITEN_JUSTIFICAR.includes(inventario.estado)) {
+    throw new Conflicto(
+      'La planilla de este inventario ya se cerró: las justificaciones cambian la multa, y esa multa ya se descontó. ' +
+        'Cualquier ajuste entra en el período siguiente.',
     );
   }
 }

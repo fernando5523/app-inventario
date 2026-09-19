@@ -1,6 +1,38 @@
 import { describe, expect, it } from 'vitest';
 
-import { esUltimaPasada, estadoDePaso, etiquetaARecontar, textoBotonCierre, textoCierreExplicacion } from './texto-cierre-ronda';
+import {
+  esUltimaPasada,
+  estadoDePaso,
+  etiquetaARecontar,
+  ordinal,
+  ORDINAL,
+  textoBotonCierre,
+  textoCierreExplicacion,
+} from './texto-cierre-ronda';
+
+/**
+ * LAS RONDAS YA NO SON TRES. Con la tabla vieja de tres entradas, la ronda 4
+ * -- la que el Auditor acaba de mandar a hacer -- se leía `undefined`, y la
+ * app decía "undefined conteo abierto" justo en el paso recién inventado.
+ */
+describe('ordinal: nombra cualquier ronda, no solo las tres del ciclo', () => {
+  it('las primeras llevan su forma irregular', () => {
+    expect(ordinal(1)).toBe('1er');
+    expect(ordinal(3)).toBe('3er');
+    expect(ordinal(4)).toBe('4to');
+  });
+
+  it('de la séptima en adelante se compone con el número, nunca undefined', () => {
+    expect(ordinal(7)).toBe('7°');
+    expect(ordinal(12)).toBe('12°');
+  });
+
+  it('ORDINAL[n] responde igual para las seis pantallas que ya lo usan como tabla', () => {
+    expect(ORDINAL[2]).toBe('2do');
+    expect(ORDINAL[5]).toBe('5to');
+    expect(ORDINAL[9]).toBe('9°');
+  });
+});
 
 // Formateador trivial: lo que se prueba acá es el TEXTO (qué ronda cierra y
 // qué pasa después), no el formato de miles — ese ya tiene su propio test.
@@ -15,12 +47,18 @@ describe('textoBotonCierre: el botón dice qué ronda CIERRA y qué pasa DESPUÉ
     expect(textoBotonCierre(2, 40, fmt)).toBe('Cerrar el 2do conteo y abrir el 3er · 40 ítems');
   });
 
-  it('ronda 3 (última pasada del ciclo): cierra la 3ra y TERMINA el inventario, no promete una 4ta', () => {
-    expect(textoBotonCierre(3, 5, fmt)).toBe('Cerrar el 3er conteo y terminar el inventario');
+  /**
+   * ESTO CAMBIÓ. Decía "y terminar el inventario", y era cierto hasta que el
+   * Auditor pudo abrir un 4to conteo o arrancar el ajuste final: ahora cerrar
+   * la última pasada del ciclo NO termina nada, se lo pasa a él. Prometer el
+   * fin acá sería mentir sobre el paso más delicado del cierre.
+   */
+  it('ronda 3 (última pasada del ciclo): cierra la 3ra y se lo pasa al auditor, no promete una 4ta', () => {
+    expect(textoBotonCierre(3, 5, fmt)).toBe('Cerrar el 3er conteo y pasarlo al auditor');
   });
 
-  it('sin nada por recontar (aRecontar 0, todo cuadró): cerrar termina el inventario aunque no sea la 3ra ronda', () => {
-    expect(textoBotonCierre(1, 0, fmt)).toBe('Cerrar el 1er conteo y terminar el inventario');
+  it('sin nada por recontar (aRecontar 0, todo cuadró): cierra sin prometer otra ronda, aunque sea la 1ra', () => {
+    expect(textoBotonCierre(1, 0, fmt)).toBe('Cerrar el 1er conteo y pasarlo al auditor');
   });
 
   it('UN solo ítem por recontar: "1 ítem", no "1 ítems" — en la 2da y la 3ra pasada esa cifra llega a uno', () => {
@@ -81,15 +119,15 @@ describe('textos del bloque de cierre: nombran la ronda que corresponde, con ORD
     expect(texto).not.toContain('2do conteo');
   });
 
-  it('ronda 3 (última): sin "siguiente conteo"; cierra el conteo y queda para liquidar', () => {
-    expect(etiquetaARecontar(3, 5)).toBe('Sin cuadrar (diferencia final para liquidar)');
+  it('ronda 3 (última): sin "siguiente conteo"; queda en manos del auditor', () => {
+    expect(etiquetaARecontar(3, 5)).toBe('Sin cuadrar (pasan al auditor)');
     const texto = textoCierreExplicacion(3, 5);
-    expect(texto).toContain('listo para liquidar');
+    expect(texto).toContain('auditor');
     expect(texto).not.toMatch(/abre el .* conteo/);
   });
 
-  it('todo cuadró antes de la última (aRecontar 0): también cierra sin prometer otra ronda', () => {
-    expect(etiquetaARecontar(1, 0)).toBe('Sin cuadrar (diferencia final para liquidar)');
-    expect(textoCierreExplicacion(1, 0)).toContain('listo para liquidar');
+  it('todo cuadró antes de la última (aRecontar 0): tampoco promete otra ronda', () => {
+    expect(etiquetaARecontar(1, 0)).toBe('Sin cuadrar (pasan al auditor)');
+    expect(textoCierreExplicacion(1, 0)).toContain('auditor');
   });
 });

@@ -11,7 +11,12 @@ import { Conflicto, NoEncontrado } from '../../shared/errores';
 import type { ColaboradorAutenticado } from '../../shared/tipos';
 import { estadoParaElFront, estadoTrasContar, totalUnidades, validarFactores } from './hojas.calculos';
 import { validarAlcance, validarEscrituraDeHoja, validarLecturaDeHoja } from './hojas.permisos';
-import type { GuardarConteoInput, ListarHojasQuery } from './hojas.schema';
+import type { CorregirConteoInput, GuardarConteoInput, ListarHojasQuery } from './hojas.schema';
+import { validarCorreccion, type EstadoConAjuste } from '../inventarios/ajuste.permisos';
+import { sacarDeLaRondaSiguienteSiCuadro, type SalidaDeLaRonda } from '../inventarios/rondas.service';
+import { puedeVerLaMatriz } from '../auditoria/auditoria.permisos';
+import type { EstadoInventario } from '../historial/historial.permisos';
+import { registrarAuditoria } from '../../shared/auditoria';
 
 // ---------------------------------------------------------------------------
 // DTOs -- espejan mobile/lib/dominio/tipos.ts, NO el schema de Prisma.
@@ -424,7 +429,25 @@ export async function guardarConteo(
    * rechaza (ver backend/README.md).
    */
   if (hoja.estado === 'finalizada') {
-    throw new Conflicto('La hoja ya esta finalizada: no se puede corregir el conteo.');
+    /**
+     * EL TEXTO CAMBIO PORQUE LA REGLA CAMBIO A MEDIAS.
+     *
+     * Decia "no se puede corregir el conteo" y eso ya es falso: el
+     * Coordinador y el Auditor SI pueden, por
+     * `PATCH /:id/conteos/:productoId/corregir`, con la hoja finalizada
+     * incluida (decision del cliente). Lo que sigue cerrado es ESTA puerta
+     * -- la de quien cuenta en la gondola --, y sigue cerrada por lo mismo de
+     * siempre: una hoja finalizada es un hecho declarado por quien la conto, y
+     * un conteo que llega tarde de la cola offline no puede reabrirla en
+     * silencio.
+     *
+     * Decir "no se puede" a secas mandaba a la persona equivocada a dar la
+     * vuelta larga: el mensaje ahora dice quien SI puede.
+     */
+    throw new Conflicto(
+      'La hoja ya está finalizada: quien contó no puede seguir cargando en ella. ' +
+        'Si hay un valor mal cargado, el Coordinador o el Auditor pueden corregirlo dejando el motivo.',
+    );
   }
 
   const producto = await prisma.producto.findFirst({
@@ -551,4 +574,250 @@ export async function finalizar(actor: ColaboradorAutenticado, hojaId: number): 
   }
 
   return detalle(actor, hojaId);
+}
+
+export interface CorreccionDeConteoDto {
+  conteo: ConteoDto;
+  /** Unidades que quedan tras la correccion. */
+  total: number;
+  /** Las que habia antes: lo que se acaba de pisar. */
+  totalAnterior: number;
+  /**
+   * SOLO PARA QUIEN YA PODIA VER LA MATRIZ de este inventario (el Auditor, el
+   * administrador). Para el Coordinador la clave NO VIENE -- no viene en
+   * `null`, no viene. Ver el comentario de `corregirConteo`.
+   */
+  stockErp?: number | null;
+  /** `total - stockErp`. Viaja junto con `stockErp` o no viaja. */
+  diferencia?: number | null;
+  /**
+   * EL ITEM SALIO DE LA RONDA SIGUIENTE porque la correccion lo hizo cuadrar.
+   * `null` = no salio de ningun lado, que es el caso normal.
+   *
+   * Va en la respuesta y no solo en el log porque es LO QUE EL CLIENTE PIDIO
+   * VER: *"puedes corregirlo para que ya no salga en mi segundo conteo"*. Sin
+   * esto, quien corrige no tiene forma de saber si consiguió lo que fue a
+   * buscar -- y la diferencia entre que salga y que no depende de si alguien
+   * ya empezó esa ronda, que es algo que quien corrige no puede ver.
+   */
+  salioDeLaRonda?: SalidaDeLaRonda | null;
+}
+
+/**
+ * CORREGIR UN CONTEO YA CARGADO: `PATCH /api/hojas/:id/conteos/:productoId/corregir`.
+ *
+ * Pedido del cliente: el Coordinador puede corregir los valores que cargaron
+ * los contadores, en cualquier conteo. Y el Auditor tambien -- misma
+ * potestad, misma ventana, con la unica diferencia de que el ve el stock (ver
+ * mas abajo). Reemplaza el valor y queda auditado: quien, con que rol, que,
+ * antes, despues y por que.
+ *
+ * CORREGIR LO CONTADO NO ES CORREGIR EL STOCK. Esto escribe `Conteo` -- lo que
+ * una persona afirmo haber visto en la gondola --, nunca
+ * `CatalogoItem.stockErp`, que es la foto del ERP y no la edita nadie desde la
+ * app. La regla completa esta en la cabecera de `ajuste.permisos.ts`.
+ *
+ * ---------------------------------------------------------------------------
+ * Y SACA EL ITEM DE LA RONDA SIGUIENTE SI LO HIZO CUADRAR
+ * ---------------------------------------------------------------------------
+ * Es la mitad que faltaba de lo que el cliente pidio: *"puedes corregirlo para
+ * que ya no salga en mi segundo conteo"*. Lo hace
+ * `rondas.service.ts#sacarDeLaRondaSiguienteSiCuadro`, en la MISMA
+ * transaccion, y solo si esa ronda todavia no arranco -- ahi esta el porque
+ * completo.
+ *
+ * ---------------------------------------------------------------------------
+ * EN QUE SE DIFERENCIA DE `guardarConteo`, QUE ESCRIBE LA MISMA FILA
+ * ---------------------------------------------------------------------------
+ *  1. NO EXIGE ESTAR ASIGNADO. `guardarConteo` usa `validarEscrituraDeHoja`,
+ *     que pide estar asignado a la hoja para todos los roles: el conteo tiene
+ *     que quedar a nombre de quien lo hizo. Corregir es lo contrario por
+ *     definicion -- se corrige lo que conto OTRO, y por eso el motivo es
+ *     obligatorio y el cambio queda auditado con nombre y rol. La autoria del
+ *     conteo original no se pierde: se registra quien la piso.
+ *  2. FUNCIONA CON LA HOJA FINALIZADA. Es la mitad del pedido que no se puede
+ *     resolver por la puerta de `guardarConteo`, que rechaza con 409.
+ *  3. LA VENTANA LA DECIDE EL INVENTARIO, no la hoja: `en_curso`, y se corta
+ *     cuando el Auditor inicia su ajuste (ver `ajuste.permisos.ts`).
+ *
+ * EL STOCK VA SOLO PARA QUIEN YA PODIA VERLO. Decision del cliente: el Auditor
+ * SI lo ve mientras corrige -- ya lo tiene en su panel de auditoria, y
+ * ocultarselo aca solo lo obligaria a saltar de pantalla para comparar. Al
+ * Coordinador se le sigue ocultando: es el conteo ciego, y quien ve contra que
+ * corrige deja de corregir un error y pasa a hacer que el inventario cuadre.
+ *
+ * QUIEN VE QUE no se decide con una lista de roles nueva sino con
+ * `auditoria.permisos.ts#puedeVerLaMatriz`, que es LA regla de quien puede
+ * mirar el `stockErp` de un inventario. Reusarla tiene una consecuencia que
+ * vale la pena nombrar: el dia que esa regla cambie, esta respuesta cambia con
+ * ella sin que nadie tenga que acordarse de este archivo. Dos listas separadas
+ * serian dos lugares donde el conteo ciego puede romperse de a uno.
+ *
+ * Las claves se OMITEN cuando no corresponden, no viajan en `null`: un `null`
+ * diria "el ERP no trajo stock", que es una afirmacion sobre el dato y no
+ * sobre quien pregunta. Son dos cosas distintas y el front tiene que poder
+ * distinguirlas (ver la cabecera de auditoria.calculos.ts).
+ */
+export async function corregirConteo(
+  actor: ColaboradorAutenticado,
+  hojaId: number,
+  productoId: number,
+  input: CorregirConteoInput,
+): Promise<CorreccionDeConteoDto> {
+  const hoja = await prisma.hojaConteo.findUnique({
+    where: { id: hojaId },
+    select: {
+      id: true,
+      inventarioId: true,
+      numeroConteo: true,
+      inventario: { select: { sucursalId: true, estado: true } },
+    },
+  });
+  if (!hoja) throw new NoEncontrado('Esa hoja no existe.');
+
+  validarCorreccion(actor, {
+    sucursalId: hoja.inventario.sucursalId,
+    estado: hoja.inventario.estado as EstadoConAjuste,
+  });
+
+  const producto = await prisma.producto.findFirst({
+    where: { id: productoId, hojaId },
+    select: { id: true, codigo: true, empaques: { select: { nombre: true, factor: true } } },
+  });
+  // De ESTA hoja: sin el `hojaId`, se corregiria la hoja A con un producto de
+  // la B (mismo cuidado que en `guardarConteo`).
+  if (!producto) throw new NoEncontrado('Ese producto no pertenece a esta hoja.');
+
+  /**
+   * TIENE QUE HABER ALGO QUE CORREGIR. Si el producto no tiene conteo, esto no
+   * es una correccion: seria CARGAR un conteo a nombre de nadie, sobre un
+   * renglon que nunca nadie miro.
+   *
+   * Es la misma regla que sostiene `finalizar` desde la decision del cliente
+   * de 2026-09-11: un 0 significa "lo vi y no habia" y lo tiene que afirmar la
+   * PERSONA que fue a la gondola, no el sistema ni quien corrige desde afuera.
+   * Si falta contar un renglon, se cuenta -- no se corrige.
+   */
+  const anterior = await prisma.conteo.findUnique({
+    where: { hojaId_productoId: { hojaId, productoId } },
+    include: { empaques: true },
+  });
+  if (!anterior) {
+    throw new Conflicto(
+      'Ese producto todavía no tiene ningún conteo cargado: no hay nada que corregir. ' +
+        'Tiene que contarlo quien esté en la góndola -- un 0 también se carga a mano.',
+    );
+  }
+
+  validarFactores(producto.empaques);
+  const totalAnterior = totalUnidades(anterior, producto.empaques);
+  // Se calcula ANTES de escribir: si una linea referencia un empaque que el
+  // producto no tiene, `totalUnidades` tira y no se persiste nada a medias.
+  const total = totalUnidades(input, producto.empaques);
+
+  const lineas = input.empaques.map((l) => ({ empaqueNombre: l.empaqueNombre, cantidad: l.cantidad }));
+
+  /**
+   * EL CAMBIO DE VALOR Y LA LIMPIEZA DE LA RONDA SON UN SOLO HECHO.
+   *
+   * Si se partieran, el estado que queda cuando falla la segunda mitad es
+   * EXACTAMENTE el bug que esto vino a arreglar: correccion aplicada, item
+   * todavia en la ronda siguiente esperando que alguien lo recuente al pedo.
+   *
+   * El registro de `conteo.corregido` tambien entra a la transaccion: un log
+   * que afirma una correccion que despues se deshizo es peor que no tener log
+   * -- es donde se va a mirar cuando alguien reclame por su descuento.
+   */
+  const { conteo, salida } = await prisma.$transaction(async (tx) => {
+    const conteo = await tx.conteo.update({
+      where: { hojaId_productoId: { hojaId, productoId } },
+      data: {
+        sueltas: input.sueltas,
+        /**
+         * SE BAJA A false, SIEMPRE. `confirmadoPorEscaner` afirma que el
+         * fisico coincide con la linea porque alguien escaneo el codigo en la
+         * gondola (schema.prisma#Conteo). Quien corrige esta tecleando un
+         * numero desde otro lado: dejar el true del conteo original seria
+         * firmar con el escaner un valor que el escaner nunca vio.
+         */
+        confirmadoPorEscaner: false,
+        // `contadoEn` NO se toca: es cuando se conto en la gondola, y corregir
+        // no cambia eso. La hora de la correccion queda en el registro de
+        // auditoria, que es donde corresponde.
+        empaques: { deleteMany: {}, create: lineas },
+      },
+      include: { empaques: true },
+    });
+
+    await registrarAuditoria(
+      {
+        actorId: actor.colaboradorId,
+        accion: 'conteo.corregido',
+        entidad: 'conteo',
+        entidadId: conteo.id,
+        // `rol` ademas de `actorId`: con las dos vias abiertas hace falta
+        // poder separar despues una correccion del Coordinador de una del
+        // Auditor sin ir a buscar el rol que el colaborador tenia ESE dia --
+        // que ademas puede haber cambiado desde entonces.
+        //
+        // `valorAnterior`/`valorNuevo` en UNIDADES y no la lista de empaques:
+        // es el numero que se audita y el que termina en el descuento de
+        // alguien. "2 cajas -> 3 cajas" obliga a quien lee el log seis meses
+        // despues a saber el factor de la caja para entender que cambio.
+        detalle: {
+          productoId,
+          codigo: producto.codigo,
+          ronda: hoja.numeroConteo,
+          valorAnterior: totalAnterior,
+          valorNuevo: total,
+          motivo: input.motivo,
+          rol: actor.rol,
+        },
+      },
+      tx,
+    );
+
+    /**
+     * DESPUES del update y dentro de la misma transaccion: lo que esta funcion
+     * lea de la base para decidir si el item cuadra ya incluye la correccion,
+     * asi que no hace falta pasarle el valor nuevo a mano. Devuelve `null`
+     * cuando no hay nada que sacar, que es el caso normal.
+     */
+    const salida = await sacarDeLaRondaSiguienteSiCuadro(tx, {
+      inventarioId: hoja.inventarioId,
+      codigo: producto.codigo,
+      rondaCorregida: hoja.numeroConteo,
+      actorId: actor.colaboradorId,
+    });
+
+    return { conteo, salida };
+  });
+
+  const base = { conteo: aConteoDto(conteo), total, totalAnterior, salioDeLaRonda: salida };
+
+  /**
+   * El estado va casteado porque `validarCorreccion` ya garantizo que es
+   * `en_curso` -- si fuera otro, no se llega hasta aca. El cast existe solo
+   * porque el union escrito a mano de `historial.permisos.ts` todavia no suma
+   * `ajuste_auditor` (ver `EstadoConAjuste`).
+   */
+  const veElStock = puedeVerLaMatriz(actor, {
+    sucursalId: hoja.inventario.sucursalId,
+    estado: hoja.inventario.estado as EstadoInventario,
+  });
+  if (!veElStock) return base;
+
+  const item = await prisma.catalogoItem.findFirst({
+    where: { inventarioId: hoja.inventarioId, codigo: producto.codigo },
+    select: { stockErp: true },
+  });
+  const stockErp = item?.stockErp ?? null;
+
+  return {
+    ...base,
+    stockErp,
+    // null y NO 0 cuando falta el stock: un 0 dice "conto exactamente lo que
+    // decia el ERP", y no puede ser tambien el valor de "no hay dato".
+    diferencia: stockErp === null ? null : total - stockErp,
+  };
 }

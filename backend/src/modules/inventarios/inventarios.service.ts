@@ -35,10 +35,20 @@ import { Conflicto, NoEncontrado, SolicitudInvalida } from '../../shared/errores
 import type { ColaboradorAutenticado } from '../../shared/tipos';
 import { INCLUIR_TODO, aHojaDto, type HojaDto } from '../hojas/hojas.service';
 import { ROLES_DE_TIENDA } from '../sesion/sesion.service';
+import type { EstadoConAjuste } from './ajuste.permisos';
 
 /** Lo que devuelve `GET /api/sucursales/:id/inventarios/activo`. */
 export interface InventarioActivoDto {
   inventarioId: number;
+  /**
+   * ADITIVO: en que tramo esta el inventario. Antes no hacia falta porque
+   * este endpoint solo devolvia `en_curso` -- era el unico estado posible y
+   * un campo con un solo valor no informa nada. Ahora tambien devuelve
+   * `ajuste_auditor`, y las dos pantallas necesitan distinguirlos: el
+   * Coordinador para saber que ya no puede corregir, el Auditor para saber
+   * que su ajuste esta abierto.
+   */
+  estado: EstadoConAjuste;
   items: number;
   tomadoEn: string;
   /** null = todavia no se crearon hojas (el Coordinador esta en el paso 1). */
@@ -50,30 +60,129 @@ export interface InventarioActivoDto {
    * null = todavia no se creo ninguna hoja, mismo momento que `tamanoHoja:
    * null` (el Coordinador esta en el paso 1, antes de partir en hojas).
    *
-   * SIEMPRE es una ronda que todavia admite conteo, y no por construccion
-   * de este campo sino porque `activo()` filtra `estado: 'en_curso'`: en
-   * cuanto `rondas.service.ts#cerrar()` cierra la ultima ronda del ciclo (o
-   * cualquiera, si no queda nada para recontar), pasa el inventario a
-   * `conteo_cerrado` en la MISMA transaccion -- y ese inventario deja de
-   * aparecer aca. Un "rondaActiva: 3" de este endpoint nunca puede referirse
-   * a una ronda 3 ya cerrada, porque ese inventario ya no es el activo de la
-   * sucursal. (Antes de ese cambio esto era un caso limite sin resolver;
-   * quedo cerrado junto con el hueco que lo causaba.)
+   * OJO: YA NO ES SIEMPRE UNA RONDA QUE ADMITE CONTEO.
+   *
+   * Decia que si, y el argumento era que `activo()` filtraba `estado:
+   * 'en_curso'`, asi que un inventario cuya ultima ronda ya habia cerrado
+   * dejaba de aparecer aca. Eso dejo de valer por los dos lados: cerrar la
+   * ultima ronda ya no cierra el inventario, y `activo()` ahora tambien
+   * devuelve los que estan en `ajuste_auditor`.
+   *
+   * Hoy `rondaActiva` es "la ultima ronda que existe", y QUE SE PUEDA CONTAR
+   * EN ELLA lo dice `estado`, no este campo:
+   *
+   *   `en_curso`        se esta contando, O la ultima ronda cerro y espera
+   *                     al Auditor -- `estado` NO distingue esos dos, los
+   *                     distingue `admiteConteo`
+   *   `ajuste_auditor`  nadie cuenta: el Auditor esta ajustando valores
+   *
+   * La pantalla tiene que mirar los dos campos. Lo que sigue siendo cierto es
+   * que nunca apunta a una ronda reemplazada por otra mas nueva: es el
+   * maximo.
    */
   rondaActiva: number | null;
+  /**
+   * SI TODAVIA SE PUEDE CONTAR EN `rondaActiva`.
+   *
+   * `false` con `rondaActiva: 3` = la ronda 3 termino y el inventario espera
+   * al Auditor, que abre otra pasada o inicia el ajuste. Es el bit que
+   * faltaba: hasta ahora, "contando la ronda 3" y "ronda 3 cerrada" llegaban
+   * al telefono EXACTAMENTE IGUALES -- los dos `estado: 'en_curso'` con
+   * `rondaActiva: 3` -- y la pantalla del ciclo mostraba "Paso 3 · En curso"
+   * sobre una ronda ya cerrada.
+   *
+   * ---------------------------------------------------------------------
+   * POR QUE UN CAMPO AL LADO Y NO `rondaActiva: null` AL CERRAR
+   * ---------------------------------------------------------------------
+   * Era la otra opcion sobre la mesa y se descarto por dos razones:
+   *
+   *  1. `rondaActiva: null` YA SIGNIFICA OTRA COSA: "todavia no hay hojas",
+   *     el Coordinador esta en el paso 1 del wizard. Usarlo tambien para "la
+   *     ultima ronda cerro" junta dos situaciones que no se parecen en nada
+   *     -- nada empezo todavia contra todo se conto y esta esperando -- y
+   *     obliga a la pantalla a desempatarlas mirando `totalHojas`. Es
+   *     justo lo que este repo evita en todos lados: un tipo que no puede
+   *     expresar dos cosas distintas fuerza a mentir en una de las dos (ver
+   *     la cabecera de auditoria.calculos.ts, "no se" no es "cero").
+   *  2. SE PERDERIA EL NUMERO DE RONDA cuando mas se necesita. Durante la
+   *     espera, lo util de mostrar es "la ronda 3 cerro"; con `rondaActiva`
+   *     en null la pantalla no tiene con que escribir el 3.
+   *
+   * Los dos campos juntos no dejan ningun caso ambiguo:
+   *
+   *     rondaActiva  admiteConteo   que esta pasando
+   *     null         false          paso 1: no hay hojas todavia
+   *     3            true           se esta contando la ronda 3
+   *     3            false          la ronda 3 cerro; le toca al Auditor
+   *
+   * ES LA MISMA CONDICION QUE EXIGE EL SERVIDOR, no una aproximacion para
+   * la pantalla: sale del mismo "todas las hojas finalizadas Y
+   * sincronizadas" que `rondas.service.ts#exigirUltimaRondaTerminada` le
+   * pide al Auditor antes de dejarlo abrir otra ronda o iniciar el ajuste.
+   * Por eso un boton que la pantalla habilita con esto es un boton que el
+   * servidor va a aceptar -- que era el problema de fondo: la precondicion
+   * se enunciaba en pantalla y la sostenia el backend, sin un dato que las
+   * uniera.
+   *
+   * Con el inventario en `ajuste_auditor` es `false` siempre, y no por un
+   * caso especial: para llegar ahi todas las hojas tienen que estar
+   * finalizadas y subidas.
+   */
+  admiteConteo: boolean;
 }
 
 /**
- * El inventario en curso de una sucursal, o `null` si el Coordinador
- * todavia no trajo el snapshot.
+ * El inventario activo de una sucursal, o `null` si el Coordinador todavia
+ * no trajo el snapshot.
  *
- * "En curso" es `estado: en_curso`, no "el ultimo": un inventario cerrado no
- * puede seguir apareciendo como activo o el Coordinador reabriria por error
- * el del mes pasado.
+ * "Activo" es `en_curso` O `ajuste_auditor`, no "el ultimo": un inventario
+ * cerrado no puede seguir apareciendo como activo o el Coordinador reabriria
+ * por error el del mes pasado.
+ *
+ * `ajuste_auditor` ENTRA, y omitirlo era el bug que este cambio trajo de la
+ * mano. Con el filtro en `en_curso` a secas, apenas el Auditor iniciaba su
+ * ajuste el inventario desaparecia de este endpoint: la pantalla del Auditor
+ * se quedaba sin el inventario que justamente estaba ajustando, y la del
+ * Coordinador decia "no hay inventario en curso" sobre una tienda que tenia
+ * uno a medio cerrar. Es el mismo criterio que ya usaba: activo = el que la
+ * tienda esta trabajando, y durante el ajuste lo sigue estando -- lo que
+ * cambia es de quien es el turno, y para eso va `estado` en el DTO.
  */
+/**
+ * Si queda algo por contar en `ronda`. Ver `InventarioActivoDto.admiteConteo`.
+ *
+ * UNA sola consulta y no las dos de `exigirUltimaRondaTerminada`
+ * (`hojasSinFinalizar` + `hojasSinSincronizar`): aquellas traen QUE hojas y
+ * de QUIEN son, porque arman el mensaje de error que manda a buscar a la
+ * persona. Acá alcanza con saber si hay alguna, y este endpoint lo consulta
+ * la pantalla todo el tiempo. La CONDICION es la misma -- finalizada Y
+ * sincronizada -- y tiene que seguir siendolo: si se separan, el boton que
+ * la pantalla habilita deja de ser el que el servidor acepta.
+ *
+ * Sin hojas todavia (`ronda === null`) da `false`: no hay ninguna ronda en
+ * la que contar. La pantalla no lo confunde con "la ronda cerro" porque
+ * `rondaActiva` viene en null, que es el paso 1 del wizard.
+ */
+async function admiteConteo(inventarioId: number, ronda: number | null): Promise<boolean> {
+  if (ronda === null) return false;
+
+  const sinTerminar = await prisma.hojaConteo.count({
+    where: {
+      inventarioId,
+      numeroConteo: ronda,
+      // Una hoja a medio contar, o contada pero todavia en la cola del
+      // telefono: en los dos casos la ronda sigue abierta. Que este
+      // finalizada no alcanza -- el conteo puede estar esperando la WiFi, y
+      // cerrar sobre eso congela un numero al que le faltan items reales.
+      OR: [{ estado: { not: 'finalizada' } }, { sync: { not: 'sincronizado' } }],
+    },
+  });
+  return sinTerminar > 0;
+}
+
 export async function activo(sucursalId: number): Promise<InventarioActivoDto | null> {
   const inventario = await prisma.inventario.findFirst({
-    where: { sucursalId, estado: 'en_curso' },
+    where: { sucursalId, estado: { in: ['en_curso', 'ajuste_auditor'] } },
     orderBy: { id: 'desc' },
     include: { _count: { select: { hojas: true } } },
   });
@@ -95,6 +204,8 @@ export async function activo(sucursalId: number): Promise<InventarioActivoDto | 
 
   return {
     inventarioId: inventario.id,
+    admiteConteo: await admiteConteo(inventario.id, rondaActiva),
+    estado: inventario.estado as EstadoConAjuste,
     // `snapshotItems` es nullable: un inventario puede existir sin snapshot
     // todavia. 0 y no null porque quien llama espera un numero para mostrar.
     items: inventario.snapshotItems ?? 0,

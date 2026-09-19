@@ -27,8 +27,8 @@ import { NoEncontrado, SolicitudInvalida } from '../../shared/errores';
 import type { ColaboradorAutenticado, Rol } from '../../shared/tipos';
 import type { EstadoInventario } from '../historial/historial.permisos';
 import { ROLES_DE_TIENDA } from '../sesion/sesion.service';
-import { validarLectura, validarRegistro } from './asistencia.permisos';
-import { aFechaUtc } from './asistencia.schema';
+import { validarJustificacion, validarLectura, validarRegistro } from './asistencia.permisos';
+import { aDia, aFechaUtc } from './asistencia.schema';
 
 export interface MarcaDto {
   colaboradorId: number;
@@ -36,6 +36,19 @@ export interface MarcaDto {
   dia: string;
   /** Fecha y HORA de la entrada, ISO 8601. */
   registradoEn: string;
+}
+
+/** Una falta perdonada por el auditor. */
+export interface JustificacionDto {
+  colaboradorId: number;
+  /** La jornada perdonada, `YYYY-MM-DD`. */
+  dia: string;
+  /** Por qué se perdonó. Obligatorio al cargarla -- ver el schema. */
+  motivo: string;
+  /** Cuándo se firmó el perdón, ISO 8601. */
+  justificadoEn: string;
+  /** Qué auditor lo firmó. */
+  justificadoPorId: number;
 }
 
 export interface PersonaDto {
@@ -54,6 +67,14 @@ export interface AsistenciaDto {
    */
   dias: string[];
   marcas: MarcaDto[];
+  /**
+   * Las faltas que el auditor perdonó. Viajan APARTE de `marcas` y no
+   * mezcladas con ellas, igual que en la base: una marca dice "estuvo" y una
+   * justificación dice "no estuvo, y está bien". La pantalla las muestra
+   * distinto y la planilla las suma sólo para la plata (ver
+   * `schema.prisma#JustificacionAsistencia`).
+   */
+  justificaciones: JustificacionDto[];
   /** A quién se le puede marcar asistencia -- ver `personalDelInventario`. */
   personal: PersonaDto[];
 }
@@ -129,10 +150,39 @@ async function estadoDe(inventarioId: number, sucursalId: number): Promise<Asist
     registradoEn: fila.registradoEn.toISOString(),
   }));
 
+  const filasJustificadas = await prisma.justificacionAsistencia.findMany({
+    where: { inventarioId },
+    select: { colaboradorId: true, dia: true, motivo: true, justificadoEn: true, justificadoPorId: true },
+    orderBy: [{ dia: 'asc' }, { colaboradorId: 'asc' }],
+  });
+
+  const justificaciones: JustificacionDto[] = filasJustificadas.map((fila) => ({
+    colaboradorId: fila.colaboradorId,
+    // Misma traducción de `@db.Date` que las marcas, por el mismo motivo: en
+    // hora local, la medianoche UTC del 3 es el 2 y el día se corre entero.
+    dia: aDia(fila.dia),
+    motivo: fila.motivo,
+    justificadoEn: fila.justificadoEn.toISOString(),
+    justificadoPorId: fila.justificadoPorId,
+  }));
+
   return {
+    /**
+     * LOS DIAS DEL INVENTARIO SALEN SOLO DE LAS MARCAS, nunca de las
+     * justificaciones. Un día que nadie trabajó no se convierte en jornada
+     * porque a alguien le perdonen la falta -- y si entrara acá, cada perdón
+     * le sumaría un día al denominador y una tarifa de multa a TODOS los
+     * demás. Sería lo contrario de lo que el perdón intenta hacer.
+     */
     dias: [...new Set(marcas.map((m) => m.dia))].sort(),
     marcas,
-    personal: await personalDelInventario(sucursalId, marcas.map((m) => m.colaboradorId)),
+    justificaciones,
+    // El personal sale de las dos listas: a quien tiene una falta perdonada y
+    // ya no está en el padrón hay que poder escribirle el nombre igual.
+    personal: await personalDelInventario(sucursalId, [
+      ...marcas.map((m) => m.colaboradorId),
+      ...justificaciones.map((j) => j.colaboradorId),
+    ]),
   };
 }
 
@@ -167,12 +217,13 @@ export async function marcar(
    * que nadie trabajó le suma un día al inventario -- y una tarifa de multa a
    * los once que sí fueron.
    *
-   * Y acá no hay red debajo: `AsistenciaInventario` NO tiene foreign keys (es
-   * la única tabla del schema así, decisión anotada en su comentario). La base
-   * acepta sin chistar una marca de un colaborador que no existe. Esta
-   * consulta -- y el `inventarioDe` de arriba -- son toda la integridad
-   * referencial que tiene la tabla; borrarlas no "relaja una validación",
-   * deja entrar basura que nadie va a rechazar después.
+   * La base ya NO es la última red: desde
+   * `20260918160000_asistencia_claves_foraneas`, `asistencia_inventario`
+   * tiene sus tres FK en RESTRICT, así que una marca de un colaborador
+   * inexistente rebota sola. Pero la FK sólo sabe que el id EXISTE -- no que
+   * esa persona sea de esta tienda, esté activa y tenga un rol de tienda, que
+   * es lo que de verdad decide si corresponde marcarla. Eso lo sigue
+   * chequeando únicamente esta consulta.
    */
   const persona = await prisma.colaborador.findFirst({
     where: { id: colaboradorId, activo: true, sucursalId: inventario.sucursalId, rol: { in: ROLES_DE_TIENDA } },
@@ -244,6 +295,149 @@ export async function borrar(
       entidad: 'inventario',
       entidadId: inventarioId,
       detalle: { colaboradorId, dia },
+    });
+  }
+
+  return estadoDe(inventarioId, inventario.sucursalId);
+}
+
+/**
+ * JUSTIFICAR UNA FALTA: el auditor perdona la inasistencia de una persona en
+ * un día, y ese día deja de cobrarse.
+ *
+ * Decisión del cliente, textual: *"si cobra el bono de distribución, es como
+ * si hubiera asistido"*. El día perdonado vale como asistido para los DOS
+ * efectos -- no paga multa por él y, si con eso completa el inventario, cobra
+ * el bono. La cuenta vive en `dominio/asistencia.ts`; acá sólo se guarda el
+ * hecho.
+ *
+ * IDEMPOTENTE, por el `@@unique([inventarioId, colaboradorId, dia])` y con
+ * `skipDuplicates`, igual que `marcar`. Y con la misma consecuencia
+ * deliberada: si ya había una justificación de ese día, el `motivo` viejo NO
+ * se pisa. El primero es el que se firmó, el que quedó en el log de auditoría
+ * y el que la planilla va a tener que explicar; dejar que un segundo toque lo
+ * reescriba sería poder cambiar la explicación de un descuento sin que quede
+ * rastro. Para cambiarlo hay que dar de baja el perdón y volver a cargarlo --
+ * dos acciones, las dos auditadas.
+ *
+ * NO SE EXIGE que la persona esté ausente ese día. Una justificación sobre un
+ * día que además tiene marca no rompe nada: `diasFaltadosCobrables` recorta en
+ * 0 y esa persona ya no pagaba multa por ese día. Pedir que primero esté
+ * ausente obligaría a chequear contra las marcas de ESTE instante, y las
+ * marcas todavía se pueden mover -- el resultado dependería del orden en que
+ * el coordinador y el auditor hacen sus cosas.
+ */
+export async function justificar(
+  actor: ColaboradorAutenticado,
+  inventarioId: number,
+  colaboradorId: number,
+  dia: string,
+  motivo: string,
+): Promise<{ creada: boolean; asistencia: AsistenciaDto }> {
+  const inventario = await inventarioDe(inventarioId);
+  validarJustificacion(actor, inventario);
+
+  /**
+   * LA PERSONA TIENE QUE SER PARTE DE ESTE INVENTARIO. No se exige `activo`
+   * -- a diferencia de `marcar` --, y la diferencia es de negocio: a alguien
+   * dado de baja a mitad de mes se le liquida igual el inventario que
+   * trabajó, así que también se le tiene que poder perdonar una falta de esos
+   * días. Lo que sí se exige es que sea personal de ESTA tienda y de un rol
+   * de tienda: el universo de la planilla es ése (ver
+   * `liquidacion.cierre.ts#proyectarPlanilla`), y perdonarle una falta a
+   * alguien que no entra a la planilla es una fila que no le cambia la multa
+   * a nadie y que después nadie entiende.
+   */
+  const persona = await prisma.colaborador.findFirst({
+    where: { id: colaboradorId, sucursalId: inventario.sucursalId, rol: { in: ROLES_DE_TIENDA } },
+    select: { id: true, nombre: true },
+  });
+  if (persona === null) {
+    // Sin distinguir la causa, mismo criterio que `marcar`: decir cuál sería
+    // confirmar que un id existe en otra sucursal.
+    throw new SolicitudInvalida(
+      `No se puede justificar la falta de la persona ${colaboradorId}: no es personal de esta tienda. ` +
+        'Revísala en Usuarios y vuelve a intentar.',
+    );
+  }
+
+  const { count } = await prisma.justificacionAsistencia.createMany({
+    data: { inventarioId, colaboradorId, dia: aFechaUtc(dia), motivo, justificadoPorId: actor.colaboradorId },
+    skipDuplicates: true,
+  });
+
+  // Sólo si de verdad se creó: un re-toque idempotente no perdonó nada nuevo,
+  // y un log que dice "justificó" cuando no pasó nada es ruido que después
+  // hay que descartar a mano al auditar un reclamo (igual que en `marcar`).
+  if (count > 0) {
+    await registrarAuditoria({
+      actorId: actor.colaboradorId,
+      accion: 'inventario.falta_justificada',
+      entidad: 'inventario',
+      entidadId: inventarioId,
+      // QUIÉN (actorId), A QUIÉN, QUÉ DÍA y POR QUÉ. El motivo va acá además
+      // de en la fila: la fila se puede dar de baja, el log no.
+      detalle: { colaboradorId, persona: persona.nombre, dia, motivo },
+    });
+  }
+
+  return { creada: count > 0, asistencia: await estadoDe(inventarioId, inventario.sucursalId) };
+}
+
+/**
+ * DAR DE BAJA UNA JUSTIFICACIÓN: se levanta el perdón de ESE día y la multa
+ * vuelve a correr.
+ *
+ * Es la contracara de `justificar` y tiene la misma ventana: hasta antes de
+ * liquidar. Existe por lo mismo que `borrar` para las marcas -- un dedo del
+ * auditor, o un motivo que resultó no ser cierto -- y también para poder
+ * corregir un motivo mal escrito, que es la única forma de hacerlo (ver
+ * `justificar`: el motivo no se pisa).
+ *
+ * NO PIDE UN MOTIVO PROPIO para la baja. El cliente pidió motivo para
+ * justificar, que es lo que mueve plata a favor de alguien; la baja devuelve
+ * las cosas a como estaban y queda igual de auditada. Si más adelante hace
+ * falta, se agrega -- pero es una regla nueva y la tiene que pedir él.
+ *
+ * Idempotente: dar de baja algo que ya no está devuelve el estado actual en
+ * vez de un 404, misma semántica que `borrar`.
+ */
+export async function quitarJustificacion(
+  actor: ColaboradorAutenticado,
+  inventarioId: number,
+  colaboradorId: number,
+  dia: string,
+): Promise<AsistenciaDto> {
+  const inventario = await inventarioDe(inventarioId);
+  validarJustificacion(actor, inventario);
+
+  // Se lee ANTES de borrar para poder dejar en el log QUÉ se dio de baja --
+  // con su motivo original. Sin esto, el log diría "se levantó un perdón" sin
+  // decir cuál era, y esa es justamente la información que hace falta cuando
+  // alguien pregunta por qué le volvieron a descontar.
+  const justificacion = await prisma.justificacionAsistencia.findUnique({
+    where: { inventarioId_colaboradorId_dia: { inventarioId, colaboradorId, dia: aFechaUtc(dia) } },
+    select: { motivo: true, justificadoPorId: true },
+  });
+
+  if (justificacion !== null) {
+    await prisma.justificacionAsistencia.delete({
+      where: { inventarioId_colaboradorId_dia: { inventarioId, colaboradorId, dia: aFechaUtc(dia) } },
+    });
+
+    await registrarAuditoria({
+      actorId: actor.colaboradorId,
+      accion: 'inventario.justificacion_quitada',
+      entidad: 'inventario',
+      entidadId: inventarioId,
+      detalle: {
+        colaboradorId,
+        dia,
+        // El motivo del perdón que se levanta, y quién lo había firmado: puede
+        // no ser el mismo auditor que lo está dando de baja.
+        motivo: justificacion.motivo,
+        justificadoPorId: justificacion.justificadoPorId,
+      },
     });
   }
 

@@ -1,3 +1,5 @@
+import type { ClaseItem } from '@prisma/client';
+
 /**
  * Tipos de las entidades OData de D365 que este modulo lee, y de nuestro
  * propio dominio de catalogo. Solo los campos que de verdad usamos --
@@ -194,6 +196,20 @@ export interface CatalogoItemDto {
   descripcion: string;
   /** Siempre al menos uno. `[0]` = el de mayor factor (ver elegirEmpaques). */
   empaques: EmpaqueDto[];
+  /**
+   * EL EMPAQUE DE COMPRA, en unidades sueltas: el denominador de la regla del
+   * faltante por paquete. NO es el mayor de `empaques` -- esos son los de
+   * conteo en gondola, y en 328 de 2.000 items reales no coinciden (ver
+   * `d365-catalogo.service.ts#empaqueDeCompra`).
+   *
+   * null = no se pudo resolver, que NO es lo mismo que 1 ("se compra por
+   * unidad"). Ver el comentario de la columna en schema.prisma.
+   */
+  empaqueCompra: number | null;
+  /** El simbolo del ERP tal cual ("Emp.12"), para poder auditar el numero. */
+  empaqueCompraSimbolo: string | null;
+  /** Como se trata su faltante -- ver `clasificarItem` y el enum `ClaseItem`. */
+  clase: ClaseItem;
   /**
    * Existencia del ERP para el almacen consultado.
    *

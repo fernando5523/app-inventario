@@ -22,6 +22,7 @@ import type {
   Clasificacion,
   DatosClasificar,
   FiltroClasificacion,
+  ClaseItem,
   PaginaClasificacion,
   ProductoClasificable,
   RepositorioClasificacion,
@@ -34,6 +35,9 @@ const BASE = '/api/clasificacion';
 interface ClasificacionDto {
   codigo: string;
   esEmpresa: boolean;
+  /** `null` = excepción vieja, anterior a las tres vías. Ver el puerto. */
+  clase: ClaseItem | null;
+  empaqueCompraCorregido: number | null;
   nota: string | null;
   clasificadoPorId: number;
   clasificadoEn: string;
@@ -44,6 +48,9 @@ interface ProductoDto {
   descripcion: string;
   categoria: string | null;
   responsableDynamics: ResponsableDynamics;
+  claseDynamics: ClaseItem;
+  empaqueCompra: number | null;
+  empaqueCompraSimbolo: string | null;
   clasificacion: ClasificacionDto | null;
 }
 
@@ -58,6 +65,11 @@ function aClasificacion(dto: ClasificacionDto): Clasificacion {
   return {
     codigo: dto.codigo,
     esEmpresa: dto.esEmpresa,
+    // `clase` puede venir null y ASÍ SE PASA: es una excepción vieja, y
+    // rellenarla acá con un valor le atribuiría al Auditor una decisión que
+    // nunca tomó (ver `Clasificacion.clase` en el puerto).
+    clase: dto.clase,
+    empaqueCompraCorregido: dto.empaqueCompraCorregido,
     nota: dto.nota,
     clasificadoPorId: dto.clasificadoPorId,
     clasificadoEn: dto.clasificadoEn,
@@ -70,6 +82,9 @@ function aProducto(dto: ProductoDto): ProductoClasificable {
     descripcion: dto.descripcion,
     categoria: dto.categoria,
     responsableDynamics: dto.responsableDynamics,
+    claseDynamics: dto.claseDynamics,
+    empaqueCompra: dto.empaqueCompra,
+    empaqueCompraSimbolo: dto.empaqueCompraSimbolo,
     clasificacion: dto.clasificacion ? aClasificacion(dto.clasificacion) : null,
   };
 }
@@ -102,7 +117,14 @@ export const clasificacionApi: RepositorioClasificacion = {
     const dto = await pedir<ClasificacionDto>(`${BASE}/${encodeURIComponent(codigo)}`, {
       metodo: 'PUT',
       cuerpo: {
-        esEmpresa: datos.esEmpresa,
+        // SOLO la clase: `esEmpresa` lo deriva el servidor. Mandar las dos
+        // permitiría que discrepen, y entonces la liquidación y la auditoría
+        // mirarían columnas distintas (ver `DatosClasificar` en el puerto).
+        clase: datos.clase,
+        // Va SIEMPRE, incluso en `null`: es un PUT y el cuerpo declara la
+        // excepción entera. Omitirlo cuando el Auditor borró la corrección
+        // dejaría viva la anterior -- justo lo contrario de lo que hizo.
+        empaqueCompraCorregido: datos.empaqueCompraCorregido ?? null,
         // La clave `nota` se OMITE cuando no vino: mandar `nota: undefined` no
         // aporta, y el backend la trata como opcional.
         ...(datos.nota !== undefined ? { nota: datos.nota } : {}),

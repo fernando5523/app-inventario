@@ -21,7 +21,10 @@ async function main(): Promise<number> {
 
   const inventario = await prisma.inventario.findUnique({
     where: { id },
-    include: { sucursal: { select: { nombre: true } }, _count: { select: { hojas: true, catalogo: true, asistencias: true } } },
+    include: {
+      sucursal: { select: { nombre: true } },
+      _count: { select: { hojas: true, catalogo: true, asistencias: true, justificaciones: true } },
+    },
   });
   if (inventario === null) {
     console.log(`No existe el inventario ${id}.`);
@@ -37,19 +40,21 @@ async function main(): Promise<number> {
   console.log(
     `Borrando inventario ${id} (${inventario.sucursal.nombre}): ` +
       `${inventario._count.hojas} hojas, ${inventario._count.catalogo} items de catalogo, ` +
-      `${inventario._count.asistencias} marca(s) de asistencia.`,
+      `${inventario._count.asistencias} marca(s) de asistencia, ` +
+      `${inventario._count.justificaciones} justificacion(es).`,
   );
 
   // El orden importa: los hijos primero, Postgres no borra en cascada acá.
   //
-  // La asistencia va en esta lista aunque el script ya se haya negado si hay
-  // conteos, y es la unica de las nueve FK hacia `inventarios` para la que
-  // eso no alcanza: las marcas las carga el Coordinador cuando la gente
-  // LLEGA, asi que un inventario de prueba con 0 conteos puede tener marcas
-  // igual, y el DELETE moria con
+  // La asistencia y las justificaciones van en esta lista aunque el script ya
+  // se haya negado si hay conteos, y son las unicas dos de las diez FK hacia
+  // `inventarios` para las que eso no alcanza: las marcas las carga el
+  // Coordinador cuando la gente LLEGA y el perdon lo firma el Auditor cuando
+  // quiera, asi que un inventario de prueba con 0 conteos puede tener las dos
+  // cosas, y el DELETE moria con
   //   violates RESTRICT setting of foreign key constraint
   //   "asistencia_inventario_inventario_id_fkey"
-  // (ver 20260918160000_asistencia_claves_foraneas). De las otras ocho, hojas
+  // (ver 20260918160000_asistencia_claves_foraneas). De las otras, hojas
   // y catalogo ya estaban en esta lista; resultado, diferencias,
   // liquidaciones, aprobaciones, lacrado e importaciones de ajustes recien
   // aparecen DESPUES del cierre del conteo, y un inventario cerrado no es lo
@@ -63,6 +68,7 @@ async function main(): Promise<number> {
     prisma.empaqueCatalogo.deleteMany({ where: { catalogoItem: { inventarioId: id } } }),
     prisma.catalogoItem.deleteMany({ where: { inventarioId: id } }),
     prisma.asistenciaInventario.deleteMany({ where: { inventarioId: id } }),
+    prisma.justificacionAsistencia.deleteMany({ where: { inventarioId: id } }),
     prisma.inventario.delete({ where: { id } }),
   ]);
 

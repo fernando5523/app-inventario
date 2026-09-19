@@ -8,6 +8,7 @@
  */
 
 import type {
+  RepositorioAjuste,
   RepositorioAsistencia,
   RepositorioAuditoria,
   RepositorioCatalogo,
@@ -25,6 +26,7 @@ import type {
   Sincronizador,
 } from './puertos/repositorios';
 
+import { ajusteMemoria } from './adaptadores/ajuste-memoria';
 import { asistenciaMemoria } from './adaptadores/asistencia-memoria';
 import { auditoriaMemoria } from './adaptadores/auditoria-memoria';
 import { catalogoMemoria } from './adaptadores/catalogo-memoria';
@@ -41,6 +43,7 @@ import { sincronizadorReal } from './adaptadores/sincronizador';
 import { tiendasMemoria } from './adaptadores/tiendas-memoria';
 import { usuariosMemoria } from './adaptadores/usuarios-memoria';
 
+import { ajusteApi } from './adaptadores/ajuste-api';
 import { asistenciaApi } from './adaptadores/asistencia-api';
 import { catalogoApi } from './adaptadores/catalogo-api';
 import { clasificacionApi } from './adaptadores/clasificacion-api';
@@ -77,6 +80,7 @@ const entorno = (globalThis as { process?: { env?: Record<string, string | undef
 /** Los puertos que HOY tienen una implementación HTTP escrita. */
 type PuertoConectable =
   | 'sesion'
+  | 'ajuste'
   | 'asistencia'
   | 'hojas'
   | 'catalogo'
@@ -238,6 +242,25 @@ export const repositorioCatalogo: RepositorioCatalogo = elegir('catalogo', catal
  * tiene que poder devolverlo al mock para desarrollar sin backend.
  */
 export const repositorioInventario: RepositorioInventario = elegir('inventario', inventarioMemoria, inventarioApi);
+
+/**
+ * ── CORRECCIONES Y AJUSTE FINAL: CONECTADO ──
+ *
+ * Reemplaza el punto de no retorno que había al finalizar una hoja. Ahora el
+ * Coordinador corrige lo que cargaron los contadores (sin ver el stock) y el
+ * Auditor abre rondas extra y hace el ajuste final (viendo el stock).
+ *
+ * Sale a la red por default y SIN cola offline, al revés que las hojas: ver
+ * `RepositorioAjuste` en el puerto -- una corrección encolada se aplicaría
+ * horas después, cuando el Auditor quizá ya cerró la ronda, con la persona
+ * convencida de que ya había corregido.
+ *
+ * `EXPO_PUBLIC_PUERTOS_MEMORIA=ajuste` lo devuelve al mock. El mock reproduce
+ * las guardas reales (quién, en qué fase, motivo obligatorio) pero NO simula
+ * la bitácora de auditoría: esa vive en el servidor, y fingirla acá haría
+ * creer que el rastro del cambio quedó guardado.
+ */
+export const repositorioAjuste: RepositorioAjuste = elegir('ajuste', ajusteMemoria, ajusteApi);
 
 /**
  * ── AUDITORÍA: CONECTADA ──

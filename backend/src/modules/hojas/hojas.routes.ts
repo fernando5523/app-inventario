@@ -4,6 +4,7 @@ import { requiereRol } from '../../middleware/autorizacion.middleware';
 import { validar } from '../../middleware/validation.middleware';
 import * as controller from './hojas.controller';
 import {
+  corregirConteoSchema,
   guardarConteoSchema,
   listarHojasQuerySchema,
   parametrosBarrasSchema,
@@ -59,3 +60,21 @@ hojasRouter.put(
 );
 
 hojasRouter.post('/:id/finalizar', validar(parametrosHojaSchema, 'params'), controller.finalizar);
+
+/**
+ * CORREGIR un conteo ya cargado -- del Coordinador, no de quien conto.
+ *
+ * Sin `requiereRol` en la ruta, igual que el resto de este router: quien
+ * puede corregir depende del INVENTARIO (su estado, su sucursal) y no solo
+ * del rol, asi que lo decide `ajuste.permisos.ts#validarCorreccion` desde el
+ * service. Poner un `requiereRol` aca ademas seria una segunda lista de roles
+ * que alguien tiene que acordarse de actualizar.
+ *
+ * PATCH y no PUT: ver el comentario del controller.
+ */
+hojasRouter.patch(
+  '/:id/conteos/:productoId/corregir',
+  validar(parametrosConteoSchema, 'params'),
+  validar(corregirConteoSchema, 'body'),
+  controller.corregirConteo,
+);

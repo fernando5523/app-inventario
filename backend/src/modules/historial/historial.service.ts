@@ -16,10 +16,14 @@ import {
   calcularResumenLiquidacion,
   calcularTotalDescuento,
   compararPeriodosPorSucursal,
+  redondear,
   resumirHistoricoItem,
   type PuntoComparativoConSucursal,
 } from './historial.calculos';
-import { resolverMontosDeClasificacion } from '../liquidacion/liquidacion.reclasificacion';
+import { aplicarClasificacionVigente, resolverMontosDeClasificacion } from '../liquidacion/liquidacion.reclasificacion';
+import { armarMatriz } from '../auditoria/auditoria.service';
+import { cuadrosParaExportar } from '../auditoria/auditoria.calculos';
+import { armarLibroDeCuadros, nombreArchivoCuadros } from './historial.exportar-cuadros';
 import { bonoBase } from '../../dominio/reparto-de-fondo';
 import {
   armarLibroDiferencias,
@@ -187,6 +191,7 @@ async function resumirResultado(
           montoFaltanteBruto: aNumeroObligatorio(r.montoFaltanteBruto),
           montoNegativos: aNumeroObligatorio(r.montoNegativos!),
           montoFaltanteEmpresa: montos.montoFaltanteEmpresa,
+          montoFaltantePaquete: montos.montoFaltantePaquete,
           montoSobranteEmpleado: montos.montoSobranteEmpleado,
           colaboradoresAlcanzados: r.colaboradoresAlcanzados,
           colaboradoresAsistieron: r.colaboradoresAsistieron!,
@@ -229,10 +234,18 @@ async function resumirResultado(
  *      a los inventarios cerrados con la regla VIEJA (multa fija por ausente,
  *      `diasDelInventario` en 0): sus multas viven congeladas y no se
  *      reinterpretan con la formula nueva.
- *   2. Las MARCAS, para el que todavia no se liquido. Como cada marca es un
- *      dia-persona presente (@@unique), los dias faltados de todo el
- *      inventario son `alcanzados x dias - marcas`. Sale de un `count`, sin
- *      traer una fila.
+ *   2. Las MARCAS Y LAS JUSTIFICACIONES, para el que todavia no se liquido.
+ *      Cada marca es un dia-persona presente y cada justificacion es un
+ *      dia-persona perdonado (las dos tablas tienen el mismo @@unique), asi
+ *      que los dias faltados COBRABLES de todo el inventario son
+ *      `alcanzados x dias - marcas - justificaciones`. Salen de dos `count`,
+ *      sin traer una fila.
+ *
+ *      Las justificaciones restan por la misma razon que en la planilla: un
+ *      dia perdonado no se cobra, asi que no entra al fondo. Si no se
+ *      restaran, el historico mostraria un fondo mas grande que el que la
+ *      planilla va a repartir -- y `diasFaltadosEnTotal x tarifa` dejaria de
+ *      dar `fondoMultas`, que es la invariante que ese campo promete.
  */
 async function fondoYBonoReales(
   inventarioId: number,
@@ -248,12 +261,19 @@ async function fondoYBonoReales(
   if (firmada._count > 0) {
     fondoMultas = aNumero(firmada._sum.multaInasistencia) ?? 0;
   } else {
-    const marcas = await prisma.asistenciaInventario.count({ where: { inventarioId } });
+    const [marcas, justificaciones] = await Promise.all([
+      prisma.asistenciaInventario.count({ where: { inventarioId } }),
+      prisma.justificacionAsistencia.count({ where: { inventarioId } }),
+    ]);
     // `Math.max(0, ...)` por lo mismo que `multaPorInasistencia` nunca es
-    // negativa: una marca de alguien que ya no esta en el padron alcanzado
-    // haria que las marcas superen a los dia-persona posibles, y un fondo
-    // negativo es plata que la empresa le estaria devolviendo a todos.
-    const diasFaltadosEnTotal = Math.max(0, r.colaboradoresAlcanzados * r.diasDelInventario - marcas);
+    // negativa: una marca -- o una justificacion -- de alguien que ya no esta
+    // en el padron alcanzado haria que superen a los dia-persona posibles, y
+    // un fondo negativo es plata que la empresa le estaria devolviendo a
+    // todos.
+    const diasFaltadosEnTotal = Math.max(
+      0,
+      r.colaboradoresAlcanzados * r.diasDelInventario - marcas - justificaciones,
+    );
     fondoMultas = (Math.round(r.tarifaPorDia * 100) * diasFaltadosEnTotal) / 100;
   }
 
@@ -412,6 +432,7 @@ export async function obtenerDetalle(actor: ColaboradorAutenticado, id: number):
           montoFaltanteBruto: aNumeroObligatorio(resultado.montoFaltanteBruto),
           montoNegativos: aNumeroObligatorio(resultado.montoNegativos!),
           montoFaltanteEmpresa: montos.montoFaltanteEmpresa,
+          montoFaltantePaquete: montos.montoFaltantePaquete,
           montoSobranteEmpleado: montos.montoSobranteEmpleado,
           colaboradoresAlcanzados: resultado.colaboradoresAlcanzados,
           colaboradoresAsistieron: resultado.colaboradoresAsistieron!,
@@ -633,6 +654,98 @@ export async function exportarDiferencias(actor: ColaboradorAutenticado, id: num
 }
 
 /**
+ * EL .XLSX CON EL FORMATO DEL CLIENTE: los cuatro cuadros, empresa y descuento,
+ * tal como Gilmer los arma a mano (`historial.exportar-cuadros.ts`).
+ *
+ * MISMOS PERMISOS Y MISMA VENTANA que `exportarDiferencias` de arriba: el
+ * auditor recortado a su sucursal, el administrador sin recorte, y SIN exigir
+ * lacrado -- sirve desde que hay diferencias calculadas. Se eligio igual a
+ * proposito y no mas estricto: son dos vistas del MISMO hecho (las diferencias
+ * del inventario), y darle a una un permiso distinto obligaria a explicar por
+ * que se puede ver el dato en un formato y no en el otro.
+ *
+ * LOS TOTALES SALEN DEL MISMO CALCULO QUE EL PANEL DE AUDITORIA
+ * (`auditoria.calculos.ts#cuadrosParaExportar`, que pasa por `repartoDelItem`).
+ * Si el Excel dijera un numero y la app otro, la discusion con el cliente esta
+ * perdida antes de empezar -- y este archivo es justo el que el va a poner al
+ * lado del suyo.
+ *
+ * LA HOJA DE DESCUENTO Y LA PLANILLA: las filas por persona salen de
+ * `LiquidacionColaborador`, o sea que aparecen una vez que la planilla se
+ * CERRO. Antes de liquidar, la hoja sale con los totales y la cuota pero sin
+ * el detalle por persona: esa planilla todavia no es firme, y mostrarla como
+ * si lo fuera en un archivo que se manda por correo es peor que no mostrarla.
+ */
+export async function exportarCuadros(
+  actor: ColaboradorAutenticado,
+  id: number,
+): Promise<{ buffer: Buffer; nombreArchivo: string }> {
+  const inv = await traerInventarioOFallar(actor, id, {
+    sucursal: { select: { nombre: true } },
+    resultado: true,
+    liquidaciones: { orderBy: { colaboradorId: 'asc' } },
+  });
+
+  // La MISMA matriz que ve el Auditor, con la clasificacion vigente aplicada:
+  // no se recalcula nada aparte para el archivo.
+  const matriz = await aplicarClasificacionVigente(id, inv.estado, await armarMatriz(id));
+  const umbral = await umbralDelInventario(id);
+  const cuadros = cuadrosParaExportar(matriz, umbral);
+
+  const totalDe = (filas: readonly { total: number | null }[]): number =>
+    redondear(filas.reduce((suma, f) => suma + (f.total ?? 0), 0));
+  const totalFaltantes = totalDe(cuadros.faltantesUnicos);
+  const totalSobrantes = totalDe(cuadros.sobrantesUnicos);
+  const diferencia = redondear(totalFaltantes + totalSobrantes);
+
+  const personas = inv.resultado?.colaboradoresAlcanzados ?? inv.liquidaciones.length;
+  const cuotaBase =
+    inv.liquidaciones[0] !== undefined
+      ? aNumeroObligatorio(inv.liquidaciones[0].cuotaBase)
+      : personas === 0
+        ? 0
+        : redondear(diferencia / personas);
+
+  return {
+    buffer: await armarLibroDeCuadros({
+      sucursal: inv.sucursal.nombre,
+      ...cuadros,
+      descuento: {
+        totalFaltantes,
+        totalSobrantes,
+        diferencia,
+        personas,
+        cuotaBase,
+        planilla: inv.liquidaciones.map((l) => {
+          const cuota = aNumeroObligatorio(l.cuotaBase);
+          // La asistencia en UNA columna con signo, como en su archivo: la
+          // multa descuenta y el bono devuelve. El total es la suma de las
+          // tres partes -- nunca una columna guardada (ver historial.calculos.ts).
+          const asistencia = redondear(aNumeroObligatorio(l.bonoAsistencia) - aNumeroObligatorio(l.multaInasistencia));
+          return {
+            nombre: l.nombreAlLiquidar,
+            dni: '',
+            cuotaBase: -cuota,
+            asistencia,
+            total: redondear(-cuota + asistencia),
+          };
+        }),
+      },
+    }),
+    nombreArchivo: nombreArchivoCuadros(inv.sucursal.nombre, inv.periodoAnio, inv.periodoMes, id),
+  };
+}
+
+/** El umbral CONGELADO del inventario -- ver schema.prisma. */
+async function umbralDelInventario(inventarioId: number): Promise<number> {
+  const inv = await prisma.inventario.findUnique({
+    where: { id: inventarioId },
+    select: { umbralMediaUnidadPaquete: true },
+  });
+  return inv?.umbralMediaUnidadPaquete?.toNumber() ?? 0.5;
+}
+
+/**
  * El .xlsx de VARIAS tiendas (o todas) en un mismo período -- pedido del
  * cliente (2026-09-09): una tienda, un subconjunto, o todas. UNA sola hoja
  * con las filas de todos los inventarios que matcheen, en el MISMO formato
@@ -769,6 +882,7 @@ export async function obtenerLiquidacion(actor: ColaboradorAutenticado, id: numb
           montoFaltanteBruto: aNumeroObligatorio(r.montoFaltanteBruto),
           montoNegativos: aNumeroObligatorio(r.montoNegativos!),
           montoFaltanteEmpresa: montos.montoFaltanteEmpresa,
+          montoFaltantePaquete: montos.montoFaltantePaquete,
           montoSobranteEmpleado: montos.montoSobranteEmpleado,
           colaboradoresAlcanzados: r.colaboradoresAlcanzados,
           colaboradoresAsistieron: r.colaboradoresAsistieron!,
@@ -825,6 +939,9 @@ export async function obtenerLiquidacion(actor: ColaboradorAutenticado, id: numb
         // Congelados al liquidar. `diasAsistidos` es lo que hace auditable la
         // multa: sin el, "S/40" con tarifa 20 obliga a recontar marcas.
         diasAsistidos: l.diasAsistidos,
+        // La otra mitad de la explicacion: sin esto, "1 de 3 dias" al lado de
+        // "multa S/0" es una fila que no cierra y que nadie puede defender.
+        diasJustificados: l.diasJustificados,
         cuotaBase,
         multaInasistencia,
         bonoAsistencia,
@@ -915,6 +1032,10 @@ function armarDatosLacrado(inv: InventarioParaSello): DatosLacrado {
       // `liquidaciones_colaborador` no tiene trigger de inmutabilidad -- el
       // hash es lo unico que protege esta tabla.
       diasAsistidos: l.diasAsistidos,
+      // Entra al hash desde la v4. Sin el, la cuenta de la multa no cierra en
+      // el propio documento firmado: `(dias - asistidos) x tarifa` da otra
+      // cosa en cuanto hay una falta perdonada. Ver VERSION_CONTENIDO_LACRADO.
+      diasJustificados: l.diasJustificados,
       cuotaBase: aNumeroObligatorio(l.cuotaBase),
       multaInasistencia: aNumeroObligatorio(l.multaInasistencia),
       bonoAsistencia: aNumeroObligatorio(l.bonoAsistencia),
@@ -1433,6 +1554,7 @@ export async function comparativo(
       montoFaltanteBruto: aNumeroObligatorio(f.resultado.montoFaltanteBruto),
       montoNegativos: aNumeroObligatorio(f.resultado.montoNegativos!),
       montoFaltanteEmpresa: montos.montoFaltanteEmpresa,
+          montoFaltantePaquete: montos.montoFaltantePaquete,
       montoSobranteEmpleado: montos.montoSobranteEmpleado,
       colaboradoresAlcanzados: f.resultado.colaboradoresAlcanzados,
       colaboradoresAsistieron: f.resultado.colaboradoresAsistieron!,

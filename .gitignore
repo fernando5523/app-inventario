@@ -39,3 +39,11 @@ _*.xml
 mobile/design/_*
 .claude/*.lock
 
+
+# El Excel del cliente (INVENTARIO MES DE JULIO ... .xlsx) — NO se versiona.
+# Su hoja ASISTENCIA trae nombres y DNI de personas reales, y este repo tiene
+# remoto en GitHub: subirlo publica datos personales de la gente de la tienda.
+# Las transcripciones sí quedan (ya estaban versionadas) porque son la fuente
+# de los requisitos. Si algún día hace falta el formato del Excel, se replica
+# en un archivo de ejemplo con datos inventados.
+requerimiento/*.xlsx

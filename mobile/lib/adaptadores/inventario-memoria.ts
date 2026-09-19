@@ -16,6 +16,7 @@ import {
   registrarInventario,
   simularLatencia,
 } from './_compartido';
+import { cerrarRondaEnMemoria, estadoDeInventarioEnMemoria, rondaActivaEnMemoria } from './ajuste-memoria';
 import { configDynamicsMemoria } from './config-dynamics-memoria';
 import { sesionMemoria } from './sesion-memoria';
 import { pluralizar } from '../dominio/plural';
@@ -168,6 +169,12 @@ export const inventarioMemoria: RepositorioInventario = {
     // siguiente de forma fiel: el mock no simula eso. Devuelve un cierre sin
     // ronda nueva, dicho como lo que es. El camino completo (abrir la 2da con
     // lo que no cuadró) se ejercita contra el backend.
+    // La ronda queda CERRADA también para `activo()`. Sin esto el mock seguía
+    // diciendo que estaba abierta, y entonces ni la ventana del Coordinador
+    // (corregir con la ronda ya cerrada) ni los botones del Auditor -- que
+    // aparecen justo cuando no hay ronda activa -- se veían nunca.
+    cerrarRondaEnMemoria(inventarioId);
+
     return {
       inventarioId,
       rondaCerrada: ronda,
@@ -178,20 +185,32 @@ export const inventarioMemoria: RepositorioInventario = {
     };
   },
 
+  /**
+   * Devuelve el inventario ABIERTO, que desde el ajuste final ya no es solo
+   * `en_curso`: también `ajuste_auditor`. El estado y la ronda salen de
+   * `ajuste-memoria.ts`, que es donde el mock lleva la fase de cierre -- si
+   * los inventara acá, cerrar una ronda o iniciar el ajuste no cambiaría nada
+   * en pantalla y los botones del Auditor parecerían rotos.
+   */
   async activo(sucursalId) {
     await simularLatencia();
     const inventario = await obtenerInventarioDeSucursal(sucursalId);
     if (!inventario) return null;
 
+    const estado = estadoDeInventarioEnMemoria(inventario.id);
+    // Cerrado el conteo el inventario deja de estar abierto: `activo()`
+    // devuelve null y las pantallas caen a su camino de "ya cerró" (el
+    // historial, en el caso del Ciclo).
+    if (estado !== 'en_curso' && estado !== 'ajuste_auditor') return null;
+
     return {
       inventarioId: inventario.id,
+      estado,
       items: inventario.snapshotItems,
       tomadoEn: inventario.snapshotTomadoEn,
       tamanoHoja: inventario.tamanoHoja,
       totalHojas: inventario.hojas.length,
-      // El mock solo tiene la ronda 1 sembrada: con hojas, la activa es la 1;
-      // sin hojas, null (mismo momento que `tamanoHoja: null`).
-      rondaActiva: inventario.hojas.length > 0 ? 1 : null,
+      rondaActiva: rondaActivaEnMemoria(inventario.id, inventario.hojas.length > 0),
     };
   },
 };

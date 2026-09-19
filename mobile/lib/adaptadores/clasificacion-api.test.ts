@@ -36,9 +36,14 @@ const PRODUCTO = {
   descripcion: 'Cerveza Pilsen 620ml',
   categoria: 'CERVEZAS',
   responsableDynamics: 'empleado',
+  claseDynamics: 'unidad',
+  empaqueCompra: 12,
+  empaqueCompraSimbolo: 'Emp.12',
   clasificacion: {
     codigo: 'CERV-001',
     esEmpresa: true,
+    clase: 'empresa',
+    empaqueCompraCorregido: null,
     nota: 'Robo: la asume la empresa',
     clasificadoPorId: 103,
     clasificadoEn: '2026-09-11T12:00:00.000Z',
@@ -96,27 +101,81 @@ describe('buscar', () => {
 });
 
 describe('clasificar', () => {
-  it('PUT /api/clasificacion/:codigo con { esEmpresa, nota } y devuelve la clasificación', async () => {
+  it('PUT /api/clasificacion/:codigo con { clase, nota } y devuelve la clasificación', async () => {
     const fn = stubFetch(json(PRODUCTO.clasificacion));
-    const clas = await clasificacionApi.clasificar('CERV-001', { esEmpresa: true, nota: 'Robo: la asume la empresa' });
+    const clas = await clasificacionApi.clasificar('CERV-001', { clase: 'empresa', nota: 'Robo: la asume la empresa' });
 
     const [url, init] = fn.mock.calls[0]!;
     expect(url).toBe(`${BASE}/api/clasificacion/CERV-001`);
     expect(init.method).toBe('PUT');
-    expect(JSON.parse(init.body as string)).toEqual({ esEmpresa: true, nota: 'Robo: la asume la empresa' });
+    // `empaqueCompraCorregido` viaja SIEMPRE, aunque sea null: es un PUT y el
+    // cuerpo declara la excepción entera. Omitirlo cuando el Auditor borró la
+    // corrección dejaría viva la anterior.
+    expect(JSON.parse(init.body as string)).toEqual({
+      clase: 'empresa',
+      empaqueCompraCorregido: null,
+      nota: 'Robo: la asume la empresa',
+    });
+    expect(clas.clase).toBe('empresa');
     expect(clas.esEmpresa).toBe(true);
+  });
+
+  /**
+   * `esEmpresa` NO VIAJA en el cuerpo: lo deriva el servidor de la clase. Es
+   * lo que impide que las dos columnas discrepen -- si la app mandara las dos,
+   * un bug de la pantalla podría escribir `paquete` con `esEmpresa: true` y la
+   * liquidación quedaría mirando una cosa distinta de la auditoría.
+   */
+  it('NUNCA manda esEmpresa: la invariante se cumple porque solo hay una fuente', async () => {
+    const fn = stubFetch(json(PRODUCTO.clasificacion));
+    await clasificacionApi.clasificar('CERV-001', { clase: 'paquete' });
+    expect(JSON.parse(fn.mock.calls[0]![1].body as string)).not.toHaveProperty('esEmpresa');
+  });
+
+  it.each(['empresa', 'paquete', 'unidad'] as const)('manda la clase %s tal cual', async (clase) => {
+    const fn = stubFetch(json({ ...PRODUCTO.clasificacion, clase }));
+    await clasificacionApi.clasificar('CERV-001', { clase });
+    expect(JSON.parse(fn.mock.calls[0]![1].body as string)).toEqual({ clase, empaqueCompraCorregido: null });
   });
 
   it('sin nota: no manda la clave nota', async () => {
     const fn = stubFetch(json({ ...PRODUCTO.clasificacion, nota: null }));
-    await clasificacionApi.clasificar('CERV-001', { esEmpresa: true });
-    expect(JSON.parse(fn.mock.calls[0]![1].body as string)).toEqual({ esEmpresa: true });
+    await clasificacionApi.clasificar('CERV-001', { clase: 'empresa' });
+    expect(JSON.parse(fn.mock.calls[0]![1].body as string)).toEqual({ clase: 'empresa', empaqueCompraCorregido: null });
+  });
+
+  /** Una excepción vieja llega con `clase: null` y SE PASA ASÍ: no se rellena. */
+  it('una clasificación con clase null llega sin reinterpretarse', async () => {
+    stubFetch(json({ ...PRODUCTO.clasificacion, clase: null }));
+    const clas = await clasificacionApi.clasificar('CERV-001', { clase: 'empresa' });
+    expect(clas.clase).toBeNull();
   });
 
   it('codigo con caracteres especiales va URL-encoded en la ruta', async () => {
     const fn = stubFetch(json(PRODUCTO.clasificacion));
-    await clasificacionApi.clasificar('A/B 1', { esEmpresa: false });
+    await clasificacionApi.clasificar('A/B 1', { clase: 'unidad' });
     expect(fn.mock.calls[0]![0]).toBe(`${BASE}/api/clasificacion/A%2FB%201`);
+  });
+
+  /**
+   * EL EMPAQUE CORREGIDO viaja al servidor y vuelve en el DTO. CORREGIR EL
+   * EMPAQUE NO ES CORREGIR EL STOCK: no hay ningún campo de stock en este
+   * cuerpo, y no lo va a haber.
+   */
+  it('manda el empaque corregido y lo devuelve en la clasificación', async () => {
+    const fn = stubFetch(json({ ...PRODUCTO.clasificacion, clase: 'paquete', empaqueCompraCorregido: 12 }));
+
+    const clas = await clasificacionApi.clasificar('105621', { clase: 'paquete', empaqueCompraCorregido: 12 });
+
+    expect(JSON.parse(fn.mock.calls[0]![1].body as string)).toMatchObject({ empaqueCompraCorregido: 12 });
+    expect(clas.empaqueCompraCorregido).toBe(12);
+  });
+
+  it('el cuerpo nunca lleva stock: el del ERP no se edita desde ningún lado', async () => {
+    const fn = stubFetch(json(PRODUCTO.clasificacion));
+    await clasificacionApi.clasificar('105621', { clase: 'paquete', empaqueCompraCorregido: 12 });
+    const cuerpo = JSON.parse(fn.mock.calls[0]![1].body as string);
+    expect(Object.keys(cuerpo)).toEqual(['clase', 'empaqueCompraCorregido']);
   });
 });
 

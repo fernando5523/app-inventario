@@ -1,5 +1,5 @@
 /**
- * Comparación de un ítem contra Dynamics tras el ciclo de 3 conteos.
+ * Comparación de un ítem contra Dynamics tras el ciclo de conteos.
  *
  * ESPEJA backend/src/modules/auditoria/auditoria.calculos.ts, función por
  * función y con las MISMAS reglas. La cuenta que decide si el inventario
@@ -21,19 +21,29 @@
  * ---------------------------------------------------------------------------
  */
 
-import type { ItemAuditoria, VeredictoAuditoria } from './tipos';
+import type { AtribucionItem, ItemAuditoria, VeredictoAuditoria } from './tipos';
 
 /**
- * El conteo que queda fijo para liquidar: el ÚLTIMO que se hizo. Si un ítem
- * cuadró en el 1er o 2do conteo no hay 3ro (ni 2do), así que se toma el más
- * avanzado que exista y no siempre `conteo3` — `null` si nadie lo contó.
+ * El conteo que queda fijo para liquidar: el ÚLTIMO NO NULO de la lista. Si un
+ * ítem cuadró en el 1er conteo no hay 2do ni 3ro, así que se toma el más
+ * avanzado que exista — `null` si nadie lo contó.
+ *
+ * Recorre DE ATRÁS PARA ADELANTE y no con una cadena de `??` de tres
+ * posiciones: así vale igual para un inventario de 3 rondas, uno de 5, o uno
+ * donde el auditor agregó su ajuste final al final de la lista. Era
+ * `conteo3 ?? conteo2 ?? conteo1`, y esa cadena es la que impedía el 4to
+ * conteo que pidió el cliente.
  */
-export function conteoFinal(item: Pick<ItemAuditoria, 'conteo1' | 'conteo2' | 'conteo3'>): number | null {
-  return item.conteo3 ?? item.conteo2 ?? item.conteo1 ?? null;
+export function conteoFinal(item: Pick<ItemAuditoria, 'conteos'>): number | null {
+  for (let i = item.conteos.length - 1; i >= 0; i--) {
+    const valor = item.conteos[i];
+    if (valor !== null && valor !== undefined) return valor;
+  }
+  return null;
 }
 
 /** true si hay con qué comparar: stock del ERP Y algún conteo. */
-export function esAuditable(item: Pick<ItemAuditoria, 'stockErp' | 'conteo1' | 'conteo2' | 'conteo3'>): boolean {
+export function esAuditable(item: Pick<ItemAuditoria, 'stockErp' | 'conteos'>): boolean {
   return item.stockErp !== null && conteoFinal(item) !== null;
 }
 
@@ -45,7 +55,7 @@ export function esAuditable(item: Pick<ItemAuditoria, 'stockErp' | 'conteo1' | '
  * no puede ser también el valor de "no tengo idea". Esta distinción es lo
  * único que impide que un catálogo sin contar se reporte como perfecto.
  */
-export function diferenciaUnidades(item: Pick<ItemAuditoria, 'conteo1' | 'conteo2' | 'conteo3' | 'stockErp'>): number | null {
+export function diferenciaUnidades(item: Pick<ItemAuditoria, 'conteos' | 'stockErp'>): number | null {
   const final = conteoFinal(item);
   if (item.stockErp === null || final === null) return null;
   return final - item.stockErp;
@@ -79,15 +89,19 @@ export function veredicto(item: ItemAuditoria): VeredictoAuditoria {
 }
 
 /**
- * La ronda en la que quedó fijado el ítem: 1, 2 o 3 — o `0` si nadie lo contó.
- * El badge "Cuadró en Ner" sale de acá: NUNCA de un default a la 3ra (ese era
- * el bug — un ítem sin contar mostraba "Cuadró en 3er", nombrando una ronda
- * que no ocurrió).
+ * La POSICIÓN (1-based) del último conteo no nulo — o `0` si nadie lo contó.
+ * Ya no tiene techo en 3: con un 4to o 5to conteo devuelve 4 o 5.
+ *
+ * El badge "Cuadró en Ner" sale de acá: NUNCA de un default a la última ronda
+ * (ese era el bug — un ítem sin contar mostraba "Cuadró en 3er", nombrando
+ * una ronda que no ocurrió).
  */
-export function rondasNecesarias(item: Pick<ItemAuditoria, 'conteo1' | 'conteo2' | 'conteo3'>): number {
-  if (item.conteo3 !== null) return 3;
-  if (item.conteo2 !== null) return 2;
-  return item.conteo1 !== null ? 1 : 0;
+export function rondasNecesarias(item: Pick<ItemAuditoria, 'conteos'>): number {
+  for (let i = item.conteos.length - 1; i >= 0; i--) {
+    const valor = item.conteos[i];
+    if (valor !== null && valor !== undefined) return i + 1;
+  }
+  return 0;
 }
 
 /**
@@ -180,4 +194,101 @@ export function resumirAuditoria(items: readonly ItemAuditoria[]): ResumenAudito
   }
 
   return r;
+}
+
+// ---------------------------------------------------------------------------
+// A qué cuadro fue cada ítem, y por qué
+// ---------------------------------------------------------------------------
+
+/**
+ * Los cuatro destinos que el Auditor puede leer en una fila. `null` = la
+ * diferencia no se pudo repartir (sin stock del ERP, sin contar, o cuadró):
+ * NO es un cuadro más, y por eso no se inventa uno.
+ */
+export type CuadroDelItem = 'personal' | 'paquetes' | 'empresa' | null;
+
+/**
+ * A QUÉ CUADRO FUE ESTE ÍTEM, leído del reparto que ya resolvió el servidor.
+ *
+ * Se mira cuál de las tres `unidadesA*` es distinta de cero, y NO la `clase`:
+ * son cosas distintas y confundirlas es un error caro. Medido contra el
+ * escenario real (inventario 8059): los tres ítems con diferencia tienen
+ * `clase: 'paquete'`, pero uno de ellos —diferencia de 2 sobre un empaque de
+ * 6— se le descuenta AL PERSONAL, porque no llega a medio empaque. Con la clase
+ * sola, la fila habría dicho "va a paquetes" sobre plata que sí se descuenta.
+ */
+export function cuadroDelItem(a: AtribucionItem): CuadroDelItem {
+  if (a.unidadesAPaquetes !== 0) return 'paquetes';
+  if (a.unidadesAEmpresa !== 0) return 'empresa';
+  if (a.unidadesAlPersonal !== 0) return 'personal';
+  return null;
+}
+
+/** El nombre del cuadro, con las palabras del cliente. */
+export function textoCuadro(cuadro: Exclude<CuadroDelItem, null>): string {
+  if (cuadro === 'paquetes') return 'Va a paquetes';
+  if (cuadro === 'empresa') return 'Lo asume la empresa';
+  return 'Se le descuenta al personal';
+}
+
+/**
+ * EL EMPAQUE CON EL QUE SE MIDIÓ, listo para leer.
+ *
+ * EL SÍMBOLO DEL ERP VA TAL CUAL Y SOLO: "Emp.6", no "empaque 6 (Emp.6)".
+ * Regla del usuario para toda la app — los empaques de Dynamics se muestran
+ * como vinieron, sin anteponerles una palabra nuestra ni traducirlos a chico,
+ * grande o display. El porqué ya está escrito en el schema, al lado de la
+ * columna: si mañana alguien discute un descuento, la respuesta es "el ERP
+ * dice Emp.12", no "el sistema calculó 12". Anteponerle "empaque" repetía el
+ * dato (el símbolo ya lo dice) y le ponía nuestra voz a un nombre ajeno.
+ *
+ * EL CASO CORREGIDO NO TIENE SÍMBOLO, y por eso ahí sí va el número: el
+ * Auditor lo tecleó a mano y `empaqueSimbolo` sigue describiendo el empaque
+ * DEL SNAPSHOT. Pegarlos diría algo falso — el caso real del escenario es
+ * `empaqueUsado: 12` con `empaqueSimbolo: "U"`, y "12 (U)" se lee como "doce
+ * unidades sueltas", justo lo contrario de lo que pasó. Se dice de quién es
+ * el número ("corregido por el auditor") para que nadie lo lea como un dato
+ * de Dynamics.
+ *
+ * `null` cuando no hubo empaque con el cual medir.
+ */
+export function textoEmpaqueUsado(a: AtribucionItem): string | null {
+  if (a.empaqueUsado === null) return null;
+  if (a.empaqueEsCorregido) return `${a.empaqueUsado}, corregido por el auditor`;
+  // Sin símbolo queda el número pelado, que es lo único honesto que se puede
+  // decir. No es un caso esperado: el snapshot saca los dos campos del MISMO
+  // objeto (`d365-catalogo.service.ts#empaqueDeCompra`), así que vienen juntos
+  // o vienen los dos en null. Es una red, no una rama de negocio.
+  return a.empaqueSimbolo ?? String(a.empaqueUsado);
+}
+
+/**
+ * POR QUÉ FUE A ESE CUADRO — el "hay que indicar" que pidió el cliente: la
+ * cantidad, el empaque con el que se midió y la razón entre los dos.
+ *
+ * Sin esto el Auditor solo puede creerle a la pantalla; con esto puede
+ * discutirlo. `null` cuando no hay nada que explicar (sin empaque, o sin razón
+ * calculable): antes que una explicación a medias, ninguna.
+ *
+ * `formatoRazon` viene inyectado, como en `comparativo-ronda.ts`: el dominio
+ * no formatea números (los datos ICU de es-PE no están garantizados en Hermes).
+ */
+export function textoPorQueCuadro(
+  a: AtribucionItem,
+  diferenciaUnidades: number,
+  formatoRazon: (n: number) => string,
+): string | null {
+  const empaque = textoEmpaqueUsado(a);
+  if (empaque === null || a.razon === null) return null;
+  const magnitud = Math.abs(diferenciaUnidades);
+  const verbo = diferenciaUnidades < 0 ? 'faltan' : 'sobran';
+  // "empaques" y NO "cajas": el ERP dice Emp.6, no dice caja. Un Emp.6 puede
+  // ser un six pack, una plancha o un display; llamarlo caja es afirmar una
+  // presentación que no sabemos. "Empaque" es la palabra del propio símbolo
+  // ("Emp." la abrevia), así que nombra la unidad sin inventar nada.
+  //
+  // Y separa con "·", no con coma: el caso corregido ya trae una coma adentro
+  // ("12, corregido por el auditor") y encadenarle otra daba
+  // "...el auditor, faltan 21", que se lee como si al auditor le faltaran 21.
+  return `${empaque} · ${verbo} ${magnitud}: ${formatoRazon(a.razon)} empaques`;
 }

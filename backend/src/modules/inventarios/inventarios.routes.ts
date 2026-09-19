@@ -5,8 +5,10 @@ import { requiereRol } from '../../middleware/autorizacion.middleware';
 import { validar } from '../../middleware/validation.middleware';
 import * as controller from './inventarios.controller';
 import {
+  ajustarConteoSchema,
   asignarHojasSchema,
   crearHojasSchema,
+  parametrosAjusteSchema,
   parametrosInventarioSchema,
   parametrosRondaSchema,
   parametrosSucursalSchema,
@@ -88,4 +90,52 @@ sucursalesInventariosRouter.get(
   '/:sucursalId/inventarios/activo',
   validar(parametrosSucursalSchema, 'params'),
   controller.activo,
+);
+
+// ---------------------------------------------------------------------------
+// EL TRAMO DEL AUDITOR: rondas extra y ajuste final
+//
+// Cuatro rutas nuevas que existen porque cerrar la ultima ronda ya NO cierra
+// el conteo: el inventario queda esperando una decision del Auditor.
+//
+// NINGUNA lleva `requiereRol`, y es deliberado. El rol solo no alcanza para
+// decidir ninguna de las cuatro: todas dependen ADEMAS del estado del
+// inventario (`en_curso` contra `ajuste_auditor`), y esas ventanas viven
+// juntas en `ajuste.permisos.ts` para que no se contradigan. Un `requiereRol`
+// aca seria media regla escrita en otro archivo -- la mitad que alguien
+// actualizaria sin mirar la otra. Los rechazos igual salen con el 403 y el
+// mensaje correctos, desde el service.
+// ---------------------------------------------------------------------------
+
+/** Un 4to conteo, un 5to: los abre el Auditor, de a uno, cuando hace falta. */
+inventariosRouter.post(
+  '/:inventarioId/rondas/abrir',
+  validar(parametrosInventarioSchema, 'params'),
+  controller.abrirRondaExtra,
+);
+
+/**
+ * ARRANCA EL AJUSTE. Es un boton y no un automatismo al cerrar la ultima
+ * ronda: esa espera es la ventana en la que el Coordinador todavia corrige
+ * (ver ajuste.permisos.ts). A partir de aca queda bloqueado.
+ */
+inventariosRouter.post(
+  '/:inventarioId/ajuste/iniciar',
+  validar(parametrosInventarioSchema, 'params'),
+  controller.iniciarAjuste,
+);
+
+/** Cambia un valor del ultimo conteo. LA UNICA respuesta que trae stockErp. */
+inventariosRouter.patch(
+  '/:inventarioId/ajuste/:productoId',
+  validar(parametrosAjusteSchema, 'params'),
+  validar(ajustarConteoSchema, 'body'),
+  controller.ajustarConteo,
+);
+
+/** Cierra el ajuste y con el, el conteo: `ajuste_auditor` -> `conteo_cerrado`. */
+inventariosRouter.post(
+  '/:inventarioId/ajuste/cerrar',
+  validar(parametrosInventarioSchema, 'params'),
+  controller.cerrarAjuste,
 );

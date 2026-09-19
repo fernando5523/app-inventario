@@ -3,6 +3,7 @@ import { asyncHandler } from '../../shared/asyncHandler';
 import type { RequestAutenticado } from '../../shared/tipos';
 import * as service from './hojas.service';
 import type {
+  CorregirConteoInput,
   GuardarConteoInput,
   ListarHojasQuery,
   ParametrosBarras,
@@ -43,4 +44,18 @@ export const guardarConteo = asyncHandler(async (req: RequestAutenticado, res: R
 export const finalizar = asyncHandler(async (req: RequestAutenticado, res: Response) => {
   const { id } = req.params as unknown as ParametrosHoja;
   res.json(await service.finalizar(actorDe(req), id));
+});
+
+/**
+ * LA CORRECCION DEL COORDINADOR. PATCH y no PUT: cambia el valor de un
+ * conteo que YA existe -- `PUT /:id/conteos/:productoId` es el que lo crea o
+ * lo reemplaza desde la gondola. Dos verbos para dos operaciones que escriben
+ * la misma fila con permisos, ventanas y reglas distintas.
+ *
+ * La respuesta NO lleva stock: ver `hojas.service.ts#corregirConteo`.
+ */
+export const corregirConteo = asyncHandler(async (req: RequestAutenticado, res: Response) => {
+  const { id, productoId } = req.params as unknown as ParametrosConteo;
+  const input = req.body as CorregirConteoInput;
+  res.json(await service.corregirConteo(actorDe(req), id, productoId, input));
 });

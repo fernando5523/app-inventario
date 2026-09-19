@@ -35,6 +35,11 @@ function itemCatalogo(over: Record<string, unknown> = {}) {
     descripcion: 'Cerveza Pilsen 620ml',
     categoria: 'CERVEZAS',
     responsable: 'empleado',
+    // La clase derivada por el snapshot y el empaque de compra: referencia
+    // para el Auditor, nunca algo que esta pantalla escriba.
+    clase: 'unidad',
+    empaqueCompra: 12,
+    empaqueCompraSimbolo: 'Emp.12',
     ...over,
   };
 }
@@ -44,6 +49,8 @@ function filaClasificacion(over: Record<string, unknown> = {}) {
     id: 7,
     codigo: 'CERV-001',
     esEmpresa: true,
+    clase: 'empresa',
+    empaqueCompraCorregido: null,
     nota: 'Robo: la asume la empresa',
     clasificadoPorId: 103,
     clasificadoEn: new Date('2026-09-11T12:00:00.000Z'),
@@ -129,6 +136,34 @@ describe('buscar: el catalogo con lo de Dynamics y lo del Auditor, por separado'
     expect(productos[0]!.responsableDynamics).toBe('empresa');
     expect(productos[0]!.clasificacion).toBeNull();
   });
+
+  /**
+   * El empaque de compra viaja en la busqueda porque es EL DENOMINADOR del
+   * umbral por paquete: elegir "paquete" sin verlo es elegir a ciegas.
+   */
+  it('trae el empaque de compra y la clase derivada por el snapshot', async () => {
+    vi.mocked(prisma.catalogoItem.groupBy).mockResolvedValue([{ codigo: 'X' }] as never);
+    vi.mocked(prisma.catalogoItem.findMany).mockResolvedValue([
+      itemCatalogo({ codigo: 'X', clase: 'paquete', empaqueCompra: 24, empaqueCompraSimbolo: 'Emp.24' }),
+    ] as never);
+
+    const { productos } = await buscar(AUDITOR, { ...QUERY_BASE });
+
+    expect(productos[0]).toMatchObject({ claseDynamics: 'paquete', empaqueCompra: 24, empaqueCompraSimbolo: 'Emp.24' });
+  });
+
+  /** NULL no es 1: sin empaque de compra el umbral no se puede aplicar, y la pantalla tiene que poder decirlo. */
+  it('un item sin empaque de compra viaja con null, nunca con 1', async () => {
+    vi.mocked(prisma.catalogoItem.groupBy).mockResolvedValue([{ codigo: 'X' }] as never);
+    vi.mocked(prisma.catalogoItem.findMany).mockResolvedValue([
+      itemCatalogo({ codigo: 'X', empaqueCompra: null, empaqueCompraSimbolo: null }),
+    ] as never);
+
+    const { productos } = await buscar(AUDITOR, { ...QUERY_BASE });
+
+    expect(productos[0]!.empaqueCompra).toBeNull();
+    expect(productos[0]!.empaqueCompraSimbolo).toBeNull();
+  });
 });
 
 describe('clasificar: upsert por codigo, con quien y cuando', () => {
@@ -136,40 +171,181 @@ describe('clasificar: upsert por codigo, con quien y cuando', () => {
     vi.mocked(prisma.clasificacionProducto.findUnique).mockResolvedValue(null as never);
     vi.mocked(prisma.clasificacionProducto.upsert).mockResolvedValue(filaClasificacion() as never);
 
-    const dto = await clasificar(AUDITOR, 'CERV-001', { esEmpresa: true, nota: 'Robo: la asume la empresa' });
+    const dto = await clasificar(AUDITOR, 'CERV-001', { clase: 'empresa', nota: 'Robo: la asume la empresa' });
 
     const args = vi.mocked(prisma.clasificacionProducto.upsert).mock.calls[0]![0];
     expect(args.where).toEqual({ codigo: 'CERV-001' });
-    expect(args.create).toMatchObject({ codigo: 'CERV-001', esEmpresa: true, nota: 'Robo: la asume la empresa', clasificadoPorId: 103 });
+    expect(args.create).toMatchObject({
+      codigo: 'CERV-001',
+      clase: 'empresa',
+      esEmpresa: true,
+      nota: 'Robo: la asume la empresa',
+      clasificadoPorId: 103,
+    });
     expect(args.create.clasificadoEn).toBeInstanceOf(Date);
-    expect(args.update).toMatchObject({ esEmpresa: true, clasificadoPorId: 103 });
+    expect(args.update).toMatchObject({ clase: 'empresa', esEmpresa: true, clasificadoPorId: 103 });
 
     expect(registrarAuditoria).toHaveBeenCalledWith(
       expect.objectContaining({
         actorId: 103,
         accion: 'clasificacion.creada',
         entidad: 'clasificacion_producto',
-        detalle: expect.objectContaining({ codigo: 'CERV-001', esEmpresa: true }),
+        detalle: expect.objectContaining({ codigo: 'CERV-001', clase: 'empresa', esEmpresa: true }),
       }),
     );
-    expect(dto).toMatchObject({ codigo: 'CERV-001', esEmpresa: true });
+    expect(dto).toMatchObject({ codigo: 'CERV-001', clase: 'empresa', esEmpresa: true });
+  });
+
+  /**
+   * LA INVARIANTE, en las tres vias: `clase == 'empresa'` <=> `esEmpresa`.
+   * `esEmpresa` NO llega del cuerpo -- se deriva -- asi que no hay forma de
+   * escribir una sin la otra. Si esto se afloja, la liquidacion termina
+   * mirando una columna distinta de la que miro la auditoria.
+   */
+  it.each([
+    ['empresa', true],
+    ['paquete', false],
+    ['unidad', false],
+  ] as const)('clase %s escribe esEmpresa %s en las DOS columnas', async (clase, esEmpresa) => {
+    vi.mocked(prisma.clasificacionProducto.findUnique).mockResolvedValue(null as never);
+    vi.mocked(prisma.clasificacionProducto.upsert).mockResolvedValue(filaClasificacion({ clase, esEmpresa }) as never);
+
+    await clasificar(AUDITOR, 'CERV-001', { clase });
+
+    const args = vi.mocked(prisma.clasificacionProducto.upsert).mock.calls[0]![0];
+    expect(args.create).toMatchObject({ clase, esEmpresa });
+    expect(args.update).toMatchObject({ clase, esEmpresa });
   });
 
   it('reclasifica uno existente: auditoria "actualizada" con el valor ANTERIOR', async () => {
     vi.mocked(prisma.clasificacionProducto.findUnique).mockResolvedValue(
-      filaClasificacion({ esEmpresa: false, nota: 'era del empleado' }) as never,
+      filaClasificacion({ clase: 'unidad', esEmpresa: false, nota: 'era del empleado' }) as never,
     );
-    vi.mocked(prisma.clasificacionProducto.upsert).mockResolvedValue(filaClasificacion({ esEmpresa: true }) as never);
+    vi.mocked(prisma.clasificacionProducto.upsert).mockResolvedValue(
+      filaClasificacion({ clase: 'paquete', esEmpresa: false }) as never,
+    );
 
-    await clasificar(AUDITOR, 'CERV-001', { esEmpresa: true });
+    await clasificar(AUDITOR, 'CERV-001', { clase: 'paquete' });
 
+    // "paso de unidad a paquete" es la unica respuesta posible, seis meses
+    // despues, a por que un faltante se descuenta distinto.
     expect(registrarAuditoria).toHaveBeenCalledWith(
       expect.objectContaining({
         accion: 'clasificacion.actualizada',
         detalle: expect.objectContaining({
           codigo: 'CERV-001',
-          esEmpresa: true,
-          anterior: { esEmpresa: false, nota: 'era del empleado' },
+          clase: 'paquete',
+          esEmpresa: false,
+          anterior: { clase: 'unidad', esEmpresa: false, empaqueCompraCorregido: null, nota: 'era del empleado' },
+        }),
+      }),
+    );
+  });
+
+  /**
+   * INVARIANTE 2: una excepcion VIEJA tiene `clase = NULL` y no se
+   * reinterpreta. Al reclasificarla, la auditoria registra ese null tal cual
+   * estaba -- rellenarlo con un valor seria inventar una decision que el
+   * Auditor nunca tomo.
+   */
+  it('una excepcion vieja (clase NULL) queda registrada como null en el valor anterior', async () => {
+    vi.mocked(prisma.clasificacionProducto.findUnique).mockResolvedValue(
+      filaClasificacion({ clase: null, esEmpresa: true, nota: 'vieja' }) as never,
+    );
+    vi.mocked(prisma.clasificacionProducto.upsert).mockResolvedValue(filaClasificacion({ clase: 'empresa' }) as never);
+
+    await clasificar(AUDITOR, 'CERV-001', { clase: 'empresa' });
+
+    expect(registrarAuditoria).toHaveBeenCalledWith(
+      expect.objectContaining({
+        detalle: expect.objectContaining({
+          anterior: { clase: null, esEmpresa: true, empaqueCompraCorregido: null, nota: 'vieja' },
+        }),
+      }),
+    );
+  });
+
+  it('la clase de una excepcion vieja viaja como null en el DTO, sin rellenarse', async () => {
+    vi.mocked(prisma.clasificacionProducto.findUnique).mockResolvedValue(null as never);
+    vi.mocked(prisma.clasificacionProducto.upsert).mockResolvedValue(
+      filaClasificacion({ clase: null, esEmpresa: true }) as never,
+    );
+
+    const dto = await clasificar(AUDITOR, 'CERV-001', { clase: 'empresa' });
+
+    expect(dto.clase).toBeNull();
+  });
+});
+
+/**
+ * EL AUDITOR CORRIGE EL EMPAQUE DE COMPRA -- el caso medido: D365 tiene los
+ * DORITOS con `PurchaseUnitSymbol = "U"` (se compra suelto) cuando vienen en
+ * display. Con el empaque corregido la regla los clasifica sola, que es la
+ * frase de Gilmer: "asi evitamos estar corrigiendo 1:1".
+ *
+ * CORREGIR EL EMPAQUE NO ES CORREGIR EL STOCK: el stock del ERP no se edita
+ * desde ningun lado. Y esto tampoco pisa `CatalogoItem.empaqueCompra`, que es
+ * el snapshot congelado -- se guarda AL LADO para que los dos numeros tengan
+ * historia.
+ */
+describe('clasificar: el empaque de compra corregido', () => {
+  it('lo escribe en la fila, junto a la clase', async () => {
+    vi.mocked(prisma.clasificacionProducto.findUnique).mockResolvedValue(null as never);
+    vi.mocked(prisma.clasificacionProducto.upsert).mockResolvedValue(
+      filaClasificacion({ clase: 'paquete', esEmpresa: false, empaqueCompraCorregido: 12 }) as never,
+    );
+
+    const dto = await clasificar(AUDITOR, '105621', { clase: 'paquete', empaqueCompraCorregido: 12 });
+
+    const args = vi.mocked(prisma.clasificacionProducto.upsert).mock.calls[0]![0];
+    expect(args.create).toMatchObject({ clase: 'paquete', empaqueCompraCorregido: 12 });
+    expect(args.update).toMatchObject({ clase: 'paquete', empaqueCompraCorregido: 12 });
+    expect(dto.empaqueCompraCorregido).toBe(12);
+  });
+
+  /** Es un PUT: el cuerpo declara la excepcion entera, omitirlo borra la correccion. */
+  it('sin el campo, la correccion queda en null: manda el del snapshot', async () => {
+    vi.mocked(prisma.clasificacionProducto.findUnique).mockResolvedValue(null as never);
+    vi.mocked(prisma.clasificacionProducto.upsert).mockResolvedValue(filaClasificacion() as never);
+
+    await clasificar(AUDITOR, 'CERV-001', { clase: 'empresa' });
+
+    expect(vi.mocked(prisma.clasificacionProducto.upsert).mock.calls[0]![0].create).toMatchObject({
+      empaqueCompraCorregido: null,
+    });
+  });
+
+  it('un null explicito tambien borra la correccion: deshacer es alcanzable', async () => {
+    vi.mocked(prisma.clasificacionProducto.findUnique).mockResolvedValue(
+      filaClasificacion({ empaqueCompraCorregido: 12 }) as never,
+    );
+    vi.mocked(prisma.clasificacionProducto.upsert).mockResolvedValue(
+      filaClasificacion({ empaqueCompraCorregido: null }) as never,
+    );
+
+    await clasificar(AUDITOR, '105621', { clase: 'paquete', empaqueCompraCorregido: null });
+
+    expect(vi.mocked(prisma.clasificacionProducto.upsert).mock.calls[0]![0].update).toMatchObject({
+      empaqueCompraCorregido: null,
+    });
+  });
+
+  /** Un cambio de empaque mueve plata de un cuadro al otro: va con su valor anterior. */
+  it('queda en la auditoria con el antes y el despues', async () => {
+    vi.mocked(prisma.clasificacionProducto.findUnique).mockResolvedValue(
+      filaClasificacion({ clase: 'paquete', empaqueCompraCorregido: null }) as never,
+    );
+    vi.mocked(prisma.clasificacionProducto.upsert).mockResolvedValue(
+      filaClasificacion({ clase: 'paquete', empaqueCompraCorregido: 12 }) as never,
+    );
+
+    await clasificar(AUDITOR, '105621', { clase: 'paquete', empaqueCompraCorregido: 12 });
+
+    expect(registrarAuditoria).toHaveBeenCalledWith(
+      expect.objectContaining({
+        detalle: expect.objectContaining({
+          empaqueCompraCorregido: 12,
+          anterior: expect.objectContaining({ empaqueCompraCorregido: null }),
         }),
       }),
     );
@@ -179,7 +355,7 @@ describe('clasificar: upsert por codigo, con quien y cuando', () => {
 describe('desclasificar: borra la fila, no la historia', () => {
   it('borra la fila y deja rastro en auditoria con el valor anterior', async () => {
     vi.mocked(prisma.clasificacionProducto.findUnique).mockResolvedValue(
-      filaClasificacion({ id: 7, esEmpresa: true, nota: 'la asumia la empresa' }) as never,
+      filaClasificacion({ id: 7, clase: 'empresa', esEmpresa: true, nota: 'la asumia la empresa' }) as never,
     );
     vi.mocked(prisma.clasificacionProducto.delete).mockResolvedValue(filaClasificacion() as never);
 
@@ -194,7 +370,7 @@ describe('desclasificar: borra la fila, no la historia', () => {
         entidadId: 7,
         detalle: expect.objectContaining({
           codigo: 'CERV-001',
-          anterior: { esEmpresa: true, nota: 'la asumia la empresa' },
+          anterior: { clase: 'empresa', esEmpresa: true, empaqueCompraCorregido: null, nota: 'la asumia la empresa' },
         }),
       }),
     );
@@ -212,7 +388,57 @@ describe('solo el Auditor (cinturon del service, ademas del middleware de la rut
   it('un no-auditor no puede buscar, ni clasificar, ni desclasificar', async () => {
     const coord: ColaboradorAutenticado = { colaboradorId: 5, sucursalId: 1, rol: 'coordinador' };
     await expect(buscar(coord, { ...QUERY_BASE })).rejects.toMatchObject({ status: 403 });
-    await expect(clasificar(coord, 'X', { esEmpresa: true })).rejects.toMatchObject({ status: 403 });
+    await expect(clasificar(coord, 'X', { clase: 'empresa' })).rejects.toMatchObject({ status: 403 });
     await expect(desclasificar(coord, 'X')).rejects.toMatchObject({ status: 403 });
+  });
+});
+
+/**
+ * CORREGIR SOLO EL EMPAQUE, SIN FORZAR NINGUN CUADRO.
+ *
+ * Es el caso MAS COMUN y era el unico imposible: `clase` era obligatoria, asi
+ * que para guardar un empaque corregido habia que forzar ademas un cuadro --
+ * y el cuadro forzado PISA lo derivado, con lo cual la correccion quedaba
+ * escrita y sin efecto. El hallazgo salio del emulador (producto 100009).
+ */
+describe('clasificar: sin forzar cuadro', () => {
+  it('guarda solo el empaque corregido, con clase null', async () => {
+    vi.mocked(prisma.clasificacionProducto.findUnique).mockResolvedValue(null as never);
+    vi.mocked(prisma.clasificacionProducto.upsert).mockResolvedValue(
+      filaClasificacion({ clase: null, esEmpresa: false, empaqueCompraCorregido: 12 }) as never,
+    );
+
+    const dto = await clasificar(AUDITOR, '105621', { empaqueCompraCorregido: 12 });
+
+    const args = vi.mocked(prisma.clasificacionProducto.upsert).mock.calls[0]![0];
+    expect(args.create).toMatchObject({ clase: null, esEmpresa: false, empaqueCompraCorregido: 12 });
+    expect(dto.clase).toBeNull();
+  });
+
+  /** La invariante 1 se sostiene igual: sin cuadro forzado no hay excepcion de empresa. */
+  it('sin clase, esEmpresa queda en false', async () => {
+    vi.mocked(prisma.clasificacionProducto.findUnique).mockResolvedValue(null as never);
+    vi.mocked(prisma.clasificacionProducto.upsert).mockResolvedValue(filaClasificacion({ clase: null }) as never);
+
+    await clasificar(AUDITOR, '105621', { clase: null, empaqueCompraCorregido: 24 });
+
+    expect(vi.mocked(prisma.clasificacionProducto.upsert).mock.calls[0]![0].create).toMatchObject({ esEmpresa: false });
+  });
+
+  it('y se puede volver a forzar un cuadro despues, sobre la misma fila', async () => {
+    vi.mocked(prisma.clasificacionProducto.findUnique).mockResolvedValue(
+      filaClasificacion({ clase: null, esEmpresa: false, empaqueCompraCorregido: 12 }) as never,
+    );
+    vi.mocked(prisma.clasificacionProducto.upsert).mockResolvedValue(
+      filaClasificacion({ clase: 'empresa', esEmpresa: true, empaqueCompraCorregido: 12 }) as never,
+    );
+
+    await clasificar(AUDITOR, '105621', { clase: 'empresa', empaqueCompraCorregido: 12 });
+
+    expect(registrarAuditoria).toHaveBeenCalledWith(
+      expect.objectContaining({
+        detalle: expect.objectContaining({ clase: 'empresa', anterior: expect.objectContaining({ clase: null }) }),
+      }),
+    );
   });
 });

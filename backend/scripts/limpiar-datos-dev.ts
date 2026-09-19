@@ -87,6 +87,7 @@ async function main(): Promise<number> {
   const conteoLineasAjuste = await prisma.lineaAjusteDynamics.count({ where: porImportacion });
   const conteoImportaciones = await prisma.importacionAjustesDynamics.count({ where: invNotIn });
   const conteoAsistencia = await prisma.asistenciaInventario.count({ where: invNotIn });
+  const conteoJustificaciones = await prisma.justificacionAsistencia.count({ where: invNotIn });
   const conteoInventarios = await prisma.inventario.count({ where: idNotIn });
   const totalColaboradores = await prisma.colaborador.count();
   const totalSucursales = await prisma.sucursal.count();
@@ -126,6 +127,7 @@ async function main(): Promise<number> {
   console.log(`lineas_ajuste_dynamics:   ${conteoLineasAjuste}`);
   console.log(`importaciones_ajustes:    ${conteoImportaciones}`);
   console.log(`asistencia_inventario:    ${conteoAsistencia}`);
+  console.log(`justificaciones_asistencia:${conteoJustificaciones}`);
   console.log(`inventarios:              ${conteoInventarios}`);
   console.log(`sesiones_token (no-admin):${conteoSesionesNoAdmin}`);
   console.log(`registro_auditoria (no-admin actor): ${conteoAuditoriaNoAdmin}`);
@@ -203,6 +205,10 @@ async function main(): Promise<number> {
       // marcas existen desde que el Coordinador pasa lista, o sea que un
       // inventario reventaba aca aunque nadie hubiera contado todavia.
       await tx.asistenciaInventario.deleteMany({ where: invNotIn });
+      // La DECIMA, hermana de la novena y con el mismo detalle: tampoco
+      // necesita conteos para existir. El auditor puede perdonarle una falta
+      // a alguien en un inventario donde todavia no se conto nada.
+      await tx.justificacionAsistencia.deleteMany({ where: invNotIn });
       await tx.inventario.deleteMany({ where: idNotIn });
 
       if (!conservarUsuariosTiendas) {

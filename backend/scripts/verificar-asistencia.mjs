@@ -4,9 +4,13 @@
  * Lo que prueba de verdad y no de palabra:
  *   - que los DIAS del inventario salgan solos de las marcas, sin que nadie
  *     los declare;
- *   - que la multa sea `(dias del inventario - dias asistidos) x tarifa`;
+ *   - que la multa sea `(dias - dias asistidos - dias justificados) x tarifa`;
+ *   - que el AUDITOR pueda perdonar una falta y que ese dia valga como
+ *     asistido para los DOS efectos (no paga multa Y cobra bono), sin que
+ *     `diasAsistidos` se infle -- ese numero va al sello del lacrado;
  *   - que el FONDO CIERRE AL CENTAVO: `diasFaltadosEnTotal x tarifa ===
- *     fondoMultas`, y que la planilla siga sumando el neto.
+ *     fondoMultas`, y que la planilla siga sumando el neto, con perdones y
+ *     sin ellos.
  *
  * ---------------------------------------------------------------------------
  * POR QUE ESA ULTIMA COMPROBACION EXISTE
@@ -211,9 +215,25 @@ try {
     }
   }
 
+  /**
+   * EL TRAMO DEL AUDITOR, que este script no tenia: desde el estado
+   * `ajuste_auditor` (migracion 20260919120000), cerrar la ultima ronda YA NO
+   * manda el inventario a `conteo_cerrado`. Queda esperando que el auditor
+   * decida -- abrir otra ronda, o iniciar y cerrar el ajuste final. Sin estos
+   * dos pasos el inventario se queda en el medio y no hay planilla que mirar.
+   */
+  const trasRondas = await prisma.inventario.findUnique({ where: { id: inv }, select: { estado: true } });
+  const sAudCierre = await entrar(gente.aud.id, PIN);
+  if (trasRondas?.estado !== 'conteo_cerrado') {
+    const iniciar = await api('POST', `/api/inventarios/${inv}/ajuste/iniciar`, { token: sAudCierre.token });
+    if (iniciar.status >= 400) mal(`iniciar el ajuste dio HTTP ${iniciar.status}: ${iniciar.texto.slice(0, 140)}`);
+    const cerrarAjuste = await api('POST', `/api/inventarios/${inv}/ajuste/cerrar`, { token: sAudCierre.token });
+    if (cerrarAjuste.status >= 400) mal(`cerrar el ajuste dio HTTP ${cerrarAjuste.status}: ${cerrarAjuste.texto.slice(0, 140)}`);
+  }
+
   const cerrado = await prisma.inventario.findUnique({ where: { id: inv }, select: { estado: true } });
   cerrado?.estado === 'conteo_cerrado'
-    ? ok('el inventario quedo en conteo_cerrado')
+    ? ok('el inventario quedo en conteo_cerrado (tras el ajuste del auditor)')
     : mal(`el inventario quedo en "${cerrado?.estado}", se esperaba conteo_cerrado`);
 
   const resultado = await prisma.resultadoInventario.findUnique({
@@ -337,6 +357,143 @@ try {
     fila(gente.coord.id)?.asistio === true && fila(gente.cont2.id)?.asistio === false
       ? ok('asistio significa asistencia COMPLETA: true para 3 de 3, false para 1 de 3')
       : mal('asistio no refleja la asistencia completa');
+
+    // =======================================================================
+    console.log('\n== PASO 5: EL AUDITOR JUSTIFICA LAS FALTAS ==');
+
+    /**
+     * La regla del cliente, textual: "si cobra el bono de distribucion, es
+     * como si hubiera asistido". Un dia perdonado vale como asistido para los
+     * DOS efectos -- no paga multa y cobra bono.
+     *
+     * cont2 vino 1 de 3. Se le perdonan los dos dias que falto y tiene que
+     * quedar en multa 0 y `asistio: true`, SIN que `diasAsistidos` se infle:
+     * ese numero va al sello del lacrado y tiene que seguir diciendo 1.
+     */
+    const antes = fila(gente.cont2.id);
+
+    // --- las guardas, primero ---
+    const porCoord = await api('POST', `/api/inventarios/${inv}/justificaciones`, {
+      token: sCoord.token, body: { colaboradorId: gente.cont2.id, dia: AYER, motivo: 'Licencia medica' },
+    });
+    porCoord.status === 403
+      ? ok('el coordinador NO justifica (403): quien pasa lista no perdona faltas')
+      : mal(`el coordinador justifico o dio otro error: HTTP ${porCoord.status}, se esperaba 403`);
+
+    const sinMotivo = await api('POST', `/api/inventarios/${inv}/justificaciones`, {
+      token: sAud.token, body: { colaboradorId: gente.cont2.id, dia: AYER },
+    });
+    sinMotivo.status === 400
+      ? ok('sin motivo, 400: un perdon sin motivo es un descuento que nadie puede explicar')
+      : mal(`justificar sin motivo dio HTTP ${sinMotivo.status}, se esperaba 400`);
+
+    // --- el perdon de verdad ---
+    for (const dia of [AYER, HOY]) {
+      const r = await api('POST', `/api/inventarios/${inv}/justificaciones`, {
+        token: sAud.token, body: { colaboradorId: gente.cont2.id, dia, motivo: 'Licencia medica' },
+      });
+      if (r.status >= 400) mal(`no pudo justificar el ${dia}: HTTP ${r.status} ${r.texto.slice(0, 140)}`);
+    }
+
+    // Idempotente: el doble toque no puede descontar DOS dias por una falta.
+    const repetida = await api('POST', `/api/inventarios/${inv}/justificaciones`, {
+      token: sAud.token, body: { colaboradorId: gente.cont2.id, dia: AYER, motivo: 'otra vez' },
+    });
+    repetida.status === 200
+      ? ok('justificar dos veces el mismo dia devuelve 200 y no duplica')
+      : mal(`el segundo toque dio HTTP ${repetida.status}, se esperaba 200`);
+
+    // El auditor VE la lista (cambio con esta funcionalidad: antes no entraba).
+    const vistaAuditor = await api('GET', `/api/inventarios/${inv}/asistencia`, { token: sAud.token });
+    vistaAuditor.status === 200 && (vistaAuditor.datos?.justificaciones ?? []).length === 2
+      ? ok('el auditor ve la lista y sus 2 justificaciones, con motivo')
+      : mal(`el auditor no ve la lista o no ve sus justificaciones: HTTP ${vistaAuditor.status}, ${(vistaAuditor.datos?.justificaciones ?? []).length} justificacion(es)`);
+
+    (vistaAuditor.datos?.dias ?? []).length === 3
+      ? ok('y los dias del inventario siguen siendo 3: un perdon NO agrega una jornada')
+      : mal(`los dias pasaron a ${(vistaAuditor.datos?.dias ?? []).length}: una justificacion agrego un dia al inventario`);
+
+    // --- la plata, despues del perdon ---
+    const liq2 = await api('GET', `/api/liquidacion/sucursales/${tienda.id}`, { token: sAud.token });
+    const L2 = liq2.datos;
+    const p2 = (L2?.planilla ?? []).find((p) => p.colaboradorId === gente.cont2.id);
+
+    p2?.diasAsistidos === 1
+      ? ok('diasAsistidos SIGUE diciendo 1: el perdon no infla lo que el sello afirma')
+      : mal(`diasAsistidos quedo en ${p2?.diasAsistidos}: se inflo con las justificaciones`);
+
+    p2?.diasJustificados === 2
+      ? ok('y los 2 dias perdonados viajan aparte, en diasJustificados')
+      : mal(`diasJustificados dice ${p2?.diasJustificados}, se esperaba 2`);
+
+    p2?.asistio === true
+      ? ok('COBRA: asistio pasa a true -- "si cobra el bono, es como si hubiera asistido"')
+      : mal('con todas sus faltas perdonadas sigue en asistio: false');
+
+    Number(L2?.diasFaltadosEnTotal) === 0
+      ? ok('no quedan dias cobrables: el fondo de multas se vacio')
+      : mal(`diasFaltadosEnTotal dice ${L2?.diasFaltadosEnTotal}, se esperaba 0`);
+
+    Number(p2?.monto) < Number(antes?.monto)
+      ? ok(`y le baja el descuento: de ${Number(antes?.monto).toFixed(2)} a ${Number(p2?.monto).toFixed(2)}`)
+      : mal(`el descuento no bajo: antes ${antes?.monto}, ahora ${p2?.monto}`);
+
+    /** LA INVARIANTE, otra vez: con perdones de por medio tiene que seguir dando. */
+    const suma2 = (L2?.planilla ?? []).reduce((t, p) => t + Number(p.monto ?? 0), 0);
+    const neto2 = Number(L2?.faltanteNeto ?? 0);
+    Math.abs(suma2 - neto2) < 0.02
+      ? ok(`la planilla SIGUE sumando el neto con justificaciones: ${suma2.toFixed(2)} contra ${neto2.toFixed(2)}`)
+      : mal(`la planilla dejo de sumar el neto: ${suma2.toFixed(2)} contra ${neto2.toFixed(2)}`);
+
+    // --- dar de baja un perdon: la multa vuelve ---
+    const baja = await api('DELETE', `/api/inventarios/${inv}/justificaciones/${gente.cont2.id}?dia=${HOY}`, { token: sAud.token });
+    baja.status === 200
+      ? ok('se puede dar de baja un perdon')
+      : mal(`dar de baja dio HTTP ${baja.status}: ${baja.texto.slice(0, 140)}`);
+
+    const liq3 = await api('GET', `/api/liquidacion/sucursales/${tienda.id}`, { token: sAud.token });
+    const p3 = (liq3.datos?.planilla ?? []).find((p) => p.colaboradorId === gente.cont2.id);
+    p3?.diasJustificados === 1 && p3?.asistio === false
+      ? ok('con un solo dia perdonado vuelve a pagar: 1 justificado, asistio false')
+      : mal(`tras la baja quedo con diasJustificados=${p3?.diasJustificados} y asistio=${p3?.asistio}`);
+
+    // =======================================================================
+    console.log('\n== PASO 6: LIQUIDAR CONGELA EL PERDON Y CIERRA LA VENTANA ==');
+
+    const cierreLiq = await api('POST', `/api/liquidacion/inventarios/${inv}/liquidar`, { token: sAud.token });
+    cierreLiq.status === 200 || cierreLiq.status === 201
+      ? ok('la planilla se cerro')
+      : mal(`liquidar dio HTTP ${cierreLiq.status}: ${cierreLiq.texto.slice(0, 160)}`);
+
+    const filaFirmada = await prisma.liquidacionColaborador.findFirst({
+      where: { inventarioId: inv, colaboradorId: gente.cont2.id },
+      select: { diasAsistidos: true, diasJustificados: true, asistio: true },
+    });
+    filaFirmada?.diasAsistidos === 1 && filaFirmada?.diasJustificados === 1
+      ? ok('la planilla FIRMADA congela los dos numeros por separado: 1 asistido, 1 perdonado')
+      : mal(`la fila firmada quedo con asistidos=${filaFirmada?.diasAsistidos} y justificados=${filaFirmada?.diasJustificados}`);
+
+    /**
+     * `colaboradoresAsistieron` se reescribe AL LIQUIDAR con el valor final:
+     * la ventana para justificar se cierra recien aca, asi que el numero que
+     * congelo el cierre del conteo puede haber quedado corto. Si no
+     * coincidiera con las filas de la planilla, el sello del lacrado firmaria
+     * dos cifras que se contradicen.
+     */
+    const rFinal = await prisma.resultadoInventario.findUnique({
+      where: { inventarioId: inv }, select: { colaboradoresAsistieron: true },
+    });
+    const conBono = await prisma.liquidacionColaborador.count({ where: { inventarioId: inv, asistio: true } });
+    rFinal?.colaboradoresAsistieron === conBono
+      ? ok(`colaboradoresAsistieron (${rFinal?.colaboradoresAsistieron}) coincide con las filas que cobran bono`)
+      : mal(`colaboradoresAsistieron dice ${rFinal?.colaboradoresAsistieron} y la planilla tiene ${conBono} filas con asistio: true`);
+
+    const tarde = await api('POST', `/api/inventarios/${inv}/justificaciones`, {
+      token: sAud.token, body: { colaboradorId: gente.cont2.id, dia: HOY, motivo: 'tarde' },
+    });
+    tarde.status === 409
+      ? ok('con la planilla liquidada, justificar da 409: ese descuento ya salio en un recibo')
+      : mal(`justificar despues de liquidar dio HTTP ${tarde.status}, se esperaba 409`);
   }
 } finally {
   // =========================================================================
@@ -357,10 +514,14 @@ try {
     await prisma.lineaAjusteDynamics.deleteMany({ where: { importacion: { inventarioId: inv } } });
     await prisma.importacionAjustesDynamics.deleteMany({ where: { inventarioId: { in: ids } } });
     /**
-     * `asistencia_inventario` NO tiene claves foraneas hacia inventarios, asi
-     * que no cae en cascada NI frena el borrado: si no se la borra aca, quedan
-     * marcas huerfanas apuntando a un inventario que ya no existe.
+     * `asistencia_inventario` y `justificaciones_asistencia` son la novena y
+     * la decima FK RESTRICT hacia `inventarios` (migraciones
+     * 20260918160000 y 20260919140000). Ya no dejan marcas huerfanas: ahora
+     * FRENAN el borrado del inventario si no se las borra antes, con
+     *   violates RESTRICT setting of foreign key constraint "..."
+     * Por eso van las dos, y antes del inventario.
      */
+    await prisma.justificacionAsistencia.deleteMany({ where: { inventarioId: inv } });
     await prisma.asistenciaInventario.deleteMany({ where: { inventarioId: inv } });
     await prisma.inventario.deleteMany({ where: { id: inv } });
     await prisma.sesionToken.deleteMany({ where: { colaborador: { sucursalId: tienda.id } } });

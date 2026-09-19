@@ -26,7 +26,7 @@
  */
 
 import type { ItemAuditoria } from '../dominio/tipos';
-import type { RepositorioAuditoria } from '../puertos/repositorios';
+import type { RepositorioAuditoria, ResumenAuditoriaServidor } from '../puertos/repositorios';
 import { pedir } from './_http';
 
 /**
@@ -73,14 +73,39 @@ function aItemAuditoria(fila: ItemAuditoria): ItemAuditoria {
     zona: fila.zona,
     precioVenta: fila.precioVenta,
     stockErp: fila.stockErp,
-    conteo1: fila.conteo1,
-    conteo2: fila.conteo2,
-    conteo3: fila.conteo3,
+    // La lista entera, tal cual la manda el servidor: un elemento por ronda.
+    // Antes eran tres campos fijos, y con eso un 4to conteo llegaba y se
+    // descartaba en silencio -- el Auditor lo habría visto desaparecer.
+    conteos: fila.conteos,
+    // El reparto ya resuelto por el servidor: se pasa tal cual. Ver
+    // `AtribucionItem` para por qué no se calcula de este lado.
+    atribucion: fila.atribucion,
     esEmpresa: fila.esEmpresa,
   };
 }
 
+/** Lo que responde `/resumen`: el resumen adentro, con el estado y el embudo al lado. */
+interface RespuestaResumen {
+  resumen: ResumenAuditoriaServidor;
+}
+
 export const auditoriaApi: RepositorioAuditoria = {
+  /**
+   * `GET /api/auditoria/inventarios/:id/resumen`.
+   *
+   * Se pide APARTE de la matriz y no se deriva de ella: el reparto entre
+   * cuadros depende del `umbral` congelado en el inventario, que el teléfono
+   * no tiene. Calcularlo acá sería una segunda copia de la regla que decide a
+   * quién se le descuenta la plata (ver `ResumenAuditoriaServidor`).
+   *
+   * El cuerpo trae además `estado`, `embudo` y `zonas`; acá se toma solo
+   * `resumen` — lo demás lo pide quien lo necesite, sin pasar por este puerto.
+   */
+  async resumen(inventarioId) {
+    const respuesta = await pedir<RespuestaResumen>(`/api/auditoria/inventarios/${inventarioId}/resumen`);
+    return respuesta.resumen;
+  },
+
   async matriz(inventarioId) {
     const items: ItemAuditoria[] = [];
     let desplazamiento = 0;

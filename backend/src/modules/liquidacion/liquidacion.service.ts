@@ -33,13 +33,24 @@ export interface DetalleLiquidacionDto {
   nombre: string;
   rol: Rol;
   /**
-   * CUMPLIO LA ASISTENCIA COMPLETA (vino los `diasDelInventario` dias), no
-   * "vino alguna vez". Es el que no paga multa y cobra bono. Quien quiera
+   * CUBRIO EL INVENTARIO COMPLETO: `diasAsistidos + diasJustificados >=
+   * diasDelInventario`. Es el que no paga multa y cobra bono -- decision del
+   * cliente: un dia perdonado cuenta como asistido para los dos efectos.
+   *
+   * No es "vino alguna vez", y tampoco es "vino todos los dias": quien tiene
+   * todas sus faltas justificadas esta en `true` sin haber ido. Quien quiera
    * mostrar "vino algun dia" usa `diasAsistidos > 0`.
    */
   asistio: boolean;
   /** Dias que asistio. La pantalla lo muestra como `diasAsistidos / diasDelInventario`. */
   diasAsistidos: number;
+  /**
+   * Dias que falto y el AUDITOR le perdono. Van aparte de `diasAsistidos` y
+   * no sumados adentro (ver schema.prisma#JustificacionAsistencia): la
+   * pantalla que muestre "1 / 3" tiene que poder aclarar "+2 justificados",
+   * porque si no, una multa en 0 al lado de 1 de 3 dias no se entiende.
+   */
+  diasJustificados: number;
   /** Cuota base ± bono/multa, ya calculado. Nunca se guarda un total suelto sin sus partes. */
   monto: number;
 }
@@ -146,6 +157,11 @@ export interface LiquidacionDto {
    * Existe para que una pantalla pueda mostrar la composición del fondo
    * ("6 días × S/20 = S/120") sin tener que sumar la planilla a mano ni --
    * peor -- multiplicar `totalFaltas`, que da otro número.
+   *
+   * Cuenta los días COBRABLES: los que el auditor justificó no aparecen acá,
+   * porque no entran al fondo. Si se perdonaron todas las faltas del mes,
+   * este número es 0 y `totalFaltas` también -- quien tiene todo justificado
+   * pasa a `asistio: true`.
    *
    * 0 en los inventarios cerrados con la regla VIEJA (`diasDelInventario` en
    * 0): esos no tienen asistencia por día, y su fondo sale de las multas fijas
@@ -353,6 +369,7 @@ export async function deSucursal(actor: ColaboradorAutenticado, sucursalId: numb
         montoFaltanteBruto: r.montoFaltanteBruto.toNumber(),
         montoNegativos: r.montoNegativos!.toNumber(),
         montoFaltanteEmpresa: montos.montoFaltanteEmpresa,
+          montoFaltantePaquete: montos.montoFaltantePaquete,
         montoSobranteEmpleado: montos.montoSobranteEmpleado,
         colaboradoresAlcanzados: r.colaboradoresAlcanzados,
         colaboradoresAsistieron: r.colaboradoresAsistieron!,
@@ -390,6 +407,7 @@ export async function deSucursal(actor: ColaboradorAutenticado, sucursalId: numb
           montoFaltanteBruto: r.montoFaltanteBruto.toNumber(),
           montoNegativos: r.montoNegativos!.toNumber(),
           montoFaltanteEmpresa: montos.montoFaltanteEmpresa,
+          montoFaltantePaquete: montos.montoFaltantePaquete,
           montoSobranteEmpleado: montos.montoSobranteEmpleado,
           colaboradoresAlcanzados: r.colaboradoresAlcanzados,
           colaboradoresAsistieron: r.colaboradoresAsistieron!,
@@ -411,6 +429,7 @@ export async function deSucursal(actor: ColaboradorAutenticado, sucursalId: numb
         // justifica la multa de esa fila. No se recalcula desde las marcas --
         // ver el comentario de la columna en schema.prisma.
         diasAsistidos: l.diasAsistidos,
+        diasJustificados: l.diasJustificados,
         // Derivado de sus tres partes, nunca una columna -- misma regla que
         // deja a Conteo sin columna `total`.
         monto: calcularTotalDescuento({
@@ -425,6 +444,7 @@ export async function deSucursal(actor: ColaboradorAutenticado, sucursalId: numb
         rol: f.rolAlLiquidar,
         asistio: f.asistio,
         diasAsistidos: f.diasAsistidos,
+        diasJustificados: f.diasJustificados,
         monto: calcularTotalDescuento(f),
       }));
 
@@ -467,7 +487,15 @@ export async function deSucursal(actor: ColaboradorAutenticado, sucursalId: numb
     diasFaltadosEnTotal:
       resumen === null
         ? null
-        : planilla.reduce((total, p) => total + Math.max(0, r.diasDelInventario - p.diasAsistidos), 0),
+        : // Los dias que DE VERDAD SE COBRAN: los perdonados no entran al
+          // fondo, asi que restan acá igual que en la multa de cada fila. Sin
+          // esto, `diasFaltadosEnTotal x tarifa` dejaria de dar `fondoMultas`
+          // -- que es exactamente lo que este campo promete que da.
+          planilla.reduce(
+            (total, p) =>
+              total + Math.max(0, r.diasDelInventario - p.diasAsistidos - p.diasJustificados),
+            0,
+          ),
     diasDelInventario: r.diasDelInventario,
     planilla,
     /**

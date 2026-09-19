@@ -7,7 +7,7 @@
  * lado que persiste algo es Postgres, del lado de aca.
  */
 
-import { Prisma } from '@prisma/client';
+import { Prisma, type ClaseItem } from '@prisma/client';
 import { mensajeSinAlmacen } from '../tiendas/tiendas.almacen';
 import { factorDesdeSimbolo } from '../../dominio/empaque';
 import { prisma } from '../../config/database';
@@ -114,6 +114,95 @@ export function elegirEmpaques(conversionesDelProducto: D365UnitConversion[], pr
   }
 
   return [...factoresPorUnidad.entries()].sort((a, b) => b[1] - a[1]).map(([nombre, factor]) => ({ nombre, factor }));
+}
+
+/**
+ * "U" y "U." son LA MISMA unidad escrita distinto -- el tenant tiene la
+ * conversion U->U. con Factor 1 justamente por eso. Las dos cuentan como
+ * unidad base, que es en la que se cuenta en gondola.
+ */
+function esUnidadBase(simbolo: string): boolean {
+  return /^u\.?$/i.test(simbolo.trim());
+}
+
+/**
+ * EL EMPAQUE DE COMPRA de un producto, en unidades sueltas. El denominador de
+ * la regla del faltante por paquete.
+ *
+ * ---------------------------------------------------------------------------
+ * POR QUE EL DE COMPRA Y NO EL DE VENTA
+ * ---------------------------------------------------------------------------
+ * Gilmer lo dijo tres veces en la reunion 2: "lo que estoy hablando aca es el
+ * empaque de compra, que no se base al empaque de venta". Su ejemplo es un
+ * chocolate con empaque de compra 540 y display de venta 20: 10 unidades
+ * faltantes son media caja de venta -- se le descuenta al trabajador -- o
+ * 1/54 de la de compra -- no se le descuenta. Es la diferencia entre cobrarle
+ * y no cobrarle a alguien.
+ *
+ * ---------------------------------------------------------------------------
+ * DE DONDE SALE, Y LA TRAMPA DEL MEDIO
+ * ---------------------------------------------------------------------------
+ * El ERP da el NOMBRE de la unidad de compra en `PurchaseUnitSymbol`
+ * ("Emp.12") y el FACTOR en las conversiones. Pero un mismo simbolo tiene
+ * VARIAS conversiones, una por unidad destino. Caso real (item 100016):
+ *
+ *     Emp.48 -> Emp.12   Factor 4
+ *     Emp.48 -> U        Factor 48
+ *
+ * Tomar "la primera que coincida" devuelve 4 -- cuantos Emp.12 entran en un
+ * Emp.48 --, no 48. Hay que pedir EXPLICITAMENTE la que va a la unidad base,
+ * porque el conteo se hace en unidades sueltas y el umbral compara unidades
+ * faltantes contra el tamano del paquete.
+ *
+ * RESPALDO, el mismo que ya usa `elegirEmpaques`: si no hay conversion a la
+ * unidad base, el numero adentro del nombre ("Emp.12" -> 12). Medido contra
+ * el tenant real, 1.950 de 2.000 items resuelven por conversion.
+ *
+ * DEVUELVE NULL cuando no hay ninguna de las dos, y NULL NO ES 1: "no se sabe
+ * el tamano del paquete" es distinto de "se compra por unidad". Con 1, la
+ * regla del umbral tratara a ese item como suelto y le descontara el faltante
+ * entero al personal; con null, quien calcule tiene que decidir que hace.
+ */
+export function empaqueDeCompra(
+  conversionesDelProducto: D365UnitConversion[],
+  producto: D365ReleasedProduct,
+): { unidades: number; simbolo: string } | null {
+  const simbolo = (producto.PurchaseUnitSymbol ?? '').trim();
+  if (simbolo === '') return null;
+
+  // Se compra por unidad: el paquete es 1, y eso es un dato, no una falta de
+  // dato. Son 457 de los primeros 2.000 items del catalogo real.
+  if (esUnidadBase(simbolo)) return { unidades: 1, simbolo };
+
+  const aLaBase = conversionesDelProducto.find(
+    (c) => c.FromUnitSymbol === simbolo && esUnidadBase(c.ToUnitSymbol),
+  );
+  if (aLaBase && Number.isFinite(aLaBase.Factor) && aLaBase.Factor > 0) {
+    return { unidades: aLaBase.Factor, simbolo };
+  }
+
+  const delNombre = factorDesdeSimbolo(simbolo);
+  return delNombre > 1 ? { unidades: delNombre, simbolo } : null;
+}
+
+/**
+ * COMO SE TRATA EL FALTANTE de este item -- las tres vias del cliente. Pura, y
+ * es la unica regla que decide la clase: si algun dia cambia, se toca aca.
+ *
+ *   empresa  lo absorbe la empresa, no se descuenta a nadie;
+ *   paquete  viene en paquete -> le aplica la regla de la media unidad;
+ *   unidad   se compra suelto -> no hay paquete contra el cual medir.
+ *
+ * SIN EMPAQUE (null) DA `unidad`, que es el tratamiento de SIEMPRE: su
+ * faltante se descuenta al personal, como venia pasando. No se inventa un
+ * paquete que nadie midio, y no se lo manda al cuadro del almacenero por no
+ * tener el dato -- eso sacaria plata del descuento sin que nadie lo decida.
+ * La columna `empaqueCompra` queda en null al lado, asi que el caso se puede
+ * encontrar y revisar.
+ */
+export function clasificarItem(esEmpresa: boolean, empaqueCompra: number | null): ClaseItem {
+  if (esEmpresa) return 'empresa';
+  return empaqueCompra !== null && empaqueCompra > 1 ? 'paquete' : 'unidad';
 }
 
 /**
@@ -338,6 +427,8 @@ export function mapearProducto(
 
   const descripcion = suelto?.ProductDescription || producto.SearchName || producto.ItemNumber;
 
+  const compra = empaqueDeCompra(conversionesDelItem, producto);
+
   return {
     codigo: producto.ItemNumber,
     // Sin ningun barcode: el ItemNumber hace de codigo de barras de ultimo
@@ -345,7 +436,15 @@ export function mapearProducto(
     codigoBarras: suelto?.Barcode || producto.ItemNumber,
     descripcion,
     empaques: elegirEmpaques(conversionesDelItem, producto),
+    // El de COMPRA, aparte de los de gondola: es el unico contra el que se
+    // puede medir "media unidad de paquete" (ver `empaqueDeCompra`).
+    empaqueCompra: compra?.unidades ?? null,
+    empaqueCompraSimbolo: compra?.simbolo ?? null,
     esEmpresa: esDeLaEmpresa(responsableCrudo),
+    // Las dos se escriben JUNTAS y de la MISMA fuente: mientras el booleano
+    // siga existiendo, `clase === 'empresa'` y `esEmpresa === true` son el
+    // mismo hecho y no pueden discrepar.
+    clase: clasificarItem(esDeLaEmpresa(responsableCrudo), compra?.unidades ?? null),
     responsable: clasificarResponsable(responsableCrudo),
     stockErp,
     precioVenta,
@@ -1002,6 +1101,29 @@ async function guardarSnapshot(args: {
   const { sucursalId, tipo, catalogo, descartes, criterios, actorId, almacen, periodoOverride } = args;
   const tomadoEn = new Date();
 
+  /**
+   * EL UMBRAL DE MEDIA UNIDAD DE PAQUETE, COPIADO DE LA CONFIG AL INVENTARIO.
+   *
+   * Es el cable que faltaba: `UMBRAL_MEDIA_UNIDAD_PAQUETE` ya se validaba, se
+   * guardaba y se editaba desde la pantalla del Administrador, pero ningun
+   * calculo la leia. Estaba la perilla y no el mecanismo.
+   *
+   * Se COPIA y no se lee en vivo, por lo mismo que `tamanoHoja`: dentro de
+   * seis meses la config va a valer otra cosa, y recalcular la liquidacion de
+   * agosto con la perilla de hoy le cambiaria el descuento a alguien sobre un
+   * sueldo ya pagado.
+   *
+   * Si la config no esta cargada se deja el default de la columna (0.5, que
+   * es "media unidad" tal como lo dijo el cliente) en vez de fallar: un
+   * snapshot no se puede caer porque falte una perilla que tiene un valor
+   * obvio y ya validado.
+   */
+  const umbralConfigurado = await prisma.configuracion.findUnique({
+    where: { clave: 'UMBRAL_MEDIA_UNIDAD_PAQUETE' },
+    select: { valor: true },
+  });
+  const umbral = Number(umbralConfigurado?.valor);
+
   const inventario = await prisma.inventario.create({
     // `tipo` se guarda en el inventario: es lo que define QUE universo se
     // conto, y sin el nadie puede saber despues si esos 6.297 items eran
@@ -1015,6 +1137,12 @@ async function guardarSnapshot(args: {
       tipo,
       snapshotItems: catalogo.length,
       snapshotTomadoEn: tomadoEn,
+      // Solo si la config trae un numero usable; si no, manda el default de
+      // la columna. Un `NaN` acá dejaria el umbral en null y reventaria el
+      // calculo mucho mas lejos de donde esta la causa.
+      ...(Number.isFinite(umbral) && umbral > 0 && umbral < 1
+        ? { umbralMediaUnidadPaquete: umbral }
+        : {}),
       ...(periodoOverride ? { periodoAnio: periodoOverride.anio, periodoMes: periodoOverride.mes } : {}),
     },
   });
@@ -1035,6 +1163,17 @@ async function guardarSnapshot(args: {
             // este item (ver seCuenta/esDeLaEmpresa). Hasta ahora quedaba
             // NULL en la base y la auditoria no podia distinguirlos.
             esEmpresa: item.esEmpresa,
+            // EL DENOMINADOR de la regla del faltante por paquete, congelado
+            // con el snapshot igual que todo lo demas: si manana cambia el
+            // empaque en Dynamics, el inventario de agosto tiene que seguir
+            // diciendo contra que paquete se midio. `null` cuando no se pudo
+            // resolver -- y null NO es 1 (ver la columna en schema.prisma).
+            empaqueCompra: item.empaqueCompra,
+            empaqueCompraSimbolo: item.empaqueCompraSimbolo,
+            // Las tres vias del cliente (empresa/paquete/unidad). Se escribe
+            // JUNTO a `esEmpresa` y derivada de lo mismo: mientras las dos
+            // columnas convivan no pueden discrepar.
+            clase: item.clase,
             // Clasificacion COMPLETA (empleado/empresa/null): a diferencia de
             // esEmpresa, distingue 'None'/sin fila -- el export de
             // diferencias filtra por esto. Ver CatalogoItem.responsable.

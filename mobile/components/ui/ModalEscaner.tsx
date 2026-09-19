@@ -255,13 +255,13 @@ export function ModalEscaner({ visible, error, onEscanear, onCerrar }: ModalEsca
 
           {/* Lo que el escáner PUEDE prometer, dicho sin adornos. Los códigos
               que trae Dynamics son todos de unidad suelta (ProductQuantity 0,
-              unidad "U" en los 15 de la muestra): ninguno identifica una caja
-              ni un pack. O sea que leer el código dice QUÉ producto es, y
+              unidad "U" en los 15 de la muestra): ninguno identifica un
+              empaque cerrado. O sea que leer el código dice QUÉ producto es, y
               nada sobre cuánto hay. Si la pantalla insinuara otra cosa, el
               operario confiaría en un dato que el escáner no tiene. */}
           <Text style={styles.nota}>
-            El escáner dice QUÉ producto es, no cuánto hay: el código es el mismo para una unidad que para una caja.
-            Después de confirmarlo, la cantidad y el empaque los cargas tú.
+            El escáner dice QUÉ producto es, no cuánto hay: el código es el mismo para una unidad suelta que para
+            un empaque cerrado. Después de confirmarlo, la cantidad y el empaque los cargas tú.
           </Text>
 
           {!permiso ? (
