@@ -2,11 +2,13 @@ import { router } from 'expo-router';
 import { useCallback, useEffect, useRef, useState, type JSX } from 'react';
 import { ActivityIndicator, StyleSheet, Text, View } from 'react-native';
 
-import { cargarSeguro } from '../../lib/adaptadores/_http';
+import { cargarSeguro, esFallaDeRed } from '../../lib/adaptadores/_http';
 import { inventarioIdSinRed, rondaActivaSinRed, ultimaDescarga, type ResultadoDescarga } from '../../lib/adaptadores/hojas-sqlite';
 import { repositorioHojas, repositorioInventario, repositorioSesion, repositorioTiendas, repositorioUsuarios, sincronizador } from '../../lib/contenedor';
 import { cifraMisHojas, cifraOSinRed, filaPct, motivoCorto } from '../../lib/dominio/cifra-sin-red';
 import { avance, avanceConjunto, estadoConjunto } from '../../lib/dominio/hoja';
+import { faseDeCierre, type FaseDeCierre } from '../../lib/dominio/ajuste-final';
+import { ORDINAL } from '../../lib/dominio/texto-cierre-ronda';
 import { pluralizar } from '../../lib/dominio/plural';
 import { sucursalEnFoco } from '../../lib/dominio/sucursal-en-foco';
 import type { HojaConteo, Rol, Sucursal } from '../../lib/dominio/tipos';
@@ -15,7 +17,7 @@ import { useSucursalAuditada } from '../../lib/sucursal-auditada-contexto';
 import { colors, fonts, fontSize, spacing } from '../../lib/theme';
 import { debeReintentarAutomaticamente, INTERVALO_REINTENTO_MS, REINTENTO_INICIAL, trasIntentoFallido } from '../hooks/refresco';
 import { useRefrescoAlEnfocar } from '../hooks/useRefrescoAlEnfocar';
-import { ACCESOS_POR_ROL } from '../navegacion/accesos';
+import { useNavegacion } from '../../lib/navegacion-contexto';
 import { PantallaConTabs } from '../navegacion/PantallaConTabs';
 import { AccesoTarjeta, BandaSync, BarraApp, Button, formatoMiles, formatoPct, resumenParaTablero, type EstadoSincronizacion } from '../ui';
 
@@ -48,12 +50,64 @@ interface FilaEstado {
   color?: string;
 }
 
-const ETIQUETA_ESTADO_1ER_CONTEO: Record<ReturnType<typeof estadoConjunto>, string> = {
-  finalizada: '1er conteo finalizado',
-  'en-proceso': '1er conteo en curso',
-  pendiente: '1er conteo pendiente',
-  'sin-hojas': 'sin hojas todavía',
-};
+/**
+ * El estado del conjunto de hojas, nombrando LA RONDA QUE SE ESTÁ MIRANDO.
+ *
+ * BUG REAL (visto en el emulador, inventario 8040): esto era una tabla que
+ * decía "1er conteo" fijo, pero las hojas que alimenta salen de la RONDA
+ * ACTIVA -- `todas(inventarioId, rondaActiva)`. Con las tres rondas corridas,
+ * Inicio mostraba "1er conteo finalizado" y "Ítems contados (1er conteo) 3/3"
+ * con los ítems de la RONDA 3: tres ítems de un reconteo presentados como si
+ * fueran los diez del primer conteo.
+ *
+ * Es la misma familia de error que ya se arregló en CicloScreen (badges que
+ * nombraban una ronda fija sin relación con la real): el ordinal sale del
+ * número, nunca de un literal.
+ */
+function etiquetaEstadoDeRonda(estado: ReturnType<typeof estadoConjunto>, ronda: number | null): string {
+  // Sin ronda abierta no hay conjunto de hojas que describir: el conteo
+  // terminó. Decir "sin hojas todavía" ahí invita a esperar unas hojas que no
+  // se van a crear.
+  if (ronda === null) return 'conteo terminado';
+  const cual = `${ORDINAL[ronda]} conteo`;
+  switch (estado) {
+    case 'finalizada':
+      return `${cual} finalizado`;
+    case 'en-proceso':
+      return `${cual} en curso`;
+    case 'pendiente':
+      return `${cual} pendiente`;
+    case 'sin-hojas':
+      return `${cual} sin hojas todavía`;
+  }
+}
+
+/**
+ * QUÉ SIGUE en el cierre, para el Auditor. Reemplaza el literal "2do y 3er
+ * conteo: Sin datos todavía", que prometía que las rondas son tres y ya era
+ * falso con la segunda corrida.
+ *
+ * Esta pantalla solo tiene las hojas de UNA ronda; el embudo de todas las
+ * pasadas vive en Ciclo. Decir eso es honesto; decir "sin datos" era afirmar
+ * que no existen, cuando lo que pasa es que esta pantalla no los pide.
+ */
+function textoQueSigue(fase: FaseDeCierre | null): string {
+  switch (fase) {
+    case 'contando':
+      return 'El embudo por pasada está en Ciclo';
+    case 'rondas-cerradas':
+      return 'Decidir: otro conteo o el ajuste final';
+    case 'ajuste':
+      return 'Ajuste final en curso';
+    case 'cerrado':
+      return 'Conteo cerrado: sigue la liquidación';
+    default:
+      // `null` = todavía no se pudo saber en qué fase está (sin red, o sin
+      // inventario). No se inventa una: "—" es más honesto que un paso
+      // afirmado sin dato.
+      return '—';
+  }
+}
 
 /**
  * Pantalla de Inicio — una sola implementación para los 3 roles (igual
@@ -69,9 +123,50 @@ export function InicioScreen(): JSX.Element {
   // la barra. Para los otros roles el hook es inerte y esto no aplica.
   const { elegida: sucursalElegida } = useSucursalAuditada();
   const [padronSucursales, setPadronSucursales] = useState<Sucursal[]>([]);
+  /**
+   * EL PADRÓN ES DECORATIVO ACÁ: solo resuelve el NOMBRE de la sucursal que
+   * se muestra en la barra. Sin él, `nombreSede` cae al de la sesión y la
+   * pantalla funciona igual.
+   *
+   * Por eso el fallo se atrapa y NO se propaga. Sin este `catch`, abrir la
+   * app sin backend dejaba escapar la promesa y el manejador global mostraba
+   * "Uncaught (in promise): ErrorApi: Sin señal" — encontrado en el emulador
+   * (2026-09-19) bajando el backend a propósito.
+   *
+   * Y el problema no es el recuadro rojo, que en release no se ve: una
+   * promesa sin atrapar NO es lo mismo que un error manejado. Quedarse sin
+   * señal en una tienda con WiFi mala es el camino ESPERADO de esta app, y el
+   * camino esperado no puede viajar como excepción. El día que se conecte un
+   * reporte de errores, cada apertura sin señal generaría un reporte, y ese
+   * ruido tapa los errores de verdad.
+   *
+   * SE REGISTRA SOLO LO QUE NO ES FALTA DE SEÑAL. Un `console.warn` en cada
+   * apertura sin red sería el mismo ruido en otro lado; pero un 500 o una
+   * respuesta inválida SÍ son un problema nuestro y no se pueden tragar en
+   * silencio, porque entonces la barra mostraría el nombre equivocado y nadie
+   * sabría por qué.
+   */
   useEffect(() => {
     if (sesion?.colaborador.rol !== 'auditor') return;
-    repositorioSesion.sucursales().then(setPadronSucursales);
+
+    let vigente = true;
+    repositorioSesion
+      .sucursales()
+      .then((padron) => {
+        // Guarda de desmontaje, que tampoco estaba: sin ella, salir de la
+        // pantalla antes de que conteste el servidor escribe estado sobre un
+        // componente que ya no existe.
+        if (vigente) setPadronSucursales(padron);
+      })
+      .catch((error: unknown) => {
+        if (!esFallaDeRed(error)) {
+          console.warn('[inicio] no se pudo traer el padrón de sucursales:', error);
+        }
+      });
+
+    return () => {
+      vigente = false;
+    };
   }, [sesion]);
   const [cargando, setCargando] = useState(true);
   // Administrador: sin red no hay nada a lo que caer (no tiene un SQLite
@@ -88,14 +183,23 @@ export function InicioScreen(): JSX.Element {
   // dos cálculos distintos: es lo que garantiza que Inicio y Ciclo
   // cuenten la misma historia (ver el comentario largo en
   // CicloScreen.tsx sobre el hallazgo I-4 de la auditoría).
-  const [hojasRonda1, setHojasRonda1] = useState<HojaConteo[] | null>(null);
+  /**
+   * Las hojas de la RONDA ACTIVA -- no de la 1ra. Se llamaba `hojasDeLaRonda` y
+   * ese nombre era la raíz del bug: el dato siempre fue de la ronda activa, y
+   * el nombre hizo que todas las etiquetas de abajo dijeran "1er conteo".
+   */
+  const [hojasDeLaRonda, setHojasDeLaRonda] = useState<HojaConteo[] | null>(null);
+  /** Qué ronda son esas hojas. `null` = no hay ninguna abierta (el conteo terminó). */
+  const [rondaActual, setRondaActual] = useState<number | null>(null);
+  /** En qué fase está el cierre, para no llamar "sin hojas" a un conteo terminado. */
+  const [fase, setFase] = useState<FaseDeCierre | null>(null);
   // true SOLO cuando `ronda === null` salió de la rama sin red (nunca se
   // pudo bajar ninguna hoja de este inventario, ni siquiera localmente —
   // ver rondaActivaSinRed). Con red, `ronda === null` es un hecho real
   // (todavía no hay ronda activa) y esto queda en false: son dos
   // situaciones distintas y confundirlas es el mismo "0 que miente" que
   // ya se corrigió para totalHojas/items (ver cifra-sin-red.ts) — acá el
-  // 0 no viene de un campo vacío sino de `hojasRonda1` cayendo en `[]`
+  // 0 no viene de un campo vacío sino de `hojasDeLaRonda` cayendo en `[]`
   // por el `ronda !== null ? ... : []` de más abajo.
   const [sinDatosDeRonda, setSinDatosDeRonda] = useState(false);
   const [misHojas, setMisHojas] = useState<HojaConteo[] | null>(null);
@@ -163,6 +267,7 @@ export function InicioScreen(): JSX.Element {
       ronda = activo?.rondaActiva ?? null;
       items = activo?.items ?? null;
       totalHojas = activo?.totalHojas ?? null;
+      setFase(activo ? faseDeCierre(activo.estado, activo.rondaActiva) : null);
     } catch {
       // Sin red (u otra falla): el avance de HOY puede estar completo en
       // SQLite — se sigue con eso en vez de dejar "Tu avance" colgado
@@ -186,6 +291,9 @@ export function InicioScreen(): JSX.Element {
       sinDatos = ronda === null;
     }
     setSinDatosDeRonda(sinDatos);
+    // La ronda que se está mirando, para que las etiquetas la nombren de
+    // verdad en vez de decir "1er conteo" pase lo que pase.
+    setRondaActual(ronda);
 
     if (!inventarioId) {
       setInventario(null);
@@ -205,7 +313,7 @@ export function InicioScreen(): JSX.Element {
       if (sesion.colaborador.rol === 'coordinador' || sesion.colaborador.rol === 'auditor') {
         // Sin ronda activa (null = ninguna abierta) no hay hojas que traer.
         const todas = rondaActiva !== null ? await repositorioHojas.todas(idInventario, rondaActiva) : [];
-        setHojasRonda1(todas);
+        setHojasDeLaRonda(todas);
       } else if (sesion.colaborador.rol === 'conteo') {
         // mias(), NUNCA todas(): un Contador no puede ver el lote entero.
         const mias = rondaActiva !== null ? await repositorioHojas.mias(idInventario, rondaActiva) : [];
@@ -265,7 +373,7 @@ export function InicioScreen(): JSX.Element {
       return;
     }
     setInventario(null);
-    setHojasRonda1(null);
+    setHojasDeLaRonda(null);
     setMisHojas(null);
     setResultadoMias(null);
     setEstadoSistema(null);
@@ -279,7 +387,10 @@ export function InicioScreen(): JSX.Element {
 
   const rol = sesion.colaborador.rol;
   const primerNombre = sesion.colaborador.nombre.split(' ')[0];
-  const accesos = ACCESOS_POR_ROL[rol];
+  // Los que configuró el Administrador. Si esa configuración no llegó, esto
+  // devuelve el mapa compilado sin avisar -- ver lib/navegacion-contexto.tsx:
+  // la persona en la góndola no tiene por qué enterarse.
+  const { accesos } = useNavegacion(rol);
 
   // El nombre de la sucursal que se muestra en la barra: para el Auditor, la
   // EFECTIVA (la elegida en el contexto); para el Coordinador/Conteo, la suya;
@@ -296,9 +407,9 @@ export function InicioScreen(): JSX.Element {
   }
 
   function abrirAcceso(ruta?: string): void {
-    // Todo acceso de ACCESOS_POR_ROL trae `ruta` hoy — el campo queda
-    // opcional en DefinicionAcceso solo como cinturón de seguridad para
-    // el día que se agregue uno nuevo antes de portar su pantalla.
+    // Todo acceso trae `ruta` hoy — el campo queda opcional en
+    // DefinicionAcceso solo como cinturón de seguridad para el día que se
+    // agregue uno nuevo antes de portar su pantalla.
     if (ruta) router.push(ruta as never);
   }
 
@@ -314,15 +425,20 @@ export function InicioScreen(): JSX.Element {
 
   if (rol === 'coordinador') {
     tituloEstado = 'Estado del inventario';
-    if (inventario && hojasRonda1) {
+    if (inventario && hojasDeLaRonda) {
       // Sin datos de ronda (sin red y nunca se descargó nada local): las 3
       // cifras son "no lo sé", nunca "0" — mostrar 0 acá diría "ninguna
       // hoja asignada", que es una afirmación distinta y falsa.
-      const asignadas = sinDatosDeRonda ? null : hojasRonda1.filter((h) => h.asignados.length > 0).length;
-      const finalizadas = sinDatosDeRonda ? null : hojasRonda1.filter((h) => h.estado === 'finalizada').length;
-      const contando = sinDatosDeRonda
+      // `rondaActual === null` = no hay ronda abierta (el conteo terminó): las
+      // hojas vienen en `[]` y las tres cifras darían 0. Un 0 ahí dice
+      // "ninguna hoja asignada, ninguna finalizada", que sobre un inventario
+      // ya contado es falso — mismo criterio que el caso sin red.
+      const sinRonda = sinDatosDeRonda || rondaActual === null;
+      const asignadas = sinRonda ? null : hojasDeLaRonda.filter((h) => h.asignados.length > 0).length;
+      const finalizadas = sinRonda ? null : hojasDeLaRonda.filter((h) => h.estado === 'finalizada').length;
+      const contando = sinRonda
         ? null
-        : new Set(hojasRonda1.filter((h) => h.estado !== 'pendiente').flatMap((h) => h.asignados)).size;
+        : new Set(hojasDeLaRonda.filter((h) => h.estado !== 'pendiente').flatMap((h) => h.asignados)).size;
       // Sin red, totalHojas/items son null: se muestran como "—", nunca
       // como "0 hojas" (que diría "no hay ninguna" en vez de "no lo sé").
       const sinRed = inventario.totalHojas === null || inventario.items === null || sinDatosDeRonda;
@@ -348,7 +464,7 @@ export function InicioScreen(): JSX.Element {
           pct: contando === null ? 'sin red' : pluralizar(contando, 'colaborador', 'colaboradores'),
         },
       ];
-      sync = resumenParaTablero(hojasRonda1);
+      sync = resumenParaTablero(hojasDeLaRonda);
     }
   } else if (rol === 'conteo') {
     tituloEstado = 'Tu avance';
@@ -400,7 +516,7 @@ export function InicioScreen(): JSX.Element {
     }
   } else if (rol === 'auditor') {
     tituloEstado = 'Estado de la auditoría';
-    if (inventario && hojasRonda1) {
+    if (inventario && hojasDeLaRonda) {
       // El Auditor todavía solo tiene datos reales del 1er conteo (mismo
       // límite que components/pantallas/CicloScreen.tsx: no existe un
       // puerto que traiga las rondas 2/3 ni el comparativo contra
@@ -411,14 +527,18 @@ export function InicioScreen(): JSX.Element {
       // usan la misma función sobre las mismas hojas.
       //
       // Sin datos de ronda (sin red, nunca se descargó nada local),
-      // `hojasRonda1` es `[]` — `estadoConjunto`/`avanceConjunto` sobre
+      // `hojasDeLaRonda` es `[]` — `estadoConjunto`/`avanceConjunto` sobre
       // eso dirían "sin hojas todavía" y "0 / 0 (0%)", que es la MISMA
       // afirmación falsa que ya se corrigió arriba: acá "sin red" y "no
       // hay hojas creadas" son hechos distintos, no se puede confundirlos.
-      const estado1 = sinDatosDeRonda ? null : estadoConjunto(hojasRonda1);
-      const avance1 = sinDatosDeRonda ? null : avanceConjunto(hojasRonda1);
+      const estado1 = sinDatosDeRonda ? null : estadoConjunto(hojasDeLaRonda);
+      // Sin ronda abierta las hojas vienen en `[]`, y `avanceConjunto([])`
+      // daría "0 / 0 (0%)" — un cero que se lee como "no se contó nada" sobre
+      // un inventario que terminó de contarse. Es la misma regla de
+      // honestidad que ya cubre el caso sin red.
+      const avance1 = sinDatosDeRonda || rondaActual === null ? null : avanceConjunto(hojasDeLaRonda);
       const pct1 = avance1 && avance1.totalItems > 0 ? (avance1.itemsContados / avance1.totalItems) * 100 : 0;
-      const etiquetaEstado1 = estado1 ? ETIQUETA_ESTADO_1ER_CONTEO[estado1] : 'sin red';
+      const etiquetaEstado1 = sinDatosDeRonda ? 'sin red' : etiquetaEstadoDeRonda(estado1 ?? 'sin-hojas', rondaActual);
       // Mismo criterio que el bloque de Coordinador: sin red no se muestra
       // "0 hojas", se muestra "—" y se aclara por qué.
       const sinRed = inventario.totalHojas === null || inventario.items === null || sinDatosDeRonda;
@@ -427,12 +547,27 @@ export function InicioScreen(): JSX.Element {
       filasEstado = [
         { etiqueta: 'Ciclo de conteos', valor: etiquetaEstado1, color: estado1 === 'finalizada' ? colors.ok : colors.proceso },
         {
-          etiqueta: 'Ítems contados (1er conteo)',
+          // LA RONDA REAL en el rótulo. Decía "(1er conteo)" fijo sobre los
+          // ítems de la ronda activa: con las tres corridas mostraba los 3
+          // ítems del reconteo como si fueran los 10 del primer conteo.
+          etiqueta: rondaActual === null ? 'Ítems contados' : `Ítems contados (${ORDINAL[rondaActual]} conteo)`,
           valor: avance1 ? formatoMiles(avance1.itemsContados) : '—',
-          pct: avance1 ? `/ ${formatoMiles(avance1.totalItems)} (${formatoPct(pct1)}%)` : 'sin red',
+          pct: avance1
+            ? `/ ${formatoMiles(avance1.totalItems)} (${formatoPct(pct1)}%)`
+            : sinDatosDeRonda
+              ? 'sin red'
+              : 'el conteo ya cerró',
           color: colors.ok,
         },
-        { etiqueta: '2do y 3er conteo', valor: 'Sin datos todavía' },
+        {
+          // ERA "2do y 3er conteo: Sin datos todavía", un literal que ya era
+          // falso con la ronda 2 corrida y que además prometía que solo hay
+          // tres. Esta pantalla solo tiene las hojas de UNA ronda: el embudo
+          // de todas las pasadas vive en Ciclo, y se dice eso en vez de
+          // afirmar que no hay datos.
+          etiqueta: 'Qué sigue',
+          valor: textoQueSigue(fase),
+        },
       ];
     }
   } else {

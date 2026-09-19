@@ -7,6 +7,19 @@
  * El `name` de cada tab tiene que coincidir EXACTO con el nombre de archivo
  * de ruta dentro de app/<rol>/ (sin extensión) — es lo que usa expo-router
  * para resolver la pantalla.
+ *
+ * ===========================================================================
+ * IGUAL QUE `accesos.ts`: YA NO ES LA FUENTE DE VERDAD, ES EL RESPALDO
+ * ===========================================================================
+ * La barra que manda la configura el Administrador y la trae el backend
+ * (`GET /api/navegacion/mia`). Este mapa se usa cuando esa respuesta no llega,
+ * y además **es el único lugar donde viven los iconos**: son componentes de
+ * `lucide-react-native` y no pueden viajar por HTTP, así que el backend manda
+ * el `name` y acá se busca el icono. O sea que este archivo se necesita
+ * SIEMPRE, con señal y sin ella.
+ *
+ * NO LO BORRES POR "CÓDIGO MUERTO" — hay un test del backend que lee este
+ * archivo como texto y falla si se separa del catálogo del servidor.
  */
 
 import type { LucideIcon } from 'lucide-react-native';

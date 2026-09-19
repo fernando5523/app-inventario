@@ -3,9 +3,10 @@ import type { JSX } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import { useNavegacion } from '../../lib/navegacion-contexto';
 import { useSesion } from '../../lib/sesion-contexto';
 import { colors, fonts } from '../../lib/theme';
-import { ALTO_TAB_BAR, TABS_POR_ROL } from './tabs';
+import { ALTO_TAB_BAR } from './tabs';
 
 /**
  * Tab bar propio, no el default de React Navigation — así se replica
@@ -20,7 +21,11 @@ import { ALTO_TAB_BAR, TABS_POR_ROL } from './tabs';
 export function TabBar({ state, navigation }: BottomTabBarProps): JSX.Element {
   const { sesion } = useSesion();
   const insets = useSafeAreaInsets();
-  const tabs = sesion ? TABS_POR_ROL[sesion.colaborador.rol] : [];
+  // La misma lista que armó <Tabs> en RolTabsLayout, del mismo contexto: si
+  // cada uno la pidiera por su lado podrían quedar desfasados un instante y
+  // la barra dibujaría un tab que la navegación no tiene.
+  const navegacion = useNavegacion(sesion?.colaborador.rol ?? 'conteo');
+  const tabs = sesion ? navegacion.tabs : [];
 
   return (
     <View style={[styles.raiz, { paddingBottom: insets.bottom }]}>
