@@ -20,10 +20,10 @@
  */
 
 export const PIN_DEV_POR_ROL = Object.freeze({
-  coordinador: '724193',
-  conteo: '518274',
-  auditor: '306581',
-  administrador: '947260',
+  coordinador: '000020',
+  conteo: '000020',
+  auditor: '000020',
+  administrador: '000020',
 });
 
 /**
