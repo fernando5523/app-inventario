@@ -2113,3 +2113,267 @@ describe('ENDURECIMIENTO: una sesión local incompleta o corrupta no muestra hoj
     expect(await hojasSqlite.mias(INV, 1)).toEqual([]);
   });
 });
+
+/**
+ * ===========================================================================
+ * RECONCILIAR: que se VAYA de la copia local lo que el servidor ya no manda
+ * ===========================================================================
+ *
+ * Los dos tests de este bloque son las dos mitades de la misma regla, y hacen
+ * falta las dos:
+ *
+ *   - el servidor manda MENOS y lo de más desaparece;
+ *   - el pedido FALLA y no desaparece NADA.
+ *
+ * El segundo es el que nadie escribe solo y el que protege el conteo sin
+ * señal: estas tiendas tienen WiFi mala, la gente cuenta igual, y vaciar una
+ * hoja cacheada porque una petición no respondió es perder el conteo de una
+ * góndola entera.
+ */
+describe('RECONCILIACIÓN: el servidor manda menos, y lo de más se va', () => {
+  const ID_MARIA = 501;
+  const MARIA = 'María Rojas';
+
+  function hojaCon(inventarioId: number, id: number, numero: string, productoIds: number[]) {
+    return {
+      id,
+      inventarioId,
+      numero,
+      zona: 'Zona R',
+      gondola: 'R1',
+      tamano: 50,
+      estado: 'pendiente' as const,
+      sync: 'sincronizado' as const,
+      asignados: [MARIA],
+      asignadoAId: ID_MARIA,
+      asignadoA2Id: null,
+      productos: productoIds.map((pid) => ({
+        id: pid,
+        codigo: String(pid).padStart(4, '0'),
+        codigoBarras: `774000000${pid}`,
+        descripcion: `Producto ${pid}`,
+        empaques: [{ nombre: 'Caja', factor: 12 }],
+      })),
+      conteos: [],
+    };
+  }
+
+  /**
+   * EL ÍTEM FANTASMA, que es el síntoma 1 medido en el emulador: el Auditor
+   * corrige un conteo, el ítem cuadra y sale de la ronda. El servidor pasa a
+   * devolver 2 productos y el teléfono seguía mostrando 3 -- salir de la
+   * pantalla y volver no lo arreglaba, porque nada lo sacaba.
+   */
+  it('un producto que ya no viene DESAPARECE de la hoja', async () => {
+    const INV = 770001;
+    const [p1, p2, p3] = [9001, 9002, 9003];
+
+    vi.mocked(hojasApi.mias).mockResolvedValueOnce([hojaCon(INV, 7700001, '001', [p1, p2, p3])]);
+    const [antes] = await hojasSqlite.mias(INV, 1);
+    expect(antes!.productos).toHaveLength(3);
+
+    // El Auditor corrigió el conteo de p3: ya cuadra y sale de la ronda.
+    vi.mocked(hojasApi.mias).mockResolvedValueOnce([hojaCon(INV, 7700001, '001', [p1, p2])]);
+    const [despues] = await hojasSqlite.mias(INV, 1);
+
+    expect(despues!.productos.map((p) => p.id).sort()).toEqual([p1, p2]);
+
+    // Y de verdad se fue de la base, no quedó escondido.
+    const db = await obtenerDbDeTest();
+    const guardados = await db.getAllAsync('SELECT id FROM productos_estructura WHERE hoja_id = ?', [7700001]);
+    expect(guardados).toHaveLength(2);
+  });
+
+  it('el conteo del producto que se fue se va con él: no infla el avance', async () => {
+    // Un conteo huérfano de un producto invisible haría que la hoja dijera
+    // "3 de 2 contados" y bloquearía o desbloquearía el botón de finalizar
+    // por un ítem que ya no existe.
+    const INV = 770002;
+    const [p1, p2] = [9011, 9012];
+
+    vi.mocked(hojasApi.mias).mockResolvedValueOnce([hojaCon(INV, 7700002, '001', [p1, p2])]);
+    await hojasSqlite.mias(INV, 1);
+
+    const db = await obtenerDbDeTest();
+    await db.runAsync(
+      'INSERT OR REPLACE INTO conteos (hoja_id, producto_id, lineas, sueltas, confirmado_por_escaner, contado_en) VALUES (?, ?, ?, ?, ?, ?)',
+      [7700002, p2, '[]', 5, 0, 't-huerfano'],
+    );
+
+    vi.mocked(hojasApi.mias).mockResolvedValueOnce([hojaCon(INV, 7700002, '001', [p1])]);
+    await hojasSqlite.mias(INV, 1);
+
+    const conteos = await db.getAllAsync('SELECT producto_id FROM conteos WHERE hoja_id = ?', [7700002]);
+    expect(conteos).toEqual([]);
+  });
+
+  /**
+   * EL MISMO ÍTEM FANTASMA, PERO POR EL CAMINO DEL AUDITOR.
+   *
+   * "Corregir lo contado" (`app/auditor/corregir.tsx`) lee con `todas()`, no
+   * con `mias()`: el Auditor entra por el INVENTARIO y busca los ítems que no
+   * cuadran, sin importar en qué hoja cayeron. El test de arriba prueba el
+   * camino del Contador; sin este, la reconciliación de PRODUCTOS por
+   * `todas()` quedaba sin cubrir -- y es justo el alcance desde el que el
+   * Auditor corrige y provoca la desaparición.
+   *
+   * Que funcione no es casualidad: `reconciliarProductos` corre ANTES del
+   * corte `if (alcance !== 'todas') return`, así que vale para los dos. Este
+   * test fija esa decisión, que de otro modo se puede perder en un refactor
+   * moviendo una línea tres renglones más abajo.
+   */
+  it('`todas()` tambien saca el producto que ya no viene (el camino del Auditor)', async () => {
+    const INV = 770005;
+    const [p1, p2, p3] = [9051, 9052, 9053];
+
+    vi.mocked(hojasApi.todas).mockResolvedValueOnce([hojaCon(INV, 7700005, '001', [p1, p2, p3])]);
+    const [antes] = await hojasSqlite.todas(INV, 1);
+    expect(antes!.productos).toHaveLength(3);
+
+    // El Auditor corrigio p3 en la ronda anterior: cuadro y salio de esta.
+    vi.mocked(hojasApi.todas).mockResolvedValueOnce([hojaCon(INV, 7700005, '001', [p1, p2])]);
+    const [despues] = await hojasSqlite.todas(INV, 1);
+
+    expect(despues!.productos.map((p) => p.id).sort()).toEqual([p1, p2]);
+
+    const db = await obtenerDbDeTest();
+    const guardados = await db.getAllAsync('SELECT id FROM productos_estructura WHERE hoja_id = ?', [7700005]);
+    expect(guardados).toHaveLength(2);
+  });
+
+  /**
+   * SIN RED, POR `todas()`, LA HOJA NO SE VACIA. Es el mismo limite que ya
+   * esta probado para `mias()`, y hace falta acá tambien porque el Auditor
+   * mira esta pantalla en la tienda, con el WiFi que hay.
+   */
+  it('SIN RED por `todas()`: los productos siguen ahi', async () => {
+    const INV = 770006;
+    const [p1, p2] = [9061, 9062];
+
+    vi.mocked(hojasApi.todas).mockResolvedValueOnce([hojaCon(INV, 7700006, '001', [p1, p2])]);
+    await hojasSqlite.todas(INV, 1);
+
+    vi.mocked(hojasApi.todas).mockRejectedValueOnce(new TypeError('Network request failed'));
+    const [despues] = await hojasSqlite.todas(INV, 1);
+
+    expect(despues!.productos.map((p) => p.id).sort()).toEqual([p1, p2]);
+  });
+
+  /**
+   * LAS HOJAS ENTERAS SOLO SE BORRAN DESDE `todas()`, y este test fija el
+   * porqué: el teléfono tiene UNA copia local, no una por rol. Una respuesta
+   * de `mias()` no sabe qué hojas existen en la ronda -- las que no vinieron
+   * pueden ser de otro contador.
+   */
+  it('`todas()` sí borra una hoja que ya no viene (reparto deshecho)', async () => {
+    const INV = 770003;
+    vi.mocked(hojasApi.todas).mockResolvedValueOnce([
+      hojaCon(INV, 7700031, '001', [9021]),
+      hojaCon(INV, 7700032, '002', [9022]),
+    ]);
+    expect(await hojasSqlite.todas(INV, 1)).toHaveLength(2);
+
+    vi.mocked(hojasApi.todas).mockResolvedValueOnce([hojaCon(INV, 7700031, '001', [9021])]);
+    const despues = await hojasSqlite.todas(INV, 1);
+
+    expect(despues.map((h) => h.numero)).toEqual(['001']);
+    const db = await obtenerDbDeTest();
+    const filas = await db.getAllAsync('SELECT id FROM hojas_estructura WHERE inventario_id = ?', [INV]);
+    expect(filas).toHaveLength(1);
+  });
+});
+
+/**
+ * ===========================================================================
+ * EL LÍMITE: SIN RED NO SE BORRA NADA
+ * ===========================================================================
+ * La copia local existe porque estas tiendas tienen WiFi mala y la gente
+ * cuenta igual. Un pedido que falla NO dice nada sobre el mundo -- dice que no
+ * se pudo preguntar. El borrado lo dispara una respuesta, nunca el silencio.
+ */
+describe('RECONCILIACIÓN: si el pedido falla, la copia local queda INTACTA', () => {
+  const ID_MARIA = 501;
+
+  function hojaCon(inventarioId: number, id: number, numero: string, productoIds: number[]) {
+    return {
+      id,
+      inventarioId,
+      numero,
+      zona: 'Zona S',
+      gondola: 'S1',
+      tamano: 50,
+      estado: 'pendiente' as const,
+      sync: 'sincronizado' as const,
+      asignados: ['María Rojas'],
+      asignadoAId: ID_MARIA,
+      asignadoA2Id: null,
+      productos: productoIds.map((pid) => ({
+        id: pid,
+        codigo: String(pid).padStart(4, '0'),
+        codigoBarras: `774000000${pid}`,
+        descripcion: `Producto ${pid}`,
+        empaques: [{ nombre: 'Caja', factor: 12 }],
+      })),
+      conteos: [],
+    };
+  }
+
+  it('SIN RED: los productos NO se borran, aunque la respuesta no traiga ninguno', async () => {
+    const INV = 780001;
+    const [p1, p2, p3] = [9101, 9102, 9103];
+
+    vi.mocked(hojasApi.mias).mockResolvedValueOnce([hojaCon(INV, 7800001, '001', [p1, p2, p3])]);
+    expect((await hojasSqlite.mias(INV, 1))[0]!.productos).toHaveLength(3);
+
+    // Se cae la red. Nada de lo guardado puede desaparecer por esto.
+    vi.mocked(hojasApi.mias).mockRejectedValueOnce(new ErrorApi('sin-red', { mensaje: 'sin conexión' }));
+    const despues = await hojasSqlite.mias(INV, 1);
+
+    expect(despues[0]!.productos).toHaveLength(3);
+  });
+
+  it('SIN RED: la hoja entera sigue ahí para `todas()`', async () => {
+    const INV = 780002;
+    vi.mocked(hojasApi.todas).mockResolvedValueOnce([
+      hojaCon(INV, 7800021, '001', [9111]),
+      hojaCon(INV, 7800022, '002', [9112]),
+    ]);
+    expect(await hojasSqlite.todas(INV, 1)).toHaveLength(2);
+
+    vi.mocked(hojasApi.todas).mockRejectedValueOnce(new ErrorApi('timeout', { mensaje: 'se agotó el tiempo' }));
+    expect(await hojasSqlite.todas(INV, 1)).toHaveLength(2);
+  });
+
+  it('LO PENDIENTE DE SUBIR NO SE BORRA, aunque el servidor no mande la hoja', async () => {
+    // Lo que la persona cargó y todavía no subió es trabajo suyo que no llegó.
+    // El servidor puede no mandar la hoja JUSTAMENTE porque no le llegó.
+    const INV = 780003;
+    const p1 = 9121;
+
+    vi.mocked(hojasApi.todas).mockResolvedValueOnce([hojaCon(INV, 7800031, '001', [p1])]);
+    await hojasSqlite.todas(INV, 1);
+    vi.mocked(hojasApi.mias).mockResolvedValueOnce([hojaCon(INV, 7800031, '001', [p1])]);
+    const [hoja] = await hojasSqlite.mias(INV, 1);
+
+    await hojasSqlite.guardarConteo(hoja!.id, {
+      productoId: p1,
+      empaques: [],
+      sueltas: 7,
+      confirmadoPorEscaner: false,
+      contadoEn: 't-pendiente',
+    });
+
+    const db = await obtenerDbDeTest();
+    const cola = await db.getAllAsync('SELECT id FROM cola_sync WHERE hoja_id = ?', [hoja!.id]);
+    expect(cola.length).toBeGreaterThan(0);
+
+    // El servidor deja de mandarla. La hoja NO se borra: tiene trabajo sin subir.
+    vi.mocked(hojasApi.todas).mockResolvedValueOnce([]);
+    await hojasSqlite.todas(INV, 1);
+
+    const filas = await db.getAllAsync('SELECT id FROM hojas_estructura WHERE id = ?', [hoja!.id]);
+    expect(filas).toHaveLength(1);
+    const conteos = await db.getAllAsync('SELECT sueltas FROM conteos WHERE hoja_id = ?', [hoja!.id]);
+    expect(conteos).toEqual([{ sueltas: 7 }]);
+  });
+});

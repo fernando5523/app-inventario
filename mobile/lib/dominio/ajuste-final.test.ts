@@ -20,17 +20,19 @@ import {
   puedeIniciarAjuste,
   STOCK_NO_SE_CORRIGE,
   type FaseDeCierre,
+  textoItemSalioDeRonda,
+  textoRondaQueYaNoExiste,
 } from './ajuste-final';
 
 describe('faseDeCierre', () => {
   it('con una ronda abierta se está contando', () => {
-    expect(faseDeCierre('en_curso', 1)).toBe('contando');
-    expect(faseDeCierre('en_curso', 4)).toBe('contando');
+    expect(faseDeCierre('en_curso', 1, 26)).toBe('contando');
+    expect(faseDeCierre('en_curso', 4, 26)).toBe('contando');
   });
 
   /** LA VENTANA: la última ronda cerró y el ajuste todavía no arrancó. */
-  it('en_curso SIN ronda activa es la ventana entre la última ronda y el ajuste', () => {
-    expect(faseDeCierre('en_curso', null)).toBe('rondas-cerradas');
+  it('en_curso SIN ronda activa, CON hojas, es la ventana entre la última ronda y el ajuste', () => {
+    expect(faseDeCierre('en_curso', null, 26)).toBe('rondas-cerradas');
   });
 
   /**
@@ -39,14 +41,69 @@ describe('faseDeCierre', () => {
    * por cerrado.
    */
   it('ajuste_auditor es su propia fase, aunque no haya ronda activa', () => {
-    expect(faseDeCierre('ajuste_auditor', null)).toBe('ajuste');
+    expect(faseDeCierre('ajuste_auditor', null, 26)).toBe('ajuste');
   });
 
   it('cualquier estado posterior es cerrado: nadie toca nada', () => {
-    expect(faseDeCierre('conteo_cerrado', null)).toBe('cerrado');
-    expect(faseDeCierre('liquidado', null)).toBe('cerrado');
-    expect(faseDeCierre('lacrado', null)).toBe('cerrado');
-    expect(faseDeCierre('anulado', null)).toBe('cerrado');
+    expect(faseDeCierre('conteo_cerrado', null, 26)).toBe('cerrado');
+    expect(faseDeCierre('liquidado', null, 26)).toBe('cerrado');
+    expect(faseDeCierre('lacrado', null, 26)).toBe('cerrado');
+    expect(faseDeCierre('anulado', null, 26)).toBe('cerrado');
+  });
+});
+
+/**
+ * LOS DOS CASOS QUE `rondaActiva === null` JUNTABA, y son lo contrario uno
+ * del otro. Este describe existe para que el que lea el `if` entienda por qué
+ * están separados y no los vuelva a juntar.
+ *
+ * BUG REAL (2026-09-21, emulador): un inventario con el catálogo traído y
+ * CERO hojas se mostraba como *"El conteo de este inventario terminó"*, y el
+ * Coordinador quedaba sin camino para crear las hojas -- lo único a lo que
+ * había entrado. Los dos llegaban con `rondaActiva: null` y la función los
+ * trataba a los dos como el segundo.
+ */
+describe('faseDeCierre: nada empezó todavía NO es todo terminó', () => {
+  it('catálogo traído y CERO hojas es `sin-hojas`: el armado recién empieza', () => {
+    // El caso de Luzuriaga: 980 ítems de catálogo, 0 hojas.
+    expect(faseDeCierre('en_curso', null, 0)).toBe('sin-hojas');
+  });
+
+  it('con hojas y sin ronda abierta SIGUE siendo `rondas-cerradas`: el caso no se tocó', () => {
+    expect(faseDeCierre('en_curso', null, 26)).toBe('rondas-cerradas');
+  });
+
+  it('lo que las separa es si TUVO hojas alguna vez, no si hay una ronda ahora', () => {
+    // Misma ronda (ninguna), mismo estado: lo único distinto es `totalHojas`,
+    // y eso solo ya decide dos fases opuestas.
+    expect(faseDeCierre('en_curso', null, 0)).toBe('sin-hojas');
+    expect(faseDeCierre('en_curso', null, 1)).toBe('rondas-cerradas');
+  });
+
+  it('sin hojas NO es `contando`: no hay nada que contar todavía', () => {
+    // Importa porque media app pregunta `fase !== 'contando'` para decidir si
+    // ya no se cuenta, y ahí `sin-hojas` tiene que caer del lado correcto.
+    expect(faseDeCierre('en_curso', null, 0)).not.toBe('contando');
+  });
+
+  it('el estado manda sobre las hojas: un inventario cerrado sin hojas es `cerrado`', () => {
+    // Un inventario anulado antes de crear hojas existe, y no es el paso 2 de
+    // nadie: ya nadie va a armar nada ahí.
+    expect(faseDeCierre('conteo_cerrado', null, 0)).toBe('cerrado');
+    expect(faseDeCierre('anulado', null, 0)).toBe('cerrado');
+    expect(faseDeCierre('ajuste_auditor', null, 0)).toBe('ajuste');
+  });
+
+  it('el Auditor NO puede decidir sobre un inventario sin hojas', () => {
+    // Antes sí podía: `sin-hojas` caía en `rondas-cerradas` y
+    // `elAuditorPuedeDecidir` daba true sobre un inventario donde nadie contó
+    // nada. Queda arreglado de rebote, y este test lo fija.
+    expect(elAuditorPuedeDecidir(faseDeCierre('en_curso', null, 0))).toBe(false);
+    expect(elAuditorPuedeDecidir(faseDeCierre('en_curso', null, 26))).toBe(true);
+  });
+
+  it('y no se puede "corregir lo contado" cuando no se contó nada', () => {
+    expect(puedeCorregirLoContado(faseDeCierre('en_curso', null, 0))).toBe(false);
   });
 });
 
@@ -202,5 +259,56 @@ describe('corregir lo contado: la ventana es la misma para los dos roles', () =>
   it('la frase del stock dice que se compara, nunca que se corrige', () => {
     expect(STOCK_NO_SE_CORRIGE).toMatch(/no se corrige/i);
     expect(STOCK_NO_SE_CORRIGE).toMatch(/comparar/i);
+  });
+});
+
+/**
+ * EL AVISO QUE CIERRA EL CÍRCULO. Es la frase que el cliente pidió textual
+ * (reunión 2, 00:12:12): *"puedes corregirlo para que ya no salga en mi
+ * segundo conteo"*.
+ */
+describe('textoItemSalioDeRonda', () => {
+  const base = { codigo: 'PQ-522626-A', ronda: 2, hojaBorrada: false, rondaBorrada: false };
+
+  it('dice el código y el conteo del que salió, con las palabras del cliente', () => {
+    const t = textoItemSalioDeRonda(base);
+    expect(t).toContain('PQ-522626-A');
+    expect(t).toContain('2do conteo');
+    expect(t).toContain('ya no sale');
+  });
+
+  it('si la hoja quedó vacía, lo dice: alguien iba a ir a buscarla', () => {
+    expect(textoItemSalioDeRonda({ ...base, hojaBorrada: true })).toContain('hoja');
+  });
+
+  /**
+   * El caso más grave y el que más importa avisar: el Auditor puede estar
+   * mirando justo esa ronda cuando desaparece.
+   */
+  it('si la ronda entera desapareció, gana sobre el aviso de la hoja', () => {
+    const t = textoItemSalioDeRonda({ ...base, hojaBorrada: true, rondaBorrada: true });
+    expect(t).toContain('ya no hace falta');
+    expect(t).not.toContain('Su hoja quedó');
+  });
+
+  /** Las rondas extra del Auditor existen: el ordinal no puede cortarse en 3. */
+  it('sirve para una ronda extra', () => {
+    expect(textoItemSalioDeRonda({ ...base, ronda: 5 })).toContain('5to conteo');
+  });
+
+  /** Tuteo latino neutro, pedido explícito del cliente: nada de voseo. */
+  it('no usa voseo', () => {
+    for (const salida of [base, { ...base, hojaBorrada: true }, { ...base, rondaBorrada: true }]) {
+      expect(textoItemSalioDeRonda(salida)).not.toMatch(/\b(corregí|tenés|podés|fijate|acá)\b/i);
+    }
+  });
+});
+
+describe('textoRondaQueYaNoExiste', () => {
+  it('dice cuál se fue, por qué y adónde se lo llevó', () => {
+    const t = textoRondaQueYaNoExiste(2, 1);
+    expect(t).toContain('2do conteo');
+    expect(t).toContain('1er conteo');
+    expect(t).toContain('se corrigieron todos sus ítems');
   });
 });

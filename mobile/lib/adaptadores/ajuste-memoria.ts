@@ -144,9 +144,11 @@ async function exigirAuditorDelInventario(inventarioId: number): Promise<number>
 /** La fase del inventario, con la ronda resuelta — las dos guardas la piden igual. */
 async function faseDe(inventarioId: number): Promise<ReturnType<typeof faseDeCierre>> {
   const inventario = await obtenerInventario(inventarioId);
+  const totalHojas = inventario?.hojas.length ?? 0;
   return faseDeCierre(
     estadoDeInventarioEnMemoria(inventarioId),
-    rondaActivaEnMemoria(inventarioId, (inventario?.hojas.length ?? 0) > 0),
+    rondaActivaEnMemoria(inventarioId, totalHojas > 0),
+    totalHojas,
   );
 }
 
@@ -200,6 +202,20 @@ export const ajusteMemoria: RepositorioAjuste = {
     const indice = hoja.conteos.findIndex((c) => c.productoId === productoId);
     if (indice >= 0) hoja.conteos[indice] = nuevo;
     else hoja.conteos.push(nuevo);
+
+    /**
+     * `salioDeLaRonda` SIEMPRE null en el mock, y no es una simplificación:
+     * para saber si un ítem sale de la ronda siguiente hay que compararlo
+     * contra el stock del ERP, y este adaptador no lo tiene. Es el MISMO
+     * límite que ya documenta `abrirRondaExtra` unas líneas más abajo -- el
+     * mock ni siquiera materializa las hojas del reconteo, así que no hay
+     * ronda siguiente de la cual sacar nada.
+     *
+     * Devolver una salida inventada sería peor que no devolver ninguna: la
+     * pantalla diría "ya no sale en el 2do conteo" sin que eso haya pasado en
+     * ningún lado.
+     */
+    return { salioDeLaRonda: null };
   },
 
   async abrirRondaExtra(inventarioId) {

@@ -1,8 +1,9 @@
 import { router } from 'expo-router';
 import { AlertTriangle, ArrowRightCircle, Check, FileText, Lock, PlusCircle, Scale } from 'lucide-react-native';
 import { useCallback, useEffect, useState, type JSX } from 'react';
-import { ActivityIndicator, Alert, Pressable, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Alert, Pressable, RefreshControl, StyleSheet, Text, View } from 'react-native';
 
+import { useRefrescoAlEnfocar } from '../hooks/useRefrescoAlEnfocar';
 import { cargarSeguro } from '../../lib/adaptadores/_http';
 import { repositorioAjuste, repositorioHistorial, repositorioInventario, repositorioSesion } from '../../lib/contenedor';
 import { elAuditorPuedeDecidir, faseDeCierre, type FaseDeCierre } from '../../lib/dominio/ajuste-final';
@@ -305,9 +306,37 @@ export function CicloScreen({ rol }: CicloScreenProps): JSX.Element {
     setResumenPorRonda(Object.fromEntries(resultados));
   }, []);
 
-  useEffect(() => {
+  /**
+   * LA CARGA DEL CICLO, y por qué ahora vuelve a correr al enfocar.
+   *
+   * ---------------------------------------------------------------------
+   * EL PROBLEMA QUE ESTO CIERRA
+   * ---------------------------------------------------------------------
+   * Esto era un `useEffect` con `[sesion, cargarResumenDeRondas,
+   * intentoNumero, sucursalId]`: se pedía UNA vez y no se volvía a pedir
+   * nunca, salvo por el botón "Reintentar" -- que solo aparece si hubo un
+   * error de carga. Volver a la pestaña no remonta la pantalla (por eso el
+   * resto de las pantallas usa `useFocusEffect`), así que el resumen se
+   * quedaba clavado en el momento en que se abrió.
+   *
+   * Lo que eso cuesta: el resumen de la ronda activa ES el preview del
+   * cierre. El Coordinador lo abría, leía "faltan 12 por contar", se iba a
+   * Gestión de hojas, volvía y seguía diciendo 12 aunque los contadores ya
+   * hubieran cargado todo. Decidía no cerrar la ronda con un dato viejo --
+   * el mismo problema que el "Faltan 50 productos por contar" que reportó
+   * el usuario en otra pantalla.
+   *
+   * Se usa `useRefrescoAlEnfocar`, el MISMO hook que Gestión de hojas y
+   * Asistencia: un solo comportamiento para toda la app, no un refresco
+   * distinto por pantalla. Cubre enfocar Y volver a primer plano.
+   *
+   * Esta pantalla NO tiene copia local que reconciliar: `activo()`,
+   * `resumenRonda()` e `historial.listar()` van al servidor en cada carga y
+   * el estado se REEMPLAZA entero. Sin red, `cargarSeguro` devuelve el error
+   * y la pantalla lo muestra sin vaciar lo que ya tenía en pantalla.
+   */
+  const cargar = useCallback(async (): Promise<void> => {
     if (!sesion) return;
-    let vigente = true;
     // Auditor que todavía no eligió sucursal (y sin ficha): no hay ciclo que
     // pedir -- la pantalla invita a elegir en vez de mostrar la de nadie.
     if (sucursalId === null) {
@@ -319,53 +348,78 @@ export function CicloScreen({ rol }: CicloScreenProps): JSX.Element {
       setErrorCarga(null);
       return;
     }
-    setCargando(true);
+
     setErrorCarga(null);
     setMotivoRechazo(null);
 
-    async function cargar(): Promise<void> {
-      const error = await cargarSeguro(async () => {
-        // `activo()` filtra `estado: en_curso`: para un inventario YA cerrado
-        // devuelve null. Ahí el ciclo es el ÚLTIMO cerrado de la sucursal, que
-        // sale del historial. Sin este fallback la pantalla quedaba en blanco
-        // sobre un ciclo que en realidad terminó con sus 3 pasadas contadas.
-        const activo = await repositorioInventario.activo(sucursalId!);
-        const historial = activo
-          ? []
-          : (await repositorioHistorial.listar({ sucursalId: sucursalId! })).inventarios;
-        if (!vigente) return;
+    const error = await cargarSeguro(async () => {
+      // `activo()` filtra `estado: en_curso`: para un inventario YA cerrado
+      // devuelve null. Ahí el ciclo es el ÚLTIMO cerrado de la sucursal, que
+      // sale del historial. Sin este fallback la pantalla quedaba en blanco
+      // sobre un ciclo que en realidad terminó con sus 3 pasadas contadas.
+      const activo = await repositorioInventario.activo(sucursalId);
+      const historial = activo ? [] : (await repositorioHistorial.listar({ sucursalId })).inventarios;
 
-        const delCiclo = inventarioDelCiclo(activo, historial);
-        setItems(delCiclo?.items ?? null);
-        setTamanoHoja(delCiclo?.tamanoHoja ?? null);
-        setInventarioId(delCiclo?.inventarioId ?? null);
-        setRondaActiva(delCiclo?.rondaActiva ?? null);
-        // La fase sale del inventario ABIERTO. Si el ciclo vino del historial
-        // (no hay `activo`), ese inventario ya cerró y no hay nada que abrir
-        // ni que ajustar.
-        setFase(activo ? faseDeCierre(activo.estado, activo.rondaActiva) : delCiclo ? 'cerrado' : null);
-        if (!delCiclo) {
-          setResumenPorRonda({});
-          return;
-        }
+      const delCiclo = inventarioDelCiclo(activo, historial);
+      setItems(delCiclo?.items ?? null);
+      setTamanoHoja(delCiclo?.tamanoHoja ?? null);
+      setInventarioId(delCiclo?.inventarioId ?? null);
+      setRondaActiva(delCiclo?.rondaActiva ?? null);
+      // La fase sale del inventario ABIERTO. Si el ciclo vino del historial
+      // (no hay `activo`), ese inventario ya cerró y no hay nada que abrir
+      // ni que ajustar.
+      setFase(activo ? faseDeCierre(activo.estado, activo.rondaActiva, activo.totalHojas) : delCiclo ? 'cerrado' : null);
+      if (!delCiclo) {
+        setResumenPorRonda({});
+        return;
+      }
 
-        // El embudo de las 3 rondas, del servidor. Lo ven los DOS roles: es el
-        // ciclo del inventario, no una herramienta de cierre. El preview del
-        // cierre sale de este mismo objeto (resumenPorRonda[rondaActiva]).
-        await cargarResumenDeRondas(delCiclo.inventarioId, delCiclo.rondaActiva ?? RONDA_MAX);
-      });
-      if (!vigente) return;
-      // INCONDICIONAL: con cargarSeguro, `error` nunca deja escapar una
-      // excepción -- este `setCargando(false)` SIEMPRE se ejecuta.
-      if (error) setErrorCarga(error.message);
-      setCargando(false);
-    }
+      // El embudo de las rondas, del servidor. Lo ven los DOS roles: es el
+      // ciclo del inventario, no una herramienta de cierre. El preview del
+      // cierre sale de este mismo objeto (resumenPorRonda[rondaActiva]).
+      await cargarResumenDeRondas(delCiclo.inventarioId, delCiclo.rondaActiva ?? RONDA_MAX);
+    });
 
-    cargar();
-    return () => {
-      vigente = false;
-    };
-  }, [sesion, cargarResumenDeRondas, intentoNumero, sucursalId]);
+    // INCONDICIONAL: con cargarSeguro, `error` nunca deja escapar una
+    // excepción -- este `setCargando(false)` SIEMPRE se ejecuta.
+    if (error) setErrorCarga(error.message);
+    setCargando(false);
+  }, [sesion, sucursalId, cargarResumenDeRondas, intentoNumero]);
+
+  /**
+   * PAUSADO MIENTRAS HAY UNA ACCIÓN EN CURSO. Un refresco que aterriza en
+   * medio de cerrar la ronda o de abrir el ajuste pisaría `rondaActiva` y
+   * `fase` con el estado de ANTES de la acción -- que es justo lo que esas
+   * funciones acaban de re-pedir a mano. Es para lo que existe la bandera
+   * (ver el hook).
+   */
+  const { refrescando, refrescar } = useRefrescoAlEnfocar(cargar, {
+    pausado: cerrandoRonda || accionAuditor !== null,
+  });
+
+  /**
+   * CAMBIAR DE SUCURSAL TIENE QUE RECARGAR, y sin esto no recargaba.
+   *
+   * `useRefrescoAlEnfocar` dispara al ENFOCAR y al volver a primer plano, y
+   * nada más: guarda `cargar` en un ref a propósito (ver su comentario) para
+   * no re-suscribirse en cada render, así que su `useFocusEffect` NO se
+   * vuelve a ejecutar cuando `cargar` cambia de identidad. Al sacar la carga
+   * del `useEffect` que la disparaba, el selector de sucursal del Auditor
+   * quedó sin efecto: elegía otra tienda y seguía viendo el ciclo de la
+   * anterior, que es la misma clase de dato viejo que este cambio vino a
+   * eliminar.
+   *
+   * Se llama a `refrescar()` y no a `cargar()` directo para pasar por el
+   * candado del hook: al montar, este efecto y el de enfocar disparan juntos,
+   * y `enVuelo` descarta el segundo en vez de pedir dos veces lo mismo.
+   *
+   * `intentoNumero` también entra: es el botón "volver a intentar" del error
+   * de carga, y compartía el mismo disparador perdido.
+   */
+  useEffect(() => {
+    setCargando(true);
+    refrescar();
+  }, [sucursalId, intentoNumero, refrescar]);
 
   if (!sesion) return <View />;
 
@@ -401,7 +455,7 @@ export function CicloScreen({ rol }: CicloScreenProps): JSX.Element {
       // embudo de las 3 pasadas (resumenPorRonda) se recarga y se sigue viendo.
       const activo = await repositorioInventario.activo(sucursalId!);
       setRondaActiva(activo?.rondaActiva ?? null);
-      setFase(activo ? faseDeCierre(activo.estado, activo.rondaActiva) : 'cerrado');
+      setFase(activo ? faseDeCierre(activo.estado, activo.rondaActiva, activo.totalHojas) : 'cerrado');
       await cargarResumenDeRondas(inventarioId, activo?.rondaActiva ?? RONDA_MAX);
     } catch (error) {
       // El backend rechaza con mensaje claro (hojas sin finalizar, o ya
@@ -435,7 +489,7 @@ export function CicloScreen({ rol }: CicloScreenProps): JSX.Element {
       }
       const activo = await repositorioInventario.activo(sucursalId!);
       setRondaActiva(activo?.rondaActiva ?? null);
-      setFase(activo ? faseDeCierre(activo.estado, activo.rondaActiva) : 'cerrado');
+      setFase(activo ? faseDeCierre(activo.estado, activo.rondaActiva, activo.totalHojas) : 'cerrado');
       await cargarResumenDeRondas(inventarioId, activo?.rondaActiva ?? RONDA_MAX);
       if (cual === 'ronda') {
         Alert.alert(
@@ -546,7 +600,15 @@ export function CicloScreen({ rol }: CicloScreenProps): JSX.Element {
     : (sucursales.find((s) => s.id === sucursalId)?.nombre ?? sesion.sucursal?.nombre);
 
   return (
-    <PantallaConTabs scrollable contentStyle={styles.contenido}>
+    <PantallaConTabs
+      scrollable
+      contentStyle={styles.contenido}
+      // Tirar para refrescar, además del foco: la misma salida manual que ya
+      // tienen Gestión de hojas y Asistencia.
+      refreshControl={
+        <RefreshControl refreshing={refrescando} onRefresh={refrescar} colors={[colors.rojo]} tintColor={colors.rojo} />
+      }
+    >
       <BarraApp
         rotulo={rol === 'auditor' ? 'Auditoría · Ciclo de conteos' : 'Gestión masiva'}
         sede={nombreSucursal}

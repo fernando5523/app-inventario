@@ -1,19 +1,31 @@
-import { router, useFocusEffect } from 'expo-router';
-import { Check, CloudDownload, LayoutGrid, Users } from 'lucide-react-native';
+import { router } from 'expo-router';
+import { AlertTriangle, Check, CloudDownload, LayoutGrid, UserCheck, Users } from 'lucide-react-native';
 import { useCallback, useMemo, useRef, useState, type JSX, type ReactNode } from 'react';
-import { ActivityIndicator, Alert, Pressable, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Alert, Pressable, RefreshControl, StyleSheet, Text, View } from 'react-native';
 
+import { useRefrescoAlEnfocar } from '../../components/hooks/useRefrescoAlEnfocar';
 import { PantallaConTabs } from '../../components/navegacion/PantallaConTabs';
 import { faseDeCierre, type FaseDeCierre } from '../../lib/dominio/ajuste-final';
-import { AvanceFila, BarraApp, Badge, Button, formatoFechaHora, formatoMiles, type BadgeVariant } from '../../components/ui';
-import { inventarioIdSinRed } from '../../lib/adaptadores/hojas-sqlite';
-import { repositorioHojas, repositorioInventario, repositorioSesion } from '../../lib/contenedor';
+import {
+  AvanceFila,
+  BarraApp,
+  Badge,
+  Button,
+  diaEnLima,
+  formatoFechaHora,
+  formatoMiles,
+  type BadgeVariant,
+} from '../../components/ui';
+import { inventarioIdSinRed, ultimaDescarga } from '../../lib/adaptadores/hojas-sqlite';
+import { repositorioAsistencia, repositorioHojas, repositorioInventario } from '../../lib/contenedor';
+import { contadoresPresentes, filasDeAsistencia } from '../../lib/dominio/asistencia';
 import { avanceParaMostrar } from '../../lib/dominio/avance-snapshot';
 import { textoDeCriterios } from '../../lib/dominio/criterios-snapshot';
 import { rotuloHojasCreadas } from '../../lib/dominio/rotulo-armado';
 import { partirEnHojas } from '../../lib/dominio/lote';
 import { pluralizar } from '../../lib/dominio/plural';
-import { TAMANOS_HOJA, type Colaborador, type HojaConteo, type TamanoHoja } from '../../lib/dominio/tipos';
+import { TAMANOS_HOJA, type HojaConteo, type TamanoHoja } from '../../lib/dominio/tipos';
+import type { AsistenciaInventario } from '../../lib/puertos/repositorios';
 import {
   ErrorSnapshot,
   type AvanceSnapshot,
@@ -257,7 +269,18 @@ export default function ArmarHojasScreen(): JSX.Element {
    * nada que crear ni repartir. Ver dominio/ajuste-final.ts.
    */
   const [fase, setFase] = useState<FaseDeCierre | null>(null);
-  const [contadores, setContadores] = useState<Colaborador[]>([]);
+  /**
+   * LA ASISTENCIA DEL DÍA. `null` = no se pudo traer, que NO es lo mismo que
+   * "nadie marcó" -- y la diferencia decide qué dice el paso 3.
+   *
+   * Antes acá había un padrón crudo (`colaboradores` filtrado por rol) y el
+   * reparto salía de ahí sin mirar la asistencia. Ver `contadoresPresentes`
+   * en dominio/asistencia.ts para el bug que eso causaba.
+   */
+  const [asistencia, setAsistencia] = useState<AsistenciaInventario | null>(null);
+  const [asistenciaFallo, setAsistenciaFallo] = useState(false);
+  /** `true` = las hojas que se muestran salen de la copia local sin haberse podido contrastar. */
+  const [hojasSinVerificar, setHojasSinVerificar] = useState(false);
 
   const [tipoElegido, setTipoElegido] = useState<TipoInventario>('mensual');
   const [desglose, setDesglose] = useState<DesgloseSnapshot | null>(null);
@@ -290,6 +313,10 @@ export default function ArmarHojasScreen(): JSX.Element {
     // se estuvieran armando ahora.
     let rondaActiva: number | null = null;
     let estadoActivo: EstadoInventario | null = null;
+    // Cuántas hojas tuvo este inventario EN TOTAL, no las de la ronda: es lo
+    // que distingue "todavía no se crearon" de "se cerraron todas". Ver
+    // dominio/ajuste-final.ts#faseDeCierre.
+    let totalHojas = 0;
     // Distingue "el servidor contestó y no hay inventario todavía" (estado
     // normal: hay que tomar el snapshot en el paso 1) de "no se pudo ni
     // preguntar" (sin red) — confundirlas mostraría "no se pudo conectar"
@@ -302,40 +329,71 @@ export default function ArmarHojasScreen(): JSX.Element {
       tomadoEnSnapshot = activo?.tomadoEn ?? null;
       rondaActiva = activo?.rondaActiva ?? null;
       estadoActivo = activo?.estado ?? null;
+      totalHojas = activo?.totalHojas ?? 0;
     } catch {
       activoFallo = true;
       inventarioActivo = await inventarioIdSinRed();
     }
 
-    // El padrón de colaboradores no tiene fallback local ni bloquea ver el
-    // avance del armado: si falla, se sigue con la lista vacía (el paso 3 de
-    // "asignar" simplemente no tendrá a quién repartir hasta que vuelva la red).
-    let colaboradores: Colaborador[] = [];
-    try {
-      colaboradores = await repositorioSesion.colaboradores(sesion.sucursal!.id);
-    } catch {
-      // silencioso a propósito, ver el comentario de arriba.
+    /**
+     * LA ASISTENCIA DEL DÍA -- de acá sale a quiénes se les reparte.
+     *
+     * Antes se traía el padrón crudo y su fallo se tragaba en silencio: la
+     * lista quedaba vacía y el paso 3 "simplemente no tenía a quién
+     * repartir". Ese patrón NO sirve acá, y es el mismo bug con otra cara:
+     * si no se pudo verificar quién vino, repartir entre todos los del
+     * padrón es exactamente lo que había que dejar de hacer. Por eso el
+     * fallo se RECUERDA (`asistenciaFallo`) y el paso 3 lo dice.
+     *
+     * Se pide después de `activo()` porque necesita el inventarioId, y solo
+     * si hay uno: sin inventario no hay asistencia que traer.
+     */
+    setAsistenciaFallo(false);
+    if (inventarioActivo !== null) {
+      try {
+        setAsistencia(await repositorioAsistencia.deInventario(inventarioActivo));
+      } catch {
+        setAsistencia(null);
+        setAsistenciaFallo(true);
+      }
+    } else {
+      setAsistencia(null);
     }
-    setContadores(colaboradores.filter((c) => c.rol === 'conteo'));
 
     if (inventarioActivo) {
       setInventarioId(inventarioActivo);
       setItems(itemsSnapshot);
       setTomadoEn(tomadoEnSnapshot);
       setRonda(rondaActiva ?? 1);
-      setFase(estadoActivo === null ? null : faseDeCierre(estadoActivo, rondaActiva));
+      setFase(estadoActivo === null ? null : faseDeCierre(estadoActivo, rondaActiva, totalHojas));
       if (rondaActiva === null) {
         // Sin ronda abierta no hay hojas que traer: o todavía no se creó
         // ninguna (paso 1), o el conteo ya terminó. Pedir las de la ronda 1
         // en el segundo caso mostraría hojas viejas como si fueran el armado
         // en curso.
         setHojas([]);
+        setHojasSinVerificar(false);
       } else {
         try {
           // Las hojas de la ronda activa. Acá solo se usan para saber en qué
           // paso está el armado (2 y 3) -- la LISTA en sí vive en "Hojas".
           const todas = await repositorioHojas.todas(inventarioActivo, rondaActiva);
           setHojas(todas);
+          /**
+           * SI LO QUE SE ESTA MOSTRANDO SE PUDO VERIFICAR CONTRA EL SERVIDOR.
+           *
+           * `todas()` NO lanza cuando la descarga falla: `descargarHojas`
+           * atrapa el error y sigue con la copia local (hojas-sqlite.ts). Sin
+           * mirar esto, el paso 3 podía afirmar "las 26 hojas ya están
+           * repartidas" con el reparto de ayer y sin ninguna marca de que no
+           * se habló con el servidor. Gestión de hojas ya lo consultaba; acá
+           * faltaba.
+           *
+           * La copia local NO se descarta ni se vacía -- sin red es lo bueno.
+           * Lo único que cambia es que la pantalla lo dice.
+           */
+          const descarga = ultimaDescarga(inventarioActivo, 'todas', rondaActiva);
+          setHojasSinVerificar(descarga?.ok === false);
         } catch (e) {
           setErrorInicial(e instanceof Error ? e.message : 'No se pudo cargar el estado del armado.');
         }
@@ -349,14 +407,23 @@ export default function ArmarHojasScreen(): JSX.Element {
     setCargandoInicial(false);
   }, [sesion]);
 
-  // useFocusEffect, no useEffect: volver a esta pantalla (por ejemplo tras
-  // recuperar la señal) tiene que reintentar sola, igual que el resto de
-  // las pantallas de acceso ya arregladas.
-  useFocusEffect(
-    useCallback(() => {
-      cargar();
-    }, [cargar]),
-  );
+  /**
+   * `useRefrescoAlEnfocar` y ya no `useFocusEffect` a secas.
+   *
+   * El anterior disparaba al NAVEGAR a esta pantalla, pero no cuando la app
+   * vuelve de segundo plano -- y ese es justo el caso que reportó el usuario:
+   * salió de la app mientras Dynamics sincronizaba el catálogo, volvió, y el
+   * paso 1 seguía mostrando los ítems de antes hasta que navegara a otra
+   * pestaña y regresara. Es el MISMO hook que usan Gestión de hojas,
+   * Asistencia y Ciclo: un solo comportamiento para toda la app.
+   *
+   * Pausado mientras se reparte o se crean hojas: un refresco a mitad de una
+   * de esas acciones pisaría `hojas` con el estado de ANTES, y las dos ya
+   * re-piden lo suyo al terminar.
+   */
+  const { refrescando, refrescar } = useRefrescoAlEnfocar(cargar, {
+    pausado: asignando || creandoHojas || trayendoSnapshot,
+  });
 
   /**
    * ¿Sabemos que esta sucursal NO tiene almacén de Dynamics asociado?
@@ -396,8 +463,59 @@ export default function ArmarHojasScreen(): JSX.Element {
     return { total: tamanos.length, parcial: ultima !== tamanoElegido ? ultima : 0 };
   }, [items, tamanoElegido]);
 
+  /**
+   * LOS CONTADORES PRESENTES HOY. La regla vive en el dominio
+   * (`contadoresPresentes`): marca del día Y rol `conteo`.
+   */
+  const hoy = diaEnLima(new Date());
+  const presentes = useMemo(
+    () => (asistencia ? contadoresPresentes(filasDeAsistencia(asistencia.personal, asistencia.marcas, hoy)) : []),
+    [asistencia, hoy],
+  );
+
+  /**
+   * EN QUÉ DE LOS CUATRO CASOS ESTÁ EL PASO 3, y los cuatro tienen texto
+   * propio. El orden importa: se pregunta primero por lo que impide saber, y
+   * recién al final por lo que habilita.
+   *
+   *  `no-verificada`  no se pudo traer la asistencia. NO se reparte -- caer a
+   *                   "todos los del padrón" es volver al bug con otra cara.
+   *  `sin-tomar`      se trajo y nadie marcó todavía. El reparto no arranca
+   *                   la jornada: la asistencia sí.
+   *  `sin-contadores` marcaron, pero ninguno de rol `conteo` (vinieron el
+   *                   coordinador y el auditor). No hay entre quiénes repartir.
+   *  `listo`          hay presentes. Recién acá el texto puede decir
+   *                   "contadores presentes" sin estar afirmando de más.
+   */
+  const casoAsistencia: 'no-verificada' | 'sin-tomar' | 'sin-contadores' | 'listo' =
+    asistenciaFallo || asistencia === null
+      ? 'no-verificada'
+      : asistencia.marcas.filter((m) => m.dia === hoy).length === 0
+        ? 'sin-tomar'
+        : presentes.length === 0
+          ? 'sin-contadores'
+          : 'listo';
+
+  /**
+   * EL QUE LLEGA TARDE. Después de repartir, alguien aparece, el Coordinador
+   * le marca la entrada y vuelve acá: hay que poder repartir de nuevo.
+   *
+   * Se compara por NOMBRE porque es lo único que trae `hoja.asignados` -- el
+   * servidor devuelve los nombres ya resueltos, no los ids. Alcanza: son los
+   * nombres del mismo padrón, y una coincidencia falsa (dos personas con el
+   * mismo nombre en una tienda) haría que no se ofrezca repartir de nuevo, no
+   * que se reparta mal.
+   */
+  const repartoDesactualizado = useMemo(() => {
+    if (!paso3Hecho || casoAsistencia !== 'listo') return false;
+    const conHojas = new Set(hojas.flatMap((h) => h.asignados));
+    const presentesAhora = new Set(presentes.map((p) => p.nombre));
+    if (conHojas.size !== presentesAhora.size) return true;
+    return [...presentesAhora].some((nombre) => !conHojas.has(nombre));
+  }, [paso3Hecho, casoAsistencia, hojas, presentes]);
+
   const resultadoReparto = useMemo(() => {
-    if (!paso3Hecho || contadores.length === 0) return null;
+    if (!paso3Hecho || presentes.length === 0) return null;
     const conteos = new Map<string, number>();
     for (const hoja of hojas) {
       const nombre = hoja.asignados[0];
@@ -409,7 +527,7 @@ export default function ArmarHojasScreen(): JSX.Element {
     // Con pocas hojas y varios contadores el reparto parejo da UNA por
     // persona. El rango (min–max) va siempre en plural: lo manda el máximo.
     return min === max ? `${min} ${pluralizar(min, 'hoja', 'hojas')} por persona` : `${min}–${max} hojas por persona`;
-  }, [paso3Hecho, contadores, hojas]);
+  }, [paso3Hecho, presentes, hojas]);
 
   // El texto del paso 3 concuerda con SUS DOS cifras: una ronda de reconteo
   // puede tener UNA hoja, y una tienda chica UN solo contador presente. Con un
@@ -417,15 +535,37 @@ export default function ArmarHojasScreen(): JSX.Element {
   // que cambian también el verbo y la preposición.
   const lasHojas = pluralizar(hojas.length, 'la única hoja', `las ${formatoMiles(hojas.length)} hojas`);
   const repartoHecho = pluralizar(
-    contadores.length,
+    presentes.length,
     `${pluralizar(hojas.length, 'está asignada', 'están asignadas')} al contador presente`,
-    `${pluralizar(hojas.length, 'está repartida', 'están repartidas')} entre los ${contadores.length} contadores presentes`,
+    `${pluralizar(hojas.length, 'está repartida', 'están repartidas')} entre los ${presentes.length} contadores presentes`,
   );
   const repartoPendiente = pluralizar(
-    contadores.length,
+    presentes.length,
     `Asigna ${lasHojas} al contador presente`,
-    `Reparte ${lasHojas} entre los ${contadores.length} contadores presentes`,
+    `Reparte ${lasHojas} entre los ${presentes.length} contadores presentes`,
   );
+
+  /**
+   * EL TEXTO DEL PASO 3 SEGÚN EL CASO.
+   *
+   * "contadores presentes" solo aparece en `listo`, que es el único donde se
+   * miró la asistencia y hay a quién repartir. En los otros tres el texto
+   * dice qué falta y adónde ir -- nunca afirma quién vino.
+   */
+  const textoPaso3 = !paso2Hecho
+    ? 'Crea primero las hojas de conteo para poder asignarlas.'
+    : casoAsistencia === 'no-verificada'
+      ? 'No se pudo verificar quién asistió hoy. Sin eso no se reparten las hojas: repartirlas entre todo el padrón le daría hojas a quien no vino, y esas hojas quedan sin contar.'
+      : casoAsistencia === 'sin-tomar'
+        ? 'Todavía no se tomó la asistencia de hoy. Márcala primero: las hojas se reparten entre quienes llegaron, no entre todo el padrón.'
+        : casoAsistencia === 'sin-contadores'
+          ? 'Hoy marcaron entrada el coordinador y el auditor, pero ningún contador. No hay entre quiénes repartir las hojas.'
+          : paso3Hecho && resultadoReparto
+            ? `${pluralizar(hojas.length, 'La única hoja', `Las ${formatoMiles(hojas.length)} hojas`)} ya ${repartoHecho}, en bloques contiguos (${resultadoReparto}).`
+            : `${repartoPendiente}, en bloques contiguos. Contar es caminar la góndola, no saltar de punta a punta.`;
+
+  /** Solo se reparte con la asistencia verificada Y con alguien a quien darle hojas. */
+  const puedeRepartir = casoAsistencia === 'listo';
 
   if (!sesion) return <View />;
 
@@ -546,12 +686,17 @@ export default function ArmarHojasScreen(): JSX.Element {
   }
 
   async function asignarAhora(): Promise<void> {
-    if (!inventarioId) return;
+    // La guarda de verdad, no solo el botón deshabilitado: sin asistencia
+    // verificada no se manda nada al servidor. `asignarHojas` NO valida
+    // asistencia a propósito (los scripts de siembra reparten sin ella, y el
+    // Coordinador es la autoridad sobre quién está en su tienda), así que
+    // esta es la única barrera y tiene que estar acá.
+    if (!inventarioId || !puedeRepartir) return;
     setAsignando(true);
     try {
       const actualizadas = await repositorioInventario.asignarHojas(
         inventarioId,
-        contadores.map((c) => c.id),
+        presentes.map((p) => p.id),
       );
       setHojas(actualizadas);
     } catch (error) {
@@ -571,7 +716,16 @@ export default function ArmarHojasScreen(): JSX.Element {
    * confunde con "todavía no hay inventario" (donde el paso 1 SÍ aplica: hay
    * que traer el catálogo), ni con "no se sabe" por falta de red.
    */
-  const conteoTerminado = fase !== null && fase !== 'contando';
+  /**
+   * El armado no aplica porque el conteo YA TERMINO -- no porque todavía no
+   * haya empezado.
+   *
+   * `'sin-hojas'` queda AFUERA a propósito, y es el bug que esto cierra: un
+   * inventario con el catálogo traído y cero hojas caía acá y la pantalla
+   * decía "El conteo de este inventario terminó", dejando al Coordinador sin
+   * forma de crear las hojas -- que es exactamente a lo que había entrado.
+   */
+  const conteoTerminado = fase !== null && fase !== 'contando' && fase !== 'sin-hojas';
 
   const cifras = items
     ? hojas.length > 0
@@ -582,8 +736,30 @@ export default function ArmarHojasScreen(): JSX.Element {
     : undefined;
 
   return (
-    <PantallaConTabs scrollable contentStyle={styles.contenido}>
+    <PantallaConTabs
+      scrollable
+      contentStyle={styles.contenido}
+      refreshControl={
+        <RefreshControl refreshing={refrescando} onRefresh={refrescar} colors={[colors.rojo]} tintColor={colors.rojo} />
+      }
+    >
       <BarraApp rotulo="Armar hojas" sede={sesion.sucursal!.nombre} cifras={cifras} onSalir={salir} />
+
+      {/*
+        LO QUE SE MUESTRA NO SE PUDO CONTRASTAR CON EL SERVIDOR. La copia
+        local sigue siendo la buena -- sin red es lo único que hay --, pero
+        decirlo cambia la decisión: el Coordinador no reparte de nuevo ni da
+        por hecho un reparto que quizá ya no es el del servidor.
+      */}
+      {hojasSinVerificar ? (
+        <View style={styles.avisoTarde}>
+          <AlertTriangle size={16} color={colors.proceso} />
+          <Text style={styles.avisoTardeTexto}>
+            No se pudo contrastar con el servidor: lo que ves es la última copia descargada en este teléfono. Tirá
+            para refrescar cuando vuelva la señal.
+          </Text>
+        </View>
+      ) : null}
 
       {cargandoInicial ? (
         <ActivityIndicator color={colors.rojo} style={styles.cargandoInicial} />
@@ -710,14 +886,56 @@ export default function ArmarHojasScreen(): JSX.Element {
             icon={Users}
             titulo="Asignar hojas de conteo"
             estado={!paso2Hecho ? 'bloqueado' : paso3Hecho ? 'hecho' : 'pendiente'}
-            texto={
-              !paso2Hecho
-                ? 'Crea primero las hojas de conteo para poder asignarlas.'
-                : paso3Hecho && resultadoReparto
-                  ? `${pluralizar(hojas.length, 'La única hoja', `Las ${formatoMiles(hojas.length)} hojas`)} ya ${repartoHecho}, en bloques contiguos (${resultadoReparto}).`
-                  : `${repartoPendiente}, en bloques contiguos. Contar es caminar la góndola, no saltar de punta a punta.`
-            }
+            texto={textoPaso3}
           />
+
+          {/*
+            EL CAMINO A LA ASISTENCIA. Sin esto el paso 3 diría "márcala
+            primero" y dejaría a la persona buscando dónde -- la pantalla está
+            en el inicio, no en esta barra. El botón es el punto entero del
+            cambio: que la asistencia deje de ser un trámite paralelo y sea lo
+            que habilita el reparto.
+          */}
+          {paso2Hecho && !paso3Hecho && casoAsistencia !== 'listo' ? (
+            <Button
+              label={casoAsistencia === 'no-verificada' ? 'Reintentar' : 'Tomar asistencia de hoy'}
+              icon={casoAsistencia === 'no-verificada' ? undefined : UserCheck}
+              size="lg"
+              variant="outline"
+              onPress={() => {
+                if (casoAsistencia === 'no-verificada') cargar();
+                else router.push('/coordinador/asistencia');
+              }}
+            />
+          ) : null}
+
+          {/*
+            EL QUE LLEGA TARDE, que pasa todos los días: se repartió, apareció
+            alguien más, el Coordinador le marcó la entrada y volvió acá. Sin
+            este aviso la pantalla diría "ya están repartidas" y no habría
+            forma de incluirlo -- el botón de repartir desaparece con el paso
+            hecho.
+          */}
+          {repartoDesactualizado ? (
+            <View style={styles.avisoTarde}>
+              <AlertTriangle size={16} color={colors.proceso} />
+              <Text style={styles.avisoTardeTexto}>
+                La asistencia cambió después de repartir: ahora hay {presentes.length}{' '}
+                {pluralizar(presentes.length, 'contador presente', 'contadores presentes')} y las hojas están
+                repartidas entre otra gente. Vuelve a repartir para incluir a quien llegó.
+              </Text>
+            </View>
+          ) : null}
+
+          {repartoDesactualizado ? (
+            <Button
+              label={`Repartir de nuevo entre ${presentes.length} ${pluralizar(presentes.length, 'contador', 'contadores')}`}
+              icon={Users}
+              size="lg"
+              loading={asignando}
+              onPress={asignarAhora}
+            />
+          ) : null}
 
           {!paso3Hecho ? (
             <Button
@@ -730,14 +948,22 @@ export default function ArmarHojasScreen(): JSX.Element {
                     ? tamanoElegido
                       ? `Crear ${previa ? formatoMiles(previa.total) : ''} ${pluralizar(previa?.total ?? 0, 'hoja', 'hojas')} de ${tamanoElegido} ítems`
                       : 'Elige el tamaño de hoja'
-                    : 'Repartir automáticamente'
+                    : casoAsistencia === 'listo'
+                      ? `Repartir entre ${presentes.length} ${pluralizar(presentes.length, 'contador presente', 'contadores presentes')}`
+                      : 'Falta tomar la asistencia'
               }
               icon={!paso1Hecho ? CloudDownload : !paso2Hecho ? LayoutGrid : Users}
               size="lg"
               loading={trayendoSnapshot || creandoHojas || asignando}
               // Sin almacén no se deja avanzar, y el propio label dice por qué:
               // un botón gris sin motivo obliga a la persona a adivinar.
-              disabled={sinAlmacen || (paso1Hecho && !paso2Hecho && !tamanoElegido)}
+              // Con las hojas creadas, el botón solo reparte si la asistencia
+              // se verificó y hay a quién: su propio label dice por qué no.
+              disabled={
+                sinAlmacen ||
+                (paso1Hecho && !paso2Hecho && !tamanoElegido) ||
+                (paso2Hecho && !puedeRepartir)
+              }
               onPress={!paso1Hecho ? traerSnapshot : !paso2Hecho ? crearHojasAhora : asignarAhora}
             />
           ) : (
@@ -754,6 +980,15 @@ export default function ArmarHojasScreen(): JSX.Element {
 
 const styles = StyleSheet.create({
   contenido: { paddingHorizontal: spacing.lg, paddingTop: spacing.sm, gap: spacing.md + 3 },
+
+  avisoTarde: {
+    flexDirection: 'row',
+    gap: spacing.sm,
+    padding: spacing.md,
+    borderRadius: radius.md,
+    backgroundColor: colors.procesoSuave,
+  },
+  avisoTardeTexto: { flex: 1, fontSize: 12.5, lineHeight: 17, color: colors.tinta, fontFamily: fonts.regular },
   cargandoInicial: { marginTop: spacing.xxxl },
 
   tarjeta: {

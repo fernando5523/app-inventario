@@ -91,18 +91,48 @@ function aNavegacion(rol: Rol, respuesta: RespuestaNavegacion): Navegacion {
  * parámetro, cualquiera con sesión podría leer el home de otro rol).
  */
 export async function traerNavegacion(rol: Rol): Promise<Navegacion> {
+  return (await traerNavegacionSiSePuede(rol)) ?? navegacionDeRespaldo(rol);
+}
+
+/**
+ * LA MISMA LECTURA, PERO DICIENDO SI SE PUDO. `null` = no se pudo traer.
+ *
+ * ---------------------------------------------------------------------------
+ * POR QUE HACEN FALTA LAS DOS, Y NO ES DUPLICAR
+ * ---------------------------------------------------------------------------
+ * Son dos momentos con la respuesta correcta OPUESTA ante el mismo error de
+ * red:
+ *
+ *   AL ARRANCAR no hay nada en memoria, así que el respaldo es lo mejor que
+ *   se puede ofrecer: mejor el home de siempre que una pantalla en blanco.
+ *   Para eso está `traerNavegacion`.
+ *
+ *   AL REFRESCAR ya hay una configuración buena en memoria -- la que trajo el
+ *   servidor hace un rato. Caer al respaldo ahí sería PISAR un dato bueno con
+ *   el mapa de fábrica: si el Administrador apagó un acceso, volver a la app
+ *   sin señal lo haría reaparecer. Por eso el refresco necesita distinguir
+ *   "llegó otra cosa" de "no llegó nada", y con `traerNavegacion` no puede:
+ *   las dos le devuelven una `Navegacion` que parece igual de válida.
+ *
+ * Lo pidió el orquestador como límite del lote: sin red, lo que ya está en la
+ * app es lo bueno y no se vacía ni se reemplaza.
+ */
+export async function traerNavegacionSiSePuede(rol: Rol): Promise<Navegacion | null> {
   try {
     const respuesta = await pedir<RespuestaNavegacion>('/api/navegacion/mia');
     // Una respuesta con la forma equivocada (un proxy que devuelve HTML, una
-    // versión vieja del backend) cae en el respaldo igual que un error de red.
-    if (!Array.isArray(respuesta?.accesos) || !Array.isArray(respuesta?.tabs)) {
-      return navegacionDeRespaldo(rol);
-    }
-    return aNavegacion(rol, respuesta);
+    // versión vieja del backend) cuenta como "no llegó": no es una
+    // configuración que se pueda aplicar.
+    if (!Array.isArray(respuesta?.accesos) || !Array.isArray(respuesta?.tabs)) return null;
+
+    const navegacion = aNavegacion(rol, respuesta);
+    // `aNavegacion` devuelve el RESPALDO cuando lo que llegó deja el home
+    // vacío. Eso tampoco es una configuración aplicable, así que para el
+    // refresco vale lo mismo que no haber traído nada.
+    return navegacion.esRespaldo ? null : navegacion;
   } catch {
-    // A propósito sin log ni re-throw: ver la cabecera. Que la app arranque
-    // con el home de siempre es EL comportamiento correcto, no una
-    // degradación que haya que avisar.
-    return navegacionDeRespaldo(rol);
+    // A propósito sin log ni re-throw: ver la cabecera. Quedarse sin señal es
+    // el camino esperado de esta app, no una degradación que avisar.
+    return null;
   }
 }

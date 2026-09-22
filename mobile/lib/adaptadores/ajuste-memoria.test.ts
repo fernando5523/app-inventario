@@ -107,9 +107,17 @@ describe('ajusteMemoria.corregirConteo — el coordinador, sin ver stock', () =>
     cerrarRondaEnMemoria(id);
     await comoCoordinador();
 
+    /**
+     * `salioDeLaRonda: null`, no `undefined`: desde que la corrección avisa si
+     * el ítem salió de la ronda siguiente, este adaptador devuelve la forma
+     * completa. Y devuelve NULL siempre, a propósito -- para saber si un ítem
+     * sale hay que compararlo contra el stock del ERP, que el mock no tiene
+     * (ver su comentario). Inventar una salida haría que la pantalla dijera
+     * "ya no sale en el 2do conteo" sin que eso haya pasado en ningún lado.
+     */
     await expect(
       ajusteMemoria.corregirConteo(hoja.id, 9002, { empaques: [], sueltas: 7, motivo: MOTIVO }),
-    ).resolves.toBeUndefined();
+    ).resolves.toEqual({ salioDeLaRonda: null });
   });
 
   it('DEJA de funcionar en cuanto el auditor arranca el ajuste', async () => {

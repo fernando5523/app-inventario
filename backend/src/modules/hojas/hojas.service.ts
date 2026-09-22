@@ -287,8 +287,33 @@ export async function listar(actor: ColaboradorAutenticado, query: ListarHojasQu
   });
   if (!inventario) throw new NoEncontrado('Ese inventario no existe.');
 
-  // Antes de leer nada: el inventario tiene que ser de la sucursal del actor.
-  if (actor.rol !== 'administrador' && actor.sucursalId !== inventario.sucursalId) {
+  /**
+   * Antes de leer nada: el inventario tiene que ser de la sucursal del actor.
+   *
+   * EL AUDITOR TAMBIEN PASA, y hasta ahora no pasaba. Esta condicion decia
+   * solo `rol !== 'administrador'`, y el auditor -- que por decision del
+   * cliente (2026-09-09) audita TODA la cadena y no pertenece a ninguna
+   * tienda -- se comia un 404 en cualquier inventario que no fuera el de la
+   * sucursal vieja de su ficha.
+   *
+   * SE ARREGLA PORQUE DEJABA UN ESTADO INCOHERENTE QUE INTRODUJIMOS NOSOTROS:
+   * desde que el Auditor entro a `ROLES_QUE_CORRIGEN` (ajuste.permisos.ts),
+   * podia CORREGIR un conteo que no podia LEER. `validarCorreccion` lo deja
+   * escribir -- usa `ajuste.permisos.ts#validarSucursal`, que si lo exceptua
+   * -- y este listado le devolvia 404. Escribir sin poder leer no es un
+   * permiso de mas ni de menos: es una pantalla que no puede existir.
+   *
+   * Y no abre nada nuevo: el Auditor YA ve la matriz de auditoria de
+   * cualquier sucursal (`auditoria.permisos.ts#validarSucursal`), que
+   * contiene `stockErp` -- el dato mas sensible del sistema. Negarle las
+   * hojas de conteo de esa misma tienda mientras se le muestra el stock del
+   * ERP era la incoherencia, no el arreglo.
+   *
+   * El recorte sigue en pie para `coordinador` y `conteo`: salir de la propia
+   * sucursal esta prohibido, o cualquiera leeria el inventario de otra tienda
+   * cambiando un id en la URL.
+   */
+  if (actor.rol !== 'administrador' && actor.rol !== 'auditor' && actor.sucursalId !== inventario.sucursalId) {
     throw new NoEncontrado('Ese inventario no existe.');
   }
 

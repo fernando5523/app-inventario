@@ -23,11 +23,15 @@
  */
 
 import type { EstadoInventario } from '../puertos/repositorios';
+import { ordinal } from './texto-cierre-ronda';
 
 /**
  * En qué punto del cierre está el inventario, para los dos roles que pueden
  * tocar valores.
  *
+ *   'sin-hojas'        el catálogo ya se trajo pero TODAVÍA NO HAY HOJAS: el
+ *                      Coordinador está en el paso 2 del armado. No es que el
+ *                      conteo haya terminado -- no empezó.
  *   'contando'         hay una ronda abierta: se cuenta y se corrige.
  *   'rondas-cerradas'  la última ronda cerró y el ajuste todavía no arrancó.
  *                      ES LA VENTANA del Coordinador, y también donde el
@@ -35,7 +39,7 @@ import type { EstadoInventario } from '../puertos/repositorios';
  *   'ajuste'           el Auditor está ajustando: el Coordinador quedó afuera.
  *   'cerrado'          el conteo cerró: nadie toca nada, sigue la liquidación.
  */
-export type FaseDeCierre = 'contando' | 'rondas-cerradas' | 'ajuste' | 'cerrado';
+export type FaseDeCierre = 'sin-hojas' | 'contando' | 'rondas-cerradas' | 'ajuste' | 'cerrado';
 
 /**
  * ---------------------------------------------------------------------------
@@ -61,9 +65,44 @@ export type FaseDeCierre = 'contando' | 'rondas-cerradas' | 'ajuste' | 'cerrado'
  * cerrada (o un `rondaAbierta` explícito), esta ambigüedad desaparece sola y
  * no hay que tocar nada más que este archivo.
  */
-export function faseDeCierre(estado: EstadoInventario, rondaActiva: number | null): FaseDeCierre {
+/**
+ * ---------------------------------------------------------------------------
+ * POR QUE `totalHojas` Y NO `rondaActiva === null` PARA EL CASO NUEVO
+ * ---------------------------------------------------------------------------
+ * BUG REAL (2026-09-21, encontrado en el emulador): el Coordinador trajo el
+ * catálogo de Luzuriaga, salió de la pantalla mientras Dynamics sincronizaba,
+ * y al volver a "Armar hojas" leyó *"El conteo de este inventario terminó"*
+ * sobre un inventario con 980 ítems y CERO hojas. Quedó sin camino para hacer
+ * lo único que había ido a hacer: crear las hojas.
+ *
+ * `rondaActiva === null` estaba cubriendo dos situaciones opuestas --
+ * "todavía no hay rondas porque no se crearon las hojas" y "no hay ronda
+ * abierta porque se cerraron todas" -- y las trataba a las dos como la
+ * segunda. Son lo contrario: nada empezó todavía contra todo se contó y está
+ * esperando.
+ *
+ * La pregunta que las separa no es "¿hay una ronda abierta ahora?" sino
+ * ¿ESTE INVENTARIO TUVO HOJAS ALGUNA VEZ?, y esa la responde `totalHojas`,
+ * que ya viaja en `activo()`. Con 0 hojas no hay ronda que cerrar, así que no
+ * puede ser el fin de nada.
+ *
+ * LA ÚLTIMA LÍNEA NO SE TOCÓ a propósito: el caso de "todas las rondas
+ * cerradas" sigue resolviéndose exactamente como antes. Ver la nota de arriba
+ * sobre `admiteConteo` -- usarlo haría alcanzable `'rondas-cerradas'` por
+ * primera vez y cambiaría el comportamiento de ocho pantallas, que es un lote
+ * aparte y no éste.
+ */
+export function faseDeCierre(
+  estado: EstadoInventario,
+  rondaActiva: number | null,
+  totalHojas: number,
+): FaseDeCierre {
   if (estado === 'ajuste_auditor') return 'ajuste';
   if (estado !== 'en_curso') return 'cerrado';
+  // Antes que nada: sin hojas no hay conteo que haya terminado ni ronda que
+  // cerrar. Va primero para que ninguna de las dos ramas de abajo lo pueda
+  // reclamar.
+  if (totalHojas === 0) return 'sin-hojas';
   return rondaActiva === null ? 'rondas-cerradas' : 'contando';
 }
 
@@ -239,4 +278,54 @@ export const TEXTO_TRAS_FINALIZAR =
  */
 export function conteoAbierto(estado: EstadoInventario): boolean {
   return estado === 'en_curso' || estado === 'ajuste_auditor';
+}
+
+// ---------------------------------------------------------------------------
+// El ítem que sale de la ronda siguiente
+// ---------------------------------------------------------------------------
+
+/**
+ * QUÉ DECIRLE A QUIEN ACABA DE CORREGIR.
+ *
+ * Es la frase que el cliente pidió con sus palabras (reunión 2, 00:12:12):
+ * *"puedes corregirlo para que ya no salga en mi segundo conteo"*. Sin esto,
+ * quien corrige guarda y no sabe si consiguió lo que fue a buscar — y que el
+ * ítem salga o no depende de si alguien ya empezó esa ronda, cosa que desde
+ * la pantalla no se ve.
+ *
+ * PURA a propósito: es el texto que va a leer una persona sobre un número que
+ * le descuenta plata a otra, y tiene que poder probarse sin montar la app.
+ *
+ * Los tres casos son de gravedad creciente y por eso son tres frases y no una
+ * con condicionales pegados: salió el ítem, se cerró la hoja, desapareció la
+ * ronda. La última es la que más importa avisar — el Auditor puede estar
+ * mirando justo esa ronda.
+ */
+export function textoItemSalioDeRonda(salida: {
+  codigo: string;
+  ronda: number;
+  hojaBorrada: boolean;
+  rondaBorrada: boolean;
+}): string {
+  const conteo = `${ordinal(salida.ronda)} conteo`;
+
+  if (salida.rondaBorrada) {
+    return `${salida.codigo} ya no sale en el ${conteo}. Era el último ítem que quedaba, así que ese conteo ya no hace falta.`;
+  }
+  if (salida.hojaBorrada) {
+    return `${salida.codigo} ya no sale en el ${conteo}. Su hoja quedó sin ítems y se cerró.`;
+  }
+  return `${salida.codigo} ya no sale en el ${conteo}: ahora cuadra contra el stock.`;
+}
+
+/**
+ * QUÉ DECIR CUANDO LA RONDA QUE SE ESTABA MIRANDO YA NO EXISTE.
+ *
+ * Pasa de verdad: se corrige el último ítem de la ronda siguiente, esa ronda
+ * desaparece, y quien estaba parado en ella se quedaría mirando algo que ya no
+ * está. No alcanza con llevarlo a otra ronda en silencio — tiene que saber por
+ * qué se movió la pantalla debajo suyo.
+ */
+export function textoRondaQueYaNoExiste(rondaIda: number, rondaAhora: number): string {
+  return `El ${ordinal(rondaIda)} conteo ya no existe: se corrigieron todos sus ítems. Te llevamos al ${ordinal(rondaAhora)} conteo.`;
 }

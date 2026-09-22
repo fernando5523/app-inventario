@@ -9,6 +9,7 @@ import { useRefrescoAlEnfocar } from '../hooks/useRefrescoAlEnfocar';
 import { repositorioHistorial, repositorioSesion } from '../../lib/contenedor';
 import { conteoAbierto } from '../../lib/dominio/ajuste-final';
 import { estadoExportacion, nombreArchivoConsolidado, nombreArchivoDiferencias } from '../../lib/dominio/exportar-diferencias';
+import { limiteParaRefrescar } from '../../lib/dominio/paginacion';
 import type { Rol, Sucursal } from '../../lib/dominio/tipos';
 import type {
   DetalleInventarioHistorico,
@@ -160,6 +161,18 @@ export function HistorialScreen({ rol }: HistorialScreenProps): JSX.Element {
   const [filtroAnio, setFiltroAnio] = useState<number | null>(null);
   const [filtroMes, setFiltroMes] = useState<number | null>(null);
 
+  /**
+   * CUANTOS inventarios hay cargados, en un ref.
+   *
+   * `cargar` lo necesita para refrescar todas las páginas que ya estaban (ver
+   * `limiteParaRefrescar`), pero NO puede depender del array: `cargar` cambia
+   * de identidad con cada dependencia, y el efecto de "cambió un filtro" corre
+   * con `[cargar]` -- una dependencia que se mueve en cada carga lo volvería
+   * un bucle de pedidos.
+   */
+  const inventariosRef = useRef(0);
+  inventariosRef.current = inventarios.length;
+
   const [detalle, setDetalle] = useState<DetalleInventarioHistorico | null>(null);
   const [cargandoDetalle, setCargandoDetalle] = useState(false);
 
@@ -193,14 +206,26 @@ export function HistorialScreen({ rol }: HistorialScreenProps): JSX.Element {
   const [historicoItem, setHistoricoItem] = useState<HistoricoItem | null>(null);
   const [cargandoHistoricoItem, setCargandoHistoricoItem] = useState(false);
 
-  // Se pide una sola vez, no en cada refresco del historial: el padrón de
-  // sucursales no cambia entre pantallazos (mismo criterio que el modoAdmin
-  // del login, que trae administradores() recién al entrar a ese modo).
-  // Sin gate por rol: `GET /api/sesion/sucursales` es el mismo endpoint del
-  // login (previo a cualquier sesión), así que no hay nada que proteger acá
-  // -- y ahora lo necesitan los dos roles (ver comentario de `sucursales`).
-  useEffect(() => {
-    repositorioSesion.sucursales().then(setSucursales);
+  /**
+   * EL PADRON DE SUCURSALES, EN CADA REFRESCO.
+   *
+   * Antes se pedía UNA vez al montar, con el argumento de que "no cambia entre
+   * pantallazos". No es cierto, y se ve en una sesión: el Administrador crea
+   * "Market Huaraz" en Tiendas, pasa a Historial, y el filtro de sucursal NO
+   * la ofrece -- no hay forma de que aparezca sin reiniciar la app. Es un
+   * pedido barato (el mismo endpoint sin sesión del login) al lado del listado
+   * de inventarios que ya se está pidiendo igual.
+   *
+   * SIN RED NO SE VACIA: el `catch` deja el padrón anterior en pantalla. Una
+   * lista de sucursales vacía apagaría el filtro entero, y no porque no haya
+   * tiendas sino porque no se pudo preguntar -- que son cosas distintas.
+   */
+  const cargarSucursales = useCallback(async () => {
+    try {
+      setSucursales(await repositorioSesion.sucursales());
+    } catch {
+      /* se conserva el padrón que ya estaba: ver arriba */
+    }
   }, []);
 
   // El filtro completo de la pantalla, en la forma que pide el puerto. Un
@@ -234,10 +259,20 @@ export function HistorialScreen({ rol }: HistorialScreenProps): JSX.Element {
     // dato nuevo, en vez de tapar la lista con una rueda. Ver
     // useRefrescoAlEnfocar.
     try {
-      const pagina = await repositorioHistorial.listar(filtroActual(0));
+      // `limiteParaRefrescar` y no `TAMANO_PAGINA`: si ya se habían cargado
+      // tres páginas, el refresco las trae TODAS de nuevo en vez de dejar la
+      // lista en la primera. Ver lib/dominio/paginacion.ts.
+      const cuantas = limiteParaRefrescar(inventariosRef.current, TAMANO_PAGINA);
+      const [pagina] = await Promise.all([
+        repositorioHistorial.listar({ ...filtroActual(0), limite: cuantas }),
+        cargarSucursales(),
+      ]);
       setInventarios(pagina.inventarios);
       setTotal(pagina.total);
-      setDesplazamiento(0);
+      // El desplazamiento sale de lo que el servidor DEVOLVIO, no de lo que se
+      // pidió: si ahora hay menos inventarios que antes, "cargar más" tiene que
+      // seguir desde ahí y no saltearse filas que sí existen.
+      setDesplazamiento(Math.max(0, pagina.inventarios.length - TAMANO_PAGINA));
     } catch (e) {
       // No hay adaptador en memoria a propósito (ver contenedor.ts): sin
       // backend se dice que no se pudo cargar. Un histórico inventado es
@@ -246,7 +281,7 @@ export function HistorialScreen({ rol }: HistorialScreenProps): JSX.Element {
     } finally {
       setCargando(false);
     }
-  }, [sesion, filtroActual]);
+  }, [sesion, filtroActual, cargarSucursales]);
 
   // Trae la página SIGUIENTE y la agrega al final — nunca reemplaza lo que
   // ya está en pantalla ni reinicia el desplazamiento.
@@ -266,16 +301,47 @@ export function HistorialScreen({ rol }: HistorialScreenProps): JSX.Element {
     }
   }
 
+  /**
+   * SE REFRESCA LO QUE SE ESTA VIENDO, no siempre la lista.
+   *
+   * Antes el refresco estaba PAUSADO con el detalle abierto, y eso dejaba el
+   * agujero más caro de esta pantalla: el Administrador abre el inventario
+   * 8040, deja el teléfono, vuelve media hora después y sigue leyendo "sin
+   * lacrar" y el bloque de firmas viejo aunque el Auditor haya lacrado en el
+   * medio -- y el botón de exportar aparece o no según ese estado vencido
+   * (`estadoExportacion` se calcula con `detalle.estado`). Para actualizarlo
+   * había que cerrar el detalle y volver a abrirlo, o sea adivinar que hacía
+   * falta.
+   *
+   * Pausar era la decisión correcta para lo que se quería evitar -- que
+   * `cargar` recargara la LISTA que está debajo del detalle -- pero se resolvía
+   * no refrescando NADA. Acá se refresca la vista de arriba, que es la que la
+   * persona está mirando.
+   *
+   * LA HISTORIA DE UN ITEM sigue pausada: es un tercer nivel que se abre de una
+   * fila puntual y se cierra enseguida. Con `recuperarAlDespausar` el disparo
+   * que llegue ahí no se pierde -- corre al volver al detalle.
+   */
+  // `traerDetalle` queda FUERA de las dependencias a propósito: es una función
+  // del cuerpo del componente, así que cambia de identidad en cada render y
+  // acá adentro volvería inestable a lo que el hook guarda. Lo que necesita
+  // esta closure es el `detalle` de ahora, y ese sí está en la lista.
+  const refrescarLoQueSeVe = useCallback(async () => {
+    if (detalle !== null) {
+      await traerDetalle(detalle.id);
+      return;
+    }
+    await cargar();
+  }, [detalle, cargar]);
+
   // useRefrescoAlEnfocar recarga al ENFOCAR y al volver la app a primer plano
   // (pedido del cliente: "cualquier dato actualizado no debe depender de cerrar
   // sesión y volver"). Pero NO recarga al cambiar un filtro sin salir: guarda
   // `cargar` en un ref a propósito (ver ese hook). Eso lo hace el efecto de
   // abajo.
-  //
-  // PAUSADO mientras hay una sub-vista abierta (detalle o historia de un ítem):
-  // `cargar` recarga LA LISTA, que esas vistas reemplazan, no encima.
-  const { refrescando, refrescar } = useRefrescoAlEnfocar(cargar, {
-    pausado: detalle !== null || historicoItem !== null,
+  const { refrescando, refrescar } = useRefrescoAlEnfocar(refrescarLoQueSeVe, {
+    pausado: historicoItem !== null,
+    recuperarAlDespausar: true,
   });
 
   // Recarga al cambiar CUALQUIER filtro (la sucursal incluida): `cargar` cambia
@@ -307,6 +373,33 @@ export function HistorialScreen({ rol }: HistorialScreenProps): JSX.Element {
     setErrorCierre(null);
     setHistoricoItem(null);
     try {
+      await traerDetalle(id);
+    } finally {
+      setCargandoDetalle(false);
+    }
+  }
+
+  /**
+   * EL DETALLE, SIN TOCAR NADA DE LO QUE LA PERSONA YA PIDIO.
+   *
+   * Lo usan dos caminos con necesidades opuestas, y por eso lo que se limpia
+   * quedó ARRIBA en `abrirDetalle` y no acá:
+   *
+   *   ABRIR otro inventario tiene que borrar el sello verificado, las
+   *   diferencias y la planilla del anterior -- si no, quedarían bajo un
+   *   encabezado que no les corresponde.
+   *
+   *   REFRESCAR el que ya está abierto NO puede borrar nada de eso: el
+   *   resultado de "verificar sello" lo pidió la persona a mano hace un rato,
+   *   y hacérselo desaparecer porque volvió a la app desde el segundo plano es
+   *   tirarle un trabajo que no pidió repetir.
+   *
+   * Si falla, se deja lo que estaba: sin red, lo que ya está en la pantalla es
+   * lo bueno (mismo principio que la reconciliación de las hojas -- borra una
+   * respuesta, nunca el silencio).
+   */
+  async function traerDetalle(id: number): Promise<void> {
+    try {
       const det = await repositorioHistorial.detalle(id);
       setDetalle(det);
       // Con el conteo todavía abierto no hay diferencias fijadas (recién se
@@ -329,8 +422,6 @@ export function HistorialScreen({ rol }: HistorialScreenProps): JSX.Element {
       }
     } catch (e) {
       setError(e instanceof Error ? e.message : 'No se pudo abrir el inventario.');
-    } finally {
-      setCargandoDetalle(false);
     }
   }
 

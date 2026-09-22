@@ -128,7 +128,14 @@ export function UsuariosScreen({ rol }: UsuariosScreenProps): JSX.Element {
   // menú de acciones. Un refresco que llegue en el medio le cierra el modal
   // a quien está tecleando un PIN, o le pisa el DNI que venía cargando. Eso
   // no es un parpadeo: es perderle el trabajo a la persona.
+  //
+  // Y `recuperarAlDespausar`: el disparo que llegue con algo abierto NO se
+  // tira, corre al cerrarlo. Sin eso, dejar abierto el menú de acciones de una
+  // ficha, mandar la app al fondo y volver dejaba la lista congelada hasta
+  // cambiar de pestaña -- con una cuenta mostrada como activa que otro
+  // administrador ya había deshabilitado.
   const { refrescando, refrescar } = useRefrescoAlEnfocar(cargar, {
+    recuperarAlDespausar: true,
     pausado:
       formularioAbierto ||
       modalEditarVisible ||

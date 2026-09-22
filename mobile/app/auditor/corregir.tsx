@@ -1,5 +1,5 @@
 import { router } from 'expo-router';
-import { Check, Lock, PencilLine, TriangleAlert } from 'lucide-react-native';
+import { Check, CircleCheckBig, Info, Lock, PencilLine, TriangleAlert } from 'lucide-react-native';
 import { useCallback, useEffect, useMemo, useRef, useState, type JSX } from 'react';
 import { ActivityIndicator, Alert, Pressable, RefreshControl, StyleSheet, Text, View } from 'react-native';
 
@@ -28,6 +28,8 @@ import {
   motivoSinCorregir,
   puedeCorregirLoContado,
   STOCK_NO_SE_CORRIGE,
+  textoItemSalioDeRonda,
+  textoRondaQueYaNoExiste,
 } from '../../lib/dominio/ajuste-final';
 import { diferenciaUnidades, veredicto } from '../../lib/dominio/auditoria';
 import { totalUnidades } from '../../lib/dominio/empaque';
@@ -103,7 +105,21 @@ export default function AuditorCorregirScreen(): JSX.Element {
   const [cargando, setCargando] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [fase, setFase] = useState<ReturnType<typeof faseDeCierre> | null>(null);
-  const [ronda, setRonda] = useState<number | null>(null);
+  /**
+   * LA VIGENTE Y LA QUE SE ESTÁ MIRANDO SON DOS COSAS DISTINTAS, y confundirlas
+   * era el bug: la pantalla se clavaba en `rondaActiva` y no había forma de ir
+   * a una ronda anterior. El caso que el cliente describió para pedir la
+   * corrección vive JUSTO ahí -- la hoja finalizada de la ronda que ya cerró,
+   * con el siguiente conteo ya abierto.
+   *
+   * `rondaElegida` en null = "la que esté vigente", que es el default y se
+   * resuelve al cargar. No se fija en el estado para que al abrirse otra ronda
+   * la pantalla siga los pasos del inventario sola.
+   */
+  const [rondaActiva, setRondaActiva] = useState<number | null>(null);
+  const [rondaElegida, setRondaElegida] = useState<number | null>(null);
+  /** Lo que pasó con la última corrección. Sobrevive a la recarga a propósito. */
+  const [aviso, setAviso] = useState<{ texto: string; tono: 'ok' | 'atencion' } | null>(null);
   const [filas, setFilas] = useState<FilaCorregible[]>([]);
   const [filtro, setFiltro] = useState<Filtro>('sin-cuadrar');
   const [enEdicion, setEnEdicion] = useState<FilaCorregible | null>(null);
@@ -125,19 +141,35 @@ export default function AuditorCorregirScreen(): JSX.Element {
     if (sucursalId === null) {
       setFilas([]);
       setFase(null);
-      setRonda(null);
+      setRondaActiva(null);
       setCargando(false);
       return;
     }
     setError(null);
     const falla = await cargarSeguro(async () => {
       const activo = await repositorioInventario.activo(sucursalId);
-      setFase(activo ? faseDeCierre(activo.estado, activo.rondaActiva) : null);
-      setRonda(activo?.rondaActiva ?? null);
+      setFase(activo ? faseDeCierre(activo.estado, activo.rondaActiva, activo.totalHojas) : null);
+      setRondaActiva(activo?.rondaActiva ?? null);
       if (!activo || activo.rondaActiva === null) {
         setFilas([]);
+        setRondaElegida(null);
         return;
       }
+
+      /**
+       * LA RONDA QUE SE ESTABA MIRANDO PUEDE HABER DESAPARECIDO. Pasa de
+       * verdad: se corrige el último ítem que quedaba en ella, la ronda se
+       * queda sin hojas y el servidor la borra. Quedarse parado ahí sería
+       * mostrar una ronda que ya no existe; irse en silencio sería mover la
+       * pantalla debajo de quien la está usando. Se hacen las dos cosas: se
+       * vuelve a la vigente Y se dice por qué.
+       */
+      const pedida =
+        rondaElegida !== null && rondaElegida <= activo.rondaActiva ? rondaElegida : activo.rondaActiva;
+      if (rondaElegida !== null && rondaElegida !== pedida) {
+        setAviso({ texto: textoRondaQueYaNoExiste(rondaElegida, pedida), tono: 'atencion' });
+      }
+      setRondaElegida(pedida);
 
       // Las DOS lecturas, en paralelo: no dependen entre sí.
       //  - las hojas dan el `hojaId` de cada producto, que es lo que pide el
@@ -146,7 +178,8 @@ export default function AuditorCorregirScreen(): JSX.Element {
       // La matriz por sí sola NO alcanza: no trae `hojaId` (ver el DTO de
       // auditoria), así que sin las hojas no habría contra qué corregir.
       const [hojas, matriz] = await Promise.all([
-        repositorioHojas.todas(activo.inventarioId, activo.rondaActiva),
+        // LA RONDA ELEGIDA, no la vigente: es todo el punto de esta pantalla.
+        repositorioHojas.todas(activo.inventarioId, pedida),
         repositorioAuditoria.matriz(activo.inventarioId),
       ]);
       const porProducto = new Map(matriz.map((i) => [i.productoId, i] as const));
@@ -172,14 +205,23 @@ export default function AuditorCorregirScreen(): JSX.Element {
     });
     setCargando(false);
     if (falla) setError(falla.message);
-  }, [sesion, sucursalId]);
+  }, [sesion, sucursalId, rondaElegida]);
 
   // Pausado con el modal abierto: un refresco a mitad de tipear el motivo
   // borraría el borrador (ver useRefrescoAlEnfocar.ts).
   const { refrescando, refrescar } = useRefrescoAlEnfocar(cargar, { pausado: enEdicion !== null || guardando });
 
-  // Cambió la tienda elegida: recargar YA y limpiar lo anterior ANTES — la
-  // barra ya dice la tienda nueva (mismo criterio que auditoria.tsx).
+  /**
+   * Cambió la tienda O LA RONDA: recargar YA y limpiar lo anterior ANTES — la
+   * barra ya dice la tienda y el conteo nuevos (mismo criterio que
+   * auditoria.tsx).
+   *
+   * Limpiar no es cosmético al cambiar de ronda: los números de hoja se
+   * REPITEN en cada pasada, así que dejar las filas viejas un instante
+   * mostraría "Hoja #001" de la ronda anterior con los ítems de la nueva. Es
+   * el mismo bug que ya se arregló navegando por identidad y no por el número
+   * visible.
+   */
   const primerRender = useRef(true);
   useEffect(() => {
     if (primerRender.current) {
@@ -211,12 +253,25 @@ export default function AuditorCorregirScreen(): JSX.Element {
   async function guardarCorreccion(fila: FilaCorregible, conteo: Conteo, motivo: string): Promise<void> {
     setGuardando(true);
     try {
-      await repositorioAjuste.corregirConteo(fila.hojaId, fila.producto.id, {
+      const { salioDeLaRonda } = await repositorioAjuste.corregirConteo(fila.hojaId, fila.producto.id, {
         empaques: conteo.empaques,
         sueltas: conteo.sueltas,
         motivo,
       });
       setEnEdicion(null);
+      /**
+       * LO ÚNICO QUE EL CLIENTE PIDIÓ CON ESAS PALABRAS: *"corrígelo para que
+       * ya no salga en mi segundo conteo"*. Si no se dice, el Auditor guarda y
+       * no sabe si lo consiguió -- y que salga o no depende de si alguien ya
+       * empezó esa ronda, cosa que desde acá no se ve.
+       *
+       * `null` NO borra el aviso anterior de golpe: se reemplaza solo cuando
+       * hay algo nuevo que decir. Una corrección que no saca nada es el caso
+       * normal y no merece un cartel.
+       */
+      if (salioDeLaRonda !== null) {
+        setAviso({ texto: textoItemSalioDeRonda(salioDeLaRonda), tono: 'ok' });
+      }
       // Se vuelve a pedir todo: la corrección puede cambiar el veredicto del
       // ítem (de "falta" a "cuadrado") y con él el filtro y los contadores.
       // Recalcularlo a mano acá sería una segunda copia de `veredicto()`.
@@ -243,7 +298,9 @@ export default function AuditorCorregirScreen(): JSX.Element {
         }
       >
         <BarraApp
-          rotulo={ronda === null ? 'Corregir lo contado' : `Corregir lo contado · ${ORDINAL[ronda]} conteo`}
+          rotulo={
+            rondaElegida === null ? 'Corregir lo contado' : `Corregir lo contado · ${ORDINAL[rondaElegida]} conteo`
+          }
           sede={nombreSucursal}
           cifras={
             sePuedeCorregir
@@ -285,6 +342,51 @@ export default function AuditorCorregirScreen(): JSX.Element {
                 nombre. {STOCK_NO_SE_CORRIGE}
               </Text>
             </View>
+
+            {/* El resultado de la última corrección. Va ARRIBA de la lista
+                porque la lista se recarga y se reordena debajo: si estuviera
+                al pie, el aviso quedaría fuera de pantalla justo después de
+                guardar. */}
+            {aviso !== null ? (
+              <View style={[styles.resultado, aviso.tono === 'ok' ? styles.resultadoOk : styles.resultadoAtencion]}>
+                {aviso.tono === 'ok' ? (
+                  <CircleCheckBig size={16} color={colors.ok} />
+                ) : (
+                  <Info size={16} color={colors.proceso} />
+                )}
+                <Text style={styles.resultadoTexto}>{aviso.texto}</Text>
+              </View>
+            ) : null}
+
+            {/**
+             * EL SELECTOR DE RONDA. Por defecto la vigente, pero deja ir a las
+             * anteriores -- que es donde vive el caso que el cliente describió
+             * para pedir la corrección: la hoja finalizada de una ronda ya
+             * cerrada, con el siguiente conteo abierto.
+             *
+             * Se ofrecen 1..vigente y no una lista traída aparte: las rondas de
+             * un inventario son correlativas, así que la más alta las define
+             * todas. Con una sola ronda no se muestra nada -- un selector de
+             * una opción es un control que no decide nada.
+             */}
+            {rondaActiva !== null && rondaActiva > 1 ? (
+              <View style={styles.rondas}>
+                <Text style={styles.rondasEtiqueta}>Conteo a corregir</Text>
+                <ChipsFiltro
+                  opciones={Array.from({ length: rondaActiva }, (_, i) => ({
+                    id: String(i + 1),
+                    etiqueta: `${ORDINAL[i + 1]} conteo`,
+                  }))}
+                  activo={String(rondaElegida ?? rondaActiva)}
+                  onCambiar={(id) => {
+                    // El aviso viejo habla de la ronda que se está dejando:
+                    // llevarlo a la nueva sería decir algo que no pasó acá.
+                    setAviso(null);
+                    setRondaElegida(Number(id));
+                  }}
+                />
+              </View>
+            ) : null}
 
             <ChipsFiltro
               opciones={[
@@ -407,6 +509,27 @@ const styles = StyleSheet.create({
     backgroundColor: colors.esperaSuave,
   },
   avisoTexto: { flex: 1, fontSize: 12.5, lineHeight: 18, color: colors.gris, fontFamily: fonts.regular },
+
+  rondas: { gap: 6 },
+  rondasEtiqueta: {
+    fontSize: 10.5,
+    letterSpacing: 0.4,
+    textTransform: 'uppercase',
+    color: colors.grisClaro,
+    fontFamily: fonts.bold,
+  },
+
+  resultado: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: spacing.sm,
+    padding: 12,
+    borderRadius: radius.md,
+    borderWidth: 1,
+  },
+  resultadoOk: { backgroundColor: colors.okSuave, borderColor: colors.ok },
+  resultadoAtencion: { backgroundColor: colors.procesoSuave, borderColor: colors.proceso },
+  resultadoTexto: { flex: 1, fontSize: 12.5, lineHeight: 18, color: colors.tinta, fontFamily: fonts.regular },
 
   lista: { gap: 9 },
   fila: {

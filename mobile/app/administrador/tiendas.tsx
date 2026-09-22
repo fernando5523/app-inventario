@@ -96,20 +96,39 @@ export default function TiendasScreen(): JSX.Element {
     }
   }
 
+  /**
+   * Si la persona YA pidió la lista completa de almacenes, en un ref.
+   *
+   * `cargar` tiene que saberlo sin depender de ese estado: es `useCallback`
+   * con lista vacía a propósito (una identidad estable, que es lo que el hook
+   * de refresco guarda).
+   */
+  const mostrandoTodosRef = useRef(false);
+  mostrandoTodosRef.current = mostrandoTodos;
+
   const cargar = useCallback(async () => {
     setError(null);
     try {
+      // SE RESPETA LA VISTA COMPLETA. `traerTodosLosAlmacenes` es una acción
+      // explícita: la persona fue a buscar una tienda que no estaba entre las
+      // diez de siempre. Refrescar con la lista corta la deshacía en silencio
+      // -- volvía de otra pestaña, reabría el selector, y los 70 almacenes del
+      // ERP eran otra vez diez, sin nada que lo explicara.
+      const todos = mostrandoTodosRef.current;
       const [lista, listaAlmacenes] = await Promise.all([
         repositorioTiendas.listar(),
         // Si Dynamics no responde, la pantalla de tiendas no se puede quedar
         // en blanco por eso: se sigue viendo y gestionando la lista, solo
         // que el selector de almacén queda vacío (con su propio aviso, ver
         // más abajo) en vez de tirar toda la pantalla abajo.
-        repositorioTiendas.listarAlmacenes().catch(() => []),
+        (todos ? repositorioTiendas.listarAlmacenes({ todos: true }) : repositorioTiendas.listarAlmacenes()).catch(
+          // Sin red se conserva lo que ya estaba en el selector en vez de
+          // vaciarlo: no se pudo preguntar, no es que no haya almacenes.
+          () => null,
+        ),
       ]);
       setTiendas(lista);
-      setAlmacenes(listaAlmacenes);
-      setMostrandoTodos(false);
+      if (listaAlmacenes !== null) setAlmacenes(listaAlmacenes);
     } catch (e) {
       // A diferencia de listarAlmacenes (Dynamics, ya con su propio
       // fallback), esto es Postgres: si falla, no hay tiendas que mostrar
@@ -127,8 +146,11 @@ export default function TiendasScreen(): JSX.Element {
   // desplegado o el menú de acciones arriba: `cargar()` reemplaza la lista de
   // tiendas y de almacenes, y hacerlo mientras alguien tipea el nombre de una
   // sucursal nueva le borra lo escrito. Tampoco mientras se está guardando.
+  // `recuperarAlDespausar`: cerrar el formulario o el menú dispara el refresco
+  // que llegó mientras estaban abiertos, en vez de perderlo.
   const { refrescando, refrescar } = useRefrescoAlEnfocar(cargar, {
     pausado: formularioAbierto || editando !== null || menuAbierto || selectAlmacenAbierto || guardando || trayendoTodos,
+    recuperarAlDespausar: true,
   });
 
   function abrirFormularioNuevo(): void {

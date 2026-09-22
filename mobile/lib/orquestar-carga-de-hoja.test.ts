@@ -39,7 +39,7 @@ describe('primera carga (sin hoja elegida): elige la que le toca y la trae por i
   it('resuelve inventario, ronda, elige la hoja en proceso y devuelve su id', async () => {
     const enProceso = hoja({ id: 22, numero: '002', estado: 'en-proceso', productos: [{ id: 1 } as never] });
     const acc = acciones({
-      activo: vi.fn(async () => ({ inventarioId: 5, estado: 'en_curso' as const, rondaActiva: 1 })),
+      activo: vi.fn(async () => ({ inventarioId: 5, estado: 'en_curso' as const, rondaActiva: 1, totalHojas: 26 })),
       mias: vi.fn(async () => [hoja({ id: 11, numero: '001', productos: [{ id: 9 } as never] }), enProceso]),
     });
 
@@ -50,7 +50,7 @@ describe('primera carga (sin hoja elegida): elige la que le toca y la trae por i
   });
 
   it('sin ninguna hoja asignada: motivo sin-hoja, hoja null', async () => {
-    const acc = acciones({ activo: vi.fn(async () => ({ inventarioId: 5, estado: 'en_curso' as const, rondaActiva: 1 })), mias: vi.fn(async () => []) });
+    const acc = acciones({ activo: vi.fn(async () => ({ inventarioId: 5, estado: 'en_curso' as const, rondaActiva: 1, totalHojas: 26 })), mias: vi.fn(async () => []) });
     const r = await cargarHojaActiva({ ronda: null, hojaId: null }, acc);
     expect(r).toMatchObject({ inventarioId: 5, ronda: 1, hojaId: null, hoja: null, motivo: 'sin-hoja' });
   });
@@ -69,7 +69,7 @@ describe('con una hoja abierta: se resuelve por ID, no por número', () => {
     // el "001" que se repite en otras rondas/personas nunca puede confundirla.
     const miHoja = hoja({ id: 201, numero: '001', estado: 'en-proceso', productos: [{ id: 1 } as never] });
     const acc = acciones({
-      activo: vi.fn(async () => ({ inventarioId: 5, estado: 'en_curso' as const, rondaActiva: 2 })),
+      activo: vi.fn(async () => ({ inventarioId: 5, estado: 'en_curso' as const, rondaActiva: 2, totalHojas: 26 })),
       mias: vi.fn(async () => [miHoja]),
     });
 
@@ -84,7 +84,7 @@ describe('con una hoja abierta: se resuelve por ID, no por número', () => {
     // Tenía la #001 de la ronda 2 (id=201). El Coordinador abrió la 3ra: sus
     // hojas nuevas tienen otros ids; la 201 ya no está en mias(3).
     const acc = acciones({
-      activo: vi.fn(async () => ({ inventarioId: 5, estado: 'en_curso' as const, rondaActiva: 3 })),
+      activo: vi.fn(async () => ({ inventarioId: 5, estado: 'en_curso' as const, rondaActiva: 3, totalHojas: 26 })),
       mias: vi.fn(async () => [hoja({ id: 305, numero: '001', productos: [{ id: 1 } as never] })]),
     });
 
@@ -95,7 +95,7 @@ describe('con una hoja abierta: se resuelve por ID, no por número', () => {
 
   it('la ronda es la MISMA pero la hoja se reasignó (ya no es suya): también hoja-vieja', async () => {
     const acc = acciones({
-      activo: vi.fn(async () => ({ inventarioId: 5, estado: 'en_curso' as const, rondaActiva: 2 })),
+      activo: vi.fn(async () => ({ inventarioId: 5, estado: 'en_curso' as const, rondaActiva: 2, totalHojas: 26 })),
       mias: vi.fn(async () => [hoja({ id: 202, numero: '002' })]), // la 201 ya no le pertenece.
     });
 
@@ -107,7 +107,7 @@ describe('con una hoja abierta: se resuelve por ID, no por número', () => {
   it('la hoja abierta sigue siendo válida: la trae ACTUALIZADA, sin aviso', async () => {
     const actualizada = hoja({ id: 201, numero: '001', estado: 'en-proceso', conteos: [{ productoId: 1 } as never] });
     const acc = acciones({
-      activo: vi.fn(async () => ({ inventarioId: 5, estado: 'en_curso' as const, rondaActiva: 2 })),
+      activo: vi.fn(async () => ({ inventarioId: 5, estado: 'en_curso' as const, rondaActiva: 2, totalHojas: 26 })),
       mias: vi.fn(async () => [actualizada]),
     });
 
@@ -159,7 +159,7 @@ describe('BUG REAL (2026-09-10): mias() revienta sin catch, cuelga la pantalla d
   // navegación de OTRO tab (si es que esta screen no bloqueaba eso también).
   it('mias() revienta -> NO debe escapar: motivo "error", nunca una excepción sin atrapar', async () => {
     const acc = acciones({
-      activo: vi.fn(async () => ({ inventarioId: 5, estado: 'en_curso' as const, rondaActiva: 1 })),
+      activo: vi.fn(async () => ({ inventarioId: 5, estado: 'en_curso' as const, rondaActiva: 1, totalHojas: 26 })),
       mias: vi.fn(async () => {
         throw new Error('timeout');
       }),
@@ -192,7 +192,7 @@ describe('textoHojaVieja: el aviso que ve la persona', () => {
  */
 describe('el conteo terminó: hay inventario abierto pero ninguna ronda', () => {
   it('lo distingue de "no hay inventario", que tiene la salida opuesta', async () => {
-    const acc = acciones({ activo: vi.fn(async () => ({ inventarioId: 5, estado: 'en_curso' as const, rondaActiva: null })) });
+    const acc = acciones({ activo: vi.fn(async () => ({ inventarioId: 5, estado: 'en_curso' as const, rondaActiva: null, totalHojas: 26 })) });
 
     const r = await cargarHojaActiva({ ronda: null, hojaId: null }, acc);
 
@@ -207,7 +207,7 @@ describe('el conteo terminó: hay inventario abierto pero ninguna ronda', () => 
 
   /** No se pide `mias()` sin ronda: no hay ronda contra la que pedirlas. */
   it('no consulta las hojas de una ronda que no existe', async () => {
-    const acc = acciones({ activo: vi.fn(async () => ({ inventarioId: 5, estado: 'en_curso' as const, rondaActiva: null })) });
+    const acc = acciones({ activo: vi.fn(async () => ({ inventarioId: 5, estado: 'en_curso' as const, rondaActiva: null, totalHojas: 26 })) });
 
     await cargarHojaActiva({ ronda: 3, hojaId: 44 }, acc);
 
@@ -225,7 +225,7 @@ describe('el conteo terminó: hay inventario abierto pero ninguna ronda', () => 
 describe('la fase manda sobre la ronda: durante el ajuste ya no se cuenta', () => {
   it('con el ajuste en curso corta antes de pedir las hojas, aunque venga una ronda', async () => {
     const acc = acciones({
-      activo: vi.fn(async () => ({ inventarioId: 5, estado: 'ajuste_auditor' as const, rondaActiva: 3 })),
+      activo: vi.fn(async () => ({ inventarioId: 5, estado: 'ajuste_auditor' as const, rondaActiva: 3, totalHojas: 26 })),
     });
 
     const r = await cargarHojaActiva({ ronda: 3, hojaId: 44 }, acc);
@@ -236,7 +236,7 @@ describe('la fase manda sobre la ronda: durante el ajuste ya no se cuenta', () =
 
   it('con el conteo ya cerrado, lo mismo', async () => {
     const acc = acciones({
-      activo: vi.fn(async () => ({ inventarioId: 5, estado: 'conteo_cerrado' as const, rondaActiva: 3 })),
+      activo: vi.fn(async () => ({ inventarioId: 5, estado: 'conteo_cerrado' as const, rondaActiva: 3, totalHojas: 26 })),
     });
 
     expect(await cargarHojaActiva({ ronda: null, hojaId: null }, acc)).toMatchObject({ motivo: 'conteo-terminado' });
@@ -244,7 +244,7 @@ describe('la fase manda sobre la ronda: durante el ajuste ya no se cuenta', () =
 
   it('con el inventario en curso y su ronda abierta SÍ se piden las hojas', async () => {
     const acc = acciones({
-      activo: vi.fn(async () => ({ inventarioId: 5, estado: 'en_curso' as const, rondaActiva: 2 })),
+      activo: vi.fn(async () => ({ inventarioId: 5, estado: 'en_curso' as const, rondaActiva: 2, totalHojas: 26 })),
     });
 
     await cargarHojaActiva({ ronda: null, hojaId: null }, acc);

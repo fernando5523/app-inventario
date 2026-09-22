@@ -31,7 +31,7 @@ vi.mock('lucide-react-native', () => ({
 
 import { ACCESOS_POR_ROL } from '../../components/navegacion/accesos';
 import { TABS_POR_ROL } from '../../components/navegacion/tabs';
-import { navegacionDeRespaldo, traerNavegacion } from './navegacion-api';
+import { navegacionDeRespaldo, traerNavegacion, traerNavegacionSiSePuede } from './navegacion-api';
 
 beforeEach(() => vi.clearAllMocks());
 
@@ -136,5 +136,55 @@ describe('navegacionDeRespaldo', () => {
       expect(nav.tabs).toEqual(TABS_POR_ROL[rol]);
       expect(nav.esRespaldo).toBe(true);
     }
+  });
+});
+
+/**
+ * LAS DOS LECTURAS, Y POR QUE ANTE EL MISMO ERROR TIENEN RESPUESTAS OPUESTAS.
+ *
+ * `traerNavegacion` es para el ARRANQUE: sin nada en memoria, el respaldo es
+ * lo mejor que se puede ofrecer.
+ *
+ * `traerNavegacionSiSePuede` es para el REFRESCO: ya hay una configuración
+ * buena, y caer al mapa de fábrica la pisaría -- si el Administrador apagó un
+ * acceso, volver a la app sin señal lo haría reaparecer. Devuelve `null` para
+ * que quien refresca no toque nada.
+ */
+describe('traerNavegacionSiSePuede: dice cuándo NO se pudo', () => {
+  it('con una respuesta buena devuelve la configuración', async () => {
+    pedirMock.mockResolvedValue({
+      rol: 'conteo',
+      accesos: [{ ruta: '/conteo/mis-hojas', titulo: 'Mis hojas', sub: '' }],
+      tabs: [{ name: 'contar', etiqueta: 'Contar' }],
+    });
+
+    const nav = await traerNavegacionSiSePuede('conteo');
+    expect(nav?.esRespaldo).toBe(false);
+    expect(nav?.accesos.map((a) => a.ruta)).toEqual(['/conteo/mis-hojas']);
+  });
+
+  it('sin señal devuelve NULL, no el mapa compilado', async () => {
+    // La diferencia que sostiene todo: con el respaldo acá, un refresco sin
+    // red pisaría la configuración buena con la de fábrica.
+    pedirMock.mockRejectedValue(new Error('Network request failed'));
+    expect(await traerNavegacionSiSePuede('coordinador')).toBeNull();
+  });
+
+  it('una respuesta con la forma equivocada también es null', async () => {
+    pedirMock.mockResolvedValue('<html>502</html>');
+    expect(await traerNavegacionSiSePuede('auditor')).toBeNull();
+  });
+
+  it('una configuración que deja el home vacío es null: no se puede aplicar', async () => {
+    pedirMock.mockResolvedValue({ rol: 'conteo', accesos: [], tabs: [] });
+    expect(await traerNavegacionSiSePuede('conteo')).toBeNull();
+  });
+
+  it('y `traerNavegacion` sigue cayendo al respaldo en los mismos casos', async () => {
+    // El arranque no cambió: esto es lo que evita el home en blanco.
+    pedirMock.mockRejectedValue(new Error('Network request failed'));
+    const nav = await traerNavegacion('coordinador');
+    expect(nav.esRespaldo).toBe(true);
+    expect(nav.accesos).toEqual(ACCESOS_POR_ROL.coordinador);
   });
 });

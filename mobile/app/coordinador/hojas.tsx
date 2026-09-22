@@ -134,7 +134,7 @@ export default function HojasScreen(): JSX.Element {
       // La FASE, no la ronda: `rondaActiva` es la última ronda que EXISTE, así
       // que sigue siendo un número mientras el auditor ajusta. Sin esto, la
       // pantalla ofrecía las hojas de una ronda que ya no admite conteos.
-      yaNoSeCuenta = activo !== null && faseDeCierre(activo.estado, activo.rondaActiva) !== 'contando';
+      yaNoSeCuenta = activo !== null && faseDeCierre(activo.estado, activo.rondaActiva, activo.totalHojas) !== 'contando';
     } catch {
       // Sin red (u otra falla): el avance de hoy puede estar completo en
       // SQLite -- se sigue con eso en vez de dejar la lista colgada

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   debeReintentarAutomaticamente,
   debeRefrescar,
+  decidirRefresco,
   esVueltaAPrimerPlano,
   MAX_REINTENTOS_AUTOMATICOS,
   REINTENTO_INICIAL,
@@ -124,5 +125,40 @@ describe('el ciclo completo: descarga en curso -> Inicio dice "—"; descarga te
     // Intento 3 (automático): la descarga YA terminó bien -- llegaron 2 hojas.
     cifra = cifraMisHojas([{}, {}], { ok: true });
     expect(cifra).toBe(2); // Inicio muestra "2", nadie navegó a ningún lado.
+  });
+});
+
+/**
+ * LOS DOS "NO" SON DISTINTOS. `debeRefrescar` los aplasta en un `false` y eso
+ * fue el hueco: un disparo pausado se tiraba igual que uno duplicado, así que
+ * cerrar el modal dejaba la pantalla con el dato de antes.
+ */
+describe('decidirRefresco: posponer no es descartar', () => {
+  it('sin nada en el medio, refresca', () => {
+    expect(decidirRefresco({ enVuelo: false, pausado: false })).toBe('refrescar');
+  });
+
+  it('pausado se POSPONE: el dato quedó viejo igual, hay que recuperarlo', () => {
+    expect(decidirRefresco({ enVuelo: false, pausado: true })).toBe('posponer');
+  });
+
+  it('en vuelo se DESCARTA: ya hay una pedida igual corriendo', () => {
+    expect(decidirRefresco({ enVuelo: true, pausado: false })).toBe('descartar');
+  });
+
+  /**
+   * La pedida en vuelo salió ANTES de este disparo, así que no cubre lo que
+   * pasó después. Con las dos condiciones, gana posponer.
+   */
+  it('pausado gana sobre en vuelo', () => {
+    expect(decidirRefresco({ enVuelo: true, pausado: true })).toBe('posponer');
+  });
+
+  it('`debeRefrescar` sigue significando lo mismo para quien ya lo usaba', () => {
+    for (const enVuelo of [false, true]) {
+      for (const pausado of [false, true]) {
+        expect(debeRefrescar({ enVuelo, pausado })).toBe(decidirRefresco({ enVuelo, pausado }) === 'refrescar');
+      }
+    }
   });
 });

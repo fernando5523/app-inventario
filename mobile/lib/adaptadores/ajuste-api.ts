@@ -31,8 +31,8 @@
  * ("el auditor ya empezó el ajuste"), y un mensaje genérico borraría justo eso.
  */
 
-import type { CorreccionDeConteo, RepositorioAjuste } from '../puertos/repositorios';
-import { pedirSinCuerpo } from './_http';
+import type { CorreccionDeConteo, RepositorioAjuste, ResultadoCorreccion } from '../puertos/repositorios';
+import { pedir, pedirSinCuerpo } from './_http';
 
 /** Lo que viaja en el cuerpo de las dos correcciones. Mismo shape en las dos rutas. */
 function cuerpoDe(correccion: CorreccionDeConteo): CorreccionDeConteo {
@@ -41,10 +41,19 @@ function cuerpoDe(correccion: CorreccionDeConteo): CorreccionDeConteo {
 
 export const ajusteApi: RepositorioAjuste = {
   async corregirConteo(hojaId, productoId, correccion) {
-    await pedirSinCuerpo(`/api/hojas/${hojaId}/conteos/${productoId}/corregir`, {
+    /**
+     * `pedir` y no `pedirSinCuerpo`: la respuesta trae `salioDeLaRonda`, que
+     * es lo que la pantalla necesita para decir "ya no sale en el 2do conteo".
+     * Con `pedirSinCuerpo` la corrección funcionaba igual y el aviso se perdía
+     * en el camino -- el servidor lo mandaba y nadie lo leía.
+     */
+    const r = await pedir<ResultadoCorreccion>(`/api/hojas/${hojaId}/conteos/${productoId}/corregir`, {
       metodo: 'PATCH',
       cuerpo: cuerpoDe(correccion),
     });
+    // `?? null` y no `r.salioDeLaRonda` a secas: un backend viejo no manda la
+    // clave, y `undefined` recorrería la pantalla hasta romper un `.codigo`.
+    return { salioDeLaRonda: r.salioDeLaRonda ?? null };
   },
 
   async abrirRondaExtra(inventarioId) {

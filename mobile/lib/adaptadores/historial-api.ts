@@ -90,6 +90,7 @@
 
 import type {
   AparicionItemHistorico,
+  ArchivoExportado,
   ComparativoMensual,
   DetalleInventarioHistorico,
   DiferenciaHistorica,
@@ -461,6 +462,19 @@ export const historialApi: RepositorioHistorial = {
 
   async exportarDiferencias(inventarioId): Promise<ArrayBuffer> {
     return pedir<ArrayBuffer>(`${BASE}/${inventarioId}/diferencias/exportar`, { binario: true });
+  },
+
+  /**
+   * La planilla de cuadros. `conNombreDeArchivo` porque el nombre lo arma el
+   * backend con sucursal y período (`nombreArchivoCuadros`), datos que el panel
+   * de auditoría no tiene: se lee del `Content-Disposition` en vez de
+   * recalcularlo, que además deja un solo dueño del formato del nombre.
+   */
+  async exportarCuadros(inventarioId: number): Promise<ArchivoExportado> {
+    return pedir<ArchivoExportado>(`${BASE}/${inventarioId}/cuadros/exportar`, {
+      binario: true,
+      conNombreDeArchivo: true,
+    });
   },
 
   async exportarDiferenciasConsolidado(filtro: FiltroExportConsolidado): Promise<ArrayBuffer> {

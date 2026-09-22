@@ -57,10 +57,25 @@ export function ComparativoScreen({ rol }: ComparativoScreenProps): JSX.Element 
   const [filtroSucursalId, setFiltroSucursalId] = useState<number | null>(null);
   const { elegida, elegir } = useSucursalAuditada();
 
-  // El padrón lo necesitan los dos roles. Mismo endpoint del login
-  // (`GET /api/sesion/sucursales`), sin gate de permiso.
-  useEffect(() => {
-    repositorioSesion.sucursales().then(setSucursales);
+  /**
+   * EL PADRON, EN CADA REFRESCO Y NO UNA SOLA VEZ AL MONTAR.
+   *
+   * Pedirlo al montar dejaba una tienda recién creada fuera del selector para
+   * el resto de la sesión: el Administrador la da de alta en Tiendas, entra
+   * acá, y no la puede elegir -- con esta pantalla no hay "todas", así que sin
+   * la tienda en el selector no hay comparativo que ver. Mismo endpoint del
+   * login, sin gate de permiso.
+   *
+   * SIN RED NO SE VACIA: el `catch` conserva el padrón anterior. Un selector
+   * vacío diría "no hay tiendas" cuando lo que pasó es que no se pudo
+   * preguntar.
+   */
+  const cargarSucursales = useCallback(async () => {
+    try {
+      setSucursales(await repositorioSesion.sucursales());
+    } catch {
+      /* se conserva el padrón que ya estaba: ver arriba */
+    }
   }, []);
 
   // La sucursal EFECTIVA: para el Auditor, la del contexto (o su ficha como
@@ -72,7 +87,15 @@ export function ComparativoScreen({ rol }: ComparativoScreenProps): JSX.Element 
       : filtroSucursalId;
 
   const cargar = useCallback(async () => {
-    if (!sesion || filtroActivo === null) {
+    if (!sesion) {
+      setCargando(false);
+      return;
+    }
+    // El padrón se trae SIEMPRE, incluso sin tienda elegida: es justamente el
+    // caso en que la persona todavía está por elegir y necesita ver la lista
+    // completa, la tienda nueva incluida.
+    await cargarSucursales();
+    if (filtroActivo === null) {
       // Sin tienda elegida no hay nada honesto que pedir: mostrar "todas"
       // mezcladas es exactamente el dato que miente que esto vino a evitar.
       setCargando(false);
@@ -86,7 +109,7 @@ export function ComparativoScreen({ rol }: ComparativoScreenProps): JSX.Element 
     } finally {
       setCargando(false);
     }
-  }, [sesion, filtroActivo]);
+  }, [sesion, filtroActivo, cargarSucursales]);
 
   // Al enfocar Y al volver la app a primer plano — "cualquier dato actualizado
   // no debe depender de cerrar sesión y volver". Ver useRefrescoAlEnfocar.

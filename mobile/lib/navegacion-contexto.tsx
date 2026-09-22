@@ -28,13 +28,34 @@
  * once personas, y este le cuesta un parpadeo a una.
  */
 
-import { createContext, useContext, useEffect, useMemo, useState, type JSX, type PropsWithChildren } from 'react';
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type JSX,
+  type PropsWithChildren,
+} from 'react';
 
-import { navegacionDeRespaldo, traerNavegacion, type Navegacion } from './adaptadores/navegacion-api';
+import {
+  navegacionDeRespaldo,
+  traerNavegacion,
+  traerNavegacionSiSePuede,
+  type Navegacion,
+} from './adaptadores/navegacion-api';
 import type { Rol } from './dominio/tipos';
 import { useSesion } from './sesion-contexto';
 
-const NavegacionContexto = createContext<Navegacion | null>(null);
+interface ValorNavegacion {
+  navegacion: Navegacion | null;
+  /** Vuelve a pedirla. Ver `refrescar` en el provider: nunca pisa lo bueno. */
+  refrescar: () => void;
+}
+
+const NavegacionContexto = createContext<ValorNavegacion | null>(null);
 
 export function NavegacionProvider({ children }: PropsWithChildren): JSX.Element {
   const { sesion } = useSesion();
@@ -42,6 +63,11 @@ export function NavegacionProvider({ children }: PropsWithChildren): JSX.Element
 
   // El respaldo YA es el estado inicial: no hay un momento sin navegación.
   const [navegacion, setNavegacion] = useState<Navegacion | null>(null);
+
+  // El rol vigente, para que `refrescar` sea estable y no se rearme en cada
+  // cambio de sesión -- lo consumen pantallas que lo pasan a `useEffect`.
+  const rolRef = useRef<Rol | null>(rol);
+  rolRef.current = rol;
 
   useEffect(() => {
     if (rol === null) {
@@ -65,12 +91,45 @@ export function NavegacionProvider({ children }: PropsWithChildren): JSX.Element
     };
   }, [rol]);
 
+  /**
+   * VOLVER A PEDIRLA, sin pisar lo que ya está bien.
+   *
+   * ---------------------------------------------------------------------
+   * POR QUE HACE FALTA
+   * ---------------------------------------------------------------------
+   * El efecto de arriba depende solo de `[rol]`, y el rol no cambia durante
+   * una sesión: `/api/navegacion/mia` se pedía UNA vez por login y no se
+   * volvía a pedir nunca. Si el Administrador prendía, apagaba o reordenaba
+   * un acceso, nadie lo veía hasta cerrar y volver a abrir la app -- ni él
+   * mismo, que después de Guardar seguía con su propia barra de tabs vieja.
+   *
+   * ---------------------------------------------------------------------
+   * ANTE UN ERROR NO TOCA NADA, Y ESA ES LA PARTE QUE IMPORTA
+   * ---------------------------------------------------------------------
+   * Usa `traerNavegacionSiSePuede`, que devuelve `null` cuando no llegó. El
+   * arranque SÍ cae al mapa compilado (mejor el home de siempre que una
+   * pantalla en blanco), pero un refresco NO puede hacer eso: ya hay una
+   * configuración buena en memoria, y reemplazarla por la de fábrica haría
+   * reaparecer un acceso que el Administrador apagó, cada vez que la persona
+   * vuelve a la app sin señal. Sin red, lo que ya está es lo bueno.
+   */
+  const refrescar = useCallback((): void => {
+    const rolActual = rolRef.current;
+    if (rolActual === null) return;
+    void traerNavegacionSiSePuede(rolActual).then((traida) => {
+      // `rolRef` otra vez y no `rolActual`: entre el pedido y la respuesta
+      // alguien pudo cerrar sesión y entrar con otro rol, y aplicarle el home
+      // del anterior sería mostrarle pantallas que no son suyas.
+      if (traida !== null && rolRef.current === rolActual) setNavegacion(traida);
+    });
+  }, []);
+
   // Mientras no llegó nada -- y también si el rol cambió recién --, el
   // respaldo. `useMemo` para no rearmar el objeto en cada render: `tabs` entra
   // como dependencia de efectos en RolTabsLayout.
-  const valor = useMemo<Navegacion | null>(
-    () => navegacion ?? (rol === null ? null : navegacionDeRespaldo(rol)),
-    [navegacion, rol],
+  const valor = useMemo<ValorNavegacion>(
+    () => ({ navegacion: navegacion ?? (rol === null ? null : navegacionDeRespaldo(rol)), refrescar }),
+    [navegacion, rol, refrescar],
   );
 
   return <NavegacionContexto.Provider value={valor}>{children}</NavegacionContexto.Provider>;
@@ -84,5 +143,24 @@ export function NavegacionProvider({ children }: PropsWithChildren): JSX.Element
  */
 export function useNavegacion(rol: Rol): Navegacion {
   const contexto = useContext(NavegacionContexto);
-  return contexto ?? navegacionDeRespaldo(rol);
+  return contexto?.navegacion ?? navegacionDeRespaldo(rol);
 }
+
+/**
+ * VOLVER A PEDIR la navegación. La usan dos lugares y por dos motivos
+ * distintos:
+ *
+ *  - `InicioScreen`, al enfocar y al volver a primer plano: así los otros tres
+ *    roles se enteran de lo que cambió el Administrador sin reiniciar la app.
+ *  - La pantalla de "Accesos y menús", justo después de guardar o de volver a
+ *    fábrica: el Administrador tiene que ver SU propio cambio en SU barra de
+ *    tabs, y guardar solo actualizaba el estado local de esa pantalla.
+ *
+ * Fuera del provider es un no-op: nunca lanza ni obliga a chequear nada.
+ */
+export function useRefrescarNavegacion(): () => void {
+  const contexto = useContext(NavegacionContexto);
+  return contexto?.refrescar ?? NO_OP;
+}
+
+const NO_OP = (): void => undefined;

@@ -744,12 +744,22 @@ async function descargarHojas(inventarioId: number, alcance: 'mias' | 'todas', r
   try {
     for (const hoja of completas) {
       await guardarEstructuraDeHoja(db, hoja, ronda);
-      // Solo para `todas()` (Coordinador/Auditor, solo lectura): refresca
-      // el estado/conteos locales con la respuesta FRESCA del servidor.
-      // `mias()` no pasa por acá -- `asegurarSembrada` (adentro de
-      // guardarEstructuraDeHoja) ya protege el trabajo propio del
-      // Contador, sembrando una sola vez, y eso es lo correcto ahí.
-      if (alcance === 'todas') await refrescarEstadoDesdeServidor(db, hoja);
+      // PARA LOS DOS ALCANCES: refresca el estado y los conteos locales con
+      // la respuesta FRESCA del servidor.
+      //
+      // ANTES ERA SOLO `todas()`, y eso DEJABA AL CONTADOR BLOQUEADO (bug
+      // real, 2026-09-21): `asegurarSembrada` siembra la hoja UNA vez y no
+      // vuelve nunca. Una hoja que se sembró vacía quedaba vacía para
+      // siempre -- el servidor tenía los 50 conteos cargados y el teléfono
+      // seguía diciendo "Faltan 50 productos por contar", así que el botón
+      // de finalizar no se habilitaba y la persona no podía avanzar.
+      //
+      // Sembrar una sola vez pretendía proteger el trabajo del Contador, y
+      // esa protección NO se pierde: vive en la guarda de
+      // `refrescarEstadoDesdeServidor`, que no toca una hoja con algo
+      // pendiente en `cola_sync`. Lo que la persona cargó y todavía no subió
+      // sigue intocable; lo que ya no tiene nada pendiente se pone al día.
+      await refrescarEstadoDesdeServidor(db, hoja);
       guardadas++;
     }
   } catch {
@@ -757,6 +767,11 @@ async function descargarHojas(inventarioId: number, alcance: 'mias' | 'todas', r
     ultimosResultados.set(claveResultado(inventarioId, alcance, ronda), resultado);
     return resultado;
   }
+
+  // RECONCILIAR, y solo acá: esta es la rama donde el servidor respondio y su
+  // lista es completa. Un fallo (el `catch` de arriba, o el `sin-red` de mas
+  // arriba) no llega hasta este punto, asi que nunca se borra por silencio.
+  await reconciliarDescarga(db, inventarioId, ronda, alcance, completas);
 
   const ahora = new Date().toISOString();
   const resultado: ResultadoDescarga = { ok: true, hojas: completas.length, en: ahora };
@@ -766,24 +781,155 @@ async function descargarHojas(inventarioId: number, alcance: 'mias' | 'todas', r
 }
 
 /**
- * Dispara la descarga y decide si HAY que esperarla:
- *  - `mias()` (Contador) con estructura local ya presente → se muestra YA
- *    (no hace esperar un timeout de red para terminar mostrando lo mismo
- *    que ya había); la descarga corre en segundo plano para refrescar.
- *    Sin nada local todavía, sí vale la pena esperar el intento (es el
- *    caso "primera vez, con WiFi, en la tienda" del punto 1).
- *  - `todas()` (Coordinador/Auditor) SIEMPRE espera el intento, tenga o
- *    no estructura local. Es de solo lectura y la razón de ser de la
- *    pantalla es ver el estado REAL de lo que hicieron los demás — la
- *    optimización de "mostrar la cache ya y refrescar en segundo plano"
- *    es correcta para el Contador (que solo necesita ver SU propio
- *    avance sin esperar), pero acá dejaba "Quedan N hojas sin finalizar"
- *    clavado para siempre (hallazgo 2026-09-06, min-1): la promesa de
- *    fondo terminaba de escribir en SQLite, pero nada volvía a pintar la
- *    pantalla con eso, así que la MISMA lectura vieja se repetía en cada
- *    visita, cada reinicio, indefinidamente. Sin red, `descargarHojas`
- *    falla rápido (timeout de `_http.ts`, no un cuelgue) y esta función
- *    sigue con lo local — la pantalla lo distingue con `ultimaDescarga`.
+ * RECONCILIAR: que se VAYA de la copia local lo que el servidor ya no manda.
+ *
+ * ---------------------------------------------------------------------------
+ * EL BUG QUE CIERRA
+ * ---------------------------------------------------------------------------
+ * La mezcla de una descarga AGREGA y ACTUALIZA, pero nunca borraba nada: en
+ * todo este archivo los unicos `DELETE` eran el de `conteos` de
+ * `refrescarEstadoDesdeServidor` y el de la cola. Entonces un item que sale
+ * de la ronda -- porque el Auditor corrigio su conteo y paso a cuadrar --
+ * sobrevivia en el telefono para siempre: el servidor devolvia 2 productos y
+ * la pantalla seguia mostrando 3, y salir y volver no lo arreglaba porque no
+ * habia nada que lo sacara. Lo mismo con una hoja que se va al deshacer un
+ * reparto.
+ *
+ * ---------------------------------------------------------------------------
+ * EL PRINCIPIO: BORRA UNA RESPUESTA, NUNCA EL SILENCIO
+ * ---------------------------------------------------------------------------
+ * Una descarga EXITOSA es la lista COMPLETA y autoritativa de su alcance
+ * `(inventario, ronda)`: lo que no vino, ya no esta. Eso habilita el borrado.
+ *
+ * Una descarga que FALLO no dice nada sobre el mundo -- dice que no se pudo
+ * preguntar. Por eso esta funcion se llama SOLO en la rama de exito de
+ * `descargarHojas`. Sin red, la copia local es la buena y queda intacta: es
+ * el corazon del conteo sin señal, y vaciar una hoja cacheada porque una
+ * peticion no respondio seria perder el trabajo de una gondola entera.
+ *
+ * ---------------------------------------------------------------------------
+ * QUE BORRA Y QUE NO
+ * ---------------------------------------------------------------------------
+ * HOJAS y PRODUCTOS. Los CONTEOS no entran acá a proposito, y no es un olvido:
+ * `procesarColaDeSincronizacion` borra la fila de `cola_sync` apenas sube un
+ * conteo con exito, asi que entre ese borrado y la proxima descarga hay una
+ * ventana donde un conteo legitimo YA SUBIDO no tiene ninguna marca de "mio,
+ * pendiente". Reconciliarlo contra una respuesta que se pidio ANTES de esa
+ * subida lo borraria del telefono. Los conteos ya tienen su regla correcta en
+ * `refrescarEstadoDesdeServidor` (reemplazo entero, solo si no hay nada
+ * pendiente), y el item fantasma del bug es un PRODUCTO, no un conteo.
+ *
+ * Y UNA HOJA CON ALGO PENDIENTE EN LA COLA NO SE TOCA, aunque el servidor no
+ * la mande. Puede no mandarla justamente porque todavia no le llego lo que
+ * esta persona cargo -- borrarla seria tirar trabajo que nunca subio.
+ */
+async function reconciliarDescarga(
+  db: DbSqlite,
+  inventarioId: number,
+  ronda: number,
+  alcance: 'mias' | 'todas',
+  hojasDelServidor: readonly HojaConteo[],
+): Promise<void> {
+  // Los productos SIEMPRE: sobre una hoja que el servidor acaba de mandar, su
+  // lista de productos es completa, venga de `mias()` o de `todas()`.
+  await reconciliarProductos(db, hojasDelServidor);
+
+  // BORRAR HOJAS ENTERAS: SOLO desde `todas()`.
+  //
+  // `mias()` y `todas()` escriben en las MISMAS tablas -- el telefono tiene
+  // UNA copia local, no una por rol. Entonces una respuesta de `mias()` es
+  // autoritativa sobre que productos tienen MIS hojas, pero NO sobre que
+  // hojas existen en la ronda: las que no vinieron pueden ser de otro
+  // contador, traidas por un `todas()` del Coordinador en este mismo equipo.
+  //
+  // Borrarlas desde `mias()` vaciaba la copia entera. Lo cazo el test de
+  // aislamiento entre contadores (Luis quedaba sin ninguna hoja), y era un
+  // fallo del diseño, no del test. `todas()` SI trae la lista completa de la
+  // ronda, asi que ahi el borrado es correcto -- y es el que saca las hojas
+  // de un reparto deshecho.
+  if (alcance !== 'todas') return;
+
+  const idsVigentes = new Set(hojasDelServidor.map((h) => h.id));
+
+  // `numero_conteo`, que es como se llama la columna (espeja
+  // `HojaConteo.numeroConteo` del backend). Y se filtra por ronda EN LA
+  // CONSULTA por el mismo motivo que `hojasEstructuraDeInventarioDb`: las
+  // hojas de la ronda 1 y la 2 conviven en la tabla, y una descarga de la
+  // ronda 2 no puede borrar las de la 1 -- el servidor no las mandó porque
+  // no se las pidieron, no porque no existan.
+  const locales = await db.getAllAsync<{ id: number }>(
+    'SELECT id FROM hojas_estructura WHERE inventario_id = ? AND numero_conteo = ?',
+    [inventarioId, ronda],
+  );
+
+  for (const { id } of locales) {
+    if (idsVigentes.has(id)) continue;
+    // La guarda de siempre: lo que no subio todavia no se borra.
+    const pendientes = await db.getFirstAsync<{ n: number }>('SELECT COUNT(*) as n FROM cola_sync WHERE hoja_id = ?', [id]);
+    if ((pendientes?.n ?? 0) > 0) continue;
+
+    await db.withTransactionAsync(async () => {
+      await db.runAsync('DELETE FROM productos_estructura WHERE hoja_id = ?', [id]);
+      await db.runAsync('DELETE FROM conteos WHERE hoja_id = ?', [id]);
+      await db.runAsync('DELETE FROM hoja_estado_local WHERE hoja_id = ?', [id]);
+      await db.runAsync('DELETE FROM hojas_estructura WHERE id = ?', [id]);
+    });
+  }
+
+}
+
+/**
+ * Los productos que ya no estan DENTRO de las hojas que si vinieron.
+ *
+ * Es la mitad que arregla el ITEM FANTASMA: el que salio de la ronda porque
+ * el Auditor corrigio su conteo y paso a cuadrar, y que sobrevivia en el
+ * telefono aunque el servidor ya devolviera dos productos en vez de tres.
+ */
+async function reconciliarProductos(db: DbSqlite, hojasDelServidor: readonly HojaConteo[]): Promise<void> {
+  for (const hoja of hojasDelServidor) {
+    const pendientes = await db.getFirstAsync<{ n: number }>('SELECT COUNT(*) as n FROM cola_sync WHERE hoja_id = ?', [
+      hoja.id,
+    ]);
+    if ((pendientes?.n ?? 0) > 0) continue;
+
+    const vigentes = new Set(hoja.productos.map((p) => p.id));
+    const guardados = await db.getAllAsync<{ id: number }>('SELECT id FROM productos_estructura WHERE hoja_id = ?', [
+      hoja.id,
+    ]);
+    const sobrantes = guardados.map((g) => g.id).filter((id) => !vigentes.has(id));
+    if (sobrantes.length === 0) continue;
+
+    await db.withTransactionAsync(async () => {
+      for (const id of sobrantes) {
+        await db.runAsync('DELETE FROM productos_estructura WHERE hoja_id = ? AND id = ?', [hoja.id, id]);
+        // El conteo del producto que ya no esta se va con el: dejarlo
+        // huerfano inflaria el "contados" de la hoja con un item invisible.
+        await db.runAsync('DELETE FROM conteos WHERE hoja_id = ? AND producto_id = ?', [hoja.id, id]);
+      }
+    });
+  }
+}
+
+/**
+ * Dispara la descarga y ESPERA el intento, para los dos alcances.
+ *
+ * ANTES `mias()` NO ESPERABA cuando ya había estructura local: disparaba la
+ * descarga con `void` y devolvía la copia guardada. La idea era no hacerle
+ * esperar un timeout de red al Contador para terminar mostrándole lo mismo
+ * que ya tenía.
+ *
+ * El costo real de esa optimización era peor que lo que ahorraba: la pantalla
+ * quedaba SIEMPRE UN REFRESCO ATRAS. La descarga fresca aterrizaba en SQLite
+ * después de que quien llamó ya había leído, y nada volvía a pintar, así que
+ * enfocar de nuevo mostraba lo que había bajado la vez anterior. Con el
+ * refresco al enfocar (`useRefrescoAlEnfocar`) funcionando bien, el dato
+ * nuevo llegaba siempre tarde y la persona veía cambios que ya no eran los
+ * últimos.
+ *
+ * Esperar no reintroduce el cuelgue que esto evitaba: `_http.ts` tiene
+ * timeout con presupuesto total, así que sin red `descargarHojas` falla
+ * rápido y se sigue con lo local -- la pantalla lo distingue con
+ * `ultimaDescarga`, que es justo para eso.
  */
 async function descargarSiHaceFalta(inventarioId: number, alcance: 'mias' | 'todas', ronda: number): Promise<void> {
   if (alcance === 'todas') {
@@ -791,13 +937,6 @@ async function descargarSiHaceFalta(inventarioId: number, alcance: 'mias' | 'tod
     return;
   }
 
-  const db = await obtenerDb();
-  const yaHayLocal = (await hojasEstructuraDeInventarioDb(db, inventarioId, ronda)).length > 0;
-
-  if (yaHayLocal) {
-    void descargarHojas(inventarioId, alcance, ronda);
-    return;
-  }
   await descargarHojas(inventarioId, alcance, ronda);
 }
 

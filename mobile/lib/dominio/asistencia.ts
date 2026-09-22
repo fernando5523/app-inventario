@@ -107,9 +107,52 @@ export function filasDeAsistencia<P extends { id: number }>(
   }));
 }
 
-/** Cuántas personas del padrón ya tienen su entrada registrada ese día. */
+/**
+ * Cuántas personas del padrón ya tienen su entrada registrada ese día.
+ *
+ * TODO el padrón, sin filtrar por rol: es el número de la pantalla de
+ * asistencia, donde el Coordinador pasa lista a los siete (él incluido). Para
+ * el reparto de hojas hace falta otra pregunta -- ver `contadoresPresentes`.
+ */
 export function presentesEnElDia<P extends { id: number }>(filas: readonly FilaAsistencia<P>[]): number {
   return filas.filter((f) => f.marcaDelDia !== null).length;
+}
+
+/**
+ * A QUIÉNES SE LES REPARTEN LAS HOJAS: los de rol `conteo` que marcaron
+ * entrada ESE día.
+ *
+ * ---------------------------------------------------------------------------
+ * POR QUÉ EXISTE, Y QUÉ ESTABA MAL ANTES
+ * ---------------------------------------------------------------------------
+ * El paso 3 de "Armar" repartía entre TODOS los `conteo` del padrón y el
+ * texto decía "entre los 5 contadores presentes" -- afirmando algo que nadie
+ * había comprobado, porque la asistencia no se miraba en ningún momento. Lo
+ * encontró el usuario solo: *"si no he tomado asistencia, ¿cómo va a saber a
+ * cuántos repartir?"*.
+ *
+ * Y no era un detalle de redacción: si dos faltaban, igual recibían hojas, y
+ * esas hojas quedaban sin contar hasta que alguien se daba cuenta a mitad de
+ * la jornada. El inventario es de un día.
+ *
+ * ---------------------------------------------------------------------------
+ * DOS FILTROS, Y LOS DOS HACEN FALTA
+ * ---------------------------------------------------------------------------
+ * `marcaDelDia !== null` -- vino HOY. No alcanza con `diasAsistidos > 0`: eso
+ * dice que vino ALGÚN día del inventario, y a quien vino ayer y hoy no, no se
+ * le puede dar una hoja.
+ *
+ * `rol === 'conteo'` -- el Coordinador y el Auditor marcan su propia entrada
+ * (la planilla les cobra la multa igual), pero no cuentan hojas. Repartirles
+ * sería dejar hojas sin contar con otra forma.
+ *
+ * Devuelve las PERSONAS y no un número: quien llama necesita los ids para
+ * `asignarHojas` y los nombres para decir quiénes son.
+ */
+export function contadoresPresentes<P extends { id: number; rol: string }>(
+  filas: readonly FilaAsistencia<P>[],
+): P[] {
+  return filas.filter((f) => f.marcaDelDia !== null && f.persona.rol === 'conteo').map((f) => f.persona);
 }
 
 /**

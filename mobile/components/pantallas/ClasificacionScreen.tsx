@@ -34,6 +34,7 @@ import { pluralizar } from '../../lib/dominio/plural';
 import type { ClaseItem, ProductoClasificable } from '../../lib/puertos/repositorios';
 import { colors, fonts, fontSize, radius, spacing } from '../../lib/theme';
 import { useRefrescoAlEnfocar } from '../hooks/useRefrescoAlEnfocar';
+import { limiteParaRefrescar } from '../../lib/dominio/paginacion';
 import { PantallaConTabs } from '../navegacion/PantallaConTabs';
 import { Badge, type BadgeVariant, BarraApp, Button, CampoTexto, ChipsFiltro, EmptyState, formatoMiles, type OpcionChip } from '../ui';
 
@@ -190,10 +191,23 @@ export function ClasificacionScreen(): JSX.Element {
     [q, soloClasificados],
   );
 
+  /**
+   * CUANTOS productos hay cargados, en un ref: `cargar` lo necesita para
+   * refrescar las páginas que ya estaban, pero no puede depender del array --
+   * el efecto de "cambió la búsqueda" corre con `[cargar]`, y una dependencia
+   * que se mueve en cada carga sería un bucle de pedidos.
+   */
+  const productosRef = useRef(0);
+  productosRef.current = productos.length;
+
   const cargar = useCallback(async () => {
     setError(null);
     try {
-      const pagina = await repositorioClasificacion.buscar(filtroActual(0));
+      // Todas las páginas que ya estaban, no solo la primera: quien cargó 120
+      // productos y vuelve a la pantalla no puede encontrarse con 40 y el
+      // scroll arriba. Ver lib/dominio/paginacion.ts.
+      const cuantos = limiteParaRefrescar(productosRef.current, TAMANO_PAGINA);
+      const pagina = await repositorioClasificacion.buscar({ ...filtroActual(0), limite: cuantos });
       setProductos(pagina.productos);
       setTotal(pagina.total);
     } catch (e) {
@@ -234,8 +248,7 @@ export function ClasificacionScreen(): JSX.Element {
     return () => clearTimeout(id);
   }, [cargar]);
 
-  function abrir(p: ProductoClasificable): void {
-    setSeleccionado(p);
+  function sembrarCampos(p: ProductoClasificable): void {
     setClase(p.clasificacion?.clase ?? null);
     // El valor ACTUAL de la corrección, si la hay: no es un default que nadie
     // mira, es lo que está guardado y hay que verlo para decidir.
@@ -245,6 +258,56 @@ export function ClasificacionScreen(): JSX.Element {
         : String(p.clasificacion.empaqueCompraCorregido),
     );
     setNota(p.clasificacion?.nota ?? '');
+  }
+
+  function abrir(p: ProductoClasificable): void {
+    setSeleccionado(p);
+    sembrarCampos(p);
+    void confirmarContraElServidor(p);
+  }
+
+  /**
+   * RELEE ESTE PRODUCTO DEL SERVIDOR AL ABRIRLO.
+   *
+   * POR QUE NO ALCANZA con lo que trajo la lista: `ClasificacionProducto` es
+   * por CODIGO y cross-tienda, así que dos auditores de sucursales distintas
+   * tocan la misma fila. `seleccionado` es la copia del momento en que se
+   * cargó esa página del catálogo -- pueden ser horas --, y de ahí sale la
+   * frase que decide todo: "Hoy va a Unidad; al guardar pasa a Paquete"
+   * (`consecuenciaDeEmpaque`). Con la copia vencida esa frase afirma un "hoy"
+   * que ya no es, sobre el sueldo de alguien.
+   *
+   * NO BLOQUEA EL MODAL: se abre al toque con lo que ya había y esto llega
+   * atrás. Una espera antes de mostrar el formulario, en una pantalla que se
+   * usa producto por producto, se siente rota.
+   *
+   * Y NO PISA LO TECLEADO. Si la respuesta llega cuando la persona ya movió
+   * algo, se actualiza el producto (para que la consecuencia se calcule contra
+   * lo que de verdad está guardado) pero NO se vuelven a sembrar los campos.
+   * Es el límite del lote: lo que la persona cargó no se toca.
+   *
+   * Si falla, no pasa nada: se sigue con la copia de la lista. Sin red, lo que
+   * ya está en la app es lo bueno.
+   */
+  async function confirmarContraElServidor(p: ProductoClasificable): Promise<void> {
+    try {
+      // `q` pega contra código, descripción y categoría (clasificacion.service),
+      // así que un código puede traer vecinos: se busca la coincidencia EXACTA
+      // y si no está, no se toca nada.
+      const pagina = await repositorioClasificacion.buscar({ q: p.codigo, limite: 20, desplazamiento: 0 });
+      const fresco = pagina.productos.find((x) => x.codigo === p.codigo);
+      if (fresco === undefined) return;
+
+      setProductos((actuales) => aplicarClasificacion(actuales, p.codigo, fresco.clasificacion));
+      setSeleccionado((actual) => {
+        // Cerró el modal, o abrió otro producto, mientras esto viajaba.
+        if (actual === null || actual.codigo !== p.codigo) return actual;
+        if (!hayCambiosSinGuardarRef.current) sembrarCampos(fresco);
+        return fresco;
+      });
+    } catch {
+      /* se sigue con la copia de la lista: ver arriba */
+    }
   }
 
   function cerrar(): void {
@@ -347,6 +410,15 @@ export function ClasificacionScreen(): JSX.Element {
           : String(seleccionado.clasificacion.empaqueCompraCorregido)) ||
       nota.trim() !== (seleccionado.clasificacion?.nota ?? ''));
 
+  /**
+   * El mismo valor, en un ref, para que `confirmarContraElServidor` lo lea
+   * CUANDO VUELVE la respuesta y no cuando salió el pedido. Entre una cosa y
+   * la otra la persona pudo empezar a escribir, y eso es justo lo que no se
+   * puede pisar.
+   */
+  const hayCambiosSinGuardarRef = useRef(false);
+  hayCambiosSinGuardarRef.current = hayCambiosSinGuardar;
+
   const correccion = empaqueTecleado(empaqueTexto);
   /** Hay ALGO que guardar: un cuadro forzado, o una corrección de empaque. */
   const hayAlgoQueGuardar = clase !== null || correccion !== null;
@@ -356,7 +428,12 @@ export function ClasificacionScreen(): JSX.Element {
       : null;
 
   const cifras = `${formatoMiles(total)} ${soloClasificados ? pluralizar(total, 'excepción', 'excepciones') : pluralizar(total, 'producto', 'productos')}`;
-  const { refrescando, refrescar } = useRefrescoAlEnfocar(cargar, { pausado: seleccionado !== null });
+  // `recuperarAlDespausar`: el disparo que llegue con un producto abierto no se
+  // tira -- corre al cerrar el modal, que es cuando ya no hay nada que pisar.
+  const { refrescando, refrescar } = useRefrescoAlEnfocar(cargar, {
+    pausado: seleccionado !== null,
+    recuperarAlDespausar: true,
+  });
 
   return (
     <>

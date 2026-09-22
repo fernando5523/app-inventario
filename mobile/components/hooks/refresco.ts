@@ -60,9 +60,40 @@ export interface CondicionesRefresco {
  * una optimización.
  */
 export function debeRefrescar({ enVuelo, pausado }: CondicionesRefresco): boolean {
-  if (pausado) return false;
-  if (enVuelo) return false;
-  return true;
+  return decidirRefresco({ enVuelo, pausado }) === 'refrescar';
+}
+
+/**
+ * QUE HACER CON UN DISPARO, distinguiendo los dos "no" que `debeRefrescar`
+ * aplasta en un `false`.
+ *
+ * Nace de un hueco medido el 2026-09-21: `pausado` DESCARTA el disparo, no lo
+ * guarda. O sea que enfocar la pantalla (o volver de segundo plano) con un
+ * modal abierto equivale a que el evento no hubiera pasado nunca -- se cierra
+ * el modal y la lista sigue siendo la de antes, sin nada que la despierte
+ * hasta el próximo foco. En Usuarios eso es: el Administrador deja abierto el
+ * menú de acciones de una ficha, manda la app al fondo, vuelve, cierra el
+ * menú, y sigue viendo una cuenta como activa que otro administrador
+ * deshabilitó.
+ *
+ * Los dos "no" son distintos y por eso se nombran distinto:
+ *
+ *  - `en-vuelo`: ya hay una pedida igual corriendo. Guardar este disparo
+ *    sería pedir dos veces lo mismo. SE DESCARTA.
+ *  - `pausado`: la persona está en el medio de algo. El dato igual quedó
+ *    viejo, así que el disparo SE POSPONE y corre cuando se despause -- que
+ *    es cuando ya no hay nada que pisarle.
+ */
+export type DecisionRefresco = 'refrescar' | 'posponer' | 'descartar';
+
+export function decidirRefresco({ enVuelo, pausado }: CondicionesRefresco): DecisionRefresco {
+  // `pausado` primero, igual que antes: es la regla de negocio y gana sobre
+  // todo lo demás. Un disparo pausado se pospone aunque además haya uno en
+  // vuelo -- ese que está corriendo se pidió ANTES, así que no cubre lo que
+  // pasó después.
+  if (pausado) return 'posponer';
+  if (enVuelo) return 'descartar';
+  return 'refrescar';
 }
 
 // ---------------------------------------------------------------------------

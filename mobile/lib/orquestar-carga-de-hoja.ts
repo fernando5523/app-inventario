@@ -34,7 +34,18 @@ export interface AccionesCargaHoja {
    * el Auditor ajusta. Sin el estado, el Contador entraba a "contar" la ronda
    * 3 de un inventario que ya no admite conteos.
    */
-  activo: () => Promise<{ inventarioId: number; estado: EstadoInventario; rondaActiva: number | null } | null>;
+  activo: () => Promise<{
+    inventarioId: number;
+    estado: EstadoInventario;
+    rondaActiva: number | null;
+    /**
+     * Las hojas que tuvo el inventario EN TOTAL. Hace falta para que
+     * `faseDeCierre` distinga "todavía no se crearon las hojas" de "se
+     * cerraron todas las rondas": las dos llegan con `rondaActiva: null` y
+     * son lo contrario una de la otra.
+     */
+    totalHojas: number;
+  } | null>;
   /** Sin red (u otra falla de `activo`): cae al inventario/ronda que ya se descargó localmente alguna vez. */
   inventarioIdSinRed: () => Promise<number | null>;
   rondaActivaSinRed: (inventarioId: number) => Promise<number | null>;
@@ -108,7 +119,7 @@ export async function cargarHojaActiva(
     ronda = activo?.rondaActiva ?? null;
     // La FASE, no la ronda: durante el ajuste `rondaActiva` sigue trayendo la
     // última ronda que existe, y contarla otra vez daría 403 en cada ítem.
-    yaNoSeCuenta = activo !== null && faseDeCierre(activo.estado, activo.rondaActiva) !== 'contando';
+    yaNoSeCuenta = activo !== null && faseDeCierre(activo.estado, activo.rondaActiva, activo.totalHojas) !== 'contando';
   } catch {
     // Sin red (u otra falla): no hay forma de preguntarle al servidor cuál es
     // la ronda activa, pero el avance de hoy puede estar completo en SQLite —

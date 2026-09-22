@@ -1,7 +1,9 @@
+import { File, Paths } from 'expo-file-system';
 import { router } from 'expo-router';
-import { BarChart3, ChevronRight, PencilLine } from 'lucide-react-native';
+import { BarChart3, ChevronRight, FileSpreadsheet, PencilLine } from 'lucide-react-native';
 import { useCallback, useEffect, useMemo, useRef, useState, type JSX } from 'react';
-import { ActivityIndicator, FlatList, Pressable, RefreshControl, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Alert, FlatList, Pressable, RefreshControl, StyleSheet, Text, View } from 'react-native';
+import * as Sharing from 'expo-sharing';
 
 import { useRefrescoAlEnfocar } from '../../components/hooks/useRefrescoAlEnfocar';
 import { PantallaConTabs } from '../../components/navegacion/PantallaConTabs';
@@ -15,12 +17,13 @@ import {
   formatoMoneda as formatoNumeroMoneda,
   type OpcionChip,
 } from '../../components/ui';
-import { repositorioAuditoria, repositorioInventario, repositorioSesion } from '../../lib/contenedor';
+import { repositorioAuditoria, repositorioHistorial, repositorioInventario, repositorioSesion } from '../../lib/contenedor';
 import { cuadroDelItem, resumirAuditoria } from '../../lib/dominio/auditoria';
+import { estadoExportacionCuadros, nombreCuadrosDeRespaldo, notaExportacionCuadros } from '../../lib/dominio/exportar-cuadros';
 import { pluralizar } from '../../lib/dominio/plural';
 import { sucursalEnFoco } from '../../lib/dominio/sucursal-en-foco';
 import type { ItemAuditoria, Sucursal, VeredictoAuditoria } from '../../lib/dominio/tipos';
-import type { CuadroDeDiferencias, ResumenAuditoriaServidor } from '../../lib/puertos/repositorios';
+import type { CuadroDeDiferencias, EstadoInventario, ResumenAuditoriaServidor } from '../../lib/puertos/repositorios';
 import { useSesion } from '../../lib/sesion-contexto';
 import { useSucursalAuditada } from '../../lib/sucursal-auditada-contexto';
 import { colors, fonts, radius } from '../../lib/theme';
@@ -150,6 +153,15 @@ export default function AuditoriaScreen(): JSX.Element {
    */
   const [resumenServidor, setResumenServidor] = useState<ResumenAuditoriaServidor | null>(null);
   const [filtro, setFiltro] = useState<FiltroId>('todos');
+  /**
+   * EL INVENTARIO EN FOCO, con su estado. Antes solo se usaba el `inventarioId`
+   * de `activo()` para pedir la matriz y se descartaba el resto; la descarga de
+   * la planilla necesita las dos cosas: el id para pedirla y el ESTADO para
+   * decidir si tiene sentido bajarla (ver dominio/exportar-cuadros.ts).
+   * `null` = no hay inventario abierto en esta sucursal.
+   */
+  const [enFoco, setEnFoco] = useState<{ id: number; estado: EstadoInventario } | null>(null);
+  const [bajandoPlanilla, setBajandoPlanilla] = useState(false);
 
   // El Auditor NO tiene tienda: audita toda la cadena y ELIGE cuál mirar. El
   // padrón de sucursales es el mismo endpoint del login (`GET /api/sesion/
@@ -176,6 +188,7 @@ export default function AuditoriaScreen(): JSX.Element {
     if (sucursalId === null) {
       setItems([]);
       setResumenServidor(null);
+      setEnFoco(null);
       setCargando(false);
       return;
     }
@@ -185,9 +198,11 @@ export default function AuditoriaScreen(): JSX.Element {
       if (!activo) {
         setItems([]);
         setResumenServidor(null);
+        setEnFoco(null);
         setCargando(false);
         return;
       }
+      setEnFoco({ id: activo.inventarioId, estado: activo.estado });
       // Las dos en paralelo: no dependen entre sí, y el resumen es el que
       // trae los montos y los cuadros.
       const [matriz, resumen] = await Promise.all([
@@ -230,6 +245,10 @@ export default function AuditoriaScreen(): JSX.Element {
     }
     setItems([]);
     setResumenServidor(null);
+    // Y el inventario en foco: si no, el botón de la planilla quedaría
+    // apuntando al inventario de la tienda ANTERIOR mientras llega la nueva --
+    // bajaría el archivo de otra sucursal con la barra diciendo esta.
+    setEnFoco(null);
     setCargando(true);
     void cargar();
   }, [cargar]);
@@ -249,6 +268,47 @@ export default function AuditoriaScreen(): JSX.Element {
   async function salir(): Promise<void> {
     await cerrar();
     router.replace('/');
+  }
+
+  /**
+   * LA PLANILLA DE CUADROS: se baja a un archivo TEMPORAL (caché del teléfono,
+   * no Descargas) y de ahí se abre el selector nativo para compartir -- mismo
+   * flujo que el export de diferencias del Historial
+   * (HistorialScreen#exportarDiferencias), porque el destino es el mismo:
+   * WhatsApp o correo, no el teléfono.
+   *
+   * LA DIFERENCIA está en el nombre: acá viene del servidor
+   * (`Content-Disposition`) en vez de rearmarse en el teléfono, porque el panel
+   * no tiene el período ni el nombre de la sucursal. Si no viniera, se guarda
+   * con un nombre mínimo y HONESTO en vez de un `download.xlsx` -- ver
+   * dominio/exportar-cuadros.ts.
+   */
+  async function bajarPlanillaDeCuadros(): Promise<void> {
+    if (!enFoco) return;
+    setBajandoPlanilla(true);
+    try {
+      const puedeCompartir = await Sharing.isAvailableAsync();
+      if (!puedeCompartir) {
+        Alert.alert('No se puede compartir', 'Este dispositivo no tiene disponible el selector nativo para compartir archivos.');
+        return;
+      }
+      const { bytes, nombreArchivo } = await repositorioHistorial.exportarCuadros(enFoco.id);
+      const archivo = new File(Paths.cache, nombreArchivo ?? nombreCuadrosDeRespaldo(enFoco.id));
+      if (archivo.exists) archivo.delete();
+      archivo.write(new Uint8Array(bytes));
+      await Sharing.shareAsync(archivo.uri, {
+        mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        // Nombra LA PLANILLA y no "el Excel": el Auditor tiene dos .xlsx de
+        // este inventario, y el selector nativo es lo último que ve antes de
+        // mandarlo.
+        dialogTitle: 'Compartir la planilla de cuadros',
+        UTI: 'org.openxmlformats.spreadsheetml.sheet',
+      });
+    } catch (e) {
+      Alert.alert('No se pudo bajar la planilla', e instanceof Error ? e.message : 'Intenta de nuevo.');
+    } finally {
+      setBajandoPlanilla(false);
+    }
   }
 
   function irALacrado(): void {
@@ -282,6 +342,19 @@ export default function AuditoriaScreen(): JSX.Element {
    * conteos y el `veredictoPorId` del filtro, que el servidor no manda.
    */
   const cuadros = resumenServidor?.porClase ?? null;
+
+  /**
+   * SI LA PLANILLA DE CUADROS TIENE SENTIDO HOY, y si no, por qué no. El botón
+   * NO desaparece: el Auditor que viene a bajar el archivo que arma a mano
+   * tiene que encontrar el camino y leer qué falta, no un hueco (misma lección
+   * que el export del Historial, ver dominio/exportar-cuadros.ts).
+   *
+   * `auditables` y no `items.length`: lo que hace inútil al archivo es no tener
+   * con qué comparar, no tener pocos ítems.
+   */
+  const planilla = enFoco === null ? null : estadoExportacionCuadros(enFoco.estado, resumen.auditables);
+  const notaPlanilla = enFoco === null ? null : notaExportacionCuadros(enFoco.estado);
+  const planillaBloqueada = planilla !== null && !planilla.puedeExportar;
 
   const opciones: OpcionChip[] = useMemo(
     () =>
@@ -520,6 +593,62 @@ export default function AuditoriaScreen(): JSX.Element {
                 </Text>
               </View>
 
+              {/*
+                LA PLANILLA DEL CLIENTE, en el paso del cierre donde se la mira.
+                Va acá y no en el Historial porque esta pantalla ES los cuatro
+                cuadros: el archivo baja los MISMOS números que están arriba, y
+                tenerlo al lado del camino a aprobación y lacrado lo pone en el
+                orden real del cierre (revisar los cuadros → bajar la planilla →
+                lacrar).
+
+                `outline` neutro y no el rojo: la acción principal del pie sigue
+                siendo el lacrado. Y cuando no se puede, el botón SE QUEDA
+                apagado con el motivo debajo -- que desaparezca deja al Auditor
+                buscando un botón que existe.
+              */}
+              {planilla !== null ? (
+                <View style={styles.planilla}>
+                  <Pressable
+                    style={[styles.planillaBtn, (planillaBloqueada || bajandoPlanilla) && styles.planillaBtnApagado]}
+                    onPress={bajarPlanillaDeCuadros}
+                    disabled={planillaBloqueada || bajandoPlanilla}
+                    accessibilityRole="button"
+                    /* El motivo va DENTRO del label: quien usa lector de
+                       pantalla tiene que oír por qué no se puede, no solo que
+                       el botón está ahí. Sin `accessibilityState.disabled`, que
+                       lo saca del árbol de accesibilidad (el bug del modal de
+                       ajuste, donde el botón existía y no se lo podía tocar). */
+                    accessibilityLabel={
+                      planilla.puedeExportar
+                        ? 'Descargar la planilla de cuadros en Excel y compartir'
+                        : `Descargar la planilla de cuadros: no disponible todavía. ${planilla.motivo}`
+                    }
+                  >
+                    {bajandoPlanilla ? (
+                      <ActivityIndicator color={colors.tinta} size="small" />
+                    ) : (
+                      <FileSpreadsheet size={17} color={planillaBloqueada ? colors.grisClaro : colors.tinta} />
+                    )}
+                    <Text style={[styles.planillaBtnTexto, planillaBloqueada && styles.planillaBtnTextoApagado]}>
+                      Descargar la planilla de cuadros (Excel)
+                    </Text>
+                  </Pressable>
+                  {/* QUÉ SE BAJA, nombrando las hojas y diciendo que NO es la
+                      otra exportación: el Auditor tiene dos .xlsx del mismo
+                      inventario, y si baja el equivocado lo descubre recién al
+                      abrirlo. */}
+                  <Text style={styles.planillaAyuda}>
+                    Las cuatro hojas del formato mensual: FALTANTES, SOBRANTES, EMPRESA y DESCUENTO. No es la
+                    exportación de diferencias del Historial, que baja una sola tabla para analizar.
+                  </Text>
+                  {planillaBloqueada ? (
+                    <Text style={styles.planillaMotivo}>{planilla.motivo}</Text>
+                  ) : notaPlanilla !== null ? (
+                    <Text style={styles.planillaMotivo}>{notaPlanilla}</Text>
+                  ) : null}
+                </View>
+              ) : null}
+
               <Pressable style={styles.accion} onPress={irALacrado}>
                 <Text style={styles.accionTexto}>Ir a aprobación y lacrado</Text>
               </Pressable>
@@ -581,6 +710,27 @@ const styles = StyleSheet.create({
   pieLista: { padding: 12, borderRadius: 11, backgroundColor: colors.esperaSuave },
   pieTexto: { fontSize: 12.5, color: colors.gris, fontFamily: fonts.regular },
   pieFuerte: { color: colors.tinta, fontFamily: fonts.bold },
+  /** La planilla: mismo `outline` neutro que `irACorregir` -- el rojo del pie es la acción principal. */
+  planilla: { gap: 7 },
+  planillaBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 9,
+    minHeight: 46,
+    paddingVertical: 11,
+    paddingHorizontal: 13,
+    borderWidth: 1,
+    borderColor: colors.borde,
+    borderRadius: radius.md,
+    backgroundColor: colors.campo,
+  },
+  /** Apagado, NO invisible: el motivo de abajo explica por qué. */
+  planillaBtnApagado: { backgroundColor: colors.esperaSuave, borderColor: colors.esperaSuave },
+  planillaBtnTexto: { flex: 1, fontSize: 13, lineHeight: 18, color: colors.tinta, fontFamily: fonts.semibold },
+  planillaBtnTextoApagado: { color: colors.grisClaro },
+  planillaAyuda: { fontSize: 11.5, lineHeight: 16, color: colors.gris, fontFamily: fonts.regular },
+  /** El motivo (o la salvedad): paleta `proceso` de atención, nunca el rojo de marca. */
+  planillaMotivo: { fontSize: 11.5, lineHeight: 16, color: colors.proceso, fontFamily: fonts.medium },
   accion: { minHeight: 52, alignItems: 'center', justifyContent: 'center', borderRadius: radius.sm, backgroundColor: colors.rojo },
   accionTexto: { fontSize: 15, color: colors.blanco, fontFamily: fonts.bold },
 });

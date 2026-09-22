@@ -32,7 +32,7 @@
  */
 
 import { AlertTriangle, ArrowDown, ArrowUp, Info, RotateCcw } from 'lucide-react-native';
-import { useCallback, useMemo, useState, type JSX } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type JSX } from 'react';
 import { ActivityIndicator, Alert, Pressable, RefreshControl, StyleSheet, Switch, Text, View } from 'react-native';
 
 import { useRefrescoAlEnfocar } from '../../components/hooks/useRefrescoAlEnfocar';
@@ -46,6 +46,7 @@ import {
   type TipoNavegacion,
 } from '../../lib/adaptadores/navegacion-admin-api';
 import { calcularEfecto, mover, type ElementoConfigurable } from '../../lib/dominio/navegacion-efecto';
+import { useRefrescarNavegacion } from '../../lib/navegacion-contexto';
 import type { Rol } from '../../lib/dominio/tipos';
 import { colors, fonts, fontSize, radius, spacing } from '../../lib/theme';
 
@@ -87,6 +88,17 @@ function aFilas(config: ConfiguracionDeUnRol, tipo: TipoNavegacion): Fila[] {
 }
 
 export default function NavegacionScreen(): JSX.Element {
+  /**
+   * AVISARLE AL PROVIDER que la navegación cambió.
+   *
+   * Sin esto, `guardar()` solo actualizaba el estado local de ESTA pantalla:
+   * el Administrador apagaba un acceso, veía la lista de acá actualizada, y
+   * su propia barra de tabs seguía siendo la vieja hasta cerrar y reabrir la
+   * app. Es el caso más visible de todos porque se reproduce con un solo
+   * teléfono, sin esperar a que otro rol entre.
+   */
+  const refrescarNavegacion = useRefrescarNavegacion();
+
   const [rol, setRol] = useState<Rol>('coordinador');
   const [tipo, setTipo] = useState<TipoNavegacion>('acceso');
 
@@ -98,22 +110,77 @@ export default function NavegacionScreen(): JSX.Element {
   const [confirmado, setConfirmado] = useState<ConfiguracionDeUnRol | null>(null);
   const [filas, setFilas] = useState<Fila[]>([]);
 
-  const cargar = useCallback(async (): Promise<void> => {
-    setError(null);
-    try {
-      const config = await traerConfiguracion(rol);
-      setConfirmado(config);
-      setFilas(aFilas(config, tipo));
-    } catch (e) {
-      // Sin respaldo, a diferencia del home: si no se puede leer el estado
-      // real, no se puede dejar que nadie lo cambie a ciegas.
-      setError(e instanceof Error ? e.message : 'No se pudo cargar la configuración.');
-    } finally {
-      setCargando(false);
-    }
-  }, [rol, tipo]);
+  /**
+   * `tipo` EN UN REF para que el efecto de carga no dependa de él.
+   *
+   * Si `tipo` fuera dependencia, tocar "Barra de abajo" dispararía otro
+   * pedido al servidor para traer exactamente lo mismo (la respuesta trae
+   * accesos Y tabs juntos) y de paso descartaría lo que la persona estuviera
+   * editando. El ref deja que la carga use el tipo vigente sin volver a
+   * correr por él.
+   */
+  const tipoRef = useRef<TipoNavegacion>(tipo);
+  tipoRef.current = tipo;
 
-  useRefrescoAlEnfocar(cargar);
+  /**
+   * LA CARGA, Y QUIEN ES DUEÑO DEL SPINNER.
+   *
+   * ---------------------------------------------------------------------
+   * BUG REAL (2026-09-19, encontrado en el emulador): LA PANTALLA SE MORIA
+   * AL CAMBIAR DE ROL
+   * ---------------------------------------------------------------------
+   * El primer render cargaba bien y cualquier cambio de rol dejaba el
+   * spinner girando para siempre -- y volver al rol que SI había cargado
+   * tampoco lo recuperaba. Sin excepción, sin error de red, sin nada en
+   * logcat: el backend contestaba los cuatro roles en 3 ms.
+   *
+   * La causa: `cambiarRol` hacía `setCargando(true)` y esperaba que algo
+   * recargara. No recargaba nadie. `useRefrescoAlEnfocar` guarda `cargar`
+   * en un ref A PROPOSITO (está documentado en el hook) y solo dispara al
+   * ENFOCAR la pantalla o al volver a primer plano; que `cargar` cambie de
+   * identidad no lo despierta. Con la pantalla ya enfocada, ese evento no
+   * vuelve a ocurrir nunca.
+   *
+   * ---------------------------------------------------------------------
+   * EL ARREGLO ES QUE ESO NO SE PUEDA VOLVER A ESCRIBIR
+   * ---------------------------------------------------------------------
+   * No alcanzaba con llamar a `cargar()` desde `cambiarRol`: el mismo error
+   * se repite el día que se agregue otro disparador. Ahora ESTE EFECTO es
+   * el único dueño de `cargando` -- lo prende al empezar y lo apaga al
+   * terminar --, así que no existe forma de prender el spinner sin arrancar
+   * una carga. `cambiarRol` no toca `cargando`.
+   *
+   * Depende SOLO de `rol`: cambiar de tipo (accesos/barra) no vuelve a
+   * pedir nada, se re-deriva de lo que ya está en `confirmado`.
+   *
+   * `vigente` corta la carrera de tocar dos chips seguidos: cada corrida
+   * invalida a la anterior, así que la respuesta lenta de un rol que ya no
+   * está en pantalla no pisa a la del rol actual.
+   */
+  useEffect(() => {
+    let vigente = true;
+    setCargando(true);
+    setError(null);
+
+    traerConfiguracion(rol)
+      .then((config) => {
+        if (!vigente) return;
+        setConfirmado(config);
+        setFilas(aFilas(config, tipoRef.current));
+      })
+      .catch((e: unknown) => {
+        // Sin respaldo, a diferencia del home: si no se puede leer el estado
+        // real, no se puede dejar que nadie lo cambie a ciegas.
+        if (vigente) setError(e instanceof Error ? e.message : 'No se pudo cargar la configuración.');
+      })
+      .finally(() => {
+        if (vigente) setCargando(false);
+      });
+
+    return () => {
+      vigente = false;
+    };
+  }, [rol]);
 
   const filasConfirmadas = useMemo<Fila[]>(
     () => (confirmado === null ? [] : aFilas(confirmado, tipo)),
@@ -121,6 +188,26 @@ export default function NavegacionScreen(): JSX.Element {
   );
 
   const efecto = useMemo(() => calcularEfecto(filasConfirmadas, filas), [filasConfirmadas, filas]);
+
+  /** Recarga a mano: el "tirar para refrescar" y el volver a la pantalla. */
+  const cargar = useCallback(async (): Promise<void> => {
+    setError(null);
+    try {
+      const config = await traerConfiguracion(rol);
+      setConfirmado(config);
+      setFilas(aFilas(config, tipoRef.current));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'No se pudo cargar la configuración.');
+    }
+  }, [rol]);
+
+  /**
+   * PAUSADO MIENTRAS HAY CAMBIOS SIN GUARDAR. Es para lo que existe la
+   * bandera (ver el hook): un refresco automático -- volver de otra app,
+   * volver a esta pantalla -- pisaría los toggles y el orden que la persona
+   * acaba de mover, y eso es perderle trabajo, no un parpadeo.
+   */
+  useRefrescoAlEnfocar(cargar, { pausado: efecto.cambia });
 
   const prendidos = filas.filter((f) => f.visible).length;
   const maximoTabs = confirmado?.maximoTabs ?? 4;
@@ -130,8 +217,10 @@ export default function NavegacionScreen(): JSX.Element {
     if (nuevo === rol) return;
     // Se descarta lo editado sin guardar: arrastrarlo a otro rol sería
     // aplicarle a alguien un cambio pensado para otro.
+    //
+    // NO toca `cargando`: el efecto de arriba es el único dueño del spinner,
+    // y esa es justamente la razón por la que esta pantalla se moría.
     setRol(nuevo);
-    setCargando(true);
     setConfirmado(null);
     setFilas([]);
   }
@@ -160,6 +249,9 @@ export default function NavegacionScreen(): JSX.Element {
       );
       setConfirmado(config);
       setFilas(aFilas(config, tipo));
+      // Lo que se acaba de guardar puede ser del rol de quien está mirando:
+      // su home y su barra tienen que reflejarlo YA, no en el próximo login.
+      refrescarNavegacion();
     } catch (e) {
       // El mensaje del servidor tal cual: dice QUÉ falta (el límite de tabs
       // explica por qué son 4). Uno genérico borraría justo lo accionable.
@@ -184,6 +276,8 @@ export default function NavegacionScreen(): JSX.Element {
               .then((config) => {
                 setConfirmado(config);
                 setFilas(aFilas(config, tipo));
+                // Volver a fábrica también cambia lo que ve la gente.
+                refrescarNavegacion();
               })
               .catch((e: unknown) =>
                 Alert.alert('No se pudo restablecer', e instanceof Error ? e.message : 'Error desconocido.'),

@@ -17,7 +17,7 @@ import { useSucursalAuditada } from '../../lib/sucursal-auditada-contexto';
 import { colors, fonts, fontSize, spacing } from '../../lib/theme';
 import { debeReintentarAutomaticamente, INTERVALO_REINTENTO_MS, REINTENTO_INICIAL, trasIntentoFallido } from '../hooks/refresco';
 import { useRefrescoAlEnfocar } from '../hooks/useRefrescoAlEnfocar';
-import { useNavegacion } from '../../lib/navegacion-contexto';
+import { useNavegacion, useRefrescarNavegacion } from '../../lib/navegacion-contexto';
 import { PantallaConTabs } from '../navegacion/PantallaConTabs';
 import { AccesoTarjeta, BandaSync, BarraApp, Button, formatoMiles, formatoPct, resumenParaTablero, type EstadoSincronizacion } from '../ui';
 
@@ -267,7 +267,7 @@ export function InicioScreen(): JSX.Element {
       ronda = activo?.rondaActiva ?? null;
       items = activo?.items ?? null;
       totalHojas = activo?.totalHojas ?? null;
-      setFase(activo ? faseDeCierre(activo.estado, activo.rondaActiva) : null);
+      setFase(activo ? faseDeCierre(activo.estado, activo.rondaActiva, activo.totalHojas) : null);
     } catch {
       // Sin red (u otra falla): el avance de HOY puede estar completo en
       // SQLite — se sigue con eso en vez de dejar "Tu avance" colgado
@@ -332,7 +332,28 @@ export function InicioScreen(): JSX.Element {
   // reportó el cliente: el Coordinador cierra una ronda y abre la
   // siguiente con esta pantalla todavía abierta, sin cambiar de tab) --
   // los dos disparadores con un solo candado contra solapamiento.
-  const { refrescar } = useRefrescoAlEnfocar(cargar);
+  /**
+   * LA NAVEGACION TAMBIEN SE REFRESCA ACA, junto con el resto del inicio.
+   *
+   * El provider la pide una sola vez por login (depende de `[rol]`, y el rol
+   * no cambia durante una sesión). Si el Administrador prende, apaga o
+   * reordena un acceso, sin esto nadie lo ve hasta cerrar y reabrir la app.
+   *
+   * Va en Inicio y no en el provider porque el refresco al enfocar necesita
+   * una PANTALLA: el provider envuelve al Stack entero y no tiene foco
+   * propio. Y es la pantalla correcta -- es la que dibuja las tarjetas, así
+   * que si algo cambió, acá es donde se nota.
+   *
+   * Ante un error de red no hace nada (ver `refrescar` en el contexto): lo
+   * que ya está en la app es lo bueno y no se pisa con el mapa de fábrica.
+   */
+  const refrescarNavegacion = useRefrescarNavegacion();
+  const cargarTodo = useCallback(async () => {
+    refrescarNavegacion();
+    await cargar();
+  }, [cargar, refrescarNavegacion]);
+
+  const { refrescar } = useRefrescoAlEnfocar(cargarTodo);
 
   // REINTENTO AUTOMÁTICO cuando la descarga de `misHojas` falló (bug real,
   // 2026-09-11): antes, un "0 hojas asignadas" (en realidad "no se pudo

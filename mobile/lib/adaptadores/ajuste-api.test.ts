@@ -123,3 +123,40 @@ describe('ajusteApi — las cuatro del auditor', () => {
     await expect(ajusteApi.iniciarAjuste(8039)).rejects.toThrow(/ya está en curso/);
   });
 });
+
+/**
+ * LA RESPUESTA TRAE `salioDeLaRonda` Y LA PANTALLA LA NECESITA.
+ *
+ * Es la frase que el cliente pidió con sus palabras: *"corrígelo para que ya
+ * no salga en mi segundo conteo"*. El adaptador usaba `pedirSinCuerpo`, así
+ * que la corrección funcionaba y el aviso se perdía en el camino -- el
+ * servidor lo mandaba y nadie lo leía.
+ */
+describe('ajusteApi.corregirConteo — lo que vuelve', () => {
+  const SALIDA = { codigo: 'PQ-522626-A', ronda: 2, hojaBorrada: false, rondaBorrada: false };
+
+  it('devuelve la salida de ronda tal cual la manda el servidor', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => json({ total: 100, totalAnterior: 77, salioDeLaRonda: SALIDA }, 200)));
+
+    await expect(ajusteApi.corregirConteo(137, 1462, CORRECCION)).resolves.toEqual({ salioDeLaRonda: SALIDA });
+  });
+
+  it('cuando no salió nada, `null` — que es el caso normal', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => json({ total: 80, totalAnterior: 77, salioDeLaRonda: null }, 200)));
+
+    await expect(ajusteApi.corregirConteo(137, 1462, CORRECCION)).resolves.toEqual({ salioDeLaRonda: null });
+  });
+
+  /**
+   * Un servidor viejo no manda la clave. Sin este `?? null` viajaría
+   * `undefined` hasta romper un `.codigo` dentro de la pantalla, que es el
+   * peor lugar donde enterarse.
+   */
+  it('si el servidor no manda la clave, `null` y no `undefined`', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => json({ total: 80, totalAnterior: 77 }, 200)));
+
+    const r = await ajusteApi.corregirConteo(137, 1462, CORRECCION);
+    expect(r.salioDeLaRonda).toBeNull();
+    expect('salioDeLaRonda' in r).toBe(true);
+  });
+});

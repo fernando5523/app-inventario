@@ -23,6 +23,8 @@
 import Constants from 'expo-constants';
 import { Platform } from 'react-native';
 
+import { nombreDeContentDisposition } from '../dominio/exportar-cuadros';
+
 // ---------------------------------------------------------------------------
 // URL base — configuración, nunca hardcode
 // ---------------------------------------------------------------------------
@@ -393,6 +395,24 @@ export interface OpcionesPedido {
    * un archivo también se cae con la WiFi de la tienda.
    */
   binario?: boolean;
+  /**
+   * Solo con `binario`: además de los bytes, devuelve el nombre de archivo que
+   * mandó el servidor en `Content-Disposition` (`ArchivoDescargado` en vez del
+   * `ArrayBuffer` pelado).
+   *
+   * Existe porque el nombre es dato del negocio, no decoración: el cliente
+   * recibe varios .xlsx del mismo día por correo y los distingue por el nombre
+   * (`historial.exportar-cuadros.ts#nombreArchivoCuadros`). Recalcularlo en el
+   * teléfono solo se puede cuando la pantalla tiene los datos del patrón; el
+   * panel de auditoría no los tiene. Ver dominio/exportar-cuadros.ts.
+   */
+  conNombreDeArchivo?: boolean;
+}
+
+/** Bytes + el nombre que mandó el servidor (`null` si no vino el header). */
+export interface ArchivoDescargado {
+  bytes: ArrayBuffer;
+  nombreArchivo: string | null;
 }
 
 interface CuerpoError {
@@ -423,7 +443,16 @@ async function intentarUnaVez<T>(
   opciones: OpcionesPedido,
   msTimeoutEfectivo: number,
 ): Promise<T> {
-  const { metodo = 'GET', cuerpo, cuerpoBinario, tipoCuerpo, sinSesion = false, senal, binario = false } = opciones;
+  const {
+    metodo = 'GET',
+    cuerpo,
+    cuerpoBinario,
+    tipoCuerpo,
+    sinSesion = false,
+    senal,
+    binario = false,
+    conNombreDeArchivo = false,
+  } = opciones;
 
   const encabezados: Record<string, string> = { Accept: binario ? '*/*' : 'application/json' };
   if (cuerpoBinario !== undefined) {
@@ -545,7 +574,17 @@ async function intentarUnaVez<T>(
 
   // El archivo NUNCA pasa por `.text()`/`JSON.parse`: son bytes, no texto --
   // decodificarlos como UTF-8 y volver a codificarlos los corrompería.
-  if (binario) return (await respuesta.arrayBuffer()) as unknown as T;
+  if (binario) {
+    const bytes = await respuesta.arrayBuffer();
+    if (!conNombreDeArchivo) return bytes as unknown as T;
+    // El parseo del header vive en dominio (puro y probado): acá solo se lee.
+    // `null` si no vino -- no se inventa un nombre que parezca del servidor.
+    const archivo: ArchivoDescargado = {
+      bytes,
+      nombreArchivo: nombreDeContentDisposition(respuesta.headers.get('Content-Disposition')),
+    };
+    return archivo as unknown as T;
+  }
 
   // 204 (y cualquier respuesta vacía) no tiene JSON que parsear: `.json()`
   // tiraría. Los métodos de puerto que devuelven void terminan acá.

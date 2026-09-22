@@ -9,6 +9,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  contadoresPresentes,
   diasAsistidosPorColaborador,
   diasFaltados,
   filasDeAsistencia,
@@ -164,5 +165,63 @@ describe('multaPorInasistencia', () => {
    */
   it('con cero días de inventario no hay multa para nadie', () => {
     expect(multaPorInasistencia(0, 0, TARIFA)).toBe(0);
+  });
+});
+
+/**
+ * A QUIÉNES SE LES REPARTEN LAS HOJAS. El bug que esto cierra: el paso 3 de
+ * "Armar" repartía entre todos los `conteo` del padrón y afirmaba "entre los
+ * 5 contadores presentes" sin haber mirado la asistencia. Si dos faltaban,
+ * igual recibían hojas y esas hojas quedaban sin contar hasta que alguien se
+ * daba cuenta a mitad de la jornada.
+ */
+describe('contadoresPresentes', () => {
+  const PADRON = [
+    { id: 1, nombre: 'Óscar', rol: 'coordinador' },
+    { id: 2, nombre: 'Silvia', rol: 'conteo' },
+    { id: 3, nombre: 'Delia', rol: 'conteo' },
+    { id: 4, nombre: 'Jorge', rol: 'auditor' },
+  ];
+  const HOY = '2026-09-21';
+  const marca = (colaboradorId: number, dia = HOY): MarcaDeAsistencia => ({
+    colaboradorId,
+    dia,
+    registradoEn: `${dia}T13:00:00.000Z`,
+  });
+
+  it('solo los contadores que marcaron HOY', () => {
+    const filas = filasDeAsistencia(PADRON, [marca(1), marca(2)], HOY);
+    expect(contadoresPresentes(filas).map((p) => p.nombre)).toEqual(['Silvia']);
+  });
+
+  it('el coordinador y el auditor NO entran, aunque hayan marcado', () => {
+    // Marcan su propia entrada porque la planilla les cobra la multa igual,
+    // pero no cuentan hojas. Darles una sería dejarla sin contar.
+    const filas = filasDeAsistencia(PADRON, [marca(1), marca(4)], HOY);
+    expect(contadoresPresentes(filas)).toEqual([]);
+  });
+
+  it('vino AYER y hoy no: no recibe hojas', () => {
+    // `diasAsistidos > 0` no alcanza -- diría que vino algún día. La hoja se
+    // reparte hoy y la tiene que contar quien está hoy.
+    const filas = filasDeAsistencia(PADRON, [marca(2, '2026-09-20')], HOY);
+    expect(contadoresPresentes(filas)).toEqual([]);
+  });
+
+  it('sin ninguna marca, nadie', () => {
+    expect(contadoresPresentes(filasDeAsistencia(PADRON, [], HOY))).toEqual([]);
+  });
+
+  it('devuelve las personas enteras: hacen falta los ids para asignar y los nombres para decir quiénes', () => {
+    const filas = filasDeAsistencia(PADRON, [marca(2), marca(3)], HOY);
+    expect(contadoresPresentes(filas)).toEqual([
+      { id: 2, nombre: 'Silvia', rol: 'conteo' },
+      { id: 3, nombre: 'Delia', rol: 'conteo' },
+    ]);
+  });
+
+  it('respeta el orden del padrón, que es el que ve el Coordinador', () => {
+    const filas = filasDeAsistencia(PADRON, [marca(3), marca(2)], HOY);
+    expect(contadoresPresentes(filas).map((p) => p.id)).toEqual([2, 3]);
   });
 });

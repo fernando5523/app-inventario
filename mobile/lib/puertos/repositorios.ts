@@ -613,6 +613,36 @@ export interface CorreccionDeConteo {
 }
 
 /**
+ * EL ÍTEM SALIÓ DE LA RONDA SIGUIENTE porque la corrección lo hizo cuadrar.
+ *
+ * Es LO QUE EL CLIENTE PIDIÓ VER, con sus palabras (reunión 2, 00:12:12):
+ * *"puedes corregirlo para que ya no salga en mi segundo conteo"*. Sin esto,
+ * quien corrige no sabe si consiguió lo que fue a buscar — y que salga o no
+ * depende de si alguien ya empezó esa ronda, que es algo que quien corrige no
+ * puede ver desde la pantalla.
+ */
+export interface SalidaDeLaRonda {
+  /** El código del ítem que salió. */
+  codigo: string;
+  /** De qué ronda salió (la siguiente a la corregida). */
+  ronda: number;
+  /** La hoja quedó sin ítems y se cerró. */
+  hojaBorrada: boolean;
+  /** Era el último ítem: esa ronda entera dejó de existir. */
+  rondaBorrada: boolean;
+}
+
+/** Lo que devuelve corregir un conteo. */
+export interface ResultadoCorreccion {
+  /**
+   * `null` = no salió de ninguna ronda, que es el caso normal: o la
+   * corrección no lo hizo cuadrar, o la ronda siguiente ya empezó y no se le
+   * toca la hoja a quien la tiene en la mano.
+   */
+  salioDeLaRonda: SalidaDeLaRonda | null;
+}
+
+/**
  * Las correcciones y el ajuste final del auditor.
  *
  * ---------------------------------------------------------------------------
@@ -651,7 +681,7 @@ export interface RepositorioAjuste {
    * Se puede con la ronda ABIERTA y también CERRADA, pero NO una vez que
    * arrancó el ajuste del auditor: el servidor rechaza y el mensaje lo dice.
    */
-  corregirConteo(hojaId: number, productoId: number, correccion: CorreccionDeConteo): Promise<void>;
+  corregirConteo(hojaId: number, productoId: number, correccion: CorreccionDeConteo): Promise<ResultadoCorreccion>;
 
   /**
    * AUDITOR: abre UNA RONDA MÁS, después de la última cerrada.
@@ -1813,6 +1843,34 @@ export interface RepositorioHistorial {
    * también acá, no una promesa de acceso ampliado.
    */
   exportarDiferenciasConsolidado(filtro: FiltroExportConsolidado): Promise<ArrayBuffer>;
+  /**
+   * El .xlsx CON EL FORMATO DE LA PLANILLA DEL CLIENTE: los cuatro cuadros
+   * (faltantes únicos, faltante y sobrante por paquete), empresa aparte y la
+   * hoja de descuento -- tal como se arma a mano hoy.
+   *
+   * ES OTRO ARCHIVO que `exportarDiferencias`, no su reemplazo: aquel es una
+   * tabla plana de una hoja para analizar, este es el que se pone al lado del
+   * del cliente para comparar. Mismos permisos y misma ventana que aquel
+   * (backend historial.routes.ts lo dice con esas palabras): son dos formatos
+   * del MISMO hecho.
+   *
+   * DEVUELVE EL NOMBRE ADEMÁS DE LOS BYTES, a diferencia de los dos de arriba.
+   * El patrón del nombre lo genera el backend con sucursal y período, y la
+   * pantalla que ofrece este botón (el panel de auditoría) no tiene ninguno de
+   * los dos -- `RepositorioInventario.activo()` no los trae. Ver
+   * dominio/exportar-cuadros.ts#nombreDeContentDisposition.
+   */
+  exportarCuadros(inventarioId: number): Promise<ArchivoExportado>;
+}
+
+/**
+ * Un archivo que llegó del servidor con su nombre. El nombre es `null` si la
+ * respuesta no lo trajo: quien lo use decide con qué guardarlo, y NO se
+ * inventa uno que parezca del servidor.
+ */
+export interface ArchivoExportado {
+  bytes: ArrayBuffer;
+  nombreArchivo: string | null;
 }
 
 /** Ver `RepositorioHistorial.exportarDiferenciasConsolidado`. */

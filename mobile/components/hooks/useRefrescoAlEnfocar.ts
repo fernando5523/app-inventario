@@ -2,7 +2,7 @@ import { useFocusEffect } from 'expo-router';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { AppState } from 'react-native';
 
-import { debeRefrescar, esVueltaAPrimerPlano, type EstadoApp } from './refresco';
+import { decidirRefresco, esVueltaAPrimerPlano, type EstadoApp } from './refresco';
 
 /**
  * "Cualquier dato actualizado no debe depender de cerrar sesión y volver."
@@ -67,6 +67,48 @@ export interface OpcionesRefresco {
    * no tocándolo — `cargar` nunca debe borrar lo pendiente de subir.
    */
   pausado?: boolean;
+  /**
+   * `true` = un disparo que llegó estando PAUSADO no se tira: se guarda y
+   * corre apenas se despausa (se cierra el modal, se termina de guardar).
+   *
+   * OPT-IN, y el default `false` es el comportamiento de siempre. Este hook lo
+   * usan las pantallas de cuatro roles a la vez y hay gente escribiendo en
+   * ellas ahora mismo: cambiarle el comportamiento a todas desde acá sería
+   * moverles el piso sin que lo hayan pedido (misma regla que el select
+   * buscable compartido, ver trujillo-ui). Lo prende la pantalla que lo
+   * necesita.
+   *
+   * PARA QUE SIRVE, medido el 2026-09-21: `pausado` descartaba el disparo. El
+   * Administrador deja abierto el menú de acciones de una ficha en Usuarios,
+   * manda la app al fondo, vuelve, cierra el menú -- y la lista sigue siendo
+   * la de antes, con una cuenta mostrada como activa que otro administrador ya
+   * deshabilitó. Ver `decidirRefresco` en ./refresco.
+   *
+   * HAY DOS FORMAS DE PAUSA, Y ESTA OPCION IMPORTA MAS EN LA SEGUNDA:
+   *
+   *  - Un MODAL o un formulario abierto. Dura lo que tarda la persona en
+   *    decidir, y el disparo perdido se recupera solo en el próximo foco.
+   *  - Una OPERACION LARGA en curso. `app/coordinador/armar.tsx` pausa
+   *    mientras baja el snapshot de ~11.000 ítems de Dynamics: son minutos, y
+   *    es justo cuando alguien manda la app al fondo y se va a hacer otra
+   *    cosa. Ahí la pausa no protege nada que se esté escribiendo -- protege
+   *    una espera -- y el disparo que llega en el medio es el que más falta
+   *    hace al volver.
+   *
+   * CUANDO NO PRENDERLO: cuando la acción que pausa YA deja el estado al día
+   * con su propia respuesta, y no queda nada más que releer (Configuración,
+   * Accesos y menús). Ahí el refresco diferido es un pedido de más que no
+   * cambia nada de lo que se ve. Ojo con el matiz: lo que decide no es que sea
+   * un formulario, es si la respuesta de la acción cubre TODO lo que la
+   * pantalla muestra -- una acción que actualiza su parte y deja el resto
+   * viejo sí lo necesita.
+   *
+   * SU LIMITE, dicho para que nadie lo lea como una garantía absoluta: si al
+   * despausar justo hay otra recarga en vuelo, este disparo se descarta. No se
+   * pierde nada real -- la que está corriendo trae datos igual de frescos --,
+   * pero no es "siempre corre exactamente una recarga al despausar".
+   */
+  recuperarAlDespausar?: boolean;
 }
 
 export interface RefrescoAlEnfocar {
@@ -76,11 +118,35 @@ export interface RefrescoAlEnfocar {
   refrescar: () => void;
 }
 
+/**
+ * LO QUE ESTE HOOK NO HACE, Y YA COSTO UNA PANTALLA MUERTA
+ * ---------------------------------------------------------------------------
+ * NO reacciona a que `cargar` cambie de identidad. Dispara al ENFOCAR la
+ * pantalla y al volver a primer plano, y nada más -- `cargar` vive en un ref
+ * justamente para eso (ver el comentario de `cargarRef`).
+ *
+ * O sea: si tu pantalla tiene un selector PROPIO que cambia QUE se pide -- un
+ * chip de rol, un filtro de período, un combo de sucursal --, cambiarlo NO
+ * dispara una recarga. Con la pantalla ya enfocada, el evento que despierta a
+ * este hook no vuelve a ocurrir nunca.
+ *
+ * Bug real (2026-09-19, `app/administrador/navegacion.tsx`): el handler del
+ * chip de rol hacía `setCargando(true)` y confiaba en que este hook recargara.
+ * No recarga. El spinner quedaba girando para siempre y volver al rol anterior
+ * tampoco lo recuperaba, sin excepción ni nada en logcat.
+ *
+ * QUE HACER en esas pantallas: un `useEffect` propio con el selector en las
+ * dependencias, que sea el ÚNICO dueño del estado de carga -- que lo prenda al
+ * empezar y lo apague al terminar. Así no existe forma de prender el spinner
+ * sin arrancar el pedido. Este hook queda para lo suyo: el "tirar para
+ * refrescar" y el volver a la pantalla.
+ */
 export function useRefrescoAlEnfocar(
   cargar: () => Promise<void> | void,
   opciones: OpcionesRefresco = {},
 ): RefrescoAlEnfocar {
   const pausado = opciones.pausado ?? false;
+  const recuperarAlDespausar = opciones.recuperarAlDespausar ?? false;
   const [refrescando, setRefrescando] = useState(false);
 
   // En un ref y no en el estado: es un CANDADO, y tiene que valer ya mismo
@@ -100,8 +166,27 @@ export function useRefrescoAlEnfocar(
   const pausadoRef = useRef(pausado);
   pausadoRef.current = pausado;
 
+  /**
+   * Hubo un disparo mientras estaba pausado y todavía no se recuperó.
+   *
+   * En un ref y no en el estado por lo mismo que `enVuelo`: se escribe desde
+   * `ejecutar`, que corre fuera del ciclo de render, y hay que poder leerlo en
+   * el mismo tick. Es un booleano y no una cola a propósito -- tres disparos
+   * pausados se recuperan con UNA recarga, porque lo que se quiere es el
+   * estado de ahora, no repetir la historia.
+   */
+  const pendienteRef = useRef(false);
+
   const ejecutar = useCallback(async (): Promise<void> => {
-    if (!debeRefrescar({ enVuelo: enVuelo.current, pausado: pausadoRef.current })) return;
+    const decision = decidirRefresco({ enVuelo: enVuelo.current, pausado: pausadoRef.current });
+    if (decision === 'posponer') {
+      // Se anota SIEMPRE, aunque la pantalla no haya pedido recuperarlo: el
+      // efecto de abajo es el único que lo lee, y solo corre con la opción
+      // prendida. Así la bandera no depende de cuándo se leyó la opción.
+      pendienteRef.current = true;
+      return;
+    }
+    if (decision === 'descartar') return;
     enVuelo.current = true;
     setRefrescando(true);
     try {
@@ -122,6 +207,16 @@ export function useRefrescoAlEnfocar(
       void ejecutar();
     }, [ejecutar]),
   );
+
+  // AL DESPAUSAR: corre el disparo que se pospuso mientras había un modal
+  // abierto o un guardado en curso. Depende de `pausado` (no de un ref) porque
+  // justamente lo que interesa es el RENDER en que pasa a `false`: ahí ya no
+  // hay nada que pisarle a la persona.
+  useEffect(() => {
+    if (!recuperarAlDespausar || pausado || !pendienteRef.current) return;
+    pendienteRef.current = false;
+    void ejecutar();
+  }, [recuperarAlDespausar, pausado, ejecutar]);
 
   // Al volver a primer plano.
   useEffect(() => {
