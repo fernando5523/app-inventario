@@ -1,0 +1,44 @@
+# Lo que NO viaja al contexto de build. Con el contexto en la RAIZ del
+# monorepo esto no es una optimizacion: es lo que evita mandarle al daemon
+# (y a quien construya la imagen en la nube) cosas que no tienen por que salir
+# de esta maquina.
+
+# EL EXCEL DEL CLIENTE Y LA TRANSCRIPCION. La hoja ASISTENCIA trae nombres y
+# DNI de personas reales. Va primero en la lista por eso: no es peso, es dato
+# personal que no puede terminar en un registro de imagenes.
+requerimiento/
+
+# La app movil no es parte de esta imagen, y su node_modules pesa cientos de
+# megas.
+mobile/
+
+docs/
+index.html
+AGENTS.md
+*.md
+
+# Dependencias y compilados: se instalan y se compilan DENTRO de la imagen.
+# Copiarlos de afuera trae binarios de otra plataforma (la maquina de
+# desarrollo es Linux x64 hoy, pero el que construya puede no serlo).
+**/node_modules
+**/dist
+**/coverage
+
+# Secretos y ruido local.
+**/.env
+**/.env.*
+**/*.log
+.git
+.gitignore
+.github
+.vscode
+.idea
+.codegraph
+
+# Los scripts de verificacion y las siembras de demo tocan la base y no tienen
+# nada que hacer en produccion. `backend/prisma/` SI viaja entero: ahi estan
+# las migraciones y el seed de las 10 tiendas.
+backend/scripts/verificar-*
+backend/scripts/sembrar-*
+backend/scripts/explorar-*
+backend/scripts/medir-*
