@@ -38,6 +38,37 @@ const DURACION_SESION_MS = 12 * 60 * 60 * 1000; // 12 horas, igual que sesion-me
 export const ROLES_DE_TIENDA: Rol[] = ['coordinador', 'conteo'];
 const ROLES_SIN_TIENDA: Rol[] = ['administrador', 'auditor'];
 
+/**
+ * QUIENES SE OFRECEN PARA ELEGIR DENTRO DE UNA TIENDA, en el login.
+ *
+ * NO es lo mismo que `ROLES_DE_TIENDA` y la diferencia es toda la razon de que
+ * esta constante exista aparte:
+ *
+ *   ROLES_DE_TIENDA                 quien PERTENECE a una tienda. Decide quien
+ *                                   recibe hojas, quien entra a la nomina y a
+ *                                   quien se le marca asistencia.
+ *   ROLES_QUE_SE_ELIGEN_EN_LA_TIENDA quien APARECE en esa lista del login. Es
+ *                                   solo donde se lo elige.
+ *
+ * El auditor entra en la segunda y NO en la primera (decision del usuario,
+ * 2026-09-22): a Gilmer le resultaba raro entrar por el grupo de arriba, y
+ * elegirse en su tienda no le cambia ni un permiso -- `ingresar` emite la
+ * sesion con el rol del PADRON, nunca con el grupo por el que se eligio.
+ *
+ * ENSANCHAR `ROLES_DE_TIENDA` PARA LOGRAR ESTO HABRIA SIDO EL BUG: al auditor
+ * le empezarian a caer hojas de conteo (ver 233f4b7, que lo saco del reparto a
+ * proposito), entraria en la planilla de liquidacion y habria que marcarle
+ * asistencia. Son dos preguntas distintas y ahora tienen dos respuestas.
+ *
+ * EL AUDITOR SIN SUCURSAL EN SU FICHA NO APARECE EN NINGUNA TIENDA, y sale
+ * solo: las consultas filtran por `sucursalId`, y un `sucursalId` null no
+ * coincide con ninguna. Es lo correcto -- no hay una tienda donde mostrarlo, y
+ * ponerlo en las diez es justo lo que evita la regla del 2026-09-10 (el auditor
+ * no pertenece a ninguna tienda). Ese auditor se elige en el grupo de arriba,
+ * que sigue listandolos a todos.
+ */
+export const ROLES_QUE_SE_ELIGEN_EN_LA_TIENDA: Rol[] = [...ROLES_DE_TIENDA, 'auditor'];
+
 export interface SucursalDto {
   id: number;
   nombre: string;
@@ -64,10 +95,25 @@ export async function listarSucursales(): Promise<SucursalDto[]> {
   const sucursales = await prisma.sucursal.findMany({
     where: { activa: true },
     orderBy: { id: 'asc' },
-    // El conteo de la tarjeta cuenta SOLO a los de tienda (coordinador/conteo):
-    // un auditor con sucursal asignada no debe inflar el número de una tienda a
-    // la que, por regla, no pertenece.
-    include: { _count: { select: { colaboradores: { where: { rol: { in: ROLES_DE_TIENDA }, activo: true } } } } },
+    /**
+     * EL CONTEO DE LA TARJETA CUENTA LO QUE LA LISTA VA A MOSTRAR, y por eso
+     * usa la misma constante que `listarColaboradores` y no `ROLES_DE_TIENDA`.
+     *
+     * Es la leccion de un bug real: Tiendas decia "11 colaboradores" y el
+     * login "9" para la misma sucursal, porque cada pantalla contaba con su
+     * propio filtro. Un subtitulo que promete 9 y abre una lista de 10 es la
+     * misma clase de mentira, al reves. La condicion se declara UNA vez.
+     *
+     * OJO -- esto YA NO COINCIDE con el conteo de la pantalla de Tiendas, y es
+     * correcto que no coincida: alla la pregunta es "cuantos colaboradores
+     * TIENE esta tienda" (personal de tienda, sin el auditor), aca es
+     * "cuantas personas puedo elegir aca". Antes las dos preguntas tenian la
+     * misma respuesta y por eso compartian filtro; desde que el auditor se
+     * elige en su tienda, dejaron de tenerla. Ver tiendas.service.ts.
+     */
+    include: {
+      _count: { select: { colaboradores: { where: { rol: { in: ROLES_QUE_SE_ELIGEN_EN_LA_TIENDA }, activo: true } } } },
+    },
   });
 
   return sucursales.map((s) => ({
@@ -78,14 +124,20 @@ export async function listarSucursales(): Promise<SucursalDto[]> {
 }
 
 /**
- * Solo colaboradores activos y DE TIENDA (coordinador/conteo): uno
- * deshabilitado no aparece para elegir al ingresar, y el auditor/administrador
- * tampoco -- se eligen en el grupo "administradores" (ver listarAdministradores),
- * no colgando de una sucursal.
+ * Los colaboradores activos que se pueden elegir EN ESTA TIENDA: el
+ * coordinador, los contadores y -- desde 2026-09-22 -- el AUDITOR asignado a
+ * ella. Uno deshabilitado no aparece.
+ *
+ * El auditor aparece ADEMAS en el grupo de arriba, no en vez de: sigue
+ * pudiendo entrar sin elegir tienda, porque audita toda la cadena. Estar en
+ * los dos lados es deliberado.
+ *
+ * Ver `ROLES_QUE_SE_ELIGEN_EN_LA_TIENDA` para por que esto NO es
+ * `ROLES_DE_TIENDA` y por que ensanchar aquella habria sido un error.
  */
 export async function listarColaboradores(sucursalId: number): Promise<ColaboradorDto[]> {
   const colaboradores = await prisma.colaborador.findMany({
-    where: { sucursalId, activo: true, rol: { in: ROLES_DE_TIENDA } },
+    where: { sucursalId, activo: true, rol: { in: ROLES_QUE_SE_ELIGEN_EN_LA_TIENDA } },
     orderBy: { id: 'asc' },
   });
 
@@ -121,15 +173,25 @@ export async function listarAdministradores(): Promise<ColaboradorDto[]> {
 export async function ingresar(colaboradorId: number, pin: string): Promise<SesionDto> {
   const colaborador = await prisma.colaborador.findUnique({
     where: { id: colaboradorId },
-    // El MISMO conteo que `listarSucursales` (y que Tiendas, ver
-    // tiendas.service.ts): `SucursalDto.colaboradores` significa lo mismo en
-    // las tres -- personal de tienda ACTIVO. Sin el filtro, la sesion devolvia
-    // el total de filas de la sucursal (auditor con `sucursalId` viejo
-    // incluido) y la misma tienda mostraba dos numeros distintos segun por
-    // donde se la mirara.
+    /**
+     * EL MISMO CONTEO QUE `listarSucursales`: es el numero que la persona
+     * acaba de ver en la tarjeta del login, y tiene que seguir diciendo lo
+     * mismo despues de entrar. Sin el filtro, la sesion devolvia el total de
+     * filas de la sucursal y la misma tienda mostraba dos numeros distintos
+     * segun por donde se la mirara.
+     *
+     * YA NO ES el de la pantalla de Tiendas, que sigue contando personal de
+     * tienda: desde que el auditor se elige en su sucursal, "cuantos puedo
+     * elegir aca" y "cuantos colaboradores tiene la tienda" dejaron de ser la
+     * misma pregunta. Ver `ROLES_QUE_SE_ELIGEN_EN_LA_TIENDA`.
+     */
     include: {
       sucursal: {
-        include: { _count: { select: { colaboradores: { where: { rol: { in: ROLES_DE_TIENDA }, activo: true } } } } },
+        include: {
+          _count: {
+            select: { colaboradores: { where: { rol: { in: ROLES_QUE_SE_ELIGEN_EN_LA_TIENDA }, activo: true } } },
+          },
+        },
       },
     },
   });

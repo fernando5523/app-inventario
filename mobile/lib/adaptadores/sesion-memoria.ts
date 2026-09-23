@@ -83,7 +83,23 @@ const DURACION_SESION_MS = 12 * 60 * 60 * 1000; // 12 horas
  * tiene tienda -audita toda la cadena-, así que va al grupo "administradores"
  * del login, no bajo una sucursal.
  */
-const esDeTienda = (c: Colaborador): boolean => c.rol === 'coordinador' || c.rol === 'conteo';
+export const esDeTienda = (c: Colaborador): boolean => c.rol === 'coordinador' || c.rol === 'conteo';
+
+/**
+ * QUIEN SE OFRECE PARA ELEGIR DENTRO DE UNA TIENDA, en el login. Paridad con
+ * `ROLES_QUE_SE_ELIGEN_EN_LA_TIENDA` del backend.
+ *
+ * NO es `esDeTienda`, y la diferencia importa: el auditor se ELIGE en su
+ * tienda (decision del usuario, 2026-09-22) pero no PERTENECE a ella. Sigue
+ * fuera del reparto de hojas, de la nomina y de la asistencia -- por eso los
+ * consumidores internos de este mock (asistencia, usuarios, liquidacion,
+ * inventario) filtran con `esDeTienda` y no con esta.
+ *
+ * El auditor SIN sucursal no sale en ninguna tienda: acá el padron se indexa
+ * POR sucursal (`COLABORADORES[sucursalId]`), asi que uno sin tienda no esta
+ * en ninguna lista. Mismo resultado que el `where sucursalId` del backend.
+ */
+const seEligeEnLaTienda = (c: Colaborador): boolean => esDeTienda(c) || c.rol === 'auditor';
 /** Todos los auditores del padrón, sin importar de qué sucursal se los sembró. */
 const AUDITORES: Colaborador[] = Object.values(COLABORADORES)
   .flat()
@@ -97,7 +113,10 @@ const AUDITORES: Colaborador[] = Object.values(COLABORADORES)
  * pantalla que lo muestre.
  */
 function conConteoDeTienda(sucursal: Sucursal): Sucursal {
-  return { ...sucursal, colaboradores: (COLABORADORES[sucursal.id] ?? []).filter(esDeTienda).length };
+  // Cuenta lo que la lista del login va a MOSTRAR, no el personal de tienda:
+  // un subtitulo que promete 9 y abre una lista de 10 es la misma mentira que
+  // el bug de "11 aca y 9 alla". Paridad con `listarSucursales` del backend.
+  return { ...sucursal, colaboradores: (COLABORADORES[sucursal.id] ?? []).filter(seEligeEnLaTienda).length };
 }
 
 function buscarColaborador(colaboradorId: number): { colaborador: Colaborador; sucursal: Sucursal | null } | null {
@@ -122,9 +141,12 @@ export const sesionMemoria: RepositorioSesion = {
   },
 
   async colaboradores(sucursalId) {
-    // Solo coordinador/conteo: el auditor no cuelga de una tienda, va en
-    // administradores() (paridad con listarColaboradores del backend).
-    return (COLABORADORES[sucursalId] ?? []).filter(esDeTienda);
+    // Coordinador, conteo Y el auditor de esta tienda -- paridad con
+    // `listarColaboradores` del backend. El auditor aparece ADEMAS en
+    // `administradores()`, no en vez de: estar en los dos lados es
+    // deliberado, porque audita toda la cadena y tiene que poder entrar sin
+    // elegir tienda.
+    return (COLABORADORES[sucursalId] ?? []).filter(seEligeEnLaTienda);
   },
 
   // El grupo "administradores" del login: los usuarios SIN tienda propia. El

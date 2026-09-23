@@ -11,7 +11,7 @@
  */
 
 import { simularLatencia } from './_compartido';
-import { sesionMemoria } from './sesion-memoria';
+import { esDeTienda, sesionMemoria } from './sesion-memoria';
 import { diasFaltados, multaPorInasistencia } from '../dominio/asistencia';
 import type {
   AjustesDelMes,
@@ -100,7 +100,10 @@ export const liquidacionMemoria: RepositorioLiquidacion = {
 
     if (sucursalId !== SUCURSAL_LUZURIAGA_ID) return null;
 
-    const colaboradores = await sesionMemoria.colaboradores(sucursalId);
+    // SOLO personal de tienda: el auditor no entra a la nomina. Ver
+    // `sesion-memoria.ts#seEligeEnLaTienda` -- se elige en la tienda, no
+    // pertenece a ella.
+    const colaboradores = (await sesionMemoria.colaboradores(sucursalId)).filter(esDeTienda);
     const { periodo, periodoAnio, periodoMes, faltanteBruto, negativosDelMes, faltanteEmpresa, multaInasistencia } = DATOS_LUZURIAGA;
 
     const faltanteNeto = faltanteBruto - negativosDelMes - faltanteEmpresa;

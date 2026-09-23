@@ -19,7 +19,7 @@
 import { finalizar as finalizarDominio, puedeEditar, puedeFinalizar as puedeFinalizarDominio } from '../dominio/hoja';
 import { partirEnHojas, repartir } from '../dominio/lote';
 import type { Colaborador, Conteo, Empaque, HojaConteo, Producto, TamanoHoja } from '../dominio/tipos';
-import { sesionMemoria } from './sesion-memoria';
+import { esDeTienda, sesionMemoria } from './sesion-memoria';
 
 // ---------------------------------------------------------------------------
 // Latencia simulada
@@ -318,7 +318,11 @@ async function sembrarLuzuriaga(): Promise<InventarioDemo> {
   const inventario = registrarInventario(SUCURSAL_LUZURIAGA_ID, TOTAL_ITEMS_LUZURIAGA, FECHA_DEMO);
   crearHojasEnInventario(inventario, 50);
 
-  const colaboradores = await sesionMemoria.colaboradores(SUCURSAL_LUZURIAGA_ID);
+  // `.filter(esDeTienda)`: desde que el auditor SE ELIGE en su tienda,
+  // `colaboradores()` tambien lo devuelve -- pero no PERTENECE a la tienda y
+  // no puede recibir hojas (233f4b7). Acá igual se queda con los de rol
+  // `conteo`, asi que el filtro es cinturon del cinturon.
+  const colaboradores = (await sesionMemoria.colaboradores(SUCURSAL_LUZURIAGA_ID)).filter(esDeTienda);
   const contadores = colaboradores.filter((c) => c.rol === 'conteo');
   asignarHojasEnInventario(
     inventario,

@@ -16,7 +16,7 @@ import { puedeCrearRol } from '../dominio/roles';
 import type { Rol, Usuario } from '../dominio/tipos';
 import type { DatosEditarUsuario, DatosNuevoUsuario, RepositorioUsuarios } from '../puertos/repositorios';
 import { simularLatencia } from './_compartido';
-import { sesionMemoria } from './sesion-memoria';
+import { esDeTienda, sesionMemoria } from './sesion-memoria';
 
 // ---------------------------------------------------------------------------
 
@@ -31,7 +31,13 @@ function asegurarSemilla(): Promise<void> {
   if (!semillaPromise) {
     semillaPromise = (async () => {
       for (const sucursalId of IDS_SUCURSAL) {
-        const colaboradores = await sesionMemoria.colaboradores(sucursalId);
+        // SOLO personal de tienda, para que esta lista NO cambie por el
+        // login. Esta semilla nunca listo auditores ni administradores --
+        // recorre las sucursales y toma lo que `colaboradores()` devolvia,
+        // que hasta 2026-09-22 era solo personal de tienda. Desde que el
+        // auditor se elige en su tienda, sin este filtro empezaria a aparecer
+        // en Usuarios sin que nadie lo haya pedido.
+        const colaboradores = (await sesionMemoria.colaboradores(sucursalId)).filter(esDeTienda);
         for (const c of colaboradores) {
           // El Administrador viene en las 4 listas (no cuelga de una sola
           // sucursal, ver sesion-memoria.ts) — se agrega una sola vez, sin

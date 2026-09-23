@@ -32,7 +32,7 @@
  */
 
 import { obtenerInventario, simularLatencia } from './_compartido';
-import { sesionMemoria } from './sesion-memoria';
+import { esDeTienda, sesionMemoria } from './sesion-memoria';
 import type { AsistenciaInventario, MarcaAsistencia, RepositorioAsistencia } from '../puertos/repositorios';
 
 /** `inventarioId -> "colaboradorId|dia" -> marca`. La clave compuesta ES el `@@unique` del servidor. */
@@ -80,7 +80,11 @@ async function validarEscritura(inventarioId: number, colaboradorId: number): Pr
     throw new Error('Solo el Coordinador de la sucursal del inventario puede registrar su asistencia.');
   }
 
-  const personal = await sesionMemoria.colaboradores(inventario.sucursalId);
+  // SOLO personal de tienda: al auditor no se le marca asistencia ni entra a
+  // la planilla. `colaboradores()` lo devuelve desde que se elige en su
+  // tienda, asi que el filtro va acá -- ensanchar la asistencia habria sido
+  // el bug de ese cambio.
+  const personal = (await sesionMemoria.colaboradores(inventario.sucursalId)).filter(esDeTienda);
   if (!personal.some((c) => c.id === colaboradorId)) {
     throw new Error(
       `El colaborador ${colaboradorId} no es personal de tienda de esta sucursal: no entra al inventario ni a su planilla.`,
@@ -104,7 +108,10 @@ export const asistenciaMemoria: RepositorioAsistencia = {
       marcas,
       // El padrón de TIENDA, el mismo que ve el login: sin auditores ni
       // administradores (ver la cabecera de este archivo).
-      personal: (await sesionMemoria.colaboradores(inventario.sucursalId)).map((c) => ({
+      // `.filter(esDeTienda)`: el padron de la planilla es personal de tienda.
+      // Al auditor no se le marca asistencia ni se le cobra multa -- y
+      // `colaboradores()` lo devuelve desde que se elige en su tienda.
+      personal: (await sesionMemoria.colaboradores(inventario.sucursalId)).filter(esDeTienda).map((c) => ({
         id: c.id,
         nombre: c.nombre,
         rol: c.rol,
