@@ -9,7 +9,7 @@
 
 import { describe, expect, it } from 'vitest';
 
-import { numeroDeHoja, ordenarParaContar, partirEnHojas, repartir, zonaDeHoja } from './lote';
+import { numeroDeHoja, ordenarParaContar, partirEnHojas, repartir, tamanoEfectivoDeHoja, zonaDeHoja } from './lote';
 
 const item = (codigo: string, categoria: string | null) => ({ codigo, categoria });
 
@@ -172,5 +172,72 @@ describe('el inventario real de Market Trujillo', () => {
     const reparto = repartir(hojas, ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h']);
     expect(reparto.flatMap((r) => r.hojas)).toHaveLength(31);
     expect(reparto.every((r) => r.hojas.length > 0)).toBe(true);
+  });
+});
+
+/**
+ * EL TAMAÑO EFECTIVO: que una ronda chica se reparta entre los presentes en
+ * vez de salir en una sola hoja para una sola persona.
+ *
+ * Pedido de Gilmer, reunión 2 (00:38:29): si hay 20 productos se le asigne a
+ * los 20 presentes, "uno, uno, uno cada uno... de manera que todos alcancen".
+ */
+describe('tamanoEfectivoDeHoja', () => {
+  it('LA RONDA 1 NO CAMBIA: con 980 ítems y 4 presentes manda el 50 elegido', () => {
+    // Repartir daría hojas de 245, y nadie cuenta 245 ítems seguidos. El
+    // tamaño elegido es un techo real, no una preferencia.
+    expect(tamanoEfectivoDeHoja(980, 4, 50)).toBe(50);
+  });
+
+  it('16 ítems entre 4: hojas de 4, una por cabeza', () => {
+    // El caso medido en el inventario 8073: antes era UNA hoja de 16 para
+    // Elena y los otros tres sin nada.
+    expect(tamanoEfectivoDeHoja(16, 4, 50)).toBe(4);
+    expect(partirEnHojas(16, tamanoEfectivoDeHoja(16, 4, 50))).toEqual([4, 4, 4, 4]);
+  });
+
+  it('8 ítems entre 4: hojas de 2', () => {
+    expect(tamanoEfectivoDeHoja(8, 4, 50)).toBe(2);
+    expect(partirEnHojas(8, tamanoEfectivoDeHoja(8, 4, 50))).toEqual([2, 2, 2, 2]);
+  });
+
+  it('5 ítems entre 4: hojas de 1, y son CINCO hojas para cuatro personas', () => {
+    // `repartir` le da 2 al primero y 1 a cada uno de los otros -- esa parte
+    // no cambia, ya estaba bien.
+    expect(tamanoEfectivoDeHoja(5, 4, 50)).toBe(1);
+    expect(partirEnHojas(5, 1)).toEqual([1, 1, 1, 1, 1]);
+  });
+
+  it('MÁS PRESENTES QUE ÍTEMS: 5 entre 8 da hojas de 1, y tres se quedan sin', () => {
+    // Un ítem no se parte en ocho. No se inventan hojas vacías ni se duplica
+    // un ítem en dos hojas: eso rompería el conteo ciego y la asistencia.
+    expect(tamanoEfectivoDeHoja(5, 8, 50)).toBe(1);
+    expect(partirEnHojas(5, tamanoEfectivoDeHoja(5, 8, 50))).toHaveLength(5);
+  });
+
+  it('SIN PRESENTES: manda el tamaño elegido, sin tocar nada', () => {
+    // Cero presentes es "todavía no se tomó asistencia", no "nadie va a
+    // contar". Forzar hojas de 1 sería decidir sobre un dato que no existe.
+    expect(tamanoEfectivoDeHoja(16, 0, 50)).toBe(50);
+    expect(tamanoEfectivoDeHoja(980, 0, 20)).toBe(20);
+  });
+
+  it('nunca devuelve 0: una hoja de cero ítems no es una hoja', () => {
+    expect(tamanoEfectivoDeHoja(1, 4, 50)).toBe(1);
+    expect(tamanoEfectivoDeHoja(0, 4, 50)).toBe(1);
+  });
+
+  it('un solo presente: manda el techo, como siempre', () => {
+    expect(tamanoEfectivoDeHoja(16, 1, 50)).toBe(16);
+    expect(tamanoEfectivoDeHoja(980, 1, 50)).toBe(50);
+  });
+
+  it('respeta el tamaño elegido más chico: con 20 elegido no sube a 30', () => {
+    expect(tamanoEfectivoDeHoja(980, 4, 20)).toBe(20);
+  });
+
+  it('rechaza un tamaño elegido inválido en vez de repartir cualquier cosa', () => {
+    expect(() => tamanoEfectivoDeHoja(16, 4, 0)).toThrow();
+    expect(() => tamanoEfectivoDeHoja(16, 4, -5)).toThrow();
   });
 });

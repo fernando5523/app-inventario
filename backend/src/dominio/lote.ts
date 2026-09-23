@@ -60,6 +60,68 @@ export function ordenarParaContar<T extends ItemOrdenable>(items: readonly T[]):
 }
 
 /**
+ * EL TAMANO DE HOJA QUE DE VERDAD SE USA: el MENOR entre el que eligio el
+ * Coordinador y lo que da repartir los items entre los presentes.
+ *
+ *     tamano efectivo = max(1, min(tamanoElegido, piso(totalItems / presentes)))
+ *
+ * ---------------------------------------------------------------------------
+ * EL PROBLEMA QUE RESUELVE: LAS RONDAS CHICAS SALEN EN UNA SOLA HOJA
+ * ---------------------------------------------------------------------------
+ * El embudo angosta cada ronda. Con un tamano fijo de 50, la ronda 1 de 980
+ * items da 20 hojas -- cinco por cabeza con 4 contadores, perfecto -- pero la
+ * ronda 2 de 16 items da UNA hoja para UNA persona, y los otros tres se
+ * quedan mirando. Medido en el inventario 8073 de Luzuriaga: ronda 2 = 1 hoja
+ * de 16, ronda 3 = 1 hoja de 8, ronda 4 = 1 hoja de 5.
+ *
+ * Es el pedido textual de Gilmer (reunion 2, 00:38:29): *"solamente tienes 3
+ * hojas de 20 items. ¿Como haria en ese caso para distribuirlos, solamente
+ * asigno a 3 personas?"*, y el acuerdo: si hay 20 productos se le asigne a los
+ * 20 presentes, *"uno, uno, uno cada uno... de manera que todos alcancen"*.
+ * Su cierre dice por que importa: *"si no, va a salir por una persona y ya"*.
+ *
+ * ---------------------------------------------------------------------------
+ * POR QUE EL MENOR DE LOS DOS, Y NO SIEMPRE EL REPARTO
+ * ---------------------------------------------------------------------------
+ * El tamano elegido (20/30/50) sigue siendo un TECHO real: es cuanto puede
+ * cargar una persona de una sentada sin perder el hilo del recorrido. Con 980
+ * items y 4 presentes, repartir daria hojas de 245 -- nadie cuenta 245 items
+ * seguidos. Por eso manda el menor: el reparto solo baja el tamano cuando la
+ * ronda es tan chica que el techo ya no aprieta.
+ *
+ * Asi la ronda 1 NO CAMBIA en absoluto, que es lo que se quiere: lo que estaba
+ * bien sigue igual y solo se arregla lo que estaba mal.
+ *
+ * ---------------------------------------------------------------------------
+ * LOS DOS BORDES, Y LO QUE NO SE INVENTA EN NINGUNO
+ * ---------------------------------------------------------------------------
+ * MAS PRESENTES QUE ITEMS (5 items, 8 presentes): el piso da 0 y el `max(1,)`
+ * lo sube a 1, o sea cinco hojas de un item. Tres personas se quedan sin hoja
+ * y NO HAY FORMA DE EVITARLO: un item no se parte en ocho. No se inventan
+ * hojas vacias ni se duplica un item en dos hojas -- eso romperia el conteo
+ * ciego y la asistencia deducida. Cinco personas cuentan, tres no.
+ *
+ * SIN PRESENTES (`presentes === 0`): manda el tamano elegido, sin tocar nada.
+ * Cero presentes es "todavia no se tomo asistencia", no "nadie va a contar":
+ * dividir por cero, o forzar hojas de 1, seria decidir algo sobre un dato que
+ * todavia no existe. Es el mismo criterio de null-no-es-cero que sostiene el
+ * resto del dominio.
+ */
+export function tamanoEfectivoDeHoja(totalItems: number, presentes: number, tamanoElegido: number): number {
+  if (!Number.isInteger(tamanoElegido) || tamanoElegido <= 0) {
+    throw new Error(`El tamano elegido debe ser un entero > 0 (se recibio ${tamanoElegido}).`);
+  }
+  // Sin asistencia tomada no hay nada que repartir: manda lo que se eligio.
+  if (!Number.isInteger(presentes) || presentes <= 0) return tamanoElegido;
+  if (!Number.isInteger(totalItems) || totalItems < 0) {
+    throw new Error(`totalItems debe ser un entero >= 0 (se recibio ${totalItems}).`);
+  }
+
+  const porCabeza = Math.floor(totalItems / presentes);
+  return Math.max(1, Math.min(tamanoElegido, porCabeza));
+}
+
+/**
  * Parte `totalItems` en bloques de `tamano`. Cuando la division no es
  * exacta, la ULTIMA hoja queda parcial en vez de forzar un tamaño parejo o
  * descartar el resto: cada item del inventario tiene que caer en alguna

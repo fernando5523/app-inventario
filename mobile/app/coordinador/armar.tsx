@@ -19,6 +19,11 @@ import {
 import { inventarioIdSinRed, ultimaDescarga } from '../../lib/adaptadores/hojas-sqlite';
 import { repositorioAsistencia, repositorioHojas, repositorioInventario } from '../../lib/contenedor';
 import { contadoresPresentes, filasDeAsistencia } from '../../lib/dominio/asistencia';
+import {
+  estadoDelReparto,
+  textoRepartoDesactualizado,
+  textoRepartoHecho,
+} from '../../lib/dominio/reparto-de-hojas';
 import { avanceParaMostrar } from '../../lib/dominio/avance-snapshot';
 import { textoDeCriterios } from '../../lib/dominio/criterios-snapshot';
 import { rotuloHojasCreadas } from '../../lib/dominio/rotulo-armado';
@@ -317,6 +322,9 @@ export default function ArmarHojasScreen(): JSX.Element {
     // que distingue "todavía no se crearon" de "se cerraron todas". Ver
     // dominio/ajuste-final.ts#faseDeCierre.
     let totalHojas = 0;
+    // La marca PROPIA del cierre. Sin esto, una ronda cerrada sin nada que
+    // recontar seguia leyendose como "en curso" -- ver faseDeCierre.
+    let ultimaRondaCerrada: number | null = null;
     // Distingue "el servidor contestó y no hay inventario todavía" (estado
     // normal: hay que tomar el snapshot en el paso 1) de "no se pudo ni
     // preguntar" (sin red) — confundirlas mostraría "no se pudo conectar"
@@ -330,6 +338,7 @@ export default function ArmarHojasScreen(): JSX.Element {
       rondaActiva = activo?.rondaActiva ?? null;
       estadoActivo = activo?.estado ?? null;
       totalHojas = activo?.totalHojas ?? 0;
+      ultimaRondaCerrada = activo?.ultimaRondaCerrada ?? null;
     } catch {
       activoFallo = true;
       inventarioActivo = await inventarioIdSinRed();
@@ -365,7 +374,7 @@ export default function ArmarHojasScreen(): JSX.Element {
       setItems(itemsSnapshot);
       setTomadoEn(tomadoEnSnapshot);
       setRonda(rondaActiva ?? 1);
-      setFase(estadoActivo === null ? null : faseDeCierre(estadoActivo, rondaActiva, totalHojas));
+      setFase(estadoActivo === null ? null : faseDeCierre(estadoActivo, rondaActiva, totalHojas, ultimaRondaCerrada));
       if (rondaActiva === null) {
         // Sin ronda abierta no hay hojas que traer: o todavía no se creó
         // ninguna (paso 1), o el conteo ya terminó. Pedir las de la ronda 1
@@ -497,48 +506,34 @@ export default function ArmarHojasScreen(): JSX.Element {
           : 'listo';
 
   /**
-   * EL QUE LLEGA TARDE. Después de repartir, alguien aparece, el Coordinador
-   * le marca la entrada y vuelve acá: hay que poder repartir de nuevo.
+   * EL ESTADO DEL REPARTO: quién tiene hoja contra quién está presente. La
+   * regla vive en el dominio (`estadoDelReparto`), acá solo se pinta.
    *
-   * Se compara por NOMBRE porque es lo único que trae `hoja.asignados` -- el
-   * servidor devuelve los nombres ya resueltos, no los ids. Alcanza: son los
-   * nombres del mismo padrón, y una coincidencia falsa (dos personas con el
-   * mismo nombre en una tienda) haría que no se ofrezca repartir de nuevo, no
-   * que se reparta mal.
+   * `null` mientras el reparto no está hecho o la asistencia no se pudo
+   * verificar: sin esos dos datos no hay nada que comparar, y el paso 3 ya
+   * dice qué falta.
    */
-  const repartoDesactualizado = useMemo(() => {
-    if (!paso3Hecho || casoAsistencia !== 'listo') return false;
-    const conHojas = new Set(hojas.flatMap((h) => h.asignados));
-    const presentesAhora = new Set(presentes.map((p) => p.nombre));
-    if (conHojas.size !== presentesAhora.size) return true;
-    return [...presentesAhora].some((nombre) => !conHojas.has(nombre));
-  }, [paso3Hecho, casoAsistencia, hojas, presentes]);
+  const estadoReparto = useMemo(
+    () =>
+      paso3Hecho && casoAsistencia === 'listo'
+        ? estadoDelReparto(hojas, presentes.map((p) => p.nombre))
+        : null,
+    [paso3Hecho, casoAsistencia, hojas, presentes],
+  );
 
-  const resultadoReparto = useMemo(() => {
-    if (!paso3Hecho || presentes.length === 0) return null;
-    const conteos = new Map<string, number>();
-    for (const hoja of hojas) {
-      const nombre = hoja.asignados[0];
-      conteos.set(nombre, (conteos.get(nombre) ?? 0) + 1);
-    }
-    const valores = [...conteos.values()];
-    const min = Math.min(...valores);
-    const max = Math.max(...valores);
-    // Con pocas hojas y varios contadores el reparto parejo da UNA por
-    // persona. El rango (min–max) va siempre en plural: lo manda el máximo.
-    return min === max ? `${min} ${pluralizar(min, 'hoja', 'hojas')} por persona` : `${min}–${max} hojas por persona`;
-  }, [paso3Hecho, presentes, hojas]);
+  /**
+   * EL QUE LLEGA TARDE. Después de repartir, alguien aparece, el Coordinador
+   * le marca la entrada y vuelve acá: hay que poder repartir de nuevo. El
+   * texto lo arma el dominio, que es donde está el motivo -- ver
+   * `textoRepartoDesactualizado` y el falso positivo que documenta.
+   */
+  const avisoReparto = estadoReparto ? textoRepartoDesactualizado(estadoReparto) : null;
 
   // El texto del paso 3 concuerda con SUS DOS cifras: una ronda de reconteo
   // puede tener UNA hoja, y una tienda chica UN solo contador presente. Con un
   // solo contador no hay nada que "repartir entre" -- se le asigna todo, así
   // que cambian también el verbo y la preposición.
   const lasHojas = pluralizar(hojas.length, 'la única hoja', `las ${formatoMiles(hojas.length)} hojas`);
-  const repartoHecho = pluralizar(
-    presentes.length,
-    `${pluralizar(hojas.length, 'está asignada', 'están asignadas')} al contador presente`,
-    `${pluralizar(hojas.length, 'está repartida', 'están repartidas')} entre los ${presentes.length} contadores presentes`,
-  );
   const repartoPendiente = pluralizar(
     presentes.length,
     `Asigna ${lasHojas} al contador presente`,
@@ -560,8 +555,8 @@ export default function ArmarHojasScreen(): JSX.Element {
         ? 'Todavía no se tomó la asistencia de hoy. Márcala primero: las hojas se reparten entre quienes llegaron, no entre todo el padrón.'
         : casoAsistencia === 'sin-contadores'
           ? 'Hoy marcaron entrada el coordinador y el auditor, pero ningún contador. No hay entre quiénes repartir las hojas.'
-          : paso3Hecho && resultadoReparto
-            ? `${pluralizar(hojas.length, 'La única hoja', `Las ${formatoMiles(hojas.length)} hojas`)} ya ${repartoHecho}, en bloques contiguos (${resultadoReparto}).`
+          : estadoReparto
+            ? textoRepartoHecho(estadoReparto, formatoMiles)
             : `${repartoPendiente}, en bloques contiguos. Contar es caminar la góndola, no saltar de punta a punta.`;
 
   /** Solo se reparte con la asistencia verificada Y con alguien a quien darle hojas. */
@@ -910,24 +905,23 @@ export default function ArmarHojasScreen(): JSX.Element {
           ) : null}
 
           {/*
-            EL QUE LLEGA TARDE, que pasa todos los días: se repartió, apareció
-            alguien más, el Coordinador le marcó la entrada y volvió acá. Sin
-            este aviso la pantalla diría "ya están repartidas" y no habría
-            forma de incluirlo -- el botón de repartir desaparece con el paso
-            hecho.
+            CUANDO REPARTIR DE NUEVO CAMBIA ALGO: llegó alguien más y hay
+            hojas para darle, o alguien que tiene hoja ya no está y esa hoja
+            no la va a contar nadie. Sin este aviso no habría forma de
+            arreglarlo -- el botón de repartir desaparece con el paso hecho.
+
+            El motivo, y con él el texto, los decide `estadoDelReparto`: la
+            pantalla no vuelve a comparar presentes contra asignados (ver el
+            falso positivo del 8073 en lib/dominio/reparto-de-hojas.ts).
           */}
-          {repartoDesactualizado ? (
+          {avisoReparto ? (
             <View style={styles.avisoTarde}>
               <AlertTriangle size={16} color={colors.proceso} />
-              <Text style={styles.avisoTardeTexto}>
-                La asistencia cambió después de repartir: ahora hay {presentes.length}{' '}
-                {pluralizar(presentes.length, 'contador presente', 'contadores presentes')} y las hojas están
-                repartidas entre otra gente. Vuelve a repartir para incluir a quien llegó.
-              </Text>
+              <Text style={styles.avisoTardeTexto}>{avisoReparto}</Text>
             </View>
           ) : null}
 
-          {repartoDesactualizado ? (
+          {avisoReparto ? (
             <Button
               label={`Repartir de nuevo entre ${presentes.length} ${pluralizar(presentes.length, 'contador', 'contadores')}`}
               icon={Users}

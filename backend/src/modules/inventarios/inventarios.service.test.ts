@@ -14,6 +14,10 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const prismaMock = vi.hoisted(() => ({
+  // `contadoresPresentesHoy` (presentes.ts): cuántos contadores hay hoy, para
+  // decidir en cuántas hojas se parte la ronda. Sin marcas manda el tamaño
+  // elegido, que es el comportamiento de siempre y el que estos tests asumen.
+  asistenciaInventario: { findMany: vi.fn(async () => []) },
   inventario: { findUnique: vi.fn(), findFirst: vi.fn(), update: vi.fn() },
   catalogoItem: { findMany: vi.fn() },
   hojaConteo: { findMany: vi.fn(), findFirst: vi.fn(), create: vi.fn(), deleteMany: vi.fn(), update: vi.fn(), aggregate: vi.fn(), count: vi.fn() },

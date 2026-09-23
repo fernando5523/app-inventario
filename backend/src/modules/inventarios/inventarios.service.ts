@@ -29,7 +29,15 @@
  */
 
 import { prisma } from '../../config/database';
-import { numeroDeHoja, ordenarParaContar, partirEnHojas, repartir, zonaDeHoja } from '../../dominio/lote';
+import {
+  numeroDeHoja,
+  ordenarParaContar,
+  partirEnHojas,
+  repartir,
+  tamanoEfectivoDeHoja,
+  zonaDeHoja,
+} from '../../dominio/lote';
+import { contadoresPresentesHoy } from './presentes';
 import { registrarAuditoria } from '../../shared/auditoria';
 import { Conflicto, NoEncontrado, SolicitudInvalida } from '../../shared/errores';
 import type { ColaboradorAutenticado } from '../../shared/tipos';
@@ -129,6 +137,31 @@ export interface InventarioActivoDto {
    * finalizadas y subidas.
    */
   admiteConteo: boolean;
+  /**
+   * LA ULTIMA RONDA QUE SE CERRO. `null` = ninguna todavia.
+   *
+   * ES EL DATO QUE FALTABA para que la pantalla pueda distinguir dos
+   * situaciones que `admiteConteo` deja IGUALES, las dos en `false`:
+   *
+   *     todas las hojas finalizadas, ronda SIN cerrar  -> falta apretar el boton
+   *     ronda ya cerrada                               -> le toca al Auditor
+   *
+   * Por eso el Coordinador veia "Paso 1 - En curso" despues de cerrar y volvia
+   * a tocar el boton (bug 2026-09-22, inventario 8073 de Luzuriaga con los 980
+   * items cuadrando). La pantalla no tenia con que saberlo: `admiteConteo` ya
+   * era `false` ANTES de cerrar, porque las 20 hojas estaban finalizadas.
+   *
+   *     rondaActiva  admiteConteo  ultimaRondaCerrada   que esta pasando
+   *     null         false         null                 paso 1: no hay hojas
+   *     3            true          2                    se cuenta la ronda 3
+   *     3            false         2                    ronda 3 lista, falta cerrarla
+   *     3            false         3                    ronda 3 cerrada; le toca al Auditor
+   *
+   * NO DICE QUE EL CONTEO TERMINO: el inventario sigue `en_curso` esperando al
+   * Auditor, y en esa ventana el Coordinador todavia corrige. Ver el comentario
+   * de la columna en schema.prisma.
+   */
+  ultimaRondaCerrada: number | null;
 }
 
 /**
@@ -205,6 +238,7 @@ export async function activo(sucursalId: number): Promise<InventarioActivoDto | 
   return {
     inventarioId: inventario.id,
     admiteConteo: await admiteConteo(inventario.id, rondaActiva),
+    ultimaRondaCerrada: inventario.ultimaRondaCerrada,
     estado: inventario.estado as EstadoConAjuste,
     // `snapshotItems` es nullable: un inventario puede existir sin snapshot
     // todavia. 0 y no null porque quien llama espera un numero para mostrar.
@@ -268,7 +302,14 @@ export async function crearHojas(actor: ColaboradorAutenticado, inventarioId: nu
   // EL ORDEN ES LO QUE HACE UTIL A LA HOJA: agrupado por categoria, cada
   // hoja es un tramo del recorrido de la tienda. Ver dominio/lote.ts.
   const ordenados = ordenarParaContar(items);
-  const tamanos = partirEnHojas(ordenados.length, tamano);
+  /**
+   * EL MISMO CAMINO QUE LAS RONDAS DE RECONTEO, no una formula parecida. Acá
+   * casi nunca cambia nada -- 980 items entre 4 presentes daria 245, y manda
+   * el 50 elegido -- pero un inventario chico (una tienda de pocos items, un
+   * parcial) tiene el mismo problema que la ronda 4.
+   */
+  const presentes = await contadoresPresentesHoy(inventarioId);
+  const tamanos = partirEnHojas(ordenados.length, tamanoEfectivoDeHoja(ordenados.length, presentes, tamano));
 
   await prisma.$transaction(async (tx) => {
     // Los productos se van con las hojas: son sus hijos (Producto.hojaId).
