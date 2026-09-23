@@ -65,7 +65,7 @@ export default function CorregirScreen(): JSX.Element {
         setFase(null);
         return;
       }
-      setFase(faseDeCierre(activo.estado, activo.rondaActiva, activo.totalHojas));
+      setFase(faseDeCierre(activo.estado, activo.rondaActiva, activo.totalHojas, activo.ultimaRondaCerrada));
 
       // `todas()` y NUNCA `mias()`: el Coordinador corrige lo que cargaron
       // OTROS, así que la hoja casi nunca es suya. Va contra el servidor (la

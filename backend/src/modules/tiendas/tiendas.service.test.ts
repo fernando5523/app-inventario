@@ -69,13 +69,36 @@ describe('listar: el conteo no incluye auditores ni cuentas deshabilitadas', () 
     expect(args.include._count.select.colaboradores).toEqual(PERSONAL_DE_TIENDA);
   });
 
-  it('es EXACTAMENTE el mismo filtro que el login: la misma tienda no puede dar 11 acá y 9 allá', async () => {
+  /**
+   * ESTE TEST EXIGIA QUE LOS DOS FILTROS FUERAN IDENTICOS, y desde el
+   * 2026-09-22 ya no lo son. No es que se haya aflojado: las dos pantallas
+   * dejaron de hacer la MISMA pregunta.
+   *
+   *   Tiendas  "cuantos colaboradores TIENE esta tienda"  -> personal de
+   *            tienda. El auditor no pertenece a ninguna (233f4b7), asi que
+   *            no cuenta. NO CAMBIO.
+   *   Login    "cuantas personas puedo elegir aca"        -> ademas el
+   *            auditor de esa tienda, porque ahora se elige ahi.
+   *
+   * El bug original (11 aca y 9 alla) era que las dos respondian LO MISMO con
+   * filtros distintos. Lo que protege hoy a cada una es que su conteo coincida
+   * con SU propia lista: el del login lo fija `sesion.service.test.ts`, y el de
+   * Tiendas es el test de arriba.
+   *
+   * Si algun dia estos dos numeros vuelven a tener que ser iguales, la pregunta
+   * a contestar primero es si el auditor volvio a pertenecer a la tienda -- no
+   * emparejar los filtros y seguir.
+   */
+  it('el conteo de Tiendas NO incluye al auditor, aunque el del login sí', async () => {
     await listar();
     await listarSucursales();
 
     const tiendas = prismaMock.sucursal.findMany.mock.calls[0]?.[0].include._count.select.colaboradores;
     const login = prismaMock.sucursal.findMany.mock.calls[1]?.[0].include._count.select.colaboradores;
-    expect(tiendas).toEqual(login);
+
+    expect(tiendas).toEqual(PERSONAL_DE_TIENDA);
+    expect(tiendas.where.rol.in).not.toContain('auditor');
+    expect(login.where.rol.in).toContain('auditor');
   });
 
   it('el DTO expone el conteo ya filtrado, tal cual lo devolvió la base', async () => {

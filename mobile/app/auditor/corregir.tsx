@@ -148,7 +148,7 @@ export default function AuditorCorregirScreen(): JSX.Element {
     setError(null);
     const falla = await cargarSeguro(async () => {
       const activo = await repositorioInventario.activo(sucursalId);
-      setFase(activo ? faseDeCierre(activo.estado, activo.rondaActiva, activo.totalHojas) : null);
+      setFase(activo ? faseDeCierre(activo.estado, activo.rondaActiva, activo.totalHojas, activo.ultimaRondaCerrada) : null);
       setRondaActiva(activo?.rondaActiva ?? null);
       if (!activo || activo.rondaActiva === null) {
         setFilas([]);

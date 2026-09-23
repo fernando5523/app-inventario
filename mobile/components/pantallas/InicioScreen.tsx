@@ -267,7 +267,7 @@ export function InicioScreen(): JSX.Element {
       ronda = activo?.rondaActiva ?? null;
       items = activo?.items ?? null;
       totalHojas = activo?.totalHojas ?? null;
-      setFase(activo ? faseDeCierre(activo.estado, activo.rondaActiva, activo.totalHojas) : null);
+      setFase(activo ? faseDeCierre(activo.estado, activo.rondaActiva, activo.totalHojas, activo.ultimaRondaCerrada) : null);
     } catch {
       // Sin red (u otra falla): el avance de HOY puede estar completo en
       // SQLite — se sigue con eso en vez de dejar "Tu avance" colgado

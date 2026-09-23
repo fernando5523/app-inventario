@@ -7,7 +7,7 @@
  */
 import { describe, expect, it } from 'vitest';
 
-import { pluralizar } from './plural';
+import { pluralizar, unirConY } from './plural';
 
 describe('pluralizar: singular solo en 1, plural en todo lo demás', () => {
   it('n === 1 devuelve el singular', () => {
@@ -26,5 +26,24 @@ describe('pluralizar: singular solo en 1, plural en todo lo demás', () => {
   it('sirve para irregulares: la forma plural va explícita, no un sufijo', () => {
     expect(pluralizar(1, 'excepción', 'excepciones')).toBe('excepción');
     expect(pluralizar(3, 'excepción', 'excepciones')).toBe('excepciones');
+  });
+});
+
+describe('unirConY', () => {
+  it('sin elementos no inventa nada', () => {
+    expect(unirConY([])).toBe('');
+  });
+
+  it('uno solo va sin conectores', () => {
+    expect(unirConY(['Carla Depaz'])).toBe('Carla Depaz');
+  });
+
+  it('dos van con "y", no con coma', () => {
+    expect(unirConY(['Carla Depaz', 'Hugo Ríos'])).toBe('Carla Depaz y Hugo Ríos');
+  });
+
+  it('de tres en adelante, comas y el último con "y"', () => {
+    expect(unirConY(['a', 'b', 'c'])).toBe('a, b y c');
+    expect(unirConY(['a', 'b', 'c', 'd'])).toBe('a, b, c y d');
   });
 });

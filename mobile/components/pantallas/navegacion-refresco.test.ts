@@ -122,3 +122,50 @@ describe('Armar hojas usa el hook compartido y dice cuándo no pudo verificar', 
     expect(fuente).toContain('setHojasSinVerificar');
   });
 });
+
+/**
+ * CICLO NO LE PIDE EL HISTÓRICO A QUIEN NO LO TIENE.
+ *
+ * BUG REAL (2026-09-22, emulador): el Coordinador entraba a Ciclo en una
+ * tienda SIN inventario y leía "Tu rol no tiene acceso a esta acción", con un
+ * botón Reintentar que no podía funcionar nunca. Era un 403 de verdad: Ciclo
+ * cae al histórico cuando no hay inventario en curso, y el histórico es del
+ * Auditor y del Administrador.
+ *
+ * Aparecía sólo sin inventario -- con uno abierto esa rama ni se ejecuta --,
+ * o sea el primer día de cada mes en cada tienda.
+ *
+ * El comportamiento se prueba en `lib/dominio/inventario-del-ciclo.test.ts`;
+ * acá se fija el CABLEADO, que es lo que no se puede montar bajo vitest.
+ */
+describe('Ciclo no pide el histórico cuando el rol no lo tiene', () => {
+  const fuente = leer('components/pantallas/CicloScreen.tsx');
+
+  it('la llamada al histórico está condicionada por el rol', () => {
+    const inicio = fuente.indexOf('const historial =');
+    expect(inicio, 'ya no se arma `historial` acá: revisá si este test sigue valiendo').toBeGreaterThan(-1);
+
+    const sentencia = fuente.slice(inicio, fuente.indexOf(';', fuente.indexOf('repositorioHistorial', inicio)) + 1);
+    expect(sentencia).toContain('puedeConsultarHistorial(rol)');
+    // Y sigue sin pedirlo cuando hay inventario activo, que era lo de antes.
+    expect(sentencia).toContain('activo ||');
+  });
+
+  it('usa la regla del dominio, no una lista de roles escrita en la pantalla', () => {
+    // Si se copia la lista acá, el día que cambie el backend quedan dos
+    // verdades y una de las dos se olvida.
+    expect(fuente).toContain("import { inventarioDelCiclo, puedeConsultarHistorial }");
+    expect(fuente).not.toMatch(/rol === 'auditor' \|\| rol === 'administrador'/);
+  });
+
+  it('sin inventario muestra que no hay inventario, no un error', () => {
+    // Antes caían los tres pasos con sus "todavía no empezó", que sobre una
+    // tienda sin inventario se leen como un ciclo en curso y atrasado.
+    expect(fuente).toContain('inventarioId === null ? (');
+    expect(fuente).toContain('Esta tienda todavía no tiene inventario');
+  });
+
+  it('y al Coordinador lo manda a Armar hojas, que es lo que corresponde', () => {
+    expect(fuente).toContain("router.push('/coordinador/armar')");
+  });
+});

@@ -109,7 +109,7 @@ export default function AjusteScreen(): JSX.Element {
     const falla = await cargarSeguro(async () => {
       const activo = await repositorioInventario.activo(sucursalId);
       setInventarioId(activo?.inventarioId ?? null);
-      setFase(activo ? faseDeCierre(activo.estado, activo.rondaActiva, activo.totalHojas) : null);
+      setFase(activo ? faseDeCierre(activo.estado, activo.rondaActiva, activo.totalHojas, activo.ultimaRondaCerrada) : null);
       setItems(activo ? await repositorioAuditoria.matriz(activo.inventarioId) : []);
     });
     setCargando(false);
