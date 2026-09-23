@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { inventarioDelCiclo, type ActivoParaCiclo, type HistoricoParaCiclo } from './inventario-del-ciclo';
+import { puedeConsultarHistorial, inventarioDelCiclo, type ActivoParaCiclo, type HistoricoParaCiclo } from './inventario-del-ciclo';
 
 const enCurso: ActivoParaCiclo = { inventarioId: 7, items: 1236, tamanoHoja: 50, rondaActiva: 2 };
 
@@ -54,5 +54,46 @@ describe('inventarioDelCiclo', () => {
     expect(inventarioDelCiclo(null, [historico({ tamanoHoja: 40 })])?.tamanoHoja).toBeNull();
     expect(inventarioDelCiclo(null, [historico({ tamanoHoja: null })])?.tamanoHoja).toBeNull();
     expect(inventarioDelCiclo(null, [historico({ tamanoHoja: 30 })])?.tamanoHoja).toBe(30);
+  });
+});
+
+/**
+ * QUIÉN PUEDE PEDIR EL HISTÓRICO, y por qué la pantalla de Ciclo tiene que
+ * preguntarlo antes de pedirlo.
+ *
+ * BUG REAL (2026-09-22, encontrado en el emulador): el Coordinador entraba a
+ * Ciclo en una tienda sin inventario y leía *"Tu rol no tiene acceso a esta
+ * acción"*. Era un 403 de verdad -- Ciclo cae al histórico cuando no hay
+ * inventario en curso, y el histórico no es suyo. El mensaje es verdad sobre
+ * el pedido y mentira sobre la pantalla, y lo mandaba a pedir permisos que
+ * nadie le va a dar.
+ *
+ * Sin inventario en curso es el estado de CADA tienda al empezar el mes, así
+ * que era lo primero que veía. Con inventario abierto la rama ni se ejecuta,
+ * y por eso no había aparecido antes.
+ */
+describe('puedeConsultarHistorial', () => {
+  it('el auditor y el administrador sí: ese camino les sirve y no se les saca', () => {
+    expect(puedeConsultarHistorial('auditor')).toBe(true);
+    expect(puedeConsultarHistorial('administrador')).toBe(true);
+  });
+
+  it('el coordinador NO: es la decisión del cliente, y no se cambia por este arreglo', () => {
+    // El arreglo es dejar de PEDIRLO, no abrirle el histórico.
+    expect(puedeConsultarHistorial('coordinador')).toBe(false);
+  });
+
+  it('el rol conteo tampoco', () => {
+    expect(puedeConsultarHistorial('conteo')).toBe(false);
+  });
+
+  /**
+   * Espeja `historial.permisos.ts#ROLES_CON_ACCESO_AL_HISTORICO` del backend.
+   * Si allá se agrega un rol y acá no, la app vuelve a pedir un 403 -- o deja
+   * de ofrecer algo que el servidor sí permite.
+   */
+  it('son exactamente dos roles: si el backend cambia, este test tiene que cambiar con él', () => {
+    const conAcceso = (['administrador', 'coordinador', 'conteo', 'auditor'] as const).filter(puedeConsultarHistorial);
+    expect(conAcceso).toEqual(['administrador', 'auditor']);
   });
 });

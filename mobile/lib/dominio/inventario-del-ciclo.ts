@@ -20,7 +20,38 @@
  */
 
 import type { EstadoInventario } from '../puertos/repositorios';
-import { TAMANOS_HOJA, type TamanoHoja } from './tipos';
+import { TAMANOS_HOJA, type Rol, type TamanoHoja } from './tipos';
+
+/**
+ * QUIÉN PUEDE PEDIR EL HISTÓRICO. Espeja
+ * `historial.permisos.ts#ROLES_CON_ACCESO_AL_HISTORICO` del backend.
+ *
+ * ---------------------------------------------------------------------------
+ * EL BUG QUE ESTO CIERRA
+ * ---------------------------------------------------------------------------
+ * La pantalla de Ciclo cae al histórico cuando no hay inventario en curso, y
+ * lo pedía SIEMPRE. Para el Coordinador eso es un 403 del servidor, así que
+ * entraba a Ciclo y leía *"Tu rol no tiene acceso a esta acción"* -- un
+ * mensaje que es verdad sobre el pedido y MENTIRA sobre la pantalla: Ciclo sí
+ * es suya, lo que no es suyo es el histórico.
+ *
+ * Y no era un caso raro: sin inventario en curso es el estado de CADA tienda
+ * al empezar el mes, o sea lo PRIMERO que ve el Coordinador. Con inventario
+ * abierto no se notaba nunca, porque esa rama ni se ejecuta.
+ *
+ * NO ES UN PERMISO NUEVO: el Coordinador sigue sin ver el histórico (decisión
+ * del cliente). Lo que cambia es que la app deja de pedirle al servidor algo
+ * que ya sabe que le va a negar, y dice la verdad en su lugar.
+ *
+ * El conteo ciego no entra acá -- el histórico son cierres pasados, no el
+ * stock del inventario en curso. Lo que lo deja afuera es la decisión de
+ * Gilmer sobre quién ve resultados, no la regla del conteo.
+ */
+const ROLES_CON_HISTORICO: readonly Rol[] = ['administrador', 'auditor'];
+
+export function puedeConsultarHistorial(rol: Rol): boolean {
+  return ROLES_CON_HISTORICO.includes(rol);
+}
 
 /** El inventario cuyo ciclo de 3 conteos se muestra. */
 export interface InventarioDelCiclo {

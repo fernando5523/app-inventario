@@ -26,13 +26,56 @@ import {
 
 describe('faseDeCierre', () => {
   it('con una ronda abierta se está contando', () => {
-    expect(faseDeCierre('en_curso', 1, 26)).toBe('contando');
-    expect(faseDeCierre('en_curso', 4, 26)).toBe('contando');
+    expect(faseDeCierre('en_curso', 1, 26, null)).toBe('contando');
+    expect(faseDeCierre('en_curso', 4, 26, null)).toBe('contando');
+  });
+
+  /**
+   * EL BUG DE LUZURIAGA (2026-09-22, inventario 8073 con los 980 ítems
+   * cuadrando). El Coordinador cerró el 1er conteo, vio el diálogo, y la
+   * pantalla siguió diciendo "Paso 1 · En curso". Tocó el botón tres veces.
+   *
+   * `rondaActiva` sigue siendo 1 después de cerrar -- es `max(numeroConteo)`
+   * --, así que sin la marca propia del cierre las dos situaciones llegaban
+   * iguales. Cuando hay diferencias el cierre crea la ronda 2 y ese salto
+   * hacía de marca; con todo cuadrado no se crea ninguna.
+   */
+  it('la ronda MAS ALTA es además la última cerrada: cerró y le toca al Auditor', () => {
+    expect(faseDeCierre('en_curso', 1, 20, 1)).toBe('rondas-cerradas');
+    expect(faseDeCierre('en_curso', 3, 26, 3)).toBe('rondas-cerradas');
+  });
+
+  /**
+   * EL CAMINO NORMAL NO SE TOCA, y es lo que este test protege: al cerrar la
+   * ronda 1 con diferencias se abre la 2, así que queda `rondaActiva: 2` con
+   * `ultimaRondaCerrada: 1` -- la ronda más alta NO está cerrada y el ciclo
+   * sigue como siempre.
+   */
+  it('con una ronda abierta encima de la cerrada, se sigue contando', () => {
+    expect(faseDeCierre('en_curso', 2, 26, 1)).toBe('contando');
+    expect(faseDeCierre('en_curso', 3, 26, 2)).toBe('contando');
+  });
+
+  /** Sin ninguna ronda cerrada todavía, se cuenta la primera. */
+  it('sin ninguna ronda cerrada, se está contando', () => {
+    expect(faseDeCierre('en_curso', 1, 20, null)).toBe('contando');
+  });
+
+  /**
+   * "RONDA CERRADA" NO ES "CONTEO TERMINADO": el inventario sigue `en_curso`
+   * esperando al Auditor, y en esa ventana el Coordinador todavía corrige. Si
+   * esto diera 'cerrado', se perdería esa ventana.
+   */
+  it('la ronda cerrada NO cierra el conteo: el Coordinador sigue corrigiendo', () => {
+    const fase = faseDeCierre('en_curso', 1, 20, 1);
+    expect(fase).not.toBe('cerrado');
+    expect(puedeCorregirLoContado(fase)).toBe(true);
+    expect(motivoSinCorregir(fase)).toBeNull();
   });
 
   /** LA VENTANA: la última ronda cerró y el ajuste todavía no arrancó. */
   it('en_curso SIN ronda activa, CON hojas, es la ventana entre la última ronda y el ajuste', () => {
-    expect(faseDeCierre('en_curso', null, 26)).toBe('rondas-cerradas');
+    expect(faseDeCierre('en_curso', null, 26, null)).toBe('rondas-cerradas');
   });
 
   /**
@@ -41,14 +84,14 @@ describe('faseDeCierre', () => {
    * por cerrado.
    */
   it('ajuste_auditor es su propia fase, aunque no haya ronda activa', () => {
-    expect(faseDeCierre('ajuste_auditor', null, 26)).toBe('ajuste');
+    expect(faseDeCierre('ajuste_auditor', null, 26, null)).toBe('ajuste');
   });
 
   it('cualquier estado posterior es cerrado: nadie toca nada', () => {
-    expect(faseDeCierre('conteo_cerrado', null, 26)).toBe('cerrado');
-    expect(faseDeCierre('liquidado', null, 26)).toBe('cerrado');
-    expect(faseDeCierre('lacrado', null, 26)).toBe('cerrado');
-    expect(faseDeCierre('anulado', null, 26)).toBe('cerrado');
+    expect(faseDeCierre('conteo_cerrado', null, 26, null)).toBe('cerrado');
+    expect(faseDeCierre('liquidado', null, 26, null)).toBe('cerrado');
+    expect(faseDeCierre('lacrado', null, 26, null)).toBe('cerrado');
+    expect(faseDeCierre('anulado', null, 26, null)).toBe('cerrado');
   });
 });
 
@@ -66,44 +109,44 @@ describe('faseDeCierre', () => {
 describe('faseDeCierre: nada empezó todavía NO es todo terminó', () => {
   it('catálogo traído y CERO hojas es `sin-hojas`: el armado recién empieza', () => {
     // El caso de Luzuriaga: 980 ítems de catálogo, 0 hojas.
-    expect(faseDeCierre('en_curso', null, 0)).toBe('sin-hojas');
+    expect(faseDeCierre('en_curso', null, 0, null)).toBe('sin-hojas');
   });
 
   it('con hojas y sin ronda abierta SIGUE siendo `rondas-cerradas`: el caso no se tocó', () => {
-    expect(faseDeCierre('en_curso', null, 26)).toBe('rondas-cerradas');
+    expect(faseDeCierre('en_curso', null, 26, null)).toBe('rondas-cerradas');
   });
 
   it('lo que las separa es si TUVO hojas alguna vez, no si hay una ronda ahora', () => {
     // Misma ronda (ninguna), mismo estado: lo único distinto es `totalHojas`,
     // y eso solo ya decide dos fases opuestas.
-    expect(faseDeCierre('en_curso', null, 0)).toBe('sin-hojas');
-    expect(faseDeCierre('en_curso', null, 1)).toBe('rondas-cerradas');
+    expect(faseDeCierre('en_curso', null, 0, null)).toBe('sin-hojas');
+    expect(faseDeCierre('en_curso', null, 1, null)).toBe('rondas-cerradas');
   });
 
   it('sin hojas NO es `contando`: no hay nada que contar todavía', () => {
     // Importa porque media app pregunta `fase !== 'contando'` para decidir si
     // ya no se cuenta, y ahí `sin-hojas` tiene que caer del lado correcto.
-    expect(faseDeCierre('en_curso', null, 0)).not.toBe('contando');
+    expect(faseDeCierre('en_curso', null, 0, null)).not.toBe('contando');
   });
 
   it('el estado manda sobre las hojas: un inventario cerrado sin hojas es `cerrado`', () => {
     // Un inventario anulado antes de crear hojas existe, y no es el paso 2 de
     // nadie: ya nadie va a armar nada ahí.
-    expect(faseDeCierre('conteo_cerrado', null, 0)).toBe('cerrado');
-    expect(faseDeCierre('anulado', null, 0)).toBe('cerrado');
-    expect(faseDeCierre('ajuste_auditor', null, 0)).toBe('ajuste');
+    expect(faseDeCierre('conteo_cerrado', null, 0, null)).toBe('cerrado');
+    expect(faseDeCierre('anulado', null, 0, null)).toBe('cerrado');
+    expect(faseDeCierre('ajuste_auditor', null, 0, null)).toBe('ajuste');
   });
 
   it('el Auditor NO puede decidir sobre un inventario sin hojas', () => {
     // Antes sí podía: `sin-hojas` caía en `rondas-cerradas` y
     // `elAuditorPuedeDecidir` daba true sobre un inventario donde nadie contó
     // nada. Queda arreglado de rebote, y este test lo fija.
-    expect(elAuditorPuedeDecidir(faseDeCierre('en_curso', null, 0))).toBe(false);
-    expect(elAuditorPuedeDecidir(faseDeCierre('en_curso', null, 26))).toBe(true);
+    expect(elAuditorPuedeDecidir(faseDeCierre('en_curso', null, 0, null))).toBe(false);
+    expect(elAuditorPuedeDecidir(faseDeCierre('en_curso', null, 26, null))).toBe(true);
   });
 
   it('y no se puede "corregir lo contado" cuando no se contó nada', () => {
-    expect(puedeCorregirLoContado(faseDeCierre('en_curso', null, 0))).toBe(false);
+    expect(puedeCorregirLoContado(faseDeCierre('en_curso', null, 0, null))).toBe(false);
   });
 });
 

@@ -508,6 +508,30 @@ model Inventario {
   /// AJUSTE DEL AUDITOR, que es el ultimo paso del conteo. No al cerrar la
   /// ultima ronda: ahi el inventario queda en `ajuste_auditor` esperando que
   /// el auditor decida, y todavia puede abrirse otra ronda.
+  /// LA ULTIMA RONDA QUE SE CERRO. `null` = ninguna todavia.
+  ///
+  /// ES UNA MARCA PROPIA, y existe porque antes no habia ninguna: el cierre de
+  /// una ronda se deducia de que EXISTIERA la ronda siguiente. Eso funciona
+  /// mientras queden diferencias -- cerrar crea la ronda N+1 y esa existencia
+  /// es la huella -- pero cuando TODO CUADRA no se crea ninguna ronda y el
+  /// cierre no dejaba rastro. Bug real (2026-09-22, inventario 8073 de
+  /// Luzuriaga, 980 items y los 980 cuadrando): el Coordinador cerraba, veia
+  /// el dialogo de exito, la pantalla seguia diciendo "Paso 1 - En curso" y el
+  /// sistema aceptaba cerrar de nuevo. Quedo trabado, y el Auditor sin recibir
+  /// nada.
+  ///
+  /// NO DICE QUE EL CONTEO TERMINO. Dice que ESA RONDA cerro, nada mas. El
+  /// inventario sigue `en_curso` esperando al Auditor, que decide si abre otra
+  /// pasada o arranca el ajuste final -- y en esa ventana el Coordinador
+  /// todavia corrige lo que cargaron los contadores. Confundir las dos cosas
+  /// cierra esa ventana (ver la rama `!siguiente.puede` de rondas.service.ts y
+  /// `ajuste.permisos.ts`).
+  ///
+  /// DISTINTA de `cerradoEn`/`cerradoPorId`, que son del cierre del INVENTARIO
+  /// (el paso a `conteo_cerrado`, que hace `cerrarAjuste`). Una ronda cerrada
+  /// no cierra el inventario.
+  ultimaRondaCerrada Int?         @map("ultima_ronda_cerrada")
+
   abiertoEn        DateTime       @default(now()) @map("abierto_en")
   cerradoEn        DateTime?      @map("cerrado_en")
   cerradoPorId     Int?           @map("cerrado_por_id")

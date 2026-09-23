@@ -16,9 +16,14 @@ import {
   registrarInventario,
   simularLatencia,
 } from './_compartido';
-import { cerrarRondaEnMemoria, estadoDeInventarioEnMemoria, rondaActivaEnMemoria } from './ajuste-memoria';
+import {
+  cerrarRondaEnMemoria,
+  estadoDeInventarioEnMemoria,
+  rondaActivaEnMemoria,
+  ultimaRondaCerradaEnMemoria,
+} from './ajuste-memoria';
 import { configDynamicsMemoria } from './config-dynamics-memoria';
-import { sesionMemoria } from './sesion-memoria';
+import { esDeTienda, sesionMemoria } from './sesion-memoria';
 import { pluralizar } from '../dominio/plural';
 import { ErrorSnapshot, type RepositorioInventario } from '../puertos/repositorios';
 
@@ -104,7 +109,10 @@ export const inventarioMemoria: RepositorioInventario = {
     const inventario = await obtenerInventario(inventarioId);
     if (!inventario) throw new Error(`Inventario ${inventarioId} no encontrado.`);
 
-    const colaboradores = await sesionMemoria.colaboradores(inventario.sucursalId);
+    // SOLO personal de tienda: un auditor NO puede recibir una hoja de
+    // conteo (233f4b7). `colaboradores()` lo devuelve desde que se elige en
+    // su tienda, asi que el reparto lo filtra acá.
+    const colaboradores = (await sesionMemoria.colaboradores(inventario.sucursalId)).filter(esDeTienda);
     return asignarHojasEnInventario(inventario, colaboradorIds, colaboradores);
   },
 
@@ -211,6 +219,7 @@ export const inventarioMemoria: RepositorioInventario = {
       tamanoHoja: inventario.tamanoHoja,
       totalHojas: inventario.hojas.length,
       rondaActiva: rondaActivaEnMemoria(inventario.id, inventario.hojas.length > 0),
+      ultimaRondaCerrada: ultimaRondaCerradaEnMemoria(inventario.id),
     };
   },
 };

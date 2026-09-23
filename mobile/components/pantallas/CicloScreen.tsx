@@ -8,7 +8,7 @@ import { cargarSeguro } from '../../lib/adaptadores/_http';
 import { repositorioAjuste, repositorioHistorial, repositorioInventario, repositorioSesion } from '../../lib/contenedor';
 import { elAuditorPuedeDecidir, faseDeCierre, type FaseDeCierre } from '../../lib/dominio/ajuste-final';
 import { comparativoDeRonda } from '../../lib/dominio/comparativo-ronda';
-import { inventarioDelCiclo } from '../../lib/dominio/inventario-del-ciclo';
+import { inventarioDelCiclo, puedeConsultarHistorial } from '../../lib/dominio/inventario-del-ciclo';
 import { sucursalEnFoco } from '../../lib/dominio/sucursal-en-foco';
 import {
   estadoDePaso,
@@ -17,6 +17,7 @@ import {
   RONDA_MAX,
   textoBotonCierre,
   textoCierreExplicacion,
+  textoRondaYaCerrada,
   type EstadoPaso,
 } from '../../lib/dominio/texto-cierre-ronda';
 import { partirEnHojas } from '../../lib/dominio/lote';
@@ -358,7 +359,26 @@ export function CicloScreen({ rol }: CicloScreenProps): JSX.Element {
       // sale del historial. Sin este fallback la pantalla quedaba en blanco
       // sobre un ciclo que en realidad terminó con sus 3 pasadas contadas.
       const activo = await repositorioInventario.activo(sucursalId);
-      const historial = activo ? [] : (await repositorioHistorial.listar({ sucursalId })).inventarios;
+      /**
+       * EL HISTÓRICO SOLO SE PIDE SI EL ROL LO TIENE.
+       *
+       * Sin inventario en curso, el ciclo que se muestra es el último
+       * cerrado, y ese sale del histórico. Pero el histórico es del Auditor y
+       * del Administrador: al Coordinador el servidor le responde 403, y la
+       * pantalla mostraba "Tu rol no tiene acceso a esta acción" -- verdad
+       * sobre el pedido, mentira sobre la pantalla, porque Ciclo SÍ es suya.
+       *
+       * Con inventario abierto esta rama ni se ejecuta, así que el bug solo
+       * aparecía sin inventario: el estado de cada tienda al empezar el mes,
+       * o sea lo primero que ve el Coordinador.
+       *
+       * No se le abre el histórico a nadie -- se deja de pedir lo que ya se
+       * sabe que va a ser negado. Ver `puedeConsultarHistorial`.
+       */
+      const historial =
+        activo || !puedeConsultarHistorial(rol)
+          ? []
+          : (await repositorioHistorial.listar({ sucursalId })).inventarios;
 
       const delCiclo = inventarioDelCiclo(activo, historial);
       setItems(delCiclo?.items ?? null);
@@ -368,7 +388,7 @@ export function CicloScreen({ rol }: CicloScreenProps): JSX.Element {
       // La fase sale del inventario ABIERTO. Si el ciclo vino del historial
       // (no hay `activo`), ese inventario ya cerró y no hay nada que abrir
       // ni que ajustar.
-      setFase(activo ? faseDeCierre(activo.estado, activo.rondaActiva, activo.totalHojas) : delCiclo ? 'cerrado' : null);
+      setFase(activo ? faseDeCierre(activo.estado, activo.rondaActiva, activo.totalHojas, activo.ultimaRondaCerrada) : delCiclo ? 'cerrado' : null);
       if (!delCiclo) {
         setResumenPorRonda({});
         return;
@@ -384,7 +404,7 @@ export function CicloScreen({ rol }: CicloScreenProps): JSX.Element {
     // excepción -- este `setCargando(false)` SIEMPRE se ejecuta.
     if (error) setErrorCarga(error.message);
     setCargando(false);
-  }, [sesion, sucursalId, cargarResumenDeRondas, intentoNumero]);
+  }, [sesion, sucursalId, rol, cargarResumenDeRondas, intentoNumero]);
 
   /**
    * PAUSADO MIENTRAS HAY UNA ACCIÓN EN CURSO. Un refresco que aterriza en
@@ -455,7 +475,7 @@ export function CicloScreen({ rol }: CicloScreenProps): JSX.Element {
       // embudo de las 3 pasadas (resumenPorRonda) se recarga y se sigue viendo.
       const activo = await repositorioInventario.activo(sucursalId!);
       setRondaActiva(activo?.rondaActiva ?? null);
-      setFase(activo ? faseDeCierre(activo.estado, activo.rondaActiva, activo.totalHojas) : 'cerrado');
+      setFase(activo ? faseDeCierre(activo.estado, activo.rondaActiva, activo.totalHojas, activo.ultimaRondaCerrada) : 'cerrado');
       await cargarResumenDeRondas(inventarioId, activo?.rondaActiva ?? RONDA_MAX);
     } catch (error) {
       // El backend rechaza con mensaje claro (hojas sin finalizar, o ya
@@ -489,7 +509,7 @@ export function CicloScreen({ rol }: CicloScreenProps): JSX.Element {
       }
       const activo = await repositorioInventario.activo(sucursalId!);
       setRondaActiva(activo?.rondaActiva ?? null);
-      setFase(activo ? faseDeCierre(activo.estado, activo.rondaActiva, activo.totalHojas) : 'cerrado');
+      setFase(activo ? faseDeCierre(activo.estado, activo.rondaActiva, activo.totalHojas, activo.ultimaRondaCerrada) : 'cerrado');
       await cargarResumenDeRondas(inventarioId, activo?.rondaActiva ?? RONDA_MAX);
       if (cual === 'ronda') {
         Alert.alert(
@@ -644,6 +664,30 @@ export function CicloScreen({ rol }: CicloScreenProps): JSX.Element {
         <View style={styles.errorCarga}>
           <Text style={styles.errorCargaTexto}>{errorCarga}</Text>
           <Button label="Reintentar" size="sm" onPress={() => setIntentoNumero((n) => n + 1)} />
+        </View>
+      ) : inventarioId === null ? (
+        /*
+          TODAVÍA NO HAY INVENTARIO, y eso no es un error ni una falta de
+          permisos: es el estado normal de cada tienda al empezar el mes.
+          Antes acá caían los tres pasos con sus "todavía no empezó", que
+          sobre una tienda sin inventario se leen como si el ciclo estuviera
+          en curso y atrasado.
+        */
+        <View style={styles.sinCiclo}>
+          <Text style={styles.sinCicloTitulo}>Esta tienda todavía no tiene inventario</Text>
+          <Text style={styles.sinCicloTexto}>
+            {esCoordinador
+              ? 'El ciclo de conteos arranca cuando se trae el catálogo y se crean las hojas. Eso se hace en "Armar hojas".'
+              : 'No hay un inventario en curso ni uno cerrado para esta sucursal. Cuando el coordinador arme las hojas, el ciclo aparece acá.'}
+          </Text>
+          {esCoordinador ? (
+            <Button
+              label="Ir a Armar hojas"
+              size="sm"
+              icon={ArrowRightCircle}
+              onPress={() => router.push('/coordinador/armar')}
+            />
+          ) : null}
         </View>
       ) : (
         <>
@@ -801,10 +845,25 @@ export function CicloScreen({ rol }: CicloScreenProps): JSX.Element {
             </View>
           ) : null}
 
-          {esCoordinador && resumenActivo && rondaActiva !== null ? (
+          {/**
+            * EL BLOQUE DE CIERRE SOLO CUANDO HAY UNA RONDA QUE CERRAR.
+            *
+            * Miraba `rondaActiva`, que es `max(numeroConteo)` y sigue siendo
+            * un número después de cerrar: con la ronda 1 ya cerrada seguía
+            * ofreciendo "Cerrar el 1er conteo", y el backend lo rechazaba con
+            * un 409. El dato estaba a salvo, pero el botón invitaba a un
+            * error garantizado -- la pantalla afirmando un estado que no era,
+            * que es el bug que veníamos cerrando.
+            *
+            * `rondaQueAdmiteConteo` ya existía y es la lectura correcta: solo
+            * en la fase `contando` hay una ronda abierta. En el camino normal
+            * no cambia nada -- cerrada la 1 se abre la 2, la fase sigue
+            * siendo `contando` y el bloque ofrece cerrar la 2.
+            */}
+          {esCoordinador && resumenActivo && rondaQueAdmiteConteo !== null ? (
             <View style={styles.tarjeta}>
               <View style={styles.tarjetaCabecera}>
-                <Text style={styles.tarjetaTitulo}>Cerrar el {ORDINAL[rondaActiva]} conteo</Text>
+                <Text style={styles.tarjetaTitulo}>Cerrar el {ORDINAL[rondaQueAdmiteConteo]} conteo</Text>
                 <Badge
                   label={resumenActivo.sePuedeCerrar ? 'Listo para cerrar' : 'Faltan hojas'}
                   variant={resumenActivo.sePuedeCerrar ? 'ok' : 'espera'}
@@ -816,12 +875,12 @@ export function CicloScreen({ rol }: CicloScreenProps): JSX.Element {
                   de apretar. */}
               <View style={styles.embudoResumen}>
                 <FilaResumen etiqueta="Cuadraron contra Dynamics" valor={`${formatoMiles(resumenActivo.cuadrados)} (${formatoPct(resumenActivo.porcentajeCuadrado)}%)`} tono="ok" />
-                <FilaResumen etiqueta={etiquetaARecontar(rondaActiva, resumenActivo.aRecontar)} valor={formatoMiles(resumenActivo.aRecontar)} tono="falta" />
+                <FilaResumen etiqueta={etiquetaARecontar(rondaQueAdmiteConteo, resumenActivo.aRecontar)} valor={formatoMiles(resumenActivo.aRecontar)} tono="falta" />
                 {resumenActivo.sinContar > 0 ? <FilaResumen etiqueta="Sin contar todavía" valor={formatoMiles(resumenActivo.sinContar)} /> : null}
                 {resumenActivo.sinDatoErp > 0 ? <FilaResumen etiqueta="Sin stock del ERP (no se auditan)" valor={formatoMiles(resumenActivo.sinDatoErp)} /> : null}
               </View>
 
-              <Text style={styles.tarjetaTexto}>{textoCierreExplicacion(rondaActiva, resumenActivo.aRecontar)}</Text>
+              <Text style={styles.tarjetaTexto}>{textoCierreExplicacion(rondaQueAdmiteConteo, resumenActivo.aRecontar)}</Text>
 
               {/* El motivo del bloqueo, a la vista: qué hojas faltan finalizar.
                   Un botón gris sin decir por qué obliga a adivinar. */}
@@ -842,7 +901,7 @@ export function CicloScreen({ rol }: CicloScreenProps): JSX.Element {
               <Button
                 label={
                   resumenActivo.sePuedeCerrar
-                    ? textoBotonCierre(rondaActiva, resumenActivo.aRecontar, formatoMiles)
+                    ? textoBotonCierre(rondaQueAdmiteConteo, resumenActivo.aRecontar, formatoMiles)
                     : 'Termina las hojas para poder cerrar'
                 }
                 icon={Lock}
@@ -850,6 +909,25 @@ export function CicloScreen({ rol }: CicloScreenProps): JSX.Element {
                 disabled={!resumenActivo.sePuedeCerrar}
                 loading={cerrandoRonda}
               />
+            </View>
+          ) : null}
+
+          {/**
+            * EN LUGAR DEL BLOQUE DE CIERRE, cuando la ronda ya cerró.
+            *
+            * No se deja el hueco: quien cerró necesita saber que ya hizo lo
+            * suyo y que sigue el Auditor. Y el texto dice ADEMÁS que todavía
+            * puede corregir -- la ventana sigue abierta hasta que arranque el
+            * ajuste, y si no se dijera acá, el coordinador la perdería de
+            * vista justo cuando le sirve. Ver `textoRondaYaCerrada`.
+            */}
+          {esCoordinador && fase === 'rondas-cerradas' && rondaActiva !== null ? (
+            <View style={styles.tarjeta}>
+              <View style={styles.tarjetaCabecera}>
+                <Text style={styles.tarjetaTitulo}>{ORDINAL[rondaActiva]} conteo cerrado</Text>
+                <Badge label="Le toca al auditor" variant="ok" />
+              </View>
+              <Text style={styles.tarjetaTexto}>{textoRondaYaCerrada(rondaActiva)}</Text>
             </View>
           ) : null}
 
@@ -903,6 +981,9 @@ const styles = StyleSheet.create({
   contenido: { paddingHorizontal: spacing.lg, paddingTop: spacing.sm, gap: spacing.md + 3 },
   cargando: { marginTop: spacing.xxxl },
   errorCarga: { marginTop: spacing.xxxl, gap: spacing.md, alignItems: 'flex-start' },
+  sinCiclo: { marginTop: spacing.xxl, gap: spacing.md, alignItems: 'flex-start' },
+  sinCicloTitulo: { fontSize: 15, color: colors.tinta, fontFamily: fonts.bold },
+  sinCicloTexto: { fontSize: 13, lineHeight: 19, color: colors.gris, fontFamily: fonts.regular },
   errorCargaTexto: { fontSize: 13, color: colors.gris, fontFamily: fonts.regular },
 
   tarjeta: {

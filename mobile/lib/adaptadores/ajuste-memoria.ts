@@ -83,6 +83,25 @@ export function rondaActivaEnMemoria(inventarioId: number, tieneHojas: boolean):
 }
 
 /**
+ * La última ronda CERRADA de este inventario, o `null` si ninguna.
+ *
+ * Espeja `Inventario.ultimaRondaCerrada` del backend, que es la marca PROPIA
+ * del cierre. Acá sale de `rondaAbierta`, que el mock ya llevaba: si la
+ * última ronda sigue abierta, la cerrada es la anterior.
+ *
+ * OJO con la diferencia entre el mock y el backend real, que es justo la que
+ * causó el bug: acá `rondaActivaEnMemoria` devuelve `null` cuando la ronda
+ * cerró, y el backend devuelve SIEMPRE `max(numeroConteo)`. Por eso el caso
+ * "todo cuadró y la ronda cerró" se veía bien en la demo y mal contra el
+ * servidor -- el mock tenía una señal que el real no.
+ */
+export function ultimaRondaCerradaEnMemoria(inventarioId: number): number | null {
+  const cierre = cierreDe(inventarioId);
+  if (!cierre.rondaAbierta) return cierre.ultimaRonda;
+  return cierre.ultimaRonda > 1 ? cierre.ultimaRonda - 1 : null;
+}
+
+/**
  * Marca la ronda como cerrada. La llama `inventario-memoria.ts#cerrarRonda`:
  * sin esto, el mock cerraba la ronda y `activo()` seguía diciendo que estaba
  * abierta, así que la ventana del Coordinador y los botones del Auditor no
@@ -149,6 +168,7 @@ async function faseDe(inventarioId: number): Promise<ReturnType<typeof faseDeCie
     estadoDeInventarioEnMemoria(inventarioId),
     rondaActivaEnMemoria(inventarioId, totalHojas > 0),
     totalHojas,
+    ultimaRondaCerradaEnMemoria(inventarioId),
   );
 }
 

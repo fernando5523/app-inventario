@@ -143,3 +143,32 @@ export function textoCierreExplicacion(rondaActiva: number, aRecontar: number): 
     'mal antes de mandar a todos a recontar.'
   );
 }
+
+/**
+ * QUÉ VE EL COORDINADOR CUANDO LA RONDA YA CERRÓ.
+ *
+ * Reemplaza al bloque de cierre, que hasta ahora seguía ofreciendo "Cerrar el
+ * 1er conteo" con la ronda 1 ya cerrada. El backend lo rechazaba con un 409
+ * --el dato estaba a salvo-- pero el botón INVITABA a hacer algo que siempre
+ * iba a fallar, y ahí la persona no sabe si se equivocó ella o se rompió la
+ * app. Un botón que existe y nunca funciona es peor que no tenerlo.
+ *
+ * ---------------------------------------------------------------------------
+ * LAS DOS COSAS QUE EL TEXTO TIENE QUE DECIR JUNTAS
+ * ---------------------------------------------------------------------------
+ * 1. Que le toca al Auditor: es lo que la persona necesita para saber que ya
+ *    hizo lo suyo y no quedarse esperando un botón.
+ * 2. Que TODAVÍA PUEDE CORREGIR. El inventario sigue `en_curso` y esa ventana
+ *    dura hasta que el Auditor arranque su ajuste -- es deliberada, y existe
+ *    justamente para el que detecta un error de carga cinco minutos después
+ *    de cerrar. Si el texto dijera solo "ya cerró", se perdería de vista.
+ *
+ * NO dice "el conteo terminó": no terminó. Terminarlo es del Auditor.
+ */
+export function textoRondaYaCerrada(ronda: number): string {
+  return (
+    `El ${ordinal(ronda)} conteo ya está cerrado y le toca al auditor: él decide si abre otra pasada o ajusta ` +
+    'los valores contra el stock. Mientras no arranque su ajuste, todavía puedes corregir lo que se contó ' +
+    'desde Gestión de hojas.'
+  );
+}

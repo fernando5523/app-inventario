@@ -116,6 +116,12 @@ interface InventarioActivoDto extends SnapshotDto {
   // derecho — no hay traducción, solo declararlo para que el tipo cierre.
   rondaActiva: number | null;
   /**
+   * La última ronda CERRADA, o null si ninguna. Pasa derecho como
+   * `rondaActiva` -- ver el puerto para por qué hace falta: sin esto,
+   * "ronda lista para cerrar" y "ronda ya cerrada" llegaban iguales.
+   */
+  ultimaRondaCerrada: number | null;
+  /**
    * EN QUÉ FASE está. Desde el ajuste final del auditor, `activo()` devuelve
    * también los inventarios en `ajuste_auditor`, y sin este campo la pantalla
    * no puede distinguirlos de uno que se sigue contando: durante el ajuste no

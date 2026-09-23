@@ -1,0 +1,15 @@
+-- LA MARCA PROPIA DE "ESTA RONDA CERRO".
+--
+-- Antes no habia ninguna: el cierre de una ronda se deducia de que EXISTIERA
+-- la ronda siguiente. Eso funciona mientras queden diferencias -- cerrar crea
+-- la ronda N+1 y esa existencia es la huella -- pero cuando TODO CUADRA no se
+-- crea ninguna ronda y el cierre no dejaba rastro: la pantalla seguia diciendo
+-- "Paso 1 - En curso" y el sistema aceptaba cerrar de nuevo, sin limite.
+--
+-- NULL = ninguna ronda cerrada todavia. NO dice que el conteo termino: el
+-- inventario sigue `en_curso` esperando al Auditor. Ver el comentario de la
+-- columna en schema.prisma.
+--
+-- ADITIVA Y NULLABLE a proposito: se aplica sobre una tabla con inventarios
+-- vivos sin bloquearla ni pedir un valor para las filas que ya existen.
+ALTER TABLE "inventarios" ADD COLUMN "ultima_ronda_cerrada" INTEGER;

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  textoRondaYaCerrada,
   esUltimaPasada,
   estadoDePaso,
   etiquetaARecontar,
@@ -129,5 +130,37 @@ describe('textos del bloque de cierre: nombran la ronda que corresponde, con ORD
   it('todo cuadró antes de la última (aRecontar 0): tampoco promete otra ronda', () => {
     expect(etiquetaARecontar(1, 0)).toBe('Sin cuadrar (pasan al auditor)');
     expect(textoCierreExplicacion(1, 0)).toContain('auditor');
+  });
+});
+
+/**
+ * Reemplaza al bloque que ofrecía cerrar una ronda YA cerrada. El backend lo
+ * frenaba con un 409, pero el botón invitaba a un error garantizado.
+ */
+describe('textoRondaYaCerrada', () => {
+  it('dice qué ronda cerró y que sigue el auditor', () => {
+    const t = textoRondaYaCerrada(1);
+    expect(t).toContain('1er conteo');
+    expect(t).toMatch(/auditor/i);
+  });
+
+  /**
+   * LO QUE NO SE PUEDE PERDER: la ventana de corrección sigue abierta. El
+   * inventario está `en_curso` hasta que el auditor arranque su ajuste, y es
+   * deliberado -- para el que detecta un error cinco minutos después.
+   */
+  it('deja claro que todavía puede corregir, y por dónde', () => {
+    const t = textoRondaYaCerrada(1);
+    expect(t).toMatch(/corregir/i);
+    expect(t).toContain('Gestión de hojas');
+  });
+
+  /** NO dice que el conteo terminó: terminarlo es del auditor. */
+  it('no afirma que el conteo terminó', () => {
+    expect(textoRondaYaCerrada(2)).not.toMatch(/(conteo|inventario) (ya )?(terminó|cerró del todo|finalizó)/i);
+  });
+
+  it('sirve para una ronda extra del auditor', () => {
+    expect(textoRondaYaCerrada(5)).toContain('5to conteo');
   });
 });

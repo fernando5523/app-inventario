@@ -61,9 +61,12 @@ export type FaseDeCierre = 'sin-hojas' | 'contando' | 'rondas-cerradas' | 'ajust
  * se cumpliría contra el backend real y el Auditor quedaría sin salida. Para
  * eso está `elAuditorPuedeDecidir`, más abajo.
  *
- * El día que `activo()` devuelva `rondaActiva: null` con la última ronda
- * cerrada (o un `rondaAbierta` explícito), esta ambigüedad desaparece sola y
- * no hay que tocar nada más que este archivo.
+ * RESUELTO EL 2026-09-22, y pasó como decía esta nota: llegó la señal
+ * explícita (`ultimaRondaCerrada`, la marca propia del cierre) y no hubo que
+ * tocar nada más que este archivo -- los llamadores solo pasan un dato más.
+ * Lo de arriba queda escrito porque explica por qué la fase existía sin ser
+ * alcanzable, y por qué el bug era invisible en la demo: el mock SÍ tenía una
+ * señal (`rondaActiva: null` al cerrar) que el backend real no daba.
  */
 /**
  * ---------------------------------------------------------------------------
@@ -96,6 +99,7 @@ export function faseDeCierre(
   estado: EstadoInventario,
   rondaActiva: number | null,
   totalHojas: number,
+  ultimaRondaCerrada: number | null,
 ): FaseDeCierre {
   if (estado === 'ajuste_auditor') return 'ajuste';
   if (estado !== 'en_curso') return 'cerrado';
@@ -103,7 +107,36 @@ export function faseDeCierre(
   // cerrar. Va primero para que ninguna de las dos ramas de abajo lo pueda
   // reclamar.
   if (totalHojas === 0) return 'sin-hojas';
-  return rondaActiva === null ? 'rondas-cerradas' : 'contando';
+  if (rondaActiva === null) return 'rondas-cerradas';
+
+  /**
+   * LA MARCA PROPIA DEL CIERRE, que es lo que faltaba.
+   *
+   * BUG REAL (2026-09-22, inventario 8073 de Luzuriaga, los 980 ítems
+   * cuadrando): el Coordinador cerró el 1er conteo, vio el diálogo, y la
+   * pantalla siguió diciendo "Paso 1 · En curso". Tocó el botón tres veces.
+   *
+   * La causa está arriba, en la nota sobre lo que las dos señales no
+   * alcanzaban a distinguir: `rondaActiva` es `max(numeroConteo)` y sigue
+   * siendo un número después de cerrar. Cuando queda algo para recontar el
+   * cierre crea la ronda siguiente, y esa ronda nueva hacía de marca implícita
+   * -- `rondaActiva` subía de 1 a 2. Con TODO cuadrado no se crea ninguna, así
+   * que el cierre no dejaba huella y la pantalla no tenía con qué enterarse.
+   *
+   * Se lee la marca en vez de deducirla de un efecto lateral, que era el
+   * problema de fondo.
+   *
+   * EL CAMINO NORMAL NO CAMBIA, y conviene verlo en números: al cerrar la
+   * ronda 1 con diferencias queda `rondaActiva: 2` y `ultimaRondaCerrada: 1`,
+   * así que `1 >= 2` es falso y sigue 'contando'. Esta rama SOLO se cumple
+   * cuando la ronda más alta es además la última cerrada -- el borde exacto.
+   *
+   * Y NO ES 'cerrado': el inventario sigue `en_curso` esperando al Auditor, y
+   * en esa ventana el Coordinador todavía corrige. Por eso
+   * `puedeCorregirLoContado` incluye 'rondas-cerradas' y no es un descuido.
+   */
+  if (ultimaRondaCerrada !== null && ultimaRondaCerrada >= rondaActiva) return 'rondas-cerradas';
+  return 'contando';
 }
 
 /**

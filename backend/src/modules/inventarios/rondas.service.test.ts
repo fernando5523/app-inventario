@@ -178,13 +178,35 @@ describe('cerrar', () => {
     await expect(cerrar(COORD, 9, 1)).rejects.toThrow(NoEncontrado);
   });
 
-  it('ya cerrada (existe la ronda siguiente) rechaza con 409 y no duplica', async () => {
-    prismaMock.hojaConteo.count.mockImplementation(async (query: unknown) => {
-      const q = query as { where?: { numeroConteo?: number } };
-      return q.where?.numeroConteo === 1 || q.where?.numeroConteo === 2 ? 1 : 0;
+  /**
+   * YA CERRADA: la guarda es `ultimaRondaCerrada`, una marca PROPIA.
+   *
+   * Antes era "si existe la ronda N+1 ya se cerró", y eso solo funcionaba
+   * cuando quedaban diferencias. Con todo cuadrando no se crea ninguna ronda,
+   * la guarda nunca se cumplía y el cierre se repetía sin límite -- el bug de
+   * 2026-09-22 (tres `ronda_cerrada` para la misma ronda 1).
+   */
+  it('ya cerrada rechaza con 409 y no vuelve a escribir', async () => {
+    prismaMock.inventario.findUnique.mockResolvedValue({
+      id: 9,
+      sucursalId: 1,
+      estado: 'en_curso',
+      tamanoHoja: 50,
+      ultimaRondaCerrada: 1,
     });
     await expect(cerrar(COORD, 9, 1)).rejects.toThrow(Conflicto);
     expect(prismaMock.inventario.update).not.toHaveBeenCalled();
+  });
+
+  it('una ronda VIEJA ya superada tampoco se puede volver a cerrar', async () => {
+    prismaMock.inventario.findUnique.mockResolvedValue({
+      id: 9,
+      sucursalId: 1,
+      estado: 'en_curso',
+      tamanoHoja: 50,
+      ultimaRondaCerrada: 3,
+    });
+    await expect(cerrar(COORD, 9, 1)).rejects.toThrow(/ya se cerró/);
   });
 
   it('con hojas sin finalizar rechaza y NO llega a chequear sincronización', async () => {
@@ -253,7 +275,11 @@ describe('cerrar', () => {
       });
 
       await expect(cerrar(COORD, 9, 1)).rejects.toThrow(Conflicto);
-      expect(prismaMock.inventario.update).not.toHaveBeenCalled();
+      // `update` SÍ se llama ahora -- para la marca de ronda cerrada --, así
+      // que lo que se afirma es QUÉ se escribe: nunca el estado ni `abierto`.
+      for (const [arg] of prismaMock.inventario.update.mock.calls as [{ data: Record<string, unknown> }][]) {
+        expect(arg.data).toEqual({ ultimaRondaCerrada: expect.any(Number) });
+      }
     });
   });
 
@@ -289,9 +315,60 @@ describe('cerrar', () => {
       });
     });
 
-    it('NO pasa el inventario a conteo_cerrado', async () => {
+    /**
+     * LA MARCA SE ESCRIBE, EL ESTADO NO. Las dos mitades, porque confundirlas
+     * cierra la ventana en la que el Coordinador todavía corrige: la ronda
+     * cerró, el conteo NO.
+     */
+    /**
+     * EL CASO QUE NADIE ESCRIBE SOLO, y que es el bug entero: TODO CUADRA.
+     *
+     * Con diferencias, cerrar crea la ronda siguiente y esa existencia servía
+     * de huella. Con todo cuadrando no se crea ninguna ronda, así que el
+     * cierre quedaba SIN RASTRO: la pantalla recargaba y veía "Paso 1 - En
+     * curso", el Coordinador volvía a tocar el botón, y el sistema lo aceptaba
+     * cada vez (inventario 8073 de Luzuriaga, 980 ítems, los 980 cuadrando --
+     * tres filas de `ronda_cerrada` para la misma ronda 1).
+     */
+    it('TODO CUADRA: el cierre queda registrado y no se puede repetir', async () => {
+      const cierre = await cerrar(COORD, 9, 1);
+
+      // No se creó ninguna ronda: no hay huella implícita en la que apoyarse.
+      expect(cierre.rondaAbierta).toBeNull();
+      expect(cierre.hojas).toEqual([]);
+
+      // Pero la marca SÍ quedó.
+      expect(prismaMock.inventario.update).toHaveBeenCalledWith({
+        where: { id: 9 },
+        data: { ultimaRondaCerrada: 1 },
+      });
+
+      // Y con esa marca, el segundo intento se rechaza -- antes pasaba.
+      prismaMock.inventario.findUnique.mockResolvedValue({
+        id: 9,
+        sucursalId: 1,
+        estado: 'en_curso',
+        tamanoHoja: 50,
+        ultimaRondaCerrada: 1,
+      });
+      await expect(cerrar(COORD, 9, 1)).rejects.toThrow(Conflicto);
+    });
+
+    it('deja la marca `ultimaRondaCerrada`, que antes no dejaba ninguna', async () => {
       await cerrar(COORD, 9, 1);
-      expect(prismaMock.inventario.update).not.toHaveBeenCalled();
+      expect(prismaMock.inventario.update).toHaveBeenCalledWith({
+        where: { id: 9 },
+        data: { ultimaRondaCerrada: 1 },
+      });
+    });
+
+    it('NO pasa el inventario a conteo_cerrado ni toca `abierto`', async () => {
+      await cerrar(COORD, 9, 1);
+      for (const llamada of prismaMock.inventario.update.mock.calls) {
+        const { data } = llamada[0] as { data: Record<string, unknown> };
+        expect(data).not.toHaveProperty('estado');
+        expect(data).not.toHaveProperty('abierto');
+      }
     });
 
     /**
@@ -310,7 +387,11 @@ describe('cerrar', () => {
      */
     it('NO libera `abierto`: el inventario sigue ocupando la sucursal hasta que cierre el conteo', async () => {
       await cerrar(COORD, 9, 1);
-      expect(prismaMock.inventario.update).not.toHaveBeenCalled();
+      // `update` SÍ se llama ahora -- para la marca de ronda cerrada --, así
+      // que lo que se afirma es QUÉ se escribe: nunca el estado ni `abierto`.
+      for (const [arg] of prismaMock.inventario.update.mock.calls as [{ data: Record<string, unknown> }][]) {
+        expect(arg.data).toEqual({ ultimaRondaCerrada: expect.any(Number) });
+      }
     });
 
     it('NO escribe ResultadoInventario ni diferencias: eso se congela al cerrar el ajuste', async () => {
@@ -346,7 +427,11 @@ describe('cerrar', () => {
       const todoCuadro = await cerrar(COORD, 9, 1);
       expect(todoCuadro.rondaAbierta).toBeNull();
       expect(todoCuadro.motivoSinSiguiente).toContain('cuadraron');
-      expect(prismaMock.inventario.update).not.toHaveBeenCalled();
+      // `update` SÍ se llama ahora -- para la marca de ronda cerrada --, así
+      // que lo que se afirma es QUÉ se escribe: nunca el estado ni `abierto`.
+      for (const [arg] of prismaMock.inventario.update.mock.calls as [{ data: Record<string, unknown> }][]) {
+        expect(arg.data).toEqual({ ultimaRondaCerrada: expect.any(Number) });
+      }
     });
   });
 
@@ -382,7 +467,11 @@ describe('cerrar', () => {
 
     it('NO toca el estado del inventario', async () => {
       await cerrar(COORD, 9, 1);
-      expect(prismaMock.inventario.update).not.toHaveBeenCalled();
+      // `update` SÍ se llama ahora -- para la marca de ronda cerrada --, así
+      // que lo que se afirma es QUÉ se escribe: nunca el estado ni `abierto`.
+      for (const [arg] of prismaMock.inventario.update.mock.calls as [{ data: Record<string, unknown> }][]) {
+        expect(arg.data).toEqual({ ultimaRondaCerrada: expect.any(Number) });
+      }
     });
 
     it('abre la ronda siguiente con los ítems que no cuadraron', async () => {
@@ -826,5 +915,147 @@ describe('cerrarAjuste: el ajuste cierra y con el, el conteo', () => {
       expect(data[0]!.conteoFinal).toBe(7);
       expect(data[0]!.resueltoEnConteo).toBe(3);
     });
+  });
+});
+
+/**
+ * ===========================================================================
+ * LA RONDA CHICA SE REPARTE ENTRE LOS PRESENTES
+ * ===========================================================================
+ * El embudo angosta cada ronda, y con el tamaño fijo la ronda 2 salía en UNA
+ * hoja para UNA persona. Medido en el inventario 8073 de Luzuriaga con 4
+ * contadores: ronda 2 = 1 hoja de 16, ronda 3 = 1 hoja de 8, ronda 4 = 1 hoja
+ * de 5, y los otros tres mirando.
+ *
+ * Pedido de Gilmer, reunión 2 (00:38:29): "si no, va a salir por una persona
+ * y ya... dependiendo con cuánto les toque, ya se va a tener que distribuir
+ * las cantidades".
+ */
+describe('cerrar: el tamaño de hoja de la ronda nueva se reparte entre los presentes', () => {
+  /** `n` ítems que NO cuadran, para que la ronda siguiente los tome. */
+  function inventarioConDiferencias(n: number): void {
+    const codigos = Array.from({ length: n }, (_, i) => String(100 + i));
+    prismaMock.producto.findMany.mockResolvedValue(codigos.map((c) => producto(c, 'ABARROTES')));
+    prismaMock.catalogoItem.findMany.mockResolvedValue(
+      codigos.map((c) => ({
+        codigo: c,
+        stockErp: 5,
+        descripcion: `Producto ${c}`,
+        precioVenta: null,
+        empaques: [],
+      })),
+    );
+    mockHojaConteoFindMany({
+      contadoPorRonda: [
+        {
+          numeroConteo: 1,
+          // Cuenta 9 contra un stock de 5: los `n` quedan con diferencia.
+          productos: codigos.map((c) => ({
+            codigo: c,
+            empaques: [{ nombre: 'U', factor: 1 }],
+            conteos: [{ sueltas: 9, empaques: [] }],
+          })),
+        },
+      ],
+      // La matriz que lee el cierre: los mismos códigos, ya finalizados.
+      matrizHojasFinalizadas: [
+        {
+          numeroConteo: 1,
+          zona: 'ABARROTES',
+          productos: codigos.map((c, i) => ({
+            id: 100 + i,
+            codigo: c,
+            descripcion: `Producto ${c}`,
+            empaques: [{ nombre: 'U', factor: 1 }],
+            conteos: [{ sueltas: 9, empaques: [] }],
+          })),
+        },
+      ],
+    });
+  }
+
+  /** Marca a `n` contadores como presentes HOY. */
+  function presentes(n: number): void {
+    prismaMock.asistenciaInventario.findMany.mockResolvedValue(
+      Array.from({ length: n }, (_, i) => ({ colaboradorId: 700 + i })),
+    );
+    prismaMock.colaborador.count.mockResolvedValue(n);
+  }
+
+  /** Los tamaños de las hojas que se crearon, en orden. */
+  function tamanosCreados(): number[] {
+    return prismaMock.hojaConteo.create.mock.calls.map((llamada) => {
+      const { data } = llamada[0] as { data: { tamano: number } };
+      return data.tamano;
+    });
+  }
+
+  it('16 ítems y 4 presentes: CUATRO hojas de 4, no una de 16', async () => {
+    // El caso exacto de la ronda 2 del 8073.
+    inventarioConDiferencias(16);
+    presentes(4);
+
+    await cerrar(COORD, 9, 1);
+
+    expect(tamanosCreados()).toEqual([4, 4, 4, 4]);
+  });
+
+  it('8 ítems y 4 presentes: cuatro hojas de 2', async () => {
+    inventarioConDiferencias(8);
+    presentes(4);
+
+    await cerrar(COORD, 9, 1);
+
+    expect(tamanosCreados()).toEqual([2, 2, 2, 2]);
+  });
+
+  it('5 ítems y 4 presentes: CINCO hojas de 1 -- una persona toma dos', async () => {
+    // Un ítem no se parte. `repartir` le da 2 al primero y 1 a cada uno de
+    // los otros; eso no cambia y no se toca.
+    inventarioConDiferencias(5);
+    presentes(4);
+
+    await cerrar(COORD, 9, 1);
+
+    expect(tamanosCreados()).toEqual([1, 1, 1, 1, 1]);
+  });
+
+  it('SIN ASISTENCIA TOMADA: manda el tamaño elegido, como siempre', async () => {
+    // Cero presentes es "todavía no se tomó asistencia", no "nadie cuenta".
+    inventarioConDiferencias(16);
+    prismaMock.asistenciaInventario.findMany.mockResolvedValue([]);
+
+    await cerrar(COORD, 9, 1);
+
+    // Una sola hoja con los 16, que es el comportamiento anterior intacto.
+    expect(tamanosCreados()).toEqual([16]);
+  });
+
+  it('el COORDINADOR no cuenta como contador: no encoge la hoja', async () => {
+    // Se marcan 5 personas presentes pero solo 4 son de rol `conteo`. Si el
+    // Coordinador entrara en la cuenta saldrían hojas de 3 y la quinta
+    // quedaría sin dueño.
+    inventarioConDiferencias(16);
+    prismaMock.asistenciaInventario.findMany.mockResolvedValue(
+      Array.from({ length: 5 }, (_, i) => ({ colaboradorId: 700 + i })),
+    );
+    prismaMock.colaborador.count.mockResolvedValue(4);
+
+    await cerrar(COORD, 9, 1);
+
+    expect(tamanosCreados()).toEqual([4, 4, 4, 4]);
+  });
+
+  it('cada hoja guarda SUS ítems en `tamano`, no el tamaño pedido', async () => {
+    // Con el tamaño efectivo esto se nota siempre: escribir el pedido dejaría
+    // cuatro hojas diciendo "50" con 4 productos adentro.
+    inventarioConDiferencias(16);
+    presentes(4);
+
+    await cerrar(COORD, 9, 1);
+
+    for (const [arg] of prismaMock.hojaConteo.create.mock.calls as [{ data: { tamano: number } }][]) {
+      expect(arg.data.tamano).toBe(4);
+    }
   });
 });

@@ -49,7 +49,14 @@ import {
   type ItemDeRonda,
   type ResumenDeRonda,
 } from '../../dominio/ciclo-conteos';
-import { numeroDeHoja, ordenarParaContar, partirEnHojas, zonaDeHoja } from '../../dominio/lote';
+import {
+  numeroDeHoja,
+  ordenarParaContar,
+  partirEnHojas,
+  tamanoEfectivoDeHoja,
+  zonaDeHoja,
+} from '../../dominio/lote';
+import { contadoresPresentesHoy } from './presentes';
 import { registrarAuditoria } from '../../shared/auditoria';
 import { Conflicto, NoEncontrado, Prohibido, SolicitudInvalida } from '../../shared/errores';
 import type { ColaboradorAutenticado } from '../../shared/tipos';
@@ -76,7 +83,7 @@ import {
 async function inventarioParaLeer(actor: ColaboradorAutenticado, inventarioId: number) {
   const inventario = await prisma.inventario.findUnique({
     where: { id: inventarioId },
-    select: { id: true, sucursalId: true, estado: true, tamanoHoja: true },
+    select: { id: true, sucursalId: true, estado: true, tamanoHoja: true, ultimaRondaCerrada: true },
   });
   if (!inventario) throw new NoEncontrado('Ese inventario no existe.');
 
@@ -408,13 +415,23 @@ export async function cerrar(
     );
   }
 
-  // Ya cerrada: si existe la ronda siguiente, esta operación ya se hizo.
-  const siguienteYaExiste = await prisma.hojaConteo.count({
-    where: { inventarioId, numeroConteo: ronda + 1 },
-  });
-  if (siguienteYaExiste > 0) {
+  /**
+   * YA CERRADA. La marca es `Inventario.ultimaRondaCerrada`, propia y
+   * explicita -- no la existencia de la ronda siguiente.
+   *
+   * ANTES la guarda era "si existe la ronda N+1, esto ya se hizo", y eso
+   * funciona solo en UNO de los dos caminos: cuando quedan diferencias, cerrar
+   * crea la ronda siguiente y esa existencia es la huella. Cuando TODO CUADRA
+   * no se crea ninguna ronda, asi que la guarda nunca se cumplia y el cierre
+   * se podia repetir indefinidamente -- el bug de 2026-09-22 (tres filas de
+   * `inventario.ronda_cerrada` para la misma ronda 1).
+   *
+   * Con la marca propia la guarda vale en los DOS caminos. El `>=` y no `===`
+   * cubre tambien el intento de cerrar una ronda VIEJA ya superada.
+   */
+  if (inventario.ultimaRondaCerrada !== null && inventario.ultimaRondaCerrada >= ronda) {
     throw new Conflicto(
-      `La ronda ${ronda} ya se cerró: la ronda ${ronda + 1} tiene ${siguienteYaExiste} hoja(s). Cerrar de nuevo duplicaría el reconteo.`,
+      `La ronda ${ronda} ya se cerró. Cerrar de nuevo duplicaría el reconteo y volvería a avisarle al Auditor.`,
     );
   }
 
@@ -477,6 +494,19 @@ export async function cerrar(
      * el mismo momento en que pasa a `conteo_cerrado`, mucho antes del
      * lacrado.
      */
+    /**
+     * LA MARCA, que es lo unico que este bloque NO hacia y por eso el cierre
+     * no dejaba huella. El registro de auditoria es un LOG, no un estado: se
+     * escribia igual las tres veces que el Coordinador toco el boton.
+     *
+     * `estado` y `abierto` NO se tocan, a proposito -- ver el comentario de
+     * arriba. La ronda cerro; el conteo no.
+     */
+    await prisma.inventario.update({
+      where: { id: inventarioId },
+      data: { ultimaRondaCerrada: ronda },
+    });
+
     await registrarAuditoria({
       actorId: actor.colaboradorId,
       accion: 'inventario.ronda_cerrada',
@@ -501,6 +531,14 @@ export async function cerrar(
 
   const rondaNueva = ronda + 1;
   const hojas = await materializarRonda(inventarioId, inventario.tamanoHoja, rondaNueva, aRecontar);
+
+  // La MISMA marca en los dos caminos. Acá la ronda siguiente tambien queda
+  // como huella, pero apoyarse en ese efecto lateral fue el bug: la marca es
+  // una sola y es esta.
+  await prisma.inventario.update({
+    where: { id: inventarioId },
+    data: { ultimaRondaCerrada: ronda },
+  });
 
   await registrarAuditoria({
     actorId: actor.colaboradorId,
@@ -552,7 +590,14 @@ async function materializarRonda(
   }
 
   const ordenados = ordenarParaContar(items);
-  const tamanos = partirEnHojas(ordenados.length, tamano);
+  /**
+   * EL TAMANO EFECTIVO, no el elegido a secas. Es donde duele de verdad: el
+   * embudo angosta cada ronda, y con el tamaño fijo la ronda 2 de 16 items
+   * salia en UNA hoja para UNA persona (medido en el 8073 de Luzuriaga).
+   * Ver `lote.ts#tamanoEfectivoDeHoja`.
+   */
+  const presentes = await contadoresPresentesHoy(inventarioId);
+  const tamanos = partirEnHojas(ordenados.length, tamanoEfectivoDeHoja(ordenados.length, presentes, tamano));
 
   await prisma.$transaction(async (tx) => {
     let cursor = 0;
@@ -567,7 +612,18 @@ async function materializarRonda(
           numero: numeroDeHoja(indice),
           zona: zonaDeHoja(bloque),
           gondola: numeroDeHoja(indice),
-          tamano,
+          /**
+           * `cantidad` y NO `tamano`: cuantos items tiene ESTA hoja, no el
+           * tamaño que se pidio. Es lo que ya hacia la ronda 1
+           * (inventarios.service.ts) y acá faltaba.
+           *
+           * Antes casi no se notaba -- todas las hojas salian del tamaño
+           * pedido salvo la ultima. Con el tamaño EFECTIVO se nota siempre:
+           * una ronda de 16 items entre 4 presentes da hojas de 4, y escribir
+           * `tamano` dejaria cuatro hojas diciendo "50" con 4 productos
+           * adentro. La pantalla muestra ese numero.
+           */
+          tamano: cantidad,
           // SIN asignar: el Coordinador reparte la ronda nueva con
           // POST /hojas/asignar, igual que la primera. Quién recuenta es una
           // decisión suya -- puede querer que lo mire otra persona.

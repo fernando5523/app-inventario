@@ -45,6 +45,12 @@ export interface AccionesCargaHoja {
      * son lo contrario una de la otra.
      */
     totalHojas: number;
+    /**
+     * La ultima ronda CERRADA. Sin esto, una ronda que cerro sin nada que
+     * recontar seguia leyendose como abierta y el Contador podia entrar a
+     * contarla -- ver `faseDeCierre`.
+     */
+    ultimaRondaCerrada: number | null;
   } | null>;
   /** Sin red (u otra falla de `activo`): cae al inventario/ronda que ya se descargó localmente alguna vez. */
   inventarioIdSinRed: () => Promise<number | null>;
@@ -119,7 +125,7 @@ export async function cargarHojaActiva(
     ronda = activo?.rondaActiva ?? null;
     // La FASE, no la ronda: durante el ajuste `rondaActiva` sigue trayendo la
     // última ronda que existe, y contarla otra vez daría 403 en cada ítem.
-    yaNoSeCuenta = activo !== null && faseDeCierre(activo.estado, activo.rondaActiva, activo.totalHojas) !== 'contando';
+    yaNoSeCuenta = activo !== null && faseDeCierre(activo.estado, activo.rondaActiva, activo.totalHojas, activo.ultimaRondaCerrada) !== 'contando';
   } catch {
     // Sin red (u otra falla): no hay forma de preguntarle al servidor cuál es
     // la ronda activa, pero el avance de hoy puede estar completo en SQLite —
