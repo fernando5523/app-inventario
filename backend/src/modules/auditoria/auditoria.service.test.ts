@@ -98,3 +98,51 @@ describe('matriz: la clasificacion del Auditor se ve, no solo la de Dynamics', (
     expect(r.matriz.find((i) => i.codigo === 'CERVEZA')?.esEmpresa).toBe(true);
   });
 });
+
+/**
+ * EL ROTULO DE LA HOJA, agregado el 2026-09-22 para que el Auditor pueda
+ * filtrar la matriz por hoja (pedido del usuario mirando la pantalla).
+ *
+ * La regla no es "la hoja donde se conto" sino LA DE LA RONDA 1, y por eso se
+ * testea: la ronda 1 es la unica que cubre el catalogo entero -- las de
+ * reconteo se arman por diferencia. Si mandara la ultima, un item que cuadro
+ * en la primera pasada y otro que llego a la tercera se mostrarian con hojas
+ * de rondas distintas, y "Hoja 003" querria decir dos cosas en la misma lista.
+ */
+describe('matriz: de que hoja dice que es cada item', () => {
+  const productoEnHoja = (id: number, sueltas: number) => ({
+    id,
+    codigo: 'CERVEZA',
+    descripcion: 'Cerveza 620ml',
+    empaques: [],
+    conteos: [{ sueltas, empaques: [] }],
+  });
+
+  it('manda la hoja de la RONDA 1, aunque el item se haya recontado en otra', async () => {
+    mockInventario('conteo_cerrado');
+    prismaMock.clasificacionProducto.findMany.mockResolvedValue([]);
+    // LA DE RECONTEO VA SEGUNDA A PROPOSITO, y es lo que hace que este test
+    // sirva: si la regla fuera "gana la ultima que se recorre" -- o sea, sin
+    // la guarda de `numeroConteo === 1` -- la hoja saldria '007' y esto
+    // fallaria. Con la de reconteo primero, las dos implementaciones dan
+    // '003' y el test no distinguiria nada.
+    prismaMock.hojaConteo.findMany.mockResolvedValue([
+      { numeroConteo: 1, numero: '003', zona: 'LICOR - CERVEZAS', productos: [productoEnHoja(90, 20)] },
+      { numeroConteo: 2, numero: '007', zona: 'RECONTEO', productos: [productoEnHoja(91, 18)] },
+    ]);
+
+    const r = (await matriz(AUDITOR, 45, QUERY_DEFECTO)) as { matriz: Array<{ codigo: string; hoja: string }> };
+
+    expect(r.matriz.find((i) => i.codigo === 'CERVEZA')?.hoja).toBe('003');
+  });
+
+  it('viaja VACIA cuando ninguna hoja finalizada incluye al item: no se inventa un numero', async () => {
+    mockInventario('conteo_cerrado');
+    prismaMock.clasificacionProducto.findMany.mockResolvedValue([]);
+    prismaMock.hojaConteo.findMany.mockResolvedValue([]);
+
+    const r = (await matriz(AUDITOR, 45, QUERY_DEFECTO)) as { matriz: Array<{ codigo: string; hoja: string }> };
+
+    expect(r.matriz.find((i) => i.codigo === 'CERVEZA')?.hoja).toBe('');
+  });
+});

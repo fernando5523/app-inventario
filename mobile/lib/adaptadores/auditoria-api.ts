@@ -71,6 +71,10 @@ function aItemAuditoria(fila: ItemAuditoria): ItemAuditoria {
     codigo: fila.codigo,
     descripcion: fila.descripcion,
     zona: fila.zona,
+    // Sin esta línea el campo llega del servidor y se tira: esta función
+    // reconstruye el objeto campo por campo a propósito (ver su cabecera), así
+    // que lo que no se nombra acá no existe para la pantalla.
+    hoja: fila.hoja,
     precioVenta: fila.precioVenta,
     stockErp: fila.stockErp,
     // La lista entera, tal cual la manda el servidor: un elemento por ronda.

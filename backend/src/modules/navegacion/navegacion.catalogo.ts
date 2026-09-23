@@ -123,6 +123,16 @@ export const ACCESOS_CATALOGO: Record<Rol, AccesoCatalogo[]> = {
   ],
   auditor: [
     { ruta: '/auditor/auditoria', titulo: 'Panel de auditoría', sub: 'Comparar los conteos contra el ERP' },
+    {
+      ruta: '/auditor/matriz',
+      titulo: 'Matriz comparativa',
+      sub: 'Revisar ítem por ítem contra el ERP',
+      nota:
+        'JUSTO DESPUES del panel, y salio de adentro de el (2026-09-22). El panel mezclaba DECIDIR ' +
+        '(resumen, cuadros, planilla, lacrado) con REVISAR item por item: con los 980 items reales de ' +
+        'Luzuriaga los botones del cierre quedaban al final de la lista, o sea que no existian. Son dos ' +
+        'tareas distintas y ahora son dos pantallas; el panel deja un acceso a esta.',
+    },
     { ruta: '/auditor/ciclo', titulo: 'Ciclo de conteos', sub: 'Embudo de discrepancias, y abrir otro conteo' },
     {
       ruta: '/auditor/corregir',

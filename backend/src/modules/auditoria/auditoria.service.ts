@@ -63,6 +63,9 @@ const INCLUDE_HOJAS_PARA_MATRIZ = {
   select: {
     numeroConteo: true,
     zona: true,
+    // El rotulo de la hoja ("003"), para mostrar y filtrar en la matriz. Sale
+    // de la misma consulta que la zona porque es el mismo tipo de dato.
+    numero: true,
     productos: {
       select: {
         id: true,
@@ -171,7 +174,7 @@ export async function armarMatriz(inventarioId: number): Promise<ItemAuditoria[]
   /** codigo -> lo que dio cada ronda. */
   const porCodigo = new Map<
     string,
-    { productoId: number; zona: string; descripcion: string; conteos: Map<number, number> }
+    { productoId: number; zona: string; hoja: string; descripcion: string; conteos: Map<number, number> }
   >();
 
   for (const hoja of hojas) {
@@ -189,14 +192,20 @@ export async function armarMatriz(inventarioId: number): Promise<ItemAuditoria[]
       const entrada = porCodigo.get(producto.codigo) ?? {
         productoId: producto.id,
         zona: hoja.zona,
+        hoja: hoja.numero,
         descripcion: producto.descripcion,
         conteos: new Map<number, number>(),
       };
-      // La ronda 1 manda para productoId/zona: es la que cubre el catalogo
-      // entero, y las hojas de reconteo se arman por diferencia, no por zona.
+      // La ronda 1 manda para productoId/zona/hoja: es la que cubre el
+      // catalogo entero, y las hojas de reconteo se arman por diferencia, no
+      // por zona. El numero de hoja sigue la MISMA regla que la zona porque es
+      // el mismo tipo de dato -- si mandara el reconteo, un item cuadrado en la
+      // ronda 1 y otro que llego a la 3 se mostrarian con hojas de rondas
+      // distintas, y "Hoja 003" querria decir dos cosas.
       if (hoja.numeroConteo === 1) {
         entrada.productoId = producto.id;
         entrada.zona = hoja.zona;
+        entrada.hoja = hoja.numero;
       }
       entrada.conteos.set(hoja.numeroConteo, unidades);
       porCodigo.set(producto.codigo, entrada);
@@ -214,6 +223,10 @@ export async function armarMatriz(inventarioId: number): Promise<ItemAuditoria[]
       codigo: item.codigo,
       descripcion: contado?.descripcion ?? item.descripcion,
       zona: contado?.zona ?? '',
+      // VACIO, igual que la zona, cuando ninguna hoja finalizada lo incluye.
+      // No se inventa un "sin hoja" ni un 0: cualquier cosa que parezca un
+      // numero de hoja se leeria como una hoja que existe.
+      hoja: contado?.hoja ?? '',
       // NULL SE PROPAGA COMO NULL, no como 0.
       //
       // El stock sale UNICAMENTE de CatalogoItem.stockErp -- el snapshot de

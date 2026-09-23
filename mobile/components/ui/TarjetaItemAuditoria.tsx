@@ -132,6 +132,13 @@ function TarjetaItemAuditoriaComponent({ item }: TarjetaItemAuditoriaProps): JSX
           <Text style={styles.nombre}>{item.descripcion}</Text>
           <Text style={styles.meta}>
             Código {item.codigo}
+            {/* LA HOJA, porque ahora se puede filtrar por ella: un filtro por
+                algo que la fila no muestra obliga a confiar de memoria en que
+                el filtro hizo lo que se le pidió. "Hoja 003" y no un 003
+                suelto — un número solo no dice de qué es. Vacía cuando ninguna
+                hoja finalizada incluye el ítem (ver ItemAuditoria.hoja): ahí
+                no se escribe nada, igual que con la zona. */}
+            {item.hoja ? ` · Hoja ${item.hoja}` : ''}
             {item.zona ? ` · ${item.zona}` : ''} · P. Venta {item.precioVenta === null ? '—' : `S/${formatoMoneda(item.precioVenta)}`}
           </Text>
         </View>

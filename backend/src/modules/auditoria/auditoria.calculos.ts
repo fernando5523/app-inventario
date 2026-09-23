@@ -49,6 +49,16 @@ export interface ItemAuditoria {
   codigo: string;
   descripcion: string;
   zona: string;
+  /**
+   * El rotulo de la hoja donde se conto ("003"), o VACIO si ninguna hoja
+   * finalizada lo incluye todavia.
+   *
+   * Es el mismo tipo de dato que `zona`: sale de la hoja, es para mostrar y
+   * para filtrar, y NO entra en ningun calculo de esta unidad. Vacio y no un
+   * "sin hoja": cualquier texto que parezca un numero de hoja se leeria como
+   * una hoja que existe.
+   */
+  hoja: string;
   /** null = el snapshot no trajo precio: la diferencia no se puede valorizar. */
   precioVenta: number | null;
   /** null = el snapshot no trajo stock: este item NO se puede auditar. */
@@ -265,6 +275,38 @@ export interface ResumenAuditoria {
   sinDatoErp: number;
   /** Tienen stock del ERP pero nadie los conto todavia. */
   sinContar: number;
+  /**
+   * CUANTOS ITEMS TIENEN ALGUN CONTEO CARGADO, tengan o no stock del ERP.
+   *
+   * NO es `items - sinContar`, y la diferencia importa: `sinContar` solo mira
+   * los que SI tienen stock del ERP (los `sin_erp` salen del bucle una linea
+   * antes), asi que restarlo daria por contado a un item sin ERP que nadie
+   * conto. Se cuenta derecho, con la misma regla que el movil
+   * (mobile/lib/dominio/auditoria.ts#resumirAuditoria): cuenta si
+   * `conteoFinal` no es null.
+   *
+   * Existe porque el encabezado del Panel de auditoria dice "980 de 980 items
+   * contados" y antes lo sacaba recorriendo la matriz EN EL TELEFONO. Al
+   * mudarse la matriz a su propia pantalla, el panel dejo de pedirla -- eran
+   * hasta 16 paginas de API para pintar un encabezado -- y este numero tenia
+   * que venir con el resumen o dejar de existir.
+   */
+  contados: number;
+  /**
+   * CUANTOS PRODUCTOS DE EMPRESA SE CONTARON, tengan o no diferencia.
+   *
+   * NO es `porClase.empresa.items` ni `deEmpresa`: esos dos cuentan solo los
+   * que tienen una diferencia distinta de cero. Un producto de empresa que
+   * CUADRO igual se conto, y el Auditor quiere saber sobre cuantos esta
+   * mirando la cifra de abajo.
+   *
+   * SE CUENTA CON LA CLASE EFECTIVA, la misma que usa `repartoDelItem`: la
+   * excepcion manual del Auditor (`claseForzada`) es justamente de donde salen
+   * la mayoria de los productos de empresa -- las cervezas, que en D365 van
+   * del empleado. Con `item.clase` pelado esa decision no se veria, y la
+   * tarjeta diria 0 sobre un cuadro que tiene plata.
+   */
+  contadosDeEmpresa: number;
   /** items - sinDatoErp - sinContar: sobre estos se puede afirmar algo. */
   auditables: number;
   /**
@@ -418,6 +460,8 @@ export function resumir(
     deEmpresa: 0,
     sinDatoErp: 0,
     sinContar: 0,
+    contados: 0,
+    contadosDeEmpresa: 0,
     auditables: 0,
     porcentajeCuadrado: 0,
     porcentajeAuditable: 0,
@@ -431,6 +475,21 @@ export function resumir(
   };
 
   for (const item of items) {
+    // ARRIBA DE LOS `continue` A PROPOSITO: un item sin stock del ERP igual
+    // pudo haberse contado, y si esto viviera despues de la guarda de
+    // `sin_erp` ese conteo no se contaria nunca.
+    if (conteoFinal(item) !== null) {
+      r.contados += 1;
+      // LA CLASE EFECTIVA, igual que `repartoDelItem` (y en el mismo orden:
+      // primero el empaque, ver el comentario de `claseEfectiva`). Un item de
+      // empresa que cuadro no aparece en ningun cuadro, asi que este es el
+      // unico lugar donde se lo puede contar.
+      const empaque = empaqueEfectivo(item.empaqueCompraCorregido, item.empaqueCompra);
+      if (claseEfectiva(item.claseForzada ?? null, item.clase, empaque) === 'empresa') {
+        r.contadosDeEmpresa += 1;
+      }
+    }
+
     const v = veredicto(item);
     if (v === 'sin_erp') {
       r.sinDatoErp += 1;

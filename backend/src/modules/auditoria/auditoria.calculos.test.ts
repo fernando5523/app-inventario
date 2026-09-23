@@ -22,6 +22,7 @@ const item = (parcial: Partial<ItemAuditoria> = {}): ItemAuditoria => ({
   codigo: 'IT-0001',
   descripcion: 'Aceite Vegetal Primor 900ml',
   zona: 'A',
+  hoja: '001',
   precioVenta: 10,
   stockErp: 100,
   conteos: [null],
@@ -281,6 +282,12 @@ describe('resumir', () => {
     expect(r.deEmpresa).toBe(1); // D
     expect(r.sinContar).toBe(1); // E -- antes se contaba como cuadrado
     expect(r.auditables).toBe(4); // los 5 menos el que no se puede auditar
+  });
+
+  it('cuenta los CONTADOS por su conteo, no por resta', () => {
+    // A, B, C y D tienen conteo; E no. `items - sinContar` daria 4 por
+    // casualidad aca, y por eso hace falta el caso de abajo.
+    expect(r.contados).toBe(4);
   });
 
   it('separa unidades faltantes de sobrantes, siempre en positivo', () => {
@@ -822,5 +829,82 @@ describe('cuadrosParaExportar', () => {
       UMBRAL,
     );
     expect(Object.values(c).every((filas) => filas.length === 0)).toBe(true);
+  });
+});
+
+/**
+ * LA TRAMPA DE `items - sinContar`, que es lo que la pantalla NO puede hacer.
+ *
+ * `sinContar` solo cuenta los que TIENEN stock del ERP: un item que el
+ * snapshot trajo sin stock sale del bucle una linea antes. Asi que restar
+ * daria por contado a un item que nadie conto, y dejaria fuera de la cuenta a
+ * uno sin ERP que si se conto.
+ */
+describe('resumir — `contados` no se puede derivar de `items - sinContar`', () => {
+  const items = [
+    // Con ERP y contado.
+    item({ codigo: 'A', stockErp: 100, conteos: [100], precioVenta: 10 }),
+    // SIN ERP pero CONTADO: la resta se lo comeria.
+    item({ codigo: 'B', stockErp: null, conteos: [7], precioVenta: 10 }),
+    // SIN ERP y sin contar.
+    item({ codigo: 'C', stockErp: null, precioVenta: 10 }),
+    // Con ERP y sin contar.
+    item({ codigo: 'D', stockErp: 50, precioVenta: 10 }),
+  ];
+  const r = resumir(items, UMBRAL);
+
+  it('cuenta los dos que tienen conteo, tengan o no stock del ERP', () => {
+    expect(r.contados).toBe(2); // A y B
+  });
+
+  it('y la resta habria dado otro numero: por eso se cuenta derecho', () => {
+    expect(r.items - r.sinContar).toBe(3);
+    expect(r.contados).not.toBe(r.items - r.sinContar);
+  });
+});
+
+/**
+ * LOS PRODUCTOS DE EMPRESA QUE SE CONTARON, que no es lo mismo que los que
+ * tienen diferencia. La tarjeta "Productos de empresa" del Panel muestra este
+ * numero arriba de la plata, y `porClase.empresa.items` no sirve: deja afuera
+ * a los que cuadraron.
+ */
+describe('resumir — `contadosDeEmpresa` cuenta los contados, no los que difieren', () => {
+  it('un item de empresa que CUADRO igual cuenta', () => {
+    const r = resumir(
+      [
+        item({ codigo: 'A', stockErp: 100, conteos: [100], esEmpresa: true, clase: 'empresa' }),
+        item({ codigo: 'B', stockErp: 100, conteos: [90], esEmpresa: true, clase: 'empresa' }),
+      ],
+      UMBRAL,
+    );
+    expect(r.contadosDeEmpresa).toBe(2);
+    // El cuadro solo ve al que difiere: por eso hace falta el campo nuevo.
+    expect(r.porClase.empresa.items).toBe(1);
+  });
+
+  it('sin contar NO cuenta, aunque sea de empresa', () => {
+    const r = resumir([item({ codigo: 'A', stockErp: 100, conteos: [null], clase: 'empresa' })], UMBRAL);
+    expect(r.contadosDeEmpresa).toBe(0);
+  });
+
+  /**
+   * DE DONDE SALEN LA MAYORIA de los productos de empresa: la excepcion manual
+   * del Auditor. Con `item.clase` pelado este caso daria 0.
+   */
+  it('la excepcion del Auditor manda sobre lo que dice el snapshot', () => {
+    const r = resumir(
+      [item({ codigo: 'CERVEZA', stockErp: 100, conteos: [95], clase: 'unidad', claseForzada: 'empresa' })],
+      UMBRAL,
+    );
+    expect(r.contadosDeEmpresa).toBe(1);
+  });
+
+  it('y al reves: forzar fuera de empresa lo saca de la cuenta', () => {
+    const r = resumir(
+      [item({ codigo: 'X', stockErp: 100, conteos: [95], clase: 'empresa', claseForzada: 'unidad' })],
+      UMBRAL,
+    );
+    expect(r.contadosDeEmpresa).toBe(0);
   });
 });

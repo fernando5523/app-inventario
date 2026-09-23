@@ -173,6 +173,12 @@ export const auditoriaMemoria: RepositorioAuditoria = {
       deEmpresa: local.deEmpresa,
       sinDatoErp: local.sinDatoErp,
       sinContar: local.sinContar,
+      // Del resumen local, que lo cuenta con la MISMA regla que el servidor
+      // (`conteoFinal` no nulo) -- no `total - sinContar`, que se comería los
+      // ítems sin ERP que sí se contaron.
+      contados: local.contados,
+      // El mock no tiene `claseForzada`: su clase efectiva es la del ítem.
+      contadosDeEmpresa: items.filter((it) => conteoFinal(it) !== null && it.atribucion.clase === 'empresa').length,
       auditables: local.auditables,
       porcentajeCuadrado: local.auditables === 0 ? 0 : (local.cuadrados / local.auditables) * 100,
       porcentajeAuditable: local.total === 0 ? 0 : (local.auditables / local.total) * 100,
@@ -212,6 +218,9 @@ export const auditoriaMemoria: RepositorioAuditoria = {
         codigo: producto.codigo,
         descripcion: producto.descripcion,
         zona: hoja002.zona,
+        // La demo tiene una sola hoja con catálogo, así que todos sus ítems
+        // salen de ella: es coherente, no un relleno.
+        hoja: hoja002.numero,
         precioVenta: semilla.precioVenta,
         stockErp: semilla.stockErp,
         conteos: conteosDelItem,

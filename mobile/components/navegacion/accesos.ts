@@ -70,6 +70,12 @@ export const ACCESOS_POR_ROL: Record<Rol, DefinicionAcceso[]> = {
   ],
   auditor: [
     { titulo: 'Panel de auditoría', sub: 'Comparar los conteos contra el ERP', ruta: '/auditor/auditoria' },
+    // JUSTO DESPUÉS del panel, y salió de adentro de él (2026-09-22): el panel
+    // mezclaba DECIDIR (resumen, cuadros, planilla, lacrado) con REVISAR ítem
+    // por ítem. Con los 980 ítems reales de Luzuriaga los botones del cierre
+    // quedaban al final de la lista, o sea que no existían. Dos tareas, dos
+    // pantallas; el panel deja un acceso a ésta.
+    { titulo: 'Matriz comparativa', sub: 'Revisar ítem por ítem contra el ERP', ruta: '/auditor/matriz' },
     { titulo: 'Ciclo de conteos', sub: 'Embudo de discrepancias, y abrir otro conteo', ruta: '/auditor/ciclo' },
     // Acceso y NO tab: se usa una vez por inventario, al cerrar. Va JUSTO
     // después del ciclo porque es donde se decide entrar (el ajuste se inicia

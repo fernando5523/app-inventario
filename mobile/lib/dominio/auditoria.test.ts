@@ -7,6 +7,7 @@ import {
   rondasNecesarias,
   veredicto,
   cuadroDelItem,
+  pagaLaEmpresa,
   textoEmpaqueUsado,
   textoPorQueCuadro,
 } from './auditoria';
@@ -21,6 +22,7 @@ function item(over: Partial<ItemAuditoria> = {}): ItemAuditoria {
     codigo: `C${sig}`,
     descripcion: `Producto ${sig}`,
     zona: 'A',
+    hoja: '001',
     precioVenta: 2,
     stockErp: 10,
     conteos: [null, null, null],
@@ -299,5 +301,28 @@ describe('textoPorQueCuadro: el "hay que indicar" del cliente', () => {
   it('sin razón o sin empaque no explica nada', () => {
     expect(textoPorQueCuadro(atribucion({ empaqueUsado: 6, razon: null }), -2, fmt)).toBeNull();
     expect(textoPorQueCuadro(atribucion({ empaqueUsado: null, razon: 2 }), -2, fmt)).toBeNull();
+  });
+});
+
+describe('lo que paga la empresa de su cuadro', () => {
+  it('faltante menos sobrante', () => {
+    expect(pagaLaEmpresa({ valorFaltante: 48, valorSobrante: 12 })).toBe(36);
+  });
+
+  it('sin sobrante, paga el faltante entero', () => {
+    expect(pagaLaEmpresa({ valorFaltante: 48, valorSobrante: 0 })).toBe(48);
+  });
+
+  /**
+   * NADIE PAGA UNA CANTIDAD NEGATIVA. Si sobró más de lo que faltó, la empresa
+   * no cobra nada — el sobrante no se le devuelve a nadie —: simplemente no
+   * hay nada que pagar, y eso se dice con un 0.
+   */
+  it('con más sobrante que faltante no hay nada que pagar: 0, no un negativo', () => {
+    expect(pagaLaEmpresa({ valorFaltante: 12, valorSobrante: 48 })).toBe(0);
+  });
+
+  it('un cuadro sin nada paga 0', () => {
+    expect(pagaLaEmpresa({ valorFaltante: 0, valorSobrante: 0 })).toBe(0);
   });
 });

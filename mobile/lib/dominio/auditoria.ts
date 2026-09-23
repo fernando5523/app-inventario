@@ -292,3 +292,22 @@ export function textoPorQueCuadro(
   // "...el auditor, faltan 21", que se lee como si al auditor le faltaran 21.
   return `${empaque} · ${verbo} ${magnitud}: ${formatoRazon(a.razon)} empaques`;
 }
+
+/**
+ * LO QUE LA EMPRESA TERMINA PAGANDO de su propio cuadro: el faltante menos el
+ * sobrante.
+ *
+ * NUNCA NEGATIVO, y no es una precaución cosmética. Los dos montos llegan del
+ * servidor SIEMPRE en positivo (ver `CuadroDeDiferencias` en el puerto), así
+ * que restar puede dar bajo cero cuando sobró más de lo que faltó. Mostrar
+ * "Paga la empresa -S/ 36,00" con el signo al revés no significa nada para
+ * quien lo lee: nadie paga una cantidad negativa, y no es que la empresa cobre
+ * — el sobrante no se le devuelve a nadie. Lo verdadero ahí es que no hay nada
+ * que pagar, y eso se dice con un 0.
+ *
+ * Devuelve el monto en POSITIVO; el signo lo pone la pantalla, igual que con
+ * el resto de los faltantes.
+ */
+export function pagaLaEmpresa(cuadro: { valorFaltante: number; valorSobrante: number }): number {
+  return Math.max(0, cuadro.valorFaltante - cuadro.valorSobrante);
+}
