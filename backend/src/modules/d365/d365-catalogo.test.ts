@@ -101,6 +101,30 @@ describe('elegirEmpaques (el factor vive en ProductSpecificUnitOfMeasureConversi
     ]);
   });
 
+  /**
+   * EL BUG QUE COSTABA PLATA, con el caso real del tenant (item 100428,
+   * ALTOMAYOCAFEGOURMETI). Un mismo simbolo tiene varias conversiones y antes
+   * ganaba la ULTIMA, sin mirar a que unidad convertia:
+   *
+   *     Emp.160 -> U      = 160   <- la buena
+   *     Emp.160 -> Emp.16 = 10    <- la que ganaba
+   *
+   * Se guardaba "Emp.160" con factor 10: quien contaba 2 registraba 20
+   * unidades en vez de 320. Eran 728 de 14.485 productos.
+   */
+  it('ignora la conversion que NO va a la unidad base, aunque venga despues', () => {
+    const cafe: D365ReleasedProduct = { ItemNumber: '100428', PurchaseUnitSymbol: 'Emp.160' };
+    const conversiones: D365UnitConversion[] = [
+      { ProductNumber: '100428', FromUnitSymbol: 'Emp.160', ToUnitSymbol: 'U', Factor: 160 },
+      { ProductNumber: '100428', FromUnitSymbol: 'Emp.160', ToUnitSymbol: 'Emp.16', Factor: 10 },
+      { ProductNumber: '100428', FromUnitSymbol: 'PF', ToUnitSymbol: 'Emp.160', Factor: 81 },
+    ];
+
+    // 160, no 10. Y `PF` no entra: su conversion no llega a la unidad suelta,
+    // asi que no hay forma de saber cuantas unidades son.
+    expect(elegirEmpaques(conversiones, cafe)).toEqual([{ nombre: 'Emp.160', factor: 160 }]);
+  });
+
   it('sin ninguna conversion, saca el factor del texto de la unidad de compra', () => {
     // "Emp.12 es 12 unidades" -- 3.728 de 11.835 productos no tienen ninguna
     // conversion cargada en D365 y este es su unico factor posible.
@@ -147,19 +171,28 @@ describe('agruparConversionesPorProducto', () => {
 });
 
 describe('obtenerCatalogoEjemplo', () => {
-  it('nunca toca red y siempre devuelve los mismos 4 productos de la maqueta', () => {
+  it('nunca toca red y siempre devuelve los mismos 5 productos de la maqueta', () => {
     const catalogo = obtenerCatalogoEjemplo();
-    expect(catalogo).toHaveLength(4);
+    expect(catalogo).toHaveLength(5);
     expect(catalogo.map((p) => p.descripcion)).toContain('Aceite Vegetal Primor 1L');
   });
 
-  it('cada item de ejemplo tiene codigo de barras y al menos un empaque con factor > 1', () => {
+  /**
+   * PEDIA UN EMPAQUE POR ITEM y ya no puede: desde que el catalogo ofrece
+   * solo el de COMPRA, un producto que se compra suelto no tiene ninguno
+   * (el Panetón). Lo que sigue siendo cierto -- y es lo que este test cuida
+   * -- es que TODO item tiene codigo de barras, y que si trae empaque, ese
+   * empaque multiplica de verdad.
+   */
+  it('cada item de ejemplo tiene codigo de barras, y su empaque (si tiene) multiplica', () => {
     const catalogo = obtenerCatalogoEjemplo();
     for (const item of catalogo) {
       expect(item.codigoBarras).toBeTruthy();
-      expect(item.empaques.length).toBeGreaterThan(0);
-      expect(item.empaques[0]!.factor).toBeGreaterThan(1);
+      for (const e of item.empaques) expect(e.factor).toBeGreaterThan(1);
     }
+    // Y el ejemplo cubre los DOS casos, que es para lo que existe.
+    expect(catalogo.some((i) => i.empaques.length === 1)).toBe(true);
+    expect(catalogo.some((i) => i.empaques.length === 0)).toBe(true);
   });
 
   it('ningun empaque de ejemplo trae codigoBarras propio (misma limitacion que el tenant real)', () => {
@@ -169,12 +202,34 @@ describe('obtenerCatalogoEjemplo', () => {
     }
   });
 
-  it('el Aceite (0051) trae DOS empaques alternos, para probar el caso de verdad', () => {
+  /**
+   * ESTE TEST PEDIA LOS DOS EMPAQUES Y AHORA PIDE UNO. Decision del usuario
+   * (2026-09-22): el conteo se carga con el empaque DE COMPRA y la unidad
+   * suelta, nada mas. El aceite tiene dos conversiones a la unidad base
+   * (Emp.12 y Emp.6) y una entre empaques (Emp.12 -> Emp.6): de las tres,
+   * la unica que se ofrece es la de compra.
+   */
+  it('el Aceite (0051) trae SOLO su empaque de compra', () => {
     const aceite = obtenerCatalogoEjemplo().find((p) => p.descripcion === 'Aceite Vegetal Primor 1L');
-    expect(aceite?.empaques).toEqual([
-      { nombre: 'Emp.12', factor: 12 },
-      { nombre: 'Emp.6', factor: 6 },
-    ]);
+    expect(aceite?.empaques).toEqual([{ nombre: 'Emp.12', factor: 12 }]);
+  });
+
+  /**
+   * EL CASO MAS COMUN DEL TENANT (4.042 items) y el que faltaba acá: se
+   * compra por unidad suelta, asi que no hay ningun empaque que ofrecer y la
+   * pantalla carga solo "Unidades sueltas". Vacio NO es un dato faltante.
+   */
+  it('el Panetón (0055) se compra suelto: viene SIN empaques', () => {
+    const paneton = obtenerCatalogoEjemplo().find((p) => p.descripcion === 'Panetón Todinno 900g');
+    expect(paneton).toBeDefined();
+    expect(paneton?.empaques).toEqual([]);
+  });
+
+  /** Ningún ítem del ejemplo ofrece un empaque de factor 1: seria un control que no decide nada. */
+  it('ningun empaque de ejemplo tiene factor 1', () => {
+    for (const item of obtenerCatalogoEjemplo()) {
+      for (const e of item.empaques) expect(e.factor).toBeGreaterThan(1);
+    }
   });
 });
 

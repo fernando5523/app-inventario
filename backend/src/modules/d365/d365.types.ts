@@ -194,7 +194,11 @@ export interface CatalogoItemDto {
   /** Codigo de barras de la unidad SUELTA. */
   codigoBarras: string;
   descripcion: string;
-  /** Siempre al menos uno. `[0]` = el de mayor factor (ver elegirEmpaques). */
+  /**
+   * El empaque DE COMPRA, o VACIO cuando el producto se compra por unidad
+   * suelta. Dejo de ser "siempre al menos uno" el 2026-09-22: ver
+   * `mapearProducto` para por que se ofrece solo ese y no todos.
+   */
   empaques: EmpaqueDto[];
   /**
    * EL EMPAQUE DE COMPRA, en unidades sueltas: el denominador de la regla del

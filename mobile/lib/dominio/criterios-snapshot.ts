@@ -29,6 +29,7 @@
  */
 
 import type { CriteriosSnapshot, TipoInventario } from '../puertos/repositorios';
+import { unirConY } from './plural';
 
 export interface TextoCriterios {
   /** Qué entró. Siempre presente. */
@@ -81,10 +82,4 @@ export function textoDeCriterios(
     resumen,
     advertencia: faltantes.length === 0 ? null : `Entraron también ${unirConY(faltantes)}.`,
   };
-}
-
-/** "a", "a y b", "a, b y c" — el separador final en palabras, como se habla. */
-function unirConY(partes: string[]): string {
-  if (partes.length <= 1) return partes[0] ?? '';
-  return `${partes.slice(0, -1).join(', ')} y ${partes[partes.length - 1]}`;
 }

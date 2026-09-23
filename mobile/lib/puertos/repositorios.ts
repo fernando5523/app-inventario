@@ -162,6 +162,25 @@ export interface ResumenAuditoriaServidor {
   deEmpresa: number;
   sinDatoErp: number;
   sinContar: number;
+  /**
+   * CUÁNTOS ÍTEMS TIENEN ALGÚN CONTEO CARGADO, tengan o no stock del ERP.
+   *
+   * NO es `items - sinContar`: `sinContar` solo cuenta los que SÍ tienen stock
+   * del ERP, así que restarlo daría por contado a un ítem sin ERP que nadie
+   * contó. Lo manda el servidor (`auditoria.calculos.ts#resumir`) porque el
+   * Panel de auditoría lo muestra en su encabezado y ya no pide la matriz —
+   * esa se mudó a `/auditor/matriz`.
+   */
+  contados: number;
+  /**
+   * CUÁNTOS PRODUCTOS DE EMPRESA SE CONTARON, tengan o no diferencia.
+   *
+   * NO es `porClase.empresa.items`: ese cuenta solo los que difieren, y un
+   * producto de empresa que cuadró igual se contó. Se cuenta con la clase
+   * EFECTIVA (la excepción manual del Auditor incluida), que es de donde salen
+   * la mayoría de los productos de empresa.
+   */
+  contadosDeEmpresa: number;
   auditables: number;
   porcentajeCuadrado: number;
   porcentajeAuditable: number;
@@ -437,11 +456,36 @@ export interface RepositorioInventario {
      * ronda, no siempre la 1. `null` NO es 1: "no hay ronda" y "ronda 1" son
      * cosas distintas — con null no se pide hojas ni se ofrece cerrar.
      *
-     * El backend garantiza que si viene un numero, esa ronda todavia admite
-     * conteo (activo() filtra `estado: en_curso`, y cerrar la ultima ronda
-     * pasa el inventario a `conteo_cerrado` en la misma transaccion).
+     * OJO: YA NO GARANTIZA QUE ESA RONDA ADMITA CONTEO. Decía que sí, apoyado
+     * en que cerrar la última ronda pasaba el inventario a `conteo_cerrado` en
+     * la misma transacción -- y eso dejó de pasar: ahora el inventario queda
+     * `en_curso` esperando al Auditor. Para saber si la ronda sigue abierta
+     * está `ultimaRondaCerrada`, acá abajo.
      */
     rondaActiva: number | null;
+    /**
+     * LA ÚLTIMA RONDA QUE SE CERRÓ. `null` = ninguna todavía.
+     *
+     * ES EL DATO QUE FALTABA, y su ausencia era un bug real (2026-09-22,
+     * inventario 8073 de Luzuriaga con los 980 ítems cuadrando): el
+     * Coordinador cerraba el 1er conteo, veía el diálogo de confirmación, y la
+     * pantalla del ciclo seguía diciendo "Paso 1 · En curso". Tocó el botón
+     * tres veces.
+     *
+     * La causa es que hasta ahora el cierre no dejaba huella propia: cuando
+     * quedaba algo para recontar se creaba la ronda siguiente, y la EXISTENCIA
+     * de esa ronda hacía de marca. Con todo cuadrado no se crea ninguna, así
+     * que el cierre quedaba invisible -- la pantalla deducía el estado de un
+     * efecto lateral en vez de leerlo.
+     *
+     *     rondaActiva  ultimaRondaCerrada   qué está pasando
+     *     3            2                    se cuenta la ronda 3
+     *     3            3                    ronda 3 cerrada; le toca al Auditor
+     *
+     * NO DICE QUE EL CONTEO TERMINÓ: el inventario sigue `en_curso` y en esa
+     * ventana el Coordinador todavía corrige (`puedeCorregirLoContado`).
+     */
+    ultimaRondaCerrada: number | null;
   } | null>;
 }
 

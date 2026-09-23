@@ -84,8 +84,31 @@ export function agruparConversionesPorProducto(conversiones: D365UnitConversion[
  * al orden de oferta en vez de a un descarte.
  */
 export function elegirEmpaques(conversionesDelProducto: D365UnitConversion[], producto: D365ReleasedProduct): EmpaqueDto[] {
+  /**
+   * SOLO LAS CONVERSIONES A LA UNIDAD BASE, y este filtro es el arreglo de un
+   * bug que costaba plata.
+   *
+   * Un mismo simbolo tiene VARIAS filas de conversion, una por unidad destino,
+   * y antes se guardaba el factor de cualquiera -- ganaba la ultima que
+   * apareciera. Caso real del tenant (item 100428, ALTOMAYOCAFEGOURMETI):
+   *
+   *     Emp.160 -> U       = 160   <- la buena: va a la unidad suelta
+   *     Emp.160 -> Emp.16  = 10    <- la que ganaba, por venir despues
+   *
+   * El catalogo guardaba un empaque llamado "Emp.160" con factor 10: el
+   * nombre decia 160 y la cuenta usaba 10. Quien contaba 2 registraba 20
+   * unidades en vez de 320 -- un faltante de 300 que nadie se llevo,
+   * descontado del sueldo de la gente y SILENCIOSO, porque el numero se ve
+   * razonable. Eran 728 de 14.485 productos, medidos contra el tenant.
+   *
+   * El conteo se hace en unidades SUELTAS, asi que el unico factor que sirve
+   * es el que llega a la unidad base. Es exactamente lo que `empaqueDeCompra`
+   * ya exigia unas lineas mas abajo -- por eso el de compra estaba bien
+   * (980 de 980) y este estaba mal.
+   */
   const factoresPorUnidad = new Map<string, number>();
   for (const conversion of conversionesDelProducto) {
+    if (!esUnidadBase(conversion.ToUnitSymbol)) continue;
     if (conversion.Factor && conversion.Factor !== 1) {
       factoresPorUnidad.set(conversion.FromUnitSymbol, conversion.Factor);
     }
@@ -435,7 +458,30 @@ export function mapearProducto(
     // recurso -- nunca se deja vacio, el escaner necesita algo para matchear.
     codigoBarras: suelto?.Barcode || producto.ItemNumber,
     descripcion,
-    empaques: elegirEmpaques(conversionesDelItem, producto),
+    /**
+     * SOLO EL EMPAQUE DE COMPRA -- decision del usuario (2026-09-22), tomada
+     * mirando los datos reales.
+     *
+     * Antes se ofrecian TODOS los empaques del producto (`elegirEmpaques`), y
+     * esa lista tenia el factor mal en 728 de 14.485 productos: se quedaba
+     * con el factor de cualquier conversion sin mirar a que unidad convertia
+     * (ver su comentario). El de COMPRA nunca tuvo ese problema -- 980 de 980
+     * con numero y simbolo -- porque `empaqueDeCompra` si exige la conversion
+     * a la unidad base.
+     *
+     * Y es ademas el que la gente ya usa: el proyecto original del cliente
+     * imprime UNA sola unidad en la columna "Cant." de su papel, la de compra
+     * (`PurchaseUnitSymbol`). Es tambien el denominador de la regla de media
+     * caja de Gilmer, asi que lo que se cuenta y lo que se liquida pasan a
+     * mirar el mismo numero.
+     *
+     * LISTA VACIA cuando el producto se compra por unidad suelta (`U`, 4.042
+     * de los items del tenant: el caso mas comun). No es un dato faltante --
+     * es que no hay ningun empaque que ofrecer, y la pantalla carga solo
+     * "Unidades sueltas". Un empaque de factor 1 al lado del campo de sueltas
+     * seria un control que no decide nada.
+     */
+    empaques: compra !== null && compra.unidades > 1 ? [{ nombre: compra.simbolo, factor: compra.unidades }] : [],
     // El de COMPRA, aparte de los de gondola: es el unico contra el que se
     // puede medir "media unidad de paquete" (ver `empaqueDeCompra`).
     empaqueCompra: compra?.unidades ?? null,
@@ -471,6 +517,14 @@ const PRODUCTOS_EJEMPLO: D365ReleasedProduct[] = [
   { ItemNumber: '0052', SearchName: 'CERVEZACUSQUENATRIGO', InventoryUnitSymbol: 'U.', PurchaseUnitSymbol: 'Emp.6' },
   { ItemNumber: '0053', SearchName: 'LECHEEVAPORADAGLORIA', InventoryUnitSymbol: 'U.', PurchaseUnitSymbol: 'Emp.24' },
   { ItemNumber: '0054', SearchName: 'FIDEOSCANUTOLAVAGGI', InventoryUnitSymbol: 'U.', PurchaseUnitSymbol: 'Emp.20' },
+  /**
+   * SE COMPRA POR UNIDAD SUELTA -- el caso MAS COMUN del tenant real (4.042
+   * de sus items) y el que faltaba en este catalogo: los otros cuatro tienen
+   * empaque, asi que el modal de conteo sin empaques no se podia ver en modo
+   * ejemplo. Su `empaques` sale VACIO y la pantalla carga solo "Unidades
+   * sueltas".
+   */
+  { ItemNumber: '0055', SearchName: 'PANETONTODINNO900G', InventoryUnitSymbol: 'U.', PurchaseUnitSymbol: 'U' },
 ];
 
 const BARCODES_EJEMPLO: D365ProductBarcode[] = [
@@ -478,20 +532,30 @@ const BARCODES_EJEMPLO: D365ProductBarcode[] = [
   { ItemNumber: '0052', Barcode: '7750999015', ProductDescription: 'Cerveza Cusqueña Trigo 310ml', ProductQuantityUnitSymbol: 'U', ProductQuantity: 0, IsDefaultDisplayedBarcode: 'Yes' },
   { ItemNumber: '0053', Barcode: '7750123088', ProductDescription: 'Leche Evaporada Gloria Azul 400g', ProductQuantityUnitSymbol: 'U', ProductQuantity: 0, IsDefaultDisplayedBarcode: 'Yes' },
   { ItemNumber: '0054', Barcode: '7750123054', ProductDescription: 'Fideos Canuto Lavaggi 500g', ProductQuantityUnitSymbol: 'U', ProductQuantity: 0, IsDefaultDisplayedBarcode: 'Yes' },
+  { ItemNumber: '0055', Barcode: '7750123055', ProductDescription: 'Panetón Todinno 900g', ProductQuantityUnitSymbol: 'U', ProductQuantity: 0, IsDefaultDisplayedBarcode: 'Yes' },
 ];
 
 const CONVERSIONES_EJEMPLO: D365UnitConversion[] = [
   { ProductNumber: '0051', FromUnitSymbol: 'U', ToUnitSymbol: 'U.', Factor: 1 },
   { ProductNumber: '0051', FromUnitSymbol: 'Emp.12', ToUnitSymbol: 'U', Factor: 12 },
-  // Segundo empaque alterno del mismo producto -- ver el comentario de la
-  // seccion de arriba.
+  /**
+   * Un SEGUNDO empaque del mismo producto, y una conversion que NO va a la
+   * unidad base. Las dos siguen acá a proposito aunque el catalogo ya no las
+   * ofrezca: son el escenario que prueba que `mapearProducto` se queda solo
+   * con el de COMPRA (`Emp.12`) y que `elegirEmpaques` no vuelve a agarrar el
+   * factor de una conversion entre empaques -- el bug del item 100428, que
+   * guardaba "Emp.160" con factor 10.
+   */
   { ProductNumber: '0051', FromUnitSymbol: 'Emp.6', ToUnitSymbol: 'U', Factor: 6 },
+  { ProductNumber: '0051', FromUnitSymbol: 'Emp.12', ToUnitSymbol: 'Emp.6', Factor: 2 },
   { ProductNumber: '0052', FromUnitSymbol: 'U', ToUnitSymbol: 'U.', Factor: 1 },
   { ProductNumber: '0052', FromUnitSymbol: 'Emp.6', ToUnitSymbol: 'U', Factor: 6 },
   { ProductNumber: '0053', FromUnitSymbol: 'U', ToUnitSymbol: 'U.', Factor: 1 },
   { ProductNumber: '0053', FromUnitSymbol: 'Emp.24', ToUnitSymbol: 'U', Factor: 24 },
   { ProductNumber: '0054', FromUnitSymbol: 'U', ToUnitSymbol: 'U.', Factor: 1 },
   { ProductNumber: '0054', FromUnitSymbol: 'Emp.20', ToUnitSymbol: 'U', Factor: 20 },
+  // El 0055 solo tiene la equivalencia U -> U.: se compra suelto, sin empaque.
+  { ProductNumber: '0055', FromUnitSymbol: 'U', ToUnitSymbol: 'U.', Factor: 1 },
 ];
 
 /**

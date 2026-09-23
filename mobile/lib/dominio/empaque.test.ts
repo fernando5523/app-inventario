@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { desgloseConteo, lineasDeTotal, totalUnidades, validarConteo } from './empaque';
+import {
+  etiquetaDeEmpaque, desgloseConteo, lineasDeTotal, totalUnidades, validarConteo } from './empaque';
 import type { Conteo, Empaque, LineaEmpaque } from './tipos';
 
 function conteo(parciales: Partial<Conteo> = {}): Conteo {
@@ -205,5 +206,56 @@ describe('lineasDeTotal: el texto de la conversión, con los nombres TAL CUAL de
 
   it('una sola suelta: "1 suelta" en singular (es palabra nuestra, no un valor del ERP)', () => {
     expect(lineasDeTotal(desgloseConteo(conteo({ sueltas: 1 }), [CAJA]))).toEqual(['1 suelta']);
+  });
+});
+
+/**
+ * La etiqueta del campo de conteo: EL NOMBRE SOLO cuando ya dice cuánto vale.
+ *
+ * Llevó un sufijo ("Emp.10 · 10 unidades") mientras el modal ofrecía todos los
+ * empaques del producto -- ahí había símbolos como `PF` que no dicen su
+ * cantidad. Con solo el empaque de COMPRA los símbolos son `Emp.N` y el
+ * número ya está adentro: el sufijo pasó de aclarar a repetir. Corrección del
+ * usuario: *"ya saben con el nombre que tiene 10 unidades un empaque"*.
+ */
+describe('etiquetaDeEmpaque', () => {
+  it('el nombre SOLO cuando ya dice cuánto vale', () => {
+    expect(etiquetaDeEmpaque({ nombre: 'Emp.4', factor: 4 })).toBe('Emp.4');
+    expect(etiquetaDeEmpaque({ nombre: 'Emp.10', factor: 10 })).toBe('Emp.10');
+    expect(etiquetaDeEmpaque({ nombre: 'Emp.160', factor: 160 })).toBe('Emp.160');
+  });
+
+  /**
+   * EL NOMBRE VA VERBATIM. Regla permanente del usuario: lo que viene del
+   * sistema no se traduce ni se pluraliza.
+   */
+  it('no traduce ni pluraliza el nombre del sistema', () => {
+    expect(etiquetaDeEmpaque({ nombre: 'Emp.45', factor: 45 })).toBe('Emp.45');
+    expect(etiquetaDeEmpaque({ nombre: 'CJ', factor: 12 })).not.toMatch(/caja/i);
+  });
+
+  /**
+   * CASO 1 DEL SUFIJO: un símbolo sin número. Nadie puede deducir si `CJ` son
+   * 12 o 144. Hoy no llega ninguno a esta pantalla -- los 151 símbolos sin
+   * número del tenant no resuelven empaque de compra -- pero el ERP se carga
+   * a mano y el día que aparezca, la pantalla lo dice.
+   */
+  it('con un símbolo SIN número, dice cuánto vale', () => {
+    expect(etiquetaDeEmpaque({ nombre: 'CJ', factor: 12 })).toBe('CJ · 12 unidades');
+    expect(etiquetaDeEmpaque({ nombre: 'DSP', factor: 144 })).toBe('DSP · 144 unidades');
+  });
+
+  /**
+   * CASO 2: el nombre MIENTE. Existe en el tenant -- el ítem 113369 tiene
+   * `Emp.12` con factor 1, por dos conversiones mal cargadas en el ERP.
+   * Mostrar "Emp.12" a secas sería repetir la mentira en la góndola.
+   */
+  it('cuando el número del nombre NO es el factor real, lo aclara', () => {
+    expect(etiquetaDeEmpaque({ nombre: 'Emp.12', factor: 1 })).toBe('Emp.12 · 1 unidad');
+    expect(etiquetaDeEmpaque({ nombre: 'Emp.160', factor: 10 })).toBe('Emp.160 · 10 unidades');
+  });
+
+  it('concuerda en singular: "1 unidad", no "1 unidades"', () => {
+    expect(etiquetaDeEmpaque({ nombre: 'Bolsa', factor: 1 })).toBe('Bolsa · 1 unidad');
   });
 });

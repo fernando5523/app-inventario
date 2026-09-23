@@ -3,7 +3,8 @@ import { useEffect, useState, type JSX } from 'react';
 import { Keyboard, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 
 import { errorDeMotivo, STOCK_NO_SE_CORRIGE } from '../../lib/dominio/ajuste-final';
-import { desgloseConteo, lineasDeTotal, validarConteo } from '../../lib/dominio/empaque';
+import {
+  etiquetaDeEmpaque, desgloseConteo, lineasDeTotal, validarConteo } from '../../lib/dominio/empaque';
 import type { Conteo, LineaEmpaque, Producto } from '../../lib/dominio/tipos';
 import { colors, fonts, fontSize, radius, shadow, spacing } from '../../lib/theme';
 import { interpretarCantidad } from './cantidad-numerica';
@@ -291,7 +292,10 @@ export function ModalConteo({
 
             {producto.empaques.map((empaque) => (
               <View key={empaque.nombre} style={styles.campo}>
-                <Text style={styles.campoEtiqueta}>{empaque.nombre}</Text>
+                {/* El nombre verbatim del sistema + a cuánto equivale: con
+                    "PF" a secas nadie sabe si son 36 o 144. Ver
+                    `etiquetaDeEmpaque`. */}
+                <Text style={styles.campoEtiqueta}>{etiquetaDeEmpaque(empaque)}</Text>
                 <TextInput
                   style={[styles.input, erroresCantidad[empaque.nombre] ? styles.inputError : null]}
                   keyboardType="number-pad"
@@ -304,7 +308,7 @@ export function ModalConteo({
                   placeholderTextColor={colors.grisClaro}
                   onChangeText={(texto) => cambiarTexto(empaque.nombre, texto)}
                   selectTextOnFocus
-                  accessibilityLabel={`Cantidad de ${empaque.nombre}`}
+                  accessibilityLabel={`Cantidad de ${etiquetaDeEmpaque(empaque)}`}
                 />
                 {erroresCantidad[empaque.nombre] ? (
                   <Text style={styles.inputErrorTexto}>{erroresCantidad[empaque.nombre]}</Text>

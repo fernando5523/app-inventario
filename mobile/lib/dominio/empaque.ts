@@ -147,3 +147,56 @@ export function validarConteo(conteo: Conteo, empaquesDisponibles: Empaque[]): A
 function esEnteroNoNegativo(valor: number): boolean {
   return Number.isInteger(valor) && valor >= 0;
 }
+
+/**
+ * La etiqueta del campo de un empaque en el modal de conteo.
+ *
+ * EL NOMBRE SOLO, cuando el nombre ya dice cuánto vale: `Emp.4`, `Emp.160`.
+ * Es lo que trae Dynamics y lo que la gente lee en el papel de Gilmer.
+ *
+ * ---------------------------------------------------------------------------
+ * ESTO LLEVÓ UN SUFIJO ("Emp.10 · 10 unidades") Y SE SACÓ
+ * ---------------------------------------------------------------------------
+ * Tenía sentido cuando el modal ofrecía TODOS los empaques del producto,
+ * incluida la `PF`, que no lleva su cantidad en el nombre: ahí el sufijo era
+ * la única forma de saber si eran 36 o 144. Al quedarnos solo con el empaque
+ * de COMPRA ese caso desapareció -- los símbolos de compra son `Emp.N` y el
+ * número ya está adentro --, así que el sufijo pasó de aclarar a repetir.
+ * Corrección del usuario, textual: *"este texto ya confunde, ya saben con el
+ * nombre que tiene 10 unidades un empaque"*.
+ *
+ * ---------------------------------------------------------------------------
+ * PERO SE QUEDA PARA CUANDO EL NOMBRE NO ALCANCE
+ * ---------------------------------------------------------------------------
+ * El sufijo aparece solo si el número que se lee del nombre NO es el factor
+ * real. Eso cubre dos casos, y los dos son "no hay forma de deducirlo":
+ *
+ *   1. UN SÍMBOLO SIN NÚMERO (`CJ`, `DSP`, `PAQ`). Nadie puede saber cuántas
+ *      unidades son mirando el nombre.
+ *   2. UN NOMBRE QUE MIENTE: el símbolo dice un número y el factor es otro.
+ *      Existe en el tenant -- el ítem 113369 tiene `Emp.12` con factor 1,
+ *      por dos filas de conversión mal cargadas en el ERP. Mostrar "Emp.12" a
+ *      secas ahí sería repetir la mentira en la góndola.
+ *
+ * HOY NINGUNO DE LOS DOS LLEGA A ESTA PANTALLA, medido contra el tenant
+ * (2026-09-21, catálogo completo: 11.867 ítems):
+ *
+ *   - Los 151 símbolos sin número (`SA`, `KGM`, `SRV`, `BJ`, `CYL`, `UND`,
+ *     `GLL`, `LTR`) no resuelven ningún empaque de compra, así que el
+ *     catálogo los deja en `empaques: []` y el modal solo pide sueltas.
+ *   - El único divergente (113369) resuelve factor 1, y `mapearProducto`
+ *     exige `> 1` para ofrecer un empaque.
+ *
+ * O sea que esta rama no se ve hoy en ninguna góndola. Se deja igual porque
+ * el ERP se carga a mano: el día que alguien dé de alta un `CJ`, la pantalla
+ * dice cuánto vale en vez de callarlo.
+ */
+export function etiquetaDeEmpaque(empaque: Empaque): string {
+  // El PRIMER número del nombre, igual que hace el backend al deducir un
+  // factor desde el símbolo (`dominio/empaque.ts#factorDesdeSimbolo` allá).
+  const numeroEnElNombre = empaque.nombre.match(/\d+/);
+  if (numeroEnElNombre !== null && Number.parseInt(numeroEnElNombre[0], 10) === empaque.factor) {
+    return empaque.nombre;
+  }
+  return `${empaque.nombre} · ${empaque.factor} ${empaque.factor === 1 ? 'unidad' : 'unidades'}`;
+}

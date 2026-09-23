@@ -57,7 +57,19 @@ export interface Producto {
   codigo: string;          // codigo interno del item en la hoja: "0051"
   codigoBarras: string;    // el de la unidad suelta
   descripcion: string;
-  /** Al menos uno. `[0]` = el que se ofrece primero al abrir el modal. */
+  /**
+   * El empaque DE COMPRA, o VACÍO cuando el producto se compra por unidad
+   * suelta (el caso más común: 4.042 ítems del tenant).
+   *
+   * Dejó de ser "al menos uno" el 2026-09-22, cuando el usuario decidió que
+   * el conteo se carga solo con el empaque de compra y la unidad suelta. Ver
+   * `d365-catalogo.service.ts#mapearProducto` para el porqué: los empaques de
+   * góndola que se ofrecían antes tenían el factor mal en 728 de 14.485
+   * productos, y ese número multiplica lo que se cuenta.
+   *
+   * Vacío NO es un dato faltante: es que no hay ningún empaque que ofrecer, y
+   * el modal carga solo "Unidades sueltas".
+   */
   empaques: Empaque[];
   ubicacion?: string;      // "Gondola A2 - Nivel 3"
   /**
@@ -338,6 +350,16 @@ export interface ItemAuditoria {
   codigo: string;
   descripcion: string;
   zona: string;
+  /**
+   * El rótulo de la hoja donde se contó ("003"), o VACÍO si ninguna hoja
+   * finalizada lo incluye todavía.
+   *
+   * Mismo tipo de dato que `zona`: sale de la hoja, es para mostrar y filtrar,
+   * y no entra en ningún cálculo. Manda la RONDA 1 (la única que cubre el
+   * catálogo entero), igual que la zona — si mandara el reconteo, "Hoja 003"
+   * querría decir dos cosas según hasta qué ronda llegó cada ítem.
+   */
+  hoja: string;
   /** null = el snapshot de Dynamics no trajo precio: la diferencia no se puede valorizar. */
   precioVenta: number | null;
   /** null = el snapshot no trajo stock: este ítem NO se puede auditar (veredicto `sin_erp`). */
