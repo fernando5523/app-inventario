@@ -3,9 +3,10 @@ import { LogOut } from 'lucide-react-native';
 import type { JSX } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
 
+import { iconoDeRuta } from './iconos-ruta';
 import { useNavegacion } from '../../lib/navegacion-contexto';
 import { useSesion } from '../../lib/sesion-contexto';
-import { colors, fonts, radius, spacing } from '../../lib/theme';
+import { colors, fonts, fontSize, radius, spacing } from '../../lib/theme';
 import type { RolTabsLayoutProps } from './RolTabsLayout';
 
 /**
@@ -43,7 +44,7 @@ import type { RolTabsLayoutProps } from './RolTabsLayout';
  * ventana angosta en una PC -- media pantalla, un monitor viejo --, NO un
  * teléfono. El teléfono tiene su propio archivo y no pasa por acá.
  */
-const ANCHO_BARRA = 248;
+const ANCHO_BARRA = 286;
 const ANCHO_ANGOSTO = 900;
 
 export function RolTabsLayout({ rol }: RolTabsLayoutProps): JSX.Element | null {
@@ -96,6 +97,9 @@ export function RolTabsLayout({ rol }: RolTabsLayoutProps): JSX.Element | null {
             // ruta madre y tiene que dejarla marcada. El Inicio se compara
             // exacto, si no queda encendido siempre.
             const activo = destino === inicio ? ruta === inicio : ruta.startsWith(destino);
+            // El icono sale de la RUTA, no del backend: los iconos son
+            // componentes y no viajan por HTTP. Ver `iconos-ruta.ts`.
+            const Icono = iconoDeRuta(destino);
             return (
               <Pressable
                 key={destino}
@@ -104,14 +108,17 @@ export function RolTabsLayout({ rol }: RolTabsLayoutProps): JSX.Element | null {
                 accessibilityRole="link"
                 accessibilityState={{ selected: activo }}
               >
-                <Text style={[styles.enlaceTitulo, activo && styles.enlaceTituloActivo]} numberOfLines={1}>
-                  {acceso.titulo}
-                </Text>
-                {!angosto ? (
-                  <Text style={styles.enlaceSub} numberOfLines={1}>
-                    {acceso.sub}
+                <Icono size={19} color={activo ? colors.rojo : colors.gris} />
+                <View style={styles.enlaceTextos}>
+                  <Text style={[styles.enlaceTitulo, activo && styles.enlaceTituloActivo]} numberOfLines={1}>
+                    {acceso.titulo}
                   </Text>
-                ) : null}
+                  {!angosto ? (
+                    <Text style={styles.enlaceSub} numberOfLines={1}>
+                      {acceso.sub}
+                    </Text>
+                  ) : null}
+                </View>
               </Pressable>
             );
           })}
@@ -153,21 +160,26 @@ const styles = StyleSheet.create({
     paddingVertical: spacing.sm,
   },
 
-  marca: { paddingHorizontal: spacing.md, paddingBottom: spacing.md, gap: 2 },
+  marca: { paddingHorizontal: spacing.xl, paddingTop: spacing.sm, paddingBottom: spacing.xl, gap: 2 },
   marcaAngosta: { paddingBottom: 0 },
-  marcaTitulo: { fontSize: 20, color: colors.rojo, fontFamily: fonts.bold },
+  // `fonts.marca` (Baloo2) y no la del cuerpo: es el logotipo, el mismo que
+  // usa el teléfono en la pantalla de ingreso.
+  marcaTitulo: { fontSize: 30, color: colors.rojo, fontFamily: fonts.marca },
   marcaSub: { fontSize: 11.5, color: colors.gris, fontFamily: fonts.regular },
 
   lista: { flex: 1 },
   listaAngostaContenido: { alignItems: 'center', gap: 4, paddingHorizontal: spacing.sm },
 
   enlace: {
-    paddingVertical: 9,
-    paddingHorizontal: spacing.md,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.md,
+    paddingVertical: 11,
+    paddingHorizontal: spacing.xl,
     borderLeftWidth: 3,
     borderLeftColor: 'transparent',
-    gap: 1,
   },
+  enlaceTextos: { flex: 1, gap: 1 },
   enlaceAngosto: {
     borderLeftWidth: 0,
     borderBottomWidth: 2,
@@ -175,16 +187,19 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingVertical: 8,
   },
-  enlaceActivo: { borderLeftColor: colors.rojo, backgroundColor: colors.campo, borderBottomColor: colors.rojo },
-  enlaceTitulo: { fontSize: 13.5, color: colors.tinta, fontFamily: fonts.semibold },
+  // El activo se pinta con el rojo suave, no con blanco: sobre una barra
+  // blanca el blanco no marca nada, y este es el mismo tinte que usan las
+  // bandas de los montos que se descuentan.
+  enlaceActivo: { borderLeftColor: colors.rojo, backgroundColor: colors.rojoSuave, borderBottomColor: colors.rojo },
+  enlaceTitulo: { fontSize: fontSize.base, color: colors.tinta, fontFamily: fonts.semibold },
   enlaceTituloActivo: { color: colors.rojo, fontFamily: fonts.bold },
-  enlaceSub: { fontSize: 11, color: colors.grisClaro, fontFamily: fonts.regular },
+  enlaceSub: { fontSize: 12, color: colors.grisClaro, fontFamily: fonts.regular },
 
   salir: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
-    marginHorizontal: spacing.md,
+    marginHorizontal: spacing.xl,
     marginTop: spacing.sm,
     paddingVertical: 9,
     paddingHorizontal: 11,
