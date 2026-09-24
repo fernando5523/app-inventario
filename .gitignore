@@ -15,6 +15,13 @@ mobile/.expo/
 dist/
 build/
 
+# La web del Auditor exportada dentro de backend/. La genera la etapa `web`
+# del Dockerfile (`expo export --platform web`) y el backend la sirve desde
+# ahí; en la máquina solo aparece si alguien la copia a mano para probar.
+# Versionarla sería meter 7 MB de bundle compilado que se regenera solo, y
+# que quedaría desfasado del código en cuanto alguien tocara mobile/.
+backend/public/
+
 # Credenciales — NUNCA se versionan. Una credencial versionada es una
 # credencial filtrada en cuanto este repo tenga un remoto. Incluye
 # .env.example a propósito: nadie con permiso lo revisó todavía para

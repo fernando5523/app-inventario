@@ -11,8 +11,20 @@
 #
 # Se podria haber cambiado el contexto del pipeline; se movio el Dockerfile en
 # su lugar porque es lo que no depende de como esté configurado el pipeline de
-# turno. Todas las rutas llevan `backend/` a proposito -- el monorepo tiene
-# tambien `mobile/`, que NO entra en esta imagen.
+# turno.
+#
+# ---------------------------------------------------------------------------
+# LA IMAGEN TRAE TAMBIEN LA WEB DEL AUDITOR
+# ---------------------------------------------------------------------------
+# `mobile/` ya no queda afuera: una etapa aparte corre
+# `expo export --platform web` y el resultado se copia a `public/`, que el
+# backend sirve (ver backend/src/config/app.ts). Asi se despliega UNA sola
+# cosa en Azure en vez de dos, y la web habla con su propio origen.
+#
+# El precio es el tiempo de construccion: la etapa nueva instala las
+# dependencias de mobile/ (que son muchas mas que las del backend) y bundlea
+# ~3,7 MB de JavaScript. Se paga a proposito: la alternativa era desplegar el
+# front por separado y mantener sincronizadas dos URLs y dos versiones.
 #
 #   docker build -t inventario-backend .
 #
@@ -50,6 +62,44 @@ COPY backend/src ./src
 RUN npm run build
 
 # ---------------------------------------------------------------------------
+# LA WEB: el mismo codigo de la app, exportado para el navegador.
+# ---------------------------------------------------------------------------
+# Etapa propia y no pegada a la del backend para que Docker pueda cachearlas
+# por separado: tocar `backend/src` no obliga a reinstalar node_modules de
+# mobile/ ni a re-bundlear la web, que es lo caro.
+FROM node:22-slim AS web
+
+WORKDIR /app
+
+COPY mobile/package.json mobile/package-lock.json ./
+RUN npm ci
+
+# ---------------------------------------------------------------------------
+# LA URL DE LA API: RELATIVA, NO UN HOST
+# ---------------------------------------------------------------------------
+# `urlBase()` (mobile/lib/adaptadores/_http.ts) compone `${base}${ruta}`, y
+# con `EXPO_PUBLIC_API_URL=/` la base queda en cadena vacia: cada pedido sale
+# como `/api/...`, o sea CONTRA EL MISMO ORIGEN que sirvio la pagina.
+#
+# Eso es justo lo que hace falta acá, donde el backend sirve las dos cosas:
+# funciona con cualquier hostname, sobrevive a recrear el recurso en Azure y
+# no hay una URL que configurar por ambiente. Verificado en el bundle
+# generado: `function n(){return "/".replace(/\/+$/,'')}` y
+# `fetch(`${n()}${o}`)`.
+#
+# Se deja como ARG y no clavado por si algun dia la web se sirve desde otro
+# lado (un CDN, otro dominio): ahi se construye con la URL absoluta del
+# backend. El default es el caso de esta imagen.
+#
+# OJO: el valor entra al bundle en tiempo de BUILD. Cambiarlo en Azure como
+# variable de entorno no hace nada -- hay que reconstruir la imagen.
+ARG EXPO_PUBLIC_API_URL=/
+ENV EXPO_PUBLIC_API_URL=$EXPO_PUBLIC_API_URL
+
+COPY mobile/ ./
+RUN npx expo export --platform web --output-dir web-build
+
+# ---------------------------------------------------------------------------
 # Imagen final: solo lo que hace falta para CORRER.
 # ---------------------------------------------------------------------------
 FROM node:22-slim AS runtime
@@ -79,6 +129,13 @@ RUN npm ci --omit=dev \
 COPY --from=build /app/node_modules/.prisma ./node_modules/.prisma
 COPY --from=build /app/node_modules/@prisma ./node_modules/@prisma
 COPY --from=build /app/dist ./dist
+
+# La web exportada, al lado de `dist/`: es exactamente donde la busca
+# `CARPETA_WEB` en src/config/app.ts (`__dirname/../../public`, o sea
+# /app/dist/config -> /app/public). Si este COPY se cae o se saca, el backend
+# NO falla al arrancar: se queda sin servir web y sigue siendo la API de
+# siempre -- a proposito, para que un problema de front no tire el backend.
+COPY --from=web /app/web-build ./public
 
 # Las migraciones y el seed de las 10 tiendas viajan: el seed se corre a mano
 # una sola vez (`npx prisma db seed`), las migraciones las aplica el arranque.

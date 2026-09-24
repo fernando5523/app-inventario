@@ -8,9 +8,16 @@
 # personal que no puede terminar en un registro de imagenes.
 requerimiento/
 
-# La app movil no es parte de esta imagen, y su node_modules pesa cientos de
-# megas.
-mobile/
+# `mobile/` SI viaja desde que la imagen trae tambien la web del Auditor: la
+# etapa `web` del Dockerfile corre ahi `expo export --platform web`. Lo que
+# queda afuera es lo pesado y lo que se regenera solo -- `**/node_modules`,
+# mas abajo, ya cubre los cientos de megas de mobile/node_modules.
+mobile/.expo/
+mobile/android/
+mobile/ios/
+mobile/design/
+mobile/**/*.test.ts
+mobile/**/*.test.tsx
 
 docs/
 index.html
