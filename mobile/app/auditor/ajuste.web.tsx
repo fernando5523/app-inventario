@@ -1,9 +1,8 @@
 import { router } from 'expo-router';
 import { Check, Lock, RefreshCw, Scale, Store, TriangleAlert, X } from 'lucide-react-native';
-import { memo, useCallback, useEffect, useMemo, useRef, useState, type JSX, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type JSX } from 'react';
 import {
   ActivityIndicator,
-  FlatList,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -16,7 +15,17 @@ import {
 import { useRefrescoAlEnfocar } from '../../components/hooks/useRefrescoAlEnfocar';
 import { ChipsFiltro, SelectorSucursal, formatoMiles } from '../../components/ui';
 import { interpretarCantidad } from '../../components/ui/cantidad-numerica';
-import { BadgeEstado, BotonWeb, ChipIcono, EncabezadoPagina, TarjetaWeb } from '../../components/web';
+import {
+  BadgeEstado,
+  BotonWeb,
+  CeldaTexto,
+  ChipIcono,
+  EncabezadoPagina,
+  TablaWeb,
+  TarjetaWeb,
+  type ColumnaTabla,
+  type TinteFila,
+} from '../../components/web';
 import { cargarSeguro } from '../../lib/adaptadores/_http';
 import { repositorioAjuste, repositorioAuditoria, repositorioInventario, repositorioSesion } from '../../lib/contenedor';
 import { errorDeMotivo, faseDeCierre, puedeAjustar } from '../../lib/dominio/ajuste-final';
@@ -50,9 +59,13 @@ type Filtro = 'sin-cuadrar' | 'todos';
  * En el teléfono cada ítem es una tarjeta: una columna de 400px no aguanta el
  * ERP, cuatro rondas y la diferencia. El Auditor los pasa con el dedo de a
  * uno. En una PC lo que hace es recorrer la columna "Diferencia" de arriba
- * abajo buscando dónde se rompe, y eso es una tabla -- la misma que ya usa
- * `matriz.web.tsx`, con una diferencia: acá cada fila SE TOCA para abrir el
- * ajuste, así que la fila es un `Pressable` y no un `View`.
+ * abajo buscando dónde se rompe, y eso es una tabla.
+ *
+ * La tabla NO se dibuja acá: es `components/web/TablaWeb.tsx`, la única de la
+ * web. Decisión del usuario -- *"todas las tablas de la web tienen que tener
+ * este diseño"*. Esta pantalla solo declara SUS columnas, cuándo va tinte y
+ * qué pasa al abrir una fila; el encabezado, la cabecera, la paginación por
+ * scroll y el pie los pone el componente.
  *
  * ---------------------------------------------------------------------------
  * `Alert.alert` NO EXISTE EN WEB, Y ESTA PANTALLA VIVÍA DE ÉL
@@ -74,34 +87,18 @@ type Filtro = 'sin-cuadrar' | 'todos';
 /** Abajo de esto las columnas se apilan: es media pantalla en una PC, no un teléfono. */
 const ANCHO_ANGOSTO = 1180;
 
-/** Alto de fila FIJO: con eso `getItemLayout` no mide 8.000 filas y el scroll no salta. */
-const ALTO_FILA = 44;
-
-/** El ancho de "Descripción" antes de repartirle el espacio sobrante. */
-const ANCHO_DESCRIPCION = 320;
-
 /** Sin dato es "—", nunca un 0: un cero es una afirmación, el guion es "no sé". */
 const SIN_DATO = '—';
 
-interface Celda {
-  texto: string;
-  color?: string;
-  fuerte?: boolean;
-}
-
-interface Columna {
-  clave: string;
-  titulo: string;
-  ancho: number;
-  /** Derecha y `tabular-nums`: las cifras se comparan de un vistazo, columna abajo. */
-  numerica: boolean;
-  celda: (item: ItemAuditoria) => Celda;
-  /** Cuando la celda no es texto (el badge de estado). Si está, gana sobre `celda`. */
-  nodo?: (item: ItemAuditoria) => ReactNode;
-}
-
-function numero(valor: number | null | undefined): Celda {
-  return valor === null || valor === undefined ? { texto: SIN_DATO, color: colors.grisClaro } : { texto: formatoMiles(valor) };
+/** Una cifra de la tabla, o el guion gris cuando no hay dato. */
+function celdaNumero(valor: number | null | undefined): JSX.Element {
+  return valor === null || valor === undefined ? (
+    <CeldaTexto numero color={colors.grisClaro}>
+      {SIN_DATO}
+    </CeldaTexto>
+  ) : (
+    <CeldaTexto numero>{formatoMiles(valor)}</CeldaTexto>
+  );
 }
 
 /**
@@ -109,69 +106,37 @@ function numero(valor: number | null | undefined): Celda {
  * no se puede afirmar nada (sin stock del ERP o sin ningún conteo), y ahí va
  * el guion gris: un 0 diría "conté exactamente lo que decía el ERP", que es
  * justo lo contrario.
+ *
+ * El 0 real (cuadró) va en tinta, sin color: el color está reservado para lo
+ * que hay que mirar, y la enorme mayoría de los ítems cuadran.
  */
-function celdaDiferencia(item: ItemAuditoria): Celda {
+function celdaDiferencia(item: ItemAuditoria): JSX.Element {
   const dif = diferenciaUnidades(item);
-  if (dif === null) return { texto: SIN_DATO, color: colors.grisClaro };
-  if (dif === 0) return { texto: '0' };
-  return {
-    texto: `${dif < 0 ? '-' : '+'}${formatoMiles(Math.abs(dif))}`,
-    color: dif < 0 ? colors.falta : colors.ok,
-    fuerte: true,
-  };
-}
-
-interface FilaProps {
-  item: ItemAuditoria;
-  columnas: readonly Columna[];
-  onPress: () => void;
+  if (dif === null)
+    return (
+      <CeldaTexto numero color={colors.grisClaro}>
+        {SIN_DATO}
+      </CeldaTexto>
+    );
+  if (dif === 0) return <CeldaTexto numero>0</CeldaTexto>;
+  return (
+    <CeldaTexto numero fuerte color={dif < 0 ? colors.falta : colors.ok}>
+      {`${dif < 0 ? '-' : '+'}${formatoMiles(Math.abs(dif))}`}
+    </CeldaTexto>
+  );
 }
 
 /**
- * `memo` por lo mismo que la matriz: son cientos de filas montadas y sin esto
- * cada cambio del padre (poner un filtro) las vuelve a renderizar todas.
+ * EL TINTE DE LA FILA. Solo para lo que tiene diferencia: si se pintan todas,
+ * el color deja de señalar nada y las que importan se pierden entre las demás.
+ * Rojo para el faltante, verde para el sobrante -- la misma lectura que la
+ * columna de diferencia, dos veces.
  */
-const Fila = memo(function FilaComponent({ item, columnas, onPress }: FilaProps): JSX.Element {
-  // EL TINTE ES SOLO PARA LO QUE TIENE DIFERENCIA: si se pintan todas, el
-  // color deja de señalar nada y las que importan se pierden entre las demás.
+function tinteDeItem(item: ItemAuditoria): TinteFila {
   const dif = diferenciaUnidades(item);
-  const tinte = dif === null || dif === 0 ? null : dif < 0 ? styles.filaFalta : styles.filaSobra;
-  return (
-    <Pressable
-      onPress={onPress}
-      accessibilityRole="button"
-      accessibilityLabel={`Ajustar ${item.descripcion}`}
-      style={({ pressed }) => [styles.fila, tinte, pressed && styles.filaPresionada]}
-    >
-      {columnas.map((columna) => {
-        if (columna.nodo) {
-          return (
-            <View key={columna.clave} style={[styles.celdaNodo, { width: columna.ancho }]}>
-              {columna.nodo(item)}
-            </View>
-          );
-        }
-        const celda = columna.celda(item);
-        return (
-          <Text
-            key={columna.clave}
-            style={[
-              styles.celda,
-              { width: columna.ancho },
-              columna.numerica ? styles.celdaNumerica : null,
-              celda.fuerte ? styles.celdaFuerte : null,
-              celda.color === undefined ? null : { color: celda.color },
-            ]}
-            numberOfLines={1}
-            ellipsizeMode="tail"
-          >
-            {celda.texto}
-          </Text>
-        );
-      })}
-    </Pressable>
-  );
-});
+  if (dif === null || dif === 0) return null;
+  return dif < 0 ? 'falta' : 'ok';
+}
 
 /** Lo que pasó con la última acción: se dice en la página, no en un `Alert` que acá no existe. */
 interface Aviso {
@@ -195,8 +160,6 @@ export default function AjusteWebScreen(): JSX.Element {
   const [cerrandoAjuste, setCerrandoAjuste] = useState(false);
   const [confirmarCerrar, setConfirmarCerrar] = useState(false);
   const [aviso, setAviso] = useState<Aviso | null>(null);
-  /** Lo que mide el marco de la tabla; lo que sobra se lo lleva "Descripción". */
-  const [anchoDisponible, setAnchoDisponible] = useState(0);
 
   // La sucursal COMPARTIDA con Auditoría, Ciclo, Liquidación e Historial:
   // elegir acá la cambia en todas (ver lib/sucursal-auditada-contexto.tsx).
@@ -259,52 +222,44 @@ export default function AjusteWebScreen(): JSX.Element {
    */
   const rondas = useMemo(() => items.reduce((max, it) => Math.max(max, it.conteos.length), 0), [items]);
 
-  const columnas = useMemo<Columna[]>(() => {
-    const base: Columna[] = [
-      { clave: 'codigo', titulo: 'Código', ancho: 92, numerica: false, celda: (it) => ({ texto: it.codigo }) },
-      {
-        clave: 'descripcion',
-        titulo: 'Descripción',
-        ancho: ANCHO_DESCRIPCION,
-        numerica: false,
-        celda: (it) => ({ texto: it.descripcion }),
-      },
+  /**
+   * LAS COLUMNAS. "Descripción" va SIN `ancho` a propósito: es la única que
+   * puede usar el espacio sobrante -- el resto son cifras cortas y estirarlas
+   * solo aleja el número de su encabezado.
+   */
+  const columnas = useMemo<ColumnaTabla<ItemAuditoria>[]>(
+    () => [
+      { clave: 'codigo', titulo: 'Código', ancho: 92, celda: (it) => <CeldaTexto>{it.codigo}</CeldaTexto> },
+      { clave: 'descripcion', titulo: 'Descripción', celda: (it) => <CeldaTexto>{it.descripcion}</CeldaTexto> },
       // "ERP" y no "Stock": es el nombre con el que el Auditor lo pide.
-      { clave: 'erp', titulo: 'ERP', ancho: 86, numerica: true, celda: (it) => numero(it.stockErp) },
+      { clave: 'erp', titulo: 'ERP', ancho: 78, alinear: 'derecha', celda: (it) => celdaNumero(it.stockErp) },
+      // UNA COLUMNA POR RONDA, no tres fijas: el Auditor abre un 4to o un 5to
+      // conteo cuando no le cierra, y ese último es justo el que fijó el
+      // número. `ordinal` es la MISMA función que nombra las rondas en el
+      // Ciclo y en la matriz.
       ...Array.from({ length: rondas }, (_, indice) => ({
         clave: `ronda-${indice}`,
-        // `ordinal` es la MISMA función que nombra las rondas en el Ciclo y en
-        // la matriz: una sola fuente para "1er/2do/3er/4to".
         titulo: ordinal(indice + 1),
-        ancho: 74,
-        numerica: true,
-        celda: (it: ItemAuditoria): Celda => numero(it.conteos[indice]),
+        ancho: 70,
+        alinear: 'derecha' as const,
+        celda: (it: ItemAuditoria) => celdaNumero(it.conteos[indice]),
       })),
-      { clave: 'diferencia', titulo: 'Diferencia', ancho: 106, numerica: true, celda: celdaDiferencia },
-      {
-        clave: 'estado',
-        titulo: 'Estado',
-        ancho: 156,
-        numerica: false,
-        celda: () => ({ texto: '' }),
-        nodo: (it) => <BadgeEstado veredicto={veredicto(it)} />,
-      },
-    ];
-    // Lo que sobra del ancho se lo lleva la descripción, la única columna que
-    // de verdad puede usarlo: el resto son cifras cortas y estirarlas solo
-    // aleja el número de su encabezado.
-    const sobra = Math.max(0, anchoDisponible - base.reduce((suma, c) => suma + c.ancho, 0));
-    if (sobra === 0) return base;
-    return base.map((c) => (c.clave === 'descripcion' ? { ...c, ancho: c.ancho + sobra } : c));
-  }, [rondas, anchoDisponible]);
-
-  const anchoTabla = useMemo(() => columnas.reduce((suma, c) => suma + c.ancho, 0), [columnas]);
+      { clave: 'diferencia', titulo: 'Diferencia', ancho: 96, alinear: 'derecha', celda: celdaDiferencia },
+      { clave: 'estado', titulo: 'Estado', ancho: 150, celda: (it) => <BadgeEstado veredicto={veredicto(it)} /> },
+    ],
+    [rondas],
+  );
 
   /**
    * La tabla scrollea DENTRO de su marco y no estira la página: con "Todos"
-   * son hasta 8.000 ítems, y una página de 8.000 filas deja el botón de
-   * cerrar el ajuste a media hora de scroll. El alto sale de la ventana para
-   * que en un monitor grande se vean más filas sin tocar nada.
+   * son hasta 8.000 ítems, y una página así de larga deja el botón de cerrar
+   * el ajuste a media hora de scroll. El alto sale de la ventana para que en
+   * un monitor grande se vean más filas sin tocar nada.
+   *
+   * Y no es solo comodidad: la paginación por scroll de `TablaWeb` cuelga del
+   * scroll DE LA LISTA. Sin un alto que la haga scrollear por su cuenta, la
+   * lista crecería con su contenido, nunca dispararía `onEndReached` y se
+   * quedaría clavada en la primera tanda.
    */
   const altoTabla = Math.max(280, Math.round(height - 430));
 
@@ -459,22 +414,45 @@ export default function AjusteWebScreen(): JSX.Element {
               </View>
             ) : null}
 
-            <TarjetaWeb
+            <TablaWeb
               titulo="Ítems del inventario"
               sub="Cada fila abre el ajuste de ese ítem."
               icono={Scale}
               tono="atencion"
-            >
-              <ChipsFiltro
-                opciones={[
-                  { id: 'sin-cuadrar', etiqueta: 'Sin cuadrar', contador: sinCuadrar.length },
-                  { id: 'todos', etiqueta: 'Todos', contador: items.length },
-                ]}
-                activo={filtro}
-                onCambiar={(id) => setFiltro(id as Filtro)}
-              />
-
-              {visibles.length === 0 ? (
+              columnas={columnas}
+              filas={visibles}
+              claveDe={(it) => String(it.productoId)}
+              onAbrirFila={setEnEdicion}
+              tinteDeFila={tinteDeItem}
+              alto={altoTabla}
+              // El filtro entra en la barra de herramientas del encabezado, a
+              // la derecha del título: es una herramienta de ESTA tabla, y
+              // suelto arriba quedaba flotando sin dueño.
+              herramientas={
+                <View style={styles.herramienta}>
+                  <ChipsFiltro
+                    opciones={[
+                      { id: 'sin-cuadrar', etiqueta: 'Sin cuadrar', contador: sinCuadrar.length },
+                      { id: 'todos', etiqueta: 'Todos', contador: items.length },
+                    ]}
+                    activo={filtro}
+                    onCambiar={(id) => setFiltro(id as Filtro)}
+                  />
+                </View>
+              }
+              /*
+                EL PIE DICE LAS TRES CIFRAS, no dos. Con la paginación por
+                scroll hay una más que antes: lo dibujado, lo que pasó el
+                filtro, y el total del inventario. Decir "60 de 985" a secas
+                sobre un filtro activo sería llamar "total" a lo filtrado --
+                el mismo error que la matriz ya tiene documentado en su pie.
+              */
+              pie={(mostradas, total) =>
+                total === items.length
+                  ? `Mostrando ${formatoMiles(mostradas)} de ${formatoMiles(total)} ítems`
+                  : `Mostrando ${formatoMiles(mostradas)} de ${formatoMiles(total)} sin cuadrar · ${formatoMiles(items.length)} ítems en el inventario`
+              }
+              vacio={
                 <View style={styles.vacio}>
                   <Check size={22} color={colors.ok} />
                   <Text style={styles.vacioTitulo}>
@@ -486,71 +464,8 @@ export default function AjusteWebScreen(): JSX.Element {
                       : 'La matriz de auditoría llegó vacía: sin ítems no hay nada que ajustar.'}
                   </Text>
                 </View>
-              ) : (
-                <View
-                  style={[styles.marco, { height: altoTabla }]}
-                  onLayout={(e) => {
-                    const ancho = Math.round(e.nativeEvent.layout.width);
-                    setAnchoDisponible((previo) => (previo === ancho ? previo : ancho));
-                  }}
-                >
-                  {/*
-                    EL ENCABEZADO NO SCROLLEA CON LAS FILAS, pero sí con las
-                    columnas: por eso vive DENTRO del scroll horizontal y FUERA
-                    de la lista vertical. Un encabezado que se va para arriba al
-                    primer scrollazo deja las columnas de números sin nombre.
-
-                    LAS BARRAS DE SCROLL SÍ SE VEN, al revés que en el teléfono:
-                    en una PC no hay gesto que descubra que hay más.
-                  */}
-                  <ScrollView horizontal style={styles.scrollHorizontal} contentContainerStyle={styles.scrollHorizontalContenido}>
-                    <View style={{ width: anchoTabla }}>
-                      <View style={styles.encabezado}>
-                        {columnas.map((columna) => (
-                          <Text
-                            key={columna.clave}
-                            style={[
-                              styles.encabezadoCelda,
-                              { width: columna.ancho },
-                              columna.numerica ? styles.celdaNumerica : null,
-                            ]}
-                            numberOfLines={1}
-                            ellipsizeMode="tail"
-                          >
-                            {columna.titulo}
-                          </Text>
-                        ))}
-                      </View>
-
-                      {/*
-                        FlatList y no un `.map`: con el catálogo completo son
-                        hasta 8.000 filas y montarlas de una cuelga el navegador
-                        antes de pintar nada. `getItemLayout` va porque el alto
-                        es fijo -- sin él la lista mide fila por fila y la barra
-                        de scroll salta.
-                      */}
-                      <FlatList
-                        style={styles.lista}
-                        data={visibles}
-                        extraData={columnas}
-                        keyExtractor={(item) => String(item.productoId)}
-                        renderItem={({ item }) => (
-                          <Fila item={item} columnas={columnas} onPress={() => setEnEdicion(item)} />
-                        )}
-                        getItemLayout={(_datos, indice) => ({ length: ALTO_FILA, offset: ALTO_FILA * indice, index: indice })}
-                        initialNumToRender={30}
-                        maxToRenderPerBatch={30}
-                        windowSize={11}
-                      />
-                    </View>
-                  </ScrollView>
-                </View>
-              )}
-
-              <Text style={styles.pie}>
-                Mostrando {formatoMiles(visibles.length)} de <Text style={styles.pieFuerte}>{formatoMiles(items.length)} ítems</Text>
-              </Text>
-            </TarjetaWeb>
+              }
+            />
 
             {/*
               EL CIERRE VA AL FINAL, después de la lista: es lo último que se
@@ -890,64 +805,18 @@ const styles = StyleSheet.create({
 
   parrafo: { fontSize: fontSize.sm, lineHeight: 20, color: colors.gris, fontFamily: fonts.regular },
 
+  /**
+   * El envoltorio del filtro dentro de la barra de herramientas. Existe porque
+   * `ChipsFiltro` es un `ScrollView` horizontal y en react-native-web esos
+   * traen `flexGrow: 1`: suelto ahí se estiraba hasta el borde y los chips
+   * quedaban pegados a la izquierda en vez de a la derecha. Este `View` sin
+   * flex lo mide por su contenido, y el `flexShrink` deja que se encoja (y
+   * scrollee) si el encabezado queda angosto.
+   */
+  herramienta: { flexShrink: 1 },
+
   vacio: { alignItems: 'center', gap: spacing.sm, paddingVertical: spacing.xxl },
   vacioTitulo: { fontSize: fontSize.lg, color: colors.tinta, fontFamily: fonts.bold, textAlign: 'center' },
-
-  marco: {
-    marginTop: spacing.sm,
-    borderWidth: 1,
-    borderColor: colors.borde,
-    borderRadius: radius.lg,
-    backgroundColor: colors.blanco,
-    overflow: 'hidden',
-  },
-  scrollHorizontal: { flex: 1 },
-  scrollHorizontalContenido: { flexGrow: 1 },
-  lista: { flex: 1 },
-
-  encabezado: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    height: ALTO_FILA,
-    paddingHorizontal: 4,
-    borderBottomWidth: 1,
-    borderBottomColor: colors.borde,
-    backgroundColor: colors.esperaSuave,
-  },
-  encabezadoCelda: {
-    paddingHorizontal: 10,
-    fontSize: fontSize.xs,
-    color: colors.gris,
-    fontFamily: fonts.bold,
-    textTransform: 'uppercase',
-    letterSpacing: 0.4,
-  },
-
-  fila: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    height: ALTO_FILA,
-    paddingHorizontal: 4,
-    borderBottomWidth: 1,
-    borderBottomColor: colors.borde,
-  },
-  /** Faltante y sobrante. Solo las filas con diferencia. */
-  filaFalta: { backgroundColor: colors.faltaSuave },
-  filaSobra: { backgroundColor: colors.okSuave },
-  filaPresionada: { backgroundColor: colors.rojoSuave },
-
-  celda: { paddingHorizontal: 10, fontSize: fontSize.sm, color: colors.tinta, fontFamily: fonts.regular },
-  celdaNodo: { paddingHorizontal: 10, justifyContent: 'center' },
-  /**
-   * Las cifras a la derecha y con `tabular-nums`: todos los dígitos ocupan lo
-   * mismo, así que las unidades quedan bajo las unidades. Sin eso hay que leer
-   * cifra por cifra en vez de barrer la columna con la vista.
-   */
-  celdaNumerica: { textAlign: 'right', fontVariant: ['tabular-nums'], fontFamily: fonts.medium },
-  celdaFuerte: { fontFamily: fonts.bold },
-
-  pie: { marginTop: spacing.sm, fontSize: fontSize.sm, color: colors.gris, fontFamily: fonts.regular },
-  pieFuerte: { color: colors.tinta, fontFamily: fonts.bold },
 
   modalRaiz: { ...StyleSheet.absoluteFillObject, zIndex: 50 },
   modalFondo: { ...StyleSheet.absoluteFillObject, backgroundColor: colors.overlay },

@@ -1,20 +1,20 @@
 import { router } from 'expo-router';
 import { Check, CircleCheckBig, Info, Lock, PencilLine, RefreshCw, Store, TriangleAlert, X } from 'lucide-react-native';
-import { memo, useCallback, useEffect, useMemo, useRef, useState, type JSX, type ReactNode } from 'react';
-import {
-  ActivityIndicator,
-  FlatList,
-  Pressable,
-  ScrollView,
-  StyleSheet,
-  Text,
-  View,
-  useWindowDimensions,
-} from 'react-native';
+import { useCallback, useEffect, useMemo, useRef, useState, type JSX } from 'react';
+import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
 
 import { useRefrescoAlEnfocar } from '../../components/hooks/useRefrescoAlEnfocar';
 import { ChipsFiltro, ModalConteo, SelectorSucursal, formatoMiles } from '../../components/ui';
-import { BotonWeb, ChipIcono, EncabezadoPagina, TarjetaWeb } from '../../components/web';
+import {
+  BotonWeb,
+  CeldaTexto,
+  ChipIcono,
+  EncabezadoPagina,
+  TablaWeb,
+  TarjetaWeb,
+  type ColumnaTabla,
+  type TinteFila,
+} from '../../components/web';
 import { cargarSeguro } from '../../lib/adaptadores/_http';
 import {
   repositorioAjuste,
@@ -82,6 +82,10 @@ interface FilaCorregible {
  * stock y la diferencia; en una PC lo que se hace es barrer la columna de
  * diferencias buscando dónde se rompe.
  *
+ * La tabla NO se dibuja acá: es `components/web/TablaWeb.tsx`, la única de la
+ * web -- *"todas las tablas de la web tienen que tener este diseño"*. Esta
+ * pantalla declara SUS columnas, cuándo va tinte y qué pasa al abrir una fila.
+ *
  * ---------------------------------------------------------------------------
  * EL ERROR DE GUARDADO NO PUEDE IR EN UN `Alert`
  * ---------------------------------------------------------------------------
@@ -94,28 +98,8 @@ interface FilaCorregible {
 /** Abajo de esto las columnas se apilan: es media pantalla en una PC, no un teléfono. */
 const ANCHO_ANGOSTO = 1180;
 
-/** Alto de fila FIJO: con eso `getItemLayout` no mide miles de filas y el scroll no salta. */
-const ALTO_FILA = 44;
-
-const ANCHO_DESCRIPCION = 320;
-
 /** Sin dato es "—", nunca un 0: nadie lo contó es distinto de "contó cero". */
 const SIN_DATO = '—';
-
-interface Celda {
-  texto: string;
-  color?: string;
-  fuerte?: boolean;
-}
-
-interface Columna {
-  clave: string;
-  titulo: string;
-  ancho: number;
-  numerica: boolean;
-  celda: (fila: FilaCorregible) => Celda;
-  nodo?: (fila: FilaCorregible) => ReactNode;
-}
 
 /**
  * LA DIFERENCIA, con las MISMAS tres palabras que el badge del teléfono
@@ -138,54 +122,19 @@ function PildoraDiferencia({ diferencia }: { diferencia: number | null }): JSX.E
   );
 }
 
-interface FilaProps {
-  fila: FilaCorregible;
-  columnas: readonly Columna[];
-  onPress: () => void;
-}
-
-/** `memo` por lo mismo que la matriz: cientos de filas montadas y un padre que cambia al filtrar. */
-const Fila = memo(function FilaComponent({ fila, columnas, onPress }: FilaProps): JSX.Element {
+/**
+ * EL TINTE DE LA FILA: ámbar para lo que no cuadra, y nada para el resto. Solo
+ * para lo que hay que mirar -- si se pintan todas, el color deja de señalar
+ * nada.
+ *
+ * Ámbar y no rojo a propósito: un ítem sin cuadrar espera una decisión, no es
+ * un peligro. Es el mismo color que ya usa el archivo del teléfono para el
+ * borde de estas filas y para su badge de diferencia.
+ */
+function tinteDeFila(fila: FilaCorregible): TinteFila {
   const dif = fila.item ? diferenciaUnidades(fila.item) : null;
-  // El tinte es SOLO para lo que tiene diferencia: si se pintan todas, el
-  // color deja de señalar nada.
-  const tinte = dif === null || dif === 0 ? null : styles.filaSinCuadrar;
-  return (
-    <Pressable
-      onPress={onPress}
-      accessibilityRole="button"
-      accessibilityLabel={`Corregir lo contado de ${fila.producto.descripcion}`}
-      style={({ pressed }) => [styles.fila, tinte, pressed && styles.filaPresionada]}
-    >
-      {columnas.map((columna) => {
-        if (columna.nodo) {
-          return (
-            <View key={columna.clave} style={[styles.celdaNodo, { width: columna.ancho }]}>
-              {columna.nodo(fila)}
-            </View>
-          );
-        }
-        const celda = columna.celda(fila);
-        return (
-          <Text
-            key={columna.clave}
-            style={[
-              styles.celda,
-              { width: columna.ancho },
-              columna.numerica ? styles.celdaNumerica : null,
-              celda.fuerte ? styles.celdaFuerte : null,
-              celda.color === undefined ? null : { color: celda.color },
-            ]}
-            numberOfLines={1}
-            ellipsizeMode="tail"
-          >
-            {celda.texto}
-          </Text>
-        );
-      })}
-    </Pressable>
-  );
-});
+  return dif === null || dif === 0 ? null : 'atencion';
+}
 
 /** Lo que pasó con la última acción. `error` existe porque en web no hay `Alert`. */
 interface Aviso {
@@ -215,7 +164,6 @@ export default function AuditorCorregirWebScreen(): JSX.Element {
   const [filtro, setFiltro] = useState<Filtro>('sin-cuadrar');
   const [enEdicion, setEnEdicion] = useState<FilaCorregible | null>(null);
   const [guardando, setGuardando] = useState(false);
-  const [anchoDisponible, setAnchoDisponible] = useState(0);
 
   const { elegida, elegir } = useSucursalAuditada();
   const [sucursales, setSucursales] = useState<Sucursal[]>([]);
@@ -324,56 +272,67 @@ export default function AuditorCorregirWebScreen(): JSX.Element {
   );
   const visibles = filtro === 'sin-cuadrar' ? sinCuadrar : filas;
 
-  const columnas = useMemo<Columna[]>(() => {
-    const base: Columna[] = [
-      { clave: 'codigo', titulo: 'Código', ancho: 92, numerica: false, celda: (f) => ({ texto: f.producto.codigo }) },
-      {
-        clave: 'descripcion',
-        titulo: 'Descripción',
-        ancho: ANCHO_DESCRIPCION,
-        numerica: false,
-        celda: (f) => ({ texto: f.producto.descripcion }),
-      },
-      { clave: 'hoja', titulo: 'Hoja', ancho: 80, numerica: false, celda: (f) => ({ texto: `#${f.numeroHoja}` }) },
+  /**
+   * LAS COLUMNAS. "Descripción" va SIN `ancho`: es la única que puede usar el
+   * espacio sobrante -- el resto son cifras cortas y estirarlas solo aleja el
+   * número de su encabezado.
+   */
+  const columnas = useMemo<ColumnaTabla<FilaCorregible>[]>(
+    () => [
+      { clave: 'codigo', titulo: 'Código', ancho: 92, celda: (f) => <CeldaTexto>{f.producto.codigo}</CeldaTexto> },
+      { clave: 'descripcion', titulo: 'Descripción', celda: (f) => <CeldaTexto>{f.producto.descripcion}</CeldaTexto> },
+      { clave: 'hoja', titulo: 'Hoja', ancho: 76, celda: (f) => <CeldaTexto>{`#${f.numeroHoja}`}</CeldaTexto> },
       {
         clave: 'contado',
         titulo: 'Contado',
-        ancho: 96,
-        numerica: true,
+        ancho: 88,
+        alinear: 'derecha',
         celda: (f) =>
-          f.contado === null ? { texto: SIN_DATO, color: colors.grisClaro } : { texto: formatoMiles(f.contado), fuerte: true },
+          f.contado === null ? (
+            <CeldaTexto numero color={colors.grisClaro}>
+              {SIN_DATO}
+            </CeldaTexto>
+          ) : (
+            <CeldaTexto numero fuerte>
+              {formatoMiles(f.contado)}
+            </CeldaTexto>
+          ),
       },
       {
         clave: 'stock',
         titulo: 'Stock',
-        ancho: 96,
-        numerica: true,
+        ancho: 88,
+        alinear: 'derecha',
         // El stock, más apagado que lo contado: es referencia, no lo que se va
         // a cambiar. Corregir lo contado NO es corregir el stock.
         celda: (f) =>
-          f.item === null || f.item.stockErp === null
-            ? { texto: SIN_DATO, color: colors.grisClaro }
-            : { texto: formatoMiles(f.item.stockErp), color: colors.gris },
+          f.item === null || f.item.stockErp === null ? (
+            <CeldaTexto numero color={colors.grisClaro}>
+              {SIN_DATO}
+            </CeldaTexto>
+          ) : (
+            <CeldaTexto numero color={colors.gris}>
+              {formatoMiles(f.item.stockErp)}
+            </CeldaTexto>
+          ),
       },
       {
         clave: 'diferencia',
         titulo: 'Diferencia',
-        ancho: 148,
-        numerica: false,
-        celda: () => ({ texto: '' }),
-        nodo: (f) => <PildoraDiferencia diferencia={f.item ? diferenciaUnidades(f.item) : null} />,
+        ancho: 132,
+        celda: (f) => <PildoraDiferencia diferencia={f.item ? diferenciaUnidades(f.item) : null} />,
       },
-    ];
-    // Lo que sobra del ancho se lo lleva la descripción: el resto son cifras
-    // cortas y estirarlas solo aleja el número de su encabezado.
-    const sobra = Math.max(0, anchoDisponible - base.reduce((suma, c) => suma + c.ancho, 0));
-    if (sobra === 0) return base;
-    return base.map((c) => (c.clave === 'descripcion' ? { ...c, ancho: c.ancho + sobra } : c));
-  }, [anchoDisponible]);
+    ],
+    [],
+  );
 
-  const anchoTabla = useMemo(() => columnas.reduce((suma, c) => suma + c.ancho, 0), [columnas]);
-
-  /** La tabla scrollea DENTRO de su marco y no estira la página: ver ajuste.web.tsx. */
+  /**
+   * La tabla scrollea DENTRO de su marco y no estira la página. Y no es solo
+   * comodidad: la paginación por scroll de `TablaWeb` cuelga del scroll DE LA
+   * LISTA -- sin un alto que la haga scrollear por su cuenta, la lista
+   * crecería con su contenido, nunca dispararía `onEndReached` y se quedaría
+   * clavada en la primera tanda.
+   */
   const altoTabla = Math.max(280, Math.round(height - 470));
 
   if (!sesion) return <View style={styles.centro} />;
@@ -532,49 +491,74 @@ export default function AuditorCorregirWebScreen(): JSX.Element {
               </View>
             ) : null}
 
-            <TarjetaWeb
+            {/**
+              * EL SELECTOR DE RONDA. Por defecto la vigente, pero deja ir a
+              * las anteriores -- que es donde vive el caso que el cliente
+              * describió para pedir la corrección: la hoja finalizada de una
+              * ronda ya cerrada, con el siguiente conteo abierto.
+              *
+              * Con una sola ronda no se muestra nada: un selector de una
+              * opción es un control que no decide nada.
+              *
+              * NO entra en la barra de herramientas de la tabla, que sí se
+              * llevó el filtro: esto no filtra las filas, CAMBIA de qué ronda
+              * son -- y sin su rótulo, "1er conteo / 2do conteo" al lado de
+              * "Sin cuadrar / Todos" se lee como dos filtros del mismo cajón.
+              */}
+            {rondaActiva !== null && rondaActiva > 1 ? (
+              <View style={styles.rondas}>
+                <Text style={styles.rondasEtiqueta}>Conteo a corregir</Text>
+                <ChipsFiltro
+                  opciones={Array.from({ length: rondaActiva }, (_, i) => ({
+                    id: String(i + 1),
+                    etiqueta: `${ORDINAL[i + 1]} conteo`,
+                  }))}
+                  activo={String(rondaElegida ?? rondaActiva)}
+                  onCambiar={(id) => {
+                    // El aviso viejo habla de la ronda que se está dejando:
+                    // llevarlo a la nueva sería decir algo que no pasó acá.
+                    setAviso(null);
+                    setRondaElegida(Number(id));
+                  }}
+                />
+              </View>
+            ) : null}
+
+            <TablaWeb
               titulo="Ítems de la ronda"
               sub="Cada fila abre la corrección de lo que se contó."
               icono={PencilLine}
-            >
-              {/**
-               * EL SELECTOR DE RONDA. Por defecto la vigente, pero deja ir a
-               * las anteriores -- que es donde vive el caso que el cliente
-               * describió para pedir la corrección: la hoja finalizada de una
-               * ronda ya cerrada, con el siguiente conteo abierto.
-               *
-               * Con una sola ronda no se muestra nada: un selector de una
-               * opción es un control que no decide nada.
-               */}
-              {rondaActiva !== null && rondaActiva > 1 ? (
-                <View style={styles.rondas}>
-                  <Text style={styles.rondasEtiqueta}>Conteo a corregir</Text>
+              columnas={columnas}
+              filas={visibles}
+              claveDe={(fila) => `${fila.hojaId}-${fila.producto.id}`}
+              onAbrirFila={setEnEdicion}
+              tinteDeFila={tinteDeFila}
+              alto={altoTabla}
+              // El filtro entra en la barra de herramientas del encabezado, a
+              // la derecha del título: es una herramienta de ESTA tabla.
+              herramientas={
+                <View style={styles.herramienta}>
                   <ChipsFiltro
-                    opciones={Array.from({ length: rondaActiva }, (_, i) => ({
-                      id: String(i + 1),
-                      etiqueta: `${ORDINAL[i + 1]} conteo`,
-                    }))}
-                    activo={String(rondaElegida ?? rondaActiva)}
-                    onCambiar={(id) => {
-                      // El aviso viejo habla de la ronda que se está dejando:
-                      // llevarlo a la nueva sería decir algo que no pasó acá.
-                      setAviso(null);
-                      setRondaElegida(Number(id));
-                    }}
+                    opciones={[
+                      { id: 'sin-cuadrar', etiqueta: 'Sin cuadrar', contador: sinCuadrar.length },
+                      { id: 'todos', etiqueta: 'Todos', contador: filas.length },
+                    ]}
+                    activo={filtro}
+                    onCambiar={(id) => setFiltro(id as Filtro)}
                   />
                 </View>
-              ) : null}
-
-              <ChipsFiltro
-                opciones={[
-                  { id: 'sin-cuadrar', etiqueta: 'Sin cuadrar', contador: sinCuadrar.length },
-                  { id: 'todos', etiqueta: 'Todos', contador: filas.length },
-                ]}
-                activo={filtro}
-                onCambiar={(id) => setFiltro(id as Filtro)}
-              />
-
-              {visibles.length === 0 ? (
+              }
+              /*
+                El pie dice las TRES cifras cuando hay filtro: lo dibujado, lo
+                que pasó el filtro y el total de la ronda. Decir "60 de 985" a
+                secas sobre un filtro activo sería llamar "total" a lo filtrado.
+              */
+              pie={(mostradas, total) =>
+                total === filas.length
+                  ? `Mostrando ${formatoMiles(mostradas)} de ${formatoMiles(total)} ítems`
+                  : `Mostrando ${formatoMiles(mostradas)} de ${formatoMiles(total)} sin cuadrar · ${formatoMiles(filas.length)} ítems en la ronda`
+              }
+              vacio={
                 <View style={styles.vacio}>
                   <Check size={22} color={colors.ok} />
                   <Text style={styles.vacioTitulo}>
@@ -586,60 +570,8 @@ export default function AuditorCorregirWebScreen(): JSX.Element {
                       : 'Las hojas de esta ronda todavía no tienen catálogo cargado.'}
                   </Text>
                 </View>
-              ) : (
-                <View
-                  style={[styles.marco, { height: altoTabla }]}
-                  onLayout={(e) => {
-                    const ancho = Math.round(e.nativeEvent.layout.width);
-                    setAnchoDisponible((previo) => (previo === ancho ? previo : ancho));
-                  }}
-                >
-                  {/* El encabezado scrollea con las columnas pero no con las
-                      filas: por eso vive dentro del scroll horizontal y fuera
-                      de la lista vertical. */}
-                  <ScrollView horizontal style={styles.scrollHorizontal} contentContainerStyle={styles.scrollHorizontalContenido}>
-                    <View style={{ width: anchoTabla }}>
-                      <View style={styles.encabezado}>
-                        {columnas.map((columna) => (
-                          <Text
-                            key={columna.clave}
-                            style={[
-                              styles.encabezadoCelda,
-                              { width: columna.ancho },
-                              columna.numerica ? styles.celdaNumerica : null,
-                            ]}
-                            numberOfLines={1}
-                            ellipsizeMode="tail"
-                          >
-                            {columna.titulo}
-                          </Text>
-                        ))}
-                      </View>
-
-                      {/* FlatList y no un `.map`: una ronda completa son miles
-                          de filas y montarlas de una cuelga el navegador. */}
-                      <FlatList
-                        style={styles.lista}
-                        data={visibles}
-                        extraData={columnas}
-                        keyExtractor={(fila) => `${fila.hojaId}-${fila.producto.id}`}
-                        renderItem={({ item: fila }) => (
-                          <Fila fila={fila} columnas={columnas} onPress={() => setEnEdicion(fila)} />
-                        )}
-                        getItemLayout={(_datos, indice) => ({ length: ALTO_FILA, offset: ALTO_FILA * indice, index: indice })}
-                        initialNumToRender={30}
-                        maxToRenderPerBatch={30}
-                        windowSize={11}
-                      />
-                    </View>
-                  </ScrollView>
-                </View>
-              )}
-
-              <Text style={styles.pie}>
-                Mostrando {formatoMiles(visibles.length)} de <Text style={styles.pieFuerte}>{formatoMiles(filas.length)} ítems</Text>
-              </Text>
-            </TarjetaWeb>
+              }
+            />
           </>
         )}
       </ScrollView>
@@ -727,55 +659,18 @@ const styles = StyleSheet.create({
     fontFamily: fonts.bold,
   },
 
+  /**
+   * El envoltorio del filtro dentro de la barra de herramientas. `ChipsFiltro`
+   * es un `ScrollView` horizontal, y en react-native-web esos traen
+   * `flexGrow: 1`: suelto ahí se estiraba hasta el borde y los chips quedaban
+   * pegados a la izquierda en vez de a la derecha. Este `View` sin flex lo
+   * mide por su contenido; el `flexShrink` deja que se encoja (y scrollee) si
+   * el encabezado queda angosto.
+   */
+  herramienta: { flexShrink: 1 },
+
   vacio: { alignItems: 'center', gap: spacing.sm, paddingVertical: spacing.xxl },
   vacioTitulo: { fontSize: fontSize.lg, color: colors.tinta, fontFamily: fonts.bold, textAlign: 'center' },
-
-  marco: {
-    marginTop: spacing.sm,
-    borderWidth: 1,
-    borderColor: colors.borde,
-    borderRadius: radius.lg,
-    backgroundColor: colors.blanco,
-    overflow: 'hidden',
-  },
-  scrollHorizontal: { flex: 1 },
-  scrollHorizontalContenido: { flexGrow: 1 },
-  lista: { flex: 1 },
-
-  encabezado: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    height: ALTO_FILA,
-    paddingHorizontal: 4,
-    borderBottomWidth: 1,
-    borderBottomColor: colors.borde,
-    backgroundColor: colors.esperaSuave,
-  },
-  encabezadoCelda: {
-    paddingHorizontal: 10,
-    fontSize: fontSize.xs,
-    color: colors.gris,
-    fontFamily: fonts.bold,
-    textTransform: 'uppercase',
-    letterSpacing: 0.4,
-  },
-
-  fila: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    height: ALTO_FILA,
-    paddingHorizontal: 4,
-    borderBottomWidth: 1,
-    borderBottomColor: colors.borde,
-  },
-  /** Ámbar, no rojo: un ítem sin cuadrar espera una decisión, no es un peligro. */
-  filaSinCuadrar: { backgroundColor: colors.procesoSuave },
-  filaPresionada: { backgroundColor: colors.rojoSuave },
-
-  celda: { paddingHorizontal: 10, fontSize: fontSize.sm, color: colors.tinta, fontFamily: fonts.regular },
-  celdaNodo: { paddingHorizontal: 10, justifyContent: 'center' },
-  celdaNumerica: { textAlign: 'right', fontVariant: ['tabular-nums'], fontFamily: fonts.medium },
-  celdaFuerte: { fontFamily: fonts.bold },
 
   pildora: {
     flexDirection: 'row',

@@ -28,7 +28,7 @@ import { textoFirmadoPor, textoFirmas, textoFirmasPendientes } from '../../lib/d
 import { useSesion } from '../../lib/sesion-contexto';
 import { useSucursalAuditada } from '../../lib/sucursal-auditada-contexto';
 import { colors, fonts, fontSize, radius, spacing } from '../../lib/theme';
-import { BotonWeb, EncabezadoPagina, TarjetaWeb } from '../web';
+import { BotonWeb, CeldaTexto, EncabezadoPagina, TablaWeb, TarjetaWeb, type ColumnaTabla } from '../web';
 import {
   Badge,
   type BadgeVariant,
@@ -1084,12 +1084,10 @@ export function HistorialScreen({ rol }: HistorialScreenProps): JSX.Element {
               ) : null}
             </View>
 
-            {/* Consolidado: SOLO auditor. Exige año Y mes elegidos: habilitarlo
-                antes invitaría a tocarlo para enterarse recién adentro de que
-                falta el período. */}
-            {rol === 'auditor' && filtroAnio !== null && filtroMes !== null ? (
-              <BotonWeb etiqueta="Exportar consolidado" onPress={() => setModalConsolidadoVisible(true)} />
-            ) : null}
+            {/* El botón de exportar el consolidado ya no vive acá: pasó a las
+                herramientas del encabezado de la tabla, con el resto de las
+                acciones. Lo que decide si se puede sigue siendo este bloque
+                (año Y mes elegidos). */}
           </TarjetaWeb>
 
           {inventarios.length === 0 ? (
@@ -1097,27 +1095,48 @@ export function HistorialScreen({ rol }: HistorialScreenProps): JSX.Element {
               <Text style={styles.ayuda}>Prueba con otra combinación.</Text>
             </TarjetaWeb>
           ) : (
-            <TarjetaWeb
-              titulo="Inventarios"
-              sub={`${inventarios.length} de ${total} ${pluralizar(total, 'inventario', 'inventarios')}`}
-              icono={History}
-            >
-              <View style={styles.marco}>
-                <View style={styles.encabezadoTabla}>
-                  <Text style={[styles.encabezadoCelda, styles.colPeriodo]}>Período</Text>
-                  <Text style={[styles.encabezadoCelda, styles.colSucursal]}>Sucursal</Text>
-                  <Text style={[styles.encabezadoCelda, styles.colEstado]}>Estado</Text>
-                  <Text style={[styles.encabezadoCelda, styles.colItems]}>Ítems</Text>
-                  <Text style={[styles.encabezadoCelda, styles.colDif]}>Diferencias</Text>
-                  <Text style={[styles.encabezadoCelda, styles.colFirmas]}>Firmas</Text>
-                </View>
-                {inventarios.map((inv) => (
-                  <FilaInventarioWeb key={inv.id} inventario={inv} onAbrir={() => abrirDetalle(inv.id)} />
-                ))}
-              </View>
+            <>
+              {/*
+                LA TABLA ÚNICA DE LA WEB (`components/web/TablaWeb`). Cada fila
+                abre el detalle de ese inventario, así que sí lleva
+                `onAbrirFila`.
 
-              {/* Nunca más un techo silencioso: mientras queden inventarios
-                  sin traer para este filtro, el botón sigue ahí. */}
+                SIN TINTE DE FILA, y es deliberado: esto es un REGISTRO, no una
+                bandeja de pendientes. Todo inventario cerrado tiene
+                diferencias, así que teñir "los que tienen" pintaría casi todo
+                y el color dejaría de significar algo. Lo que hay que mirar de
+                cada fila ya lo dicen el badge de estado y la columna de
+                diferencias en rojo.
+              */}
+              <TablaWeb<InventarioHistorico>
+                titulo="Inventarios"
+                icono={History}
+                columnas={COLUMNAS_INVENTARIOS}
+                filas={inventarios}
+                claveDe={(inv) => String(inv.id)}
+                onAbrirFila={(inv) => abrirDetalle(inv.id)}
+                herramientas={
+                  /* Consolidado: SOLO auditor. Exige año Y mes elegidos en los
+                     filtros de arriba: habilitarlo antes invitaría a tocarlo
+                     para enterarse recién adentro de que falta el período. */
+                  rol === 'auditor' && filtroAnio !== null && filtroMes !== null ? (
+                    <BotonWeb etiqueta="Exportar consolidado" onPress={() => setModalConsolidadoVisible(true)} />
+                  ) : null
+                }
+                /* EL TOTAL ES EL DEL SERVIDOR, no el de lo que se trajo: decir
+                   "20 de 20" sobre un filtro que tiene 45 sería el techo
+                   silencioso que el botón de abajo vino a romper. */
+                pie={(mostradas) => `Mostrando ${mostradas} de ${total} ${pluralizar(total, 'inventario', 'inventarios')}`}
+              />
+
+              {/*
+                "CARGAR MÁS" NO SE VA con la paginación de la tabla, y no es un
+                descuido: la de `TablaWeb` es por SCROLL y sobre lo que ya está
+                en memoria -- corta el DIBUJO. Esta le pide al SERVIDOR la página
+                siguiente (`TAMANO_PAGINA`), y sin ella los inventarios que
+                todavía no se trajeron no existirían para nadie. Mientras queden,
+                el botón sigue ahí.
+              */}
               {inventarios.length < total ? (
                 <BotonWeb
                   etiqueta={`Cargar más (${total - inventarios.length} ${pluralizar(total - inventarios.length, 'restante', 'restantes')})`}
@@ -1125,7 +1144,7 @@ export function HistorialScreen({ rol }: HistorialScreenProps): JSX.Element {
                   onPress={() => void cargarMas()}
                 />
               ) : null}
-            </TarjetaWeb>
+            </>
           )}
         </>
       )}
@@ -1166,52 +1185,77 @@ function Dato({ etiqueta, valor, tono }: { etiqueta: string; valor: string; tono
  * Reemplaza a `TarjetaInventario`, que no se copió acá justamente porque es la
  * pieza que este rediseño viene a cambiar.
  */
-function FilaInventarioWeb({
-  inventario,
-  onAbrir,
-}: {
-  inventario: InventarioHistorico;
-  onAbrir: () => void;
-}): JSX.Element {
-  const r = inventario.resultado;
-  // El MISMO texto que el pie de la tarjeta del teléfono: firmado por, o
-  // cuántas firmas faltan.
-  const firmas = inventario.folio
-    ? textoFirmadoPor(inventario.aprobacionesRequeridas)
-    : textoFirmas(inventario.aprobaciones, inventario.aprobacionesRequeridas);
-  const est = ESTADOS[inventario.estado];
-  return (
-    <Pressable
-      style={styles.fila}
-      onPress={onAbrir}
-      accessibilityRole="button"
-      accessibilityLabel={`Abrir inventario de ${inventario.sucursalNombre}, ${MESES_CORTOS[inventario.periodoMes - 1]} ${inventario.periodoAnio}`}
-    >
-      <Text style={[styles.celda, styles.colPeriodo, styles.celdaFuerte]} numberOfLines={1}>
-        {MESES_CORTOS[inventario.periodoMes - 1]} {inventario.periodoAnio}
-      </Text>
-      <Text style={[styles.celda, styles.colSucursal]} numberOfLines={1}>
-        {inventario.sucursalNombre}
-      </Text>
-      <View style={styles.colEstado}>
-        {/* `ESTADOS` es la MISMA tabla que usa la tarjeta del teléfono: una
-            sola fuente para la etiqueta y el color de cada estado. */}
-        <Badge label={est.etiqueta} variant={est.badge} />
-      </View>
-      {/* Sin resultado calculado no se inventa un 0: el guion dice "todavía no
-          se sabe", que es lo que pasa con un inventario en curso. */}
-      <Text style={[styles.celda, styles.colItems, styles.celdaNumerica]}>
-        {r === null ? '—' : formatoMiles(r.itemsTotales)}
-      </Text>
-      <Text style={[styles.celda, styles.colDif, styles.celdaNumerica, r !== null && r.itemsConDiferencia > 0 ? styles.celdaFalta : null]}>
-        {r === null ? '—' : formatoMiles(r.itemsConDiferencia)}
-      </Text>
-      <Text style={[styles.celda, styles.colFirmas]} numberOfLines={1}>
-        {firmas}
-      </Text>
-    </Pressable>
-  );
-}
+/**
+ * LAS SEIS COLUMNAS DEL REGISTRO. Las mismas que había: período, sucursal,
+ * estado, ítems, diferencias y firmas.
+ *
+ * Sin `ancho`, sucursal y firmas se reparten lo que sobra: son los dos textos
+ * largos y los únicos que se benefician de una ventana ancha. El resto queda
+ * fijo para que las cifras no se muevan de fila en fila.
+ */
+const COLUMNAS_INVENTARIOS: ColumnaTabla<InventarioHistorico>[] = [
+  {
+    clave: 'periodo',
+    titulo: 'Período',
+    ancho: 120,
+    celda: (inv) => (
+      <CeldaTexto fuerte>
+        {MESES_CORTOS[inv.periodoMes - 1]} {inv.periodoAnio}
+      </CeldaTexto>
+    ),
+  },
+  { clave: 'sucursal', titulo: 'Sucursal', celda: (inv) => <CeldaTexto>{inv.sucursalNombre}</CeldaTexto> },
+  {
+    clave: 'estado',
+    titulo: 'Estado',
+    ancho: 170,
+    // `BadgeEstado` de `components/web` NO sirve acá: tipa su prop como
+    // `VeredictoAuditoria` -- los cinco estados de un ÍTEM (cuadrado, falta,
+    // empresa, sin dato del ERP, sin contar) -- y estos son los seis del ciclo
+    // de vida de un INVENTARIO. Forzarlos ahí le sacaría a ese tipo justo la
+    // garantía que lo hace valer. `ESTADOS` es la MISMA tabla que usa la
+    // tarjeta del teléfono: una sola fuente para la etiqueta y el color.
+    celda: (inv) => <Badge label={ESTADOS[inv.estado].etiqueta} variant={ESTADOS[inv.estado].badge} />,
+  },
+  {
+    clave: 'items',
+    titulo: 'Ítems',
+    ancho: 92,
+    alinear: 'derecha',
+    // Sin resultado calculado no se inventa un 0: el guion dice "todavía no se
+    // sabe", que es lo que pasa con un inventario en curso.
+    celda: (inv) => <CeldaTexto numero>{inv.resultado === null ? '—' : formatoMiles(inv.resultado.itemsTotales)}</CeldaTexto>,
+  },
+  {
+    clave: 'diferencias',
+    titulo: 'Diferencias',
+    ancho: 108,
+    alinear: 'derecha',
+    /** En rojo solo las que existen: son lo que se viene a buscar. */
+    celda: (inv) => (
+      <CeldaTexto
+        numero
+        fuerte={inv.resultado !== null && inv.resultado.itemsConDiferencia > 0}
+        color={inv.resultado !== null && inv.resultado.itemsConDiferencia > 0 ? colors.falta : undefined}
+      >
+        {inv.resultado === null ? '—' : formatoMiles(inv.resultado.itemsConDiferencia)}
+      </CeldaTexto>
+    ),
+  },
+  {
+    clave: 'firmas',
+    titulo: 'Firmas',
+    // El MISMO texto que el pie de la tarjeta del teléfono: firmado por, o
+    // cuántas firmas faltan.
+    celda: (inv) => (
+      <CeldaTexto>
+        {inv.folio
+          ? textoFirmadoPor(inv.aprobacionesRequeridas)
+          : textoFirmas(inv.aprobaciones, inv.aprobacionesRequeridas)}
+      </CeldaTexto>
+    ),
+  },
+];
 
 
 /**
@@ -1378,35 +1422,4 @@ const styles = StyleSheet.create({
   paginaWeb: { flex: 1 },
   contenidoWeb: { padding: spacing.xxl, gap: spacing.lg },
   filtros: { flexGrow: 0 },
-  marco: { borderWidth: 1, borderColor: colors.borde, borderRadius: radius.md, overflow: 'hidden' },
-  encabezadoTabla: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    minHeight: 38,
-    borderBottomWidth: 1,
-    borderBottomColor: colors.borde,
-    backgroundColor: colors.esperaSuave,
-  },
-  encabezadoCelda: {
-    paddingHorizontal: spacing.md,
-    fontSize: 11.5,
-    color: colors.gris,
-    fontFamily: fonts.bold,
-    textTransform: 'uppercase',
-    letterSpacing: 0.4,
-  },
-  fila: { flexDirection: 'row', alignItems: 'center', minHeight: 50, borderBottomWidth: 1, borderBottomColor: colors.borde },
-  celda: { paddingHorizontal: spacing.md, fontSize: fontSize.sm, color: colors.gris, fontFamily: fonts.regular },
-  celdaFuerte: { color: colors.tinta, fontFamily: fonts.semibold, fontSize: fontSize.base },
-  /** Cifras a la derecha y `tabular-nums`: se comparan columna abajo. */
-  celdaNumerica: { textAlign: 'right', fontVariant: ['tabular-nums'], fontFamily: fonts.medium, color: colors.tinta },
-  /** Solo las diferencias, que son lo que se viene a buscar. */
-  celdaFalta: { color: colors.falta, fontFamily: fonts.bold },
-
-  colPeriodo: { width: 120 },
-  colSucursal: { flex: 1.6, minWidth: 150 },
-  colEstado: { width: 170, paddingHorizontal: spacing.md },
-  colItems: { width: 92 },
-  colDif: { width: 108 },
-  colFirmas: { flex: 1.4, minWidth: 150 },
 });

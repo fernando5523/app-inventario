@@ -15,3 +15,11 @@ export { BotonWeb, type BotonWebProps } from './BotonWeb';
 export { ChipIcono, type ChipIconoProps, type TonoChip } from './ChipIcono';
 export { EncabezadoPagina, type EncabezadoPaginaProps } from './EncabezadoPagina';
 export { FilaDato, TarjetaWeb, type TarjetaWebProps } from './TarjetaWeb';
+export {
+  CeldaTexto,
+  TablaWeb,
+  type AlineacionColumna,
+  type ColumnaTabla,
+  type TablaWebProps,
+  type TinteFila,
+} from './TablaWeb';

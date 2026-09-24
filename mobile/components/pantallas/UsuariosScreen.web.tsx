@@ -22,7 +22,7 @@ import type { Rol, Sucursal, Usuario } from '../../lib/dominio/tipos';
 import { useSesion } from '../../lib/sesion-contexto';
 import { colors, fonts, fontSize, radius, spacing } from '../../lib/theme';
 import { CampoTexto, PinPuntos, Select, TecladoPin, type SelectOpcion } from '../ui';
-import { BotonWeb, EncabezadoPagina, TarjetaWeb } from '../web';
+import { BotonWeb, CeldaTexto, EncabezadoPagina, TablaWeb, TarjetaWeb, type ColumnaTabla } from '../web';
 
 const LARGO_PIN = 6;
 const ANCHO_ANGOSTO = 1180;
@@ -249,6 +249,84 @@ export function UsuariosScreen({ rol }: UsuariosScreenProps): JSX.Element {
 
   const habilitadas = usuarios.filter((u) => u.activo).length;
 
+  /**
+   * LAS COLUMNAS, para `TablaWeb`. Son las MISMAS seis que ya había; lo único
+   * que cambia es quién las dibuja.
+   *
+   * Sucursal solo para el Administrador: el Auditor ve únicamente las cuentas
+   * de su tienda, así que una columna con el mismo nombre repetido en cada
+   * fila no informa nada y le roba ancho al resto. Es el mismo criterio que
+   * tenía la tabla de antes.
+   *
+   * NO hay `onAbrirFila`: tocar la fila no lleva a ningún lado -- las cuatro
+   * acciones son botones propios, cada uno sobre su fila.
+   */
+  const columnas: ColumnaTabla<Usuario>[] = [
+    { clave: 'nombre', titulo: 'Nombre', celda: (u) => <CeldaTexto fuerte>{u.nombre}</CeldaTexto> },
+    // `numero` por el `tabular-nums`, pero a la izquierda: un DNI es un
+    // identificador, no una cantidad, y alinearlo a la derecha lo haría leer
+    // como un monto.
+    { clave: 'dni', titulo: 'DNI', ancho: 110, celda: (u) => <CeldaTexto numero>{u.dni}</CeldaTexto> },
+    {
+      clave: 'rol',
+      titulo: 'Rol',
+      ancho: 150,
+      celda: (u) => <PillUsuario texto={NOMBRE_ROL[u.rol]} tono={u.rol === 'administrador' ? 'atencion' : 'neutro'} />,
+    },
+    ...(rol === 'administrador'
+      ? [
+          {
+            clave: 'sucursal',
+            titulo: 'Sucursal',
+            ancho: 180,
+            celda: (u: Usuario) => (
+              <CeldaTexto color={colors.gris}>
+                {u.sucursalId ? (nombreTienda.get(u.sucursalId) ?? 'Sucursal') : '—'}
+              </CeldaTexto>
+            ),
+          },
+        ]
+      : []),
+    {
+      clave: 'estado',
+      titulo: 'Estado',
+      ancho: 150,
+      // Habilitada en VERDE y deshabilitada en GRIS, nunca en rojo: una cuenta
+      // deshabilitada no es una falla ni un peligro, es una decisión que
+      // alguien tomó. Por lo mismo la fila NO lleva tinte.
+      celda: (u) => <PillUsuario texto={u.activo ? 'Habilitada' : 'Deshabilitada'} tono={u.activo ? 'ok' : 'neutro'} />,
+    },
+    {
+      clave: 'acciones',
+      titulo: 'Acciones',
+      ancho: 168,
+      celda: (u) => (
+        <View style={styles.acciones}>
+          <AccionFila icono={SquarePen} etiqueta={`Editar cuenta de ${u.nombre}`} onPress={() => abrirEditar(u)} />
+          <AccionFila
+            icono={KeyRound}
+            etiqueta={`Resetear PIN de ${u.nombre}`}
+            onPress={() => {
+              setPinReset('');
+              setUsuarioResetPin(u);
+            }}
+          />
+          <AccionFila
+            icono={u.activo ? UserX : UserCheck}
+            etiqueta={`${u.activo ? 'Deshabilitar' : 'Habilitar'} cuenta de ${u.nombre}`}
+            onPress={() => void alternarActivo(u)}
+          />
+          <AccionFila
+            icono={Trash2}
+            etiqueta={`Eliminar cuenta de ${u.nombre}`}
+            peligro
+            onPress={() => confirmarEliminar(u)}
+          />
+        </View>
+      ),
+    },
+  ];
+
   return (
     <ScrollView style={styles.pagina} contentContainerStyle={styles.contenido} showsVerticalScrollIndicator={false}>
       <EncabezadoPagina
@@ -360,72 +438,20 @@ export function UsuariosScreen({ rol }: UsuariosScreenProps): JSX.Element {
           <Text style={styles.ayuda}>Crea la primera con el botón de arriba.</Text>
         </TarjetaWeb>
       ) : (
-        <TarjetaWeb
+        /*
+          LA TABLA ÚNICA DE LA WEB. Antes esta pantalla dibujaba su propio
+          marco, su propia cabecera y sus propias filas; ahora las pone
+          `TablaWeb`, que es la misma que usan la matriz y la clasificación.
+          Los datos, los permisos y los textos no cambiaron.
+        */
+        <TablaWeb
           titulo="Cuentas"
           sub={`${usuarios.length} ${pluralizar(usuarios.length, 'cuenta', 'cuentas')} · ${habilitadas} ${pluralizar(habilitadas, 'habilitada', 'habilitadas')}`}
           icono={Users}
-        >
-          <View style={styles.marco}>
-            <View style={styles.encabezadoTabla}>
-              <Text style={[styles.encabezadoCelda, styles.colNombre]}>Nombre</Text>
-              <Text style={[styles.encabezadoCelda, styles.colDni]}>DNI</Text>
-              <Text style={[styles.encabezadoCelda, styles.colRol]}>Rol</Text>
-              {rol === 'administrador' ? <Text style={[styles.encabezadoCelda, styles.colSucursal]}>Sucursal</Text> : null}
-              <Text style={[styles.encabezadoCelda, styles.colEstado]}>Estado</Text>
-              <Text style={[styles.encabezadoCelda, styles.colAcciones]}>Acciones</Text>
-            </View>
-
-            {usuarios.map((usuario) => (
-              <View key={usuario.id} style={styles.fila}>
-                <Text style={[styles.celda, styles.colNombre, styles.celdaFuerte]} numberOfLines={1}>
-                  {usuario.nombre}
-                </Text>
-                <Text style={[styles.celda, styles.colDni]} numberOfLines={1}>
-                  {usuario.dni}
-                </Text>
-                <View style={styles.colRol}>
-                  <PillUsuario texto={NOMBRE_ROL[usuario.rol]} tono={usuario.rol === 'administrador' ? 'atencion' : 'neutro'} />
-                </View>
-                {rol === 'administrador' ? (
-                  <Text style={[styles.celda, styles.colSucursal]} numberOfLines={1}>
-                    {usuario.sucursalId ? (nombreTienda.get(usuario.sucursalId) ?? 'Sucursal') : '—'}
-                  </Text>
-                ) : null}
-                <View style={styles.colEstado}>
-                  {/* Habilitada en VERDE y deshabilitada en GRIS, nunca en rojo:
-                      una cuenta deshabilitada no es una falla ni un peligro, es
-                      una decisión que alguien tomó. */}
-                  <PillUsuario
-                    texto={usuario.activo ? 'Habilitada' : 'Deshabilitada'}
-                    tono={usuario.activo ? 'ok' : 'neutro'}
-                  />
-                </View>
-                <View style={[styles.colAcciones, styles.acciones]}>
-                  <AccionFila icono={SquarePen} etiqueta={`Editar cuenta de ${usuario.nombre}`} onPress={() => abrirEditar(usuario)} />
-                  <AccionFila
-                    icono={KeyRound}
-                    etiqueta={`Resetear PIN de ${usuario.nombre}`}
-                    onPress={() => {
-                      setPinReset('');
-                      setUsuarioResetPin(usuario);
-                    }}
-                  />
-                  <AccionFila
-                    icono={usuario.activo ? UserX : UserCheck}
-                    etiqueta={`${usuario.activo ? 'Deshabilitar' : 'Habilitar'} cuenta de ${usuario.nombre}`}
-                    onPress={() => void alternarActivo(usuario)}
-                  />
-                  <AccionFila
-                    icono={Trash2}
-                    etiqueta={`Eliminar cuenta de ${usuario.nombre}`}
-                    peligro
-                    onPress={() => confirmarEliminar(usuario)}
-                  />
-                </View>
-              </View>
-            ))}
-          </View>
-        </TarjetaWeb>
+          columnas={columnas}
+          filas={usuarios}
+          claveDe={(u) => String(u.id)}
+        />
       )}
 
       <Modal visible={editando !== null} transparent animationType="fade" onRequestClose={() => setEditando(null)}>
@@ -602,34 +628,6 @@ const styles = StyleSheet.create({
     borderRadius: radius.md,
   },
   valorVacio: { flex: 1, fontSize: fontSize.base, color: colors.grisClaro, fontFamily: fonts.regular },
-
-  marco: { borderWidth: 1, borderColor: colors.borde, borderRadius: radius.md, overflow: 'hidden' },
-  encabezadoTabla: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    minHeight: 38,
-    borderBottomWidth: 1,
-    borderBottomColor: colors.borde,
-    backgroundColor: colors.esperaSuave,
-  },
-  encabezadoCelda: {
-    paddingHorizontal: spacing.md,
-    fontSize: 11.5,
-    color: colors.gris,
-    fontFamily: fonts.bold,
-    textTransform: 'uppercase',
-    letterSpacing: 0.4,
-  },
-  fila: { flexDirection: 'row', alignItems: 'center', minHeight: 52, borderBottomWidth: 1, borderBottomColor: colors.borde },
-  celda: { paddingHorizontal: spacing.md, fontSize: fontSize.sm, color: colors.gris, fontFamily: fonts.regular },
-  celdaFuerte: { color: colors.tinta, fontFamily: fonts.semibold, fontSize: fontSize.base },
-
-  colNombre: { flex: 2.2, minWidth: 160 },
-  colDni: { width: 110 },
-  colRol: { width: 150, paddingHorizontal: spacing.md },
-  colSucursal: { flex: 1.4, minWidth: 130 },
-  colEstado: { width: 158, paddingHorizontal: spacing.md },
-  colAcciones: { width: 176 },
 
   acciones: { flexDirection: 'row', alignItems: 'center', gap: spacing.xs, paddingHorizontal: spacing.sm },
   accion: {

@@ -1,5 +1,5 @@
 import { router } from 'expo-router';
-import { AlertTriangle, Search, ShieldAlert, Tag, X } from 'lucide-react-native';
+import { AlertTriangle, Search, Tag, X } from 'lucide-react-native';
 import { useCallback, useEffect, useRef, useState, type JSX } from 'react';
 import { ActivityIndicator, Alert, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 
@@ -25,7 +25,7 @@ import type { ClaseItem, ProductoClasificable } from '../../lib/puertos/reposito
 import { colors, fonts, fontSize, radius, spacing } from '../../lib/theme';
 import { useRefrescoAlEnfocar } from '../hooks/useRefrescoAlEnfocar';
 import { CampoTexto, ChipsFiltro, formatoMiles, type OpcionChip } from '../ui';
-import { BotonWeb, EncabezadoPagina, TarjetaWeb } from '../web';
+import { BotonWeb, CeldaTexto, EncabezadoPagina, TablaWeb, type ColumnaTabla } from '../web';
 
 const TAMANO_PAGINA = 40;
 const AVISO_CUANDO_APLICA =
@@ -89,6 +89,77 @@ function Pill({ texto, tono }: { texto: string; tono: TonoPill }): JSX.Element {
     </View>
   );
 }
+
+/**
+ * El buscador que vive DENTRO del encabezado de la tabla. Compacto a
+ * propósito: el `CampoTexto` del design system trae su rótulo arriba y ocupa
+ * dos renglones, que en una barra de herramientas de una sola línea no entran.
+ *
+ * El rótulo no se pierde -- pasa a `accessibilityLabel`, que es donde sigue
+ * sirviendo. El texto de ayuda del campo es el MISMO de antes.
+ */
+function BuscadorTabla({ valor, onCambiar }: { valor: string; onCambiar: (v: string) => void }): JSX.Element {
+  return (
+    <View style={styles.buscador}>
+      <Search size={16} color={colors.grisClaro} />
+      <TextInput
+        style={styles.buscadorInput}
+        value={valor}
+        onChangeText={onCambiar}
+        placeholder="Código, descripción o categoría"
+        placeholderTextColor={colors.grisClaro}
+        autoCapitalize="none"
+        accessibilityLabel="Buscar producto"
+      />
+    </View>
+  );
+}
+
+/**
+ * LAS CINCO COLUMNAS, las mismas que ya había. La separación entre "lo que
+ * hace el sistema" y "tu excepción" es el punto de la pantalla: fundirlas
+ * escondería justamente dónde no coinciden.
+ *
+ * Va fuera del componente porque no depende de nada del render: así la
+ * identidad del arreglo es estable y `TablaWeb` no rearma nada de más.
+ */
+const COLUMNAS: ColumnaTabla<ProductoClasificable>[] = [
+  { clave: 'codigo', titulo: 'Código', ancho: 96, celda: (p) => <CeldaTexto numero color={colors.gris}>{p.codigo}</CeldaTexto> },
+  // Truncado al FINAL (lo hace `CeldaTexto`): se reconoce el producto por cómo
+  // empieza el nombre.
+  { clave: 'descripcion', titulo: 'Descripción', celda: (p) => <CeldaTexto fuerte>{p.descripcion}</CeldaTexto> },
+  {
+    clave: 'categoria',
+    titulo: 'Categoría',
+    ancho: 170,
+    celda: (p) => <CeldaTexto color={colors.gris}>{p.categoria ?? 'Sin categoría'}</CeldaTexto>,
+  },
+  {
+    clave: 'sistema',
+    titulo: 'Lo que hace el sistema',
+    ancho: 200,
+    celda: (p) => (
+      <CeldaTexto color={colors.gris}>
+        {textoResponsableDynamics(p.responsableDynamics)} · {textoClase(p.claseDynamics)}
+      </CeldaTexto>
+    ),
+  },
+  {
+    clave: 'excepcion',
+    titulo: 'Tu excepción',
+    ancho: 210,
+    celda: (p) => {
+      const pill = pillDelAuditor(p);
+      return pill ? <Pill texto={pill.texto} tono={pill.tono} /> : <CeldaTexto color={colors.grisClaro}>Sin excepción</CeldaTexto>;
+    },
+  },
+];
+
+/**
+ * Identidad estable para "la tabla no tiene filas". Un `[]` nuevo en cada
+ * render haría que `TablaWeb` reiniciara su tanda en cada render.
+ */
+const SIN_FILAS: ProductoClasificable[] = [];
 
 /**
  * El selector de las tres vías. Son `Pressable` reales y no `View` porque acá
@@ -363,6 +434,15 @@ export function ClasificacionScreen(): JSX.Element {
       : null;
 
   const cifras = `${formatoMiles(total)} ${soloClasificados ? pluralizar(total, 'excepción', 'excepciones') : pluralizar(total, 'producto', 'productos')}`;
+
+  /**
+   * Cargando o con error, la tabla va SIN FILAS y muestra su `vacio` -- que es
+   * exactamente lo que hacía antes, cuando el spinner y el cartel de error
+   * reemplazaban la tabla entera. En particular, un fallo de "Cargar más"
+   * sigue dejando el listado en su cartel de error en vez de mostrar media
+   * lista con un error escondido.
+   */
+  const filasDeLaTabla = cargando || error !== null ? SIN_FILAS : productos;
   // `recuperarAlDespausar`: el disparo que llegue con un producto abierto no
   // se tira -- corre al cerrar el modal.
   useRefrescoAlEnfocar(cargar, { pausado: seleccionado !== null, recuperarAlDespausar: true });
@@ -376,98 +456,83 @@ export function ClasificacionScreen(): JSX.Element {
         onInicio={() => router.push('/')}
       />
 
-      <TarjetaWeb titulo="Buscar en el catálogo" sub={cifras} icono={Search} style={styles.filtros}>
-        <CampoTexto
-          label="Buscar producto"
-          valor={q}
-          onCambiar={setQ}
-          icon={Search}
-          placeholder="Código, descripción o categoría"
-          autoCapitalize="none"
-        />
-        <ChipsFiltro
-          opciones={OPCIONES_FILTRO}
-          activo={soloClasificados ? 'clasificados' : 'todos'}
-          onCambiar={(id) => setSoloClasificados(id === 'clasificados')}
-        />
-      </TarjetaWeb>
+      {/*
+        LA TABLA ÚNICA DE LA WEB, Y EL BUSCADOR ADENTRO DE SU ENCABEZADO.
+        Antes el buscador y los chips vivían en una tarjeta aparte arriba de la
+        tabla; ahora van donde se usan, a la derecha del título.
 
-      {cargando ? (
-        <ActivityIndicator color={colors.rojo} style={styles.cargando} />
-      ) : error ? (
-        <TarjetaWeb titulo="No se pudo cargar" icono={ShieldAlert} tono="neutro">
-          <Text style={styles.ayuda}>{error}</Text>
-          <BotonWeb
-            etiqueta="Reintentar"
-            variante="principal"
-            onPress={() => {
-              setCargando(true);
-              void cargar();
-            }}
-          />
-        </TarjetaWeb>
-      ) : productos.length === 0 ? (
-        <TarjetaWeb
-          titulo={soloClasificados ? 'Todavía no hay excepciones' : 'Sin resultados'}
-          icono={Search}
-          tono="neutro"
-        >
-          <Text style={styles.ayuda}>
-            {soloClasificados
-              ? 'Cuando marques un producto como empresa, paquete o unidad, va a aparecer aquí.'
-              : 'Prueba con otro código, descripción o categoría.'}
-          </Text>
-        </TarjetaWeb>
-      ) : (
-        <TarjetaWeb titulo="Catálogo" sub={cifras} icono={Tag}>
-          <View style={styles.marco}>
-            <View style={styles.encabezadoTabla}>
-              <Text style={[styles.encabezadoCelda, styles.colCodigo]}>Código</Text>
-              <Text style={[styles.encabezadoCelda, styles.colDescripcion]}>Descripción</Text>
-              <Text style={[styles.encabezadoCelda, styles.colCategoria]}>Categoría</Text>
-              {/* DOS COLUMNAS SEPARADAS, y esa separación es el punto de la
-                  pantalla: lo que hace el sistema y lo que decidió el Auditor.
-                  Fundirlas escondería justamente dónde no coinciden. */}
-              <Text style={[styles.encabezadoCelda, styles.colSistema]}>Lo que hace el sistema</Text>
-              <Text style={[styles.encabezadoCelda, styles.colExcepcion]}>Tu excepción</Text>
+        SE DIBUJA SIEMPRE, incluso cargando o sin resultados, y eso no es un
+        detalle: con el buscador dentro del encabezado, esconder la tabla
+        cuando la búsqueda no devuelve nada escondería también el campo con el
+        que se escribió esa búsqueda -- justo cuando hace falta para
+        corregirla. Los tres estados (cargando, error, sin resultados) van en
+        `vacio`, con los mismos textos de siempre.
+      */}
+      <TablaWeb
+        titulo="Catálogo"
+        icono={Tag}
+        columnas={COLUMNAS}
+        filas={filasDeLaTabla}
+        claveDe={(p) => p.codigo}
+        onAbrirFila={abrir}
+        herramientas={
+          <>
+            <BuscadorTabla valor={q} onCambiar={setQ} />
+            <ChipsFiltro
+              opciones={OPCIONES_FILTRO}
+              activo={soloClasificados ? 'clasificados' : 'todos'}
+              onCambiar={(id) => setSoloClasificados(id === 'clasificados')}
+            />
+          </>
+        }
+        /*
+          EL TOTAL ES EL DEL CATÁLOGO, no el de lo que se trajo. `filas.length`
+          son los productos que hay EN MEMORIA (40 por página), y decir
+          "Mostrando 40 de 40" sobre un catálogo de 11.800 sería el cero que
+          miente de siempre, con otro disfraz. `cifras` ya trae el total real
+          del servidor y su plural.
+        */
+        pie={(mostradas) => (cargando ? cifras : `Mostrando ${formatoMiles(mostradas)} de ${cifras}`)}
+        vacio={
+          cargando ? (
+            <ActivityIndicator color={colors.rojo} />
+          ) : error ? (
+            <View style={styles.vacioBloque}>
+              <Text style={styles.ayuda}>{error}</Text>
+              <BotonWeb
+                etiqueta="Reintentar"
+                variante="principal"
+                onPress={() => {
+                  setCargando(true);
+                  void cargar();
+                }}
+              />
             </View>
+          ) : (
+            <View style={styles.vacioBloque}>
+              <Text style={styles.vacioTitulo}>
+                {soloClasificados ? 'Todavía no hay excepciones' : 'Sin resultados'}
+              </Text>
+              <Text style={styles.ayuda}>
+                {soloClasificados
+                  ? 'Cuando marques un producto como empresa, paquete o unidad, va a aparecer aquí.'
+                  : 'Prueba con otro código, descripción o categoría.'}
+              </Text>
+            </View>
+          )
+        }
+      />
 
-            {productos.map((p) => {
-              const pill = pillDelAuditor(p);
-              return (
-                <Pressable
-                  key={p.codigo}
-                  style={styles.fila}
-                  onPress={() => abrir(p)}
-                  accessibilityRole="button"
-                  accessibilityLabel={`${p.descripcion}. ${textoExcepcionActual(p)}`}
-                >
-                  <Text style={[styles.celda, styles.colCodigo]} numberOfLines={1}>
-                    {p.codigo}
-                  </Text>
-                  {/* Truncado al FINAL: se reconoce el producto por cómo empieza. */}
-                  <Text style={[styles.celda, styles.colDescripcion, styles.celdaFuerte]} numberOfLines={1} ellipsizeMode="tail">
-                    {p.descripcion}
-                  </Text>
-                  <Text style={[styles.celda, styles.colCategoria]} numberOfLines={1} ellipsizeMode="tail">
-                    {p.categoria ?? 'Sin categoría'}
-                  </Text>
-                  <Text style={[styles.celda, styles.colSistema]} numberOfLines={1}>
-                    {textoResponsableDynamics(p.responsableDynamics)} · {textoClase(p.claseDynamics)}
-                  </Text>
-                  <View style={styles.colExcepcion}>
-                    {pill ? <Pill texto={pill.texto} tono={pill.tono} /> : <Text style={styles.sinExcepcion}>Sin excepción</Text>}
-                  </View>
-                </Pressable>
-              );
-            })}
-          </View>
-
-          {hayMasPorCargar(productos.length, total) ? (
-            <BotonWeb etiqueta="Cargar más" cargando={cargandoMas} onPress={() => void cargarMas()} />
-          ) : null}
-        </TarjetaWeb>
-      )}
+      {/*
+        "CARGAR MÁS" SE QUEDA, y no es la paginación que hace la tabla. La de
+        `TablaWeb` corta el DIBUJO de filas que ya están en memoria; esta trae
+        del SERVIDOR las que todavía no llegaron -- el catálogo son ~11.800
+        productos y acá entran de a 40. Sacarla dejaría 40 productos como techo
+        de la pantalla.
+      */}
+      {hayMasPorCargar(productos.length, total) ? (
+        <BotonWeb etiqueta="Cargar más" cargando={cargandoMas} onPress={() => void cargarMas()} />
+      ) : null}
 
       <Modal visible={seleccionado !== null} transparent animationType="fade" onRequestClose={intentarCerrar}>
         <Pressable style={styles.overlay} onPress={intentarCerrar} accessibilityLabel="Cerrar" />
@@ -648,38 +713,29 @@ export function ClasificacionScreen(): JSX.Element {
 const styles = StyleSheet.create({
   pagina: { flex: 1 },
   contenido: { padding: spacing.xxl, gap: spacing.lg },
-  cargando: { marginTop: spacing.xxl },
-  filtros: { flexGrow: 0 },
-  ayuda: { fontSize: fontSize.sm, lineHeight: 19, color: colors.gris, fontFamily: fonts.regular },
 
-  marco: { borderWidth: 1, borderColor: colors.borde, borderRadius: radius.md, overflow: 'hidden' },
-  encabezadoTabla: {
+  /** El buscador de la barra de herramientas: una sola línea, alto de control chico. */
+  buscador: {
     flexDirection: 'row',
     alignItems: 'center',
-    minHeight: 38,
-    borderBottomWidth: 1,
-    borderBottomColor: colors.borde,
-    backgroundColor: colors.esperaSuave,
-  },
-  encabezadoCelda: {
+    gap: spacing.sm,
+    width: 300,
+    minHeight: 40,
     paddingHorizontal: spacing.md,
-    fontSize: 11.5,
-    color: colors.gris,
-    fontFamily: fonts.bold,
-    textTransform: 'uppercase',
-    letterSpacing: 0.4,
+    borderWidth: 1,
+    borderColor: colors.borde,
+    borderRadius: radius.md,
+    backgroundColor: colors.campo,
   },
-  fila: { flexDirection: 'row', alignItems: 'center', minHeight: 48, borderBottomWidth: 1, borderBottomColor: colors.borde },
-  celda: { paddingHorizontal: spacing.md, fontSize: fontSize.sm, color: colors.gris, fontFamily: fonts.regular },
-  celdaFuerte: { color: colors.tinta, fontFamily: fonts.semibold },
+  // Sin tocar el `outline` del navegador: los tipos de React Native no lo
+  // admiten, y ningún otro campo de la app lo apaga. El halo de foco queda
+  // como en el resto de los inputs.
+  buscadorInput: { flex: 1, fontSize: fontSize.sm, color: colors.tinta, fontFamily: fonts.regular },
 
-  colCodigo: { width: 96 },
-  colDescripcion: { flex: 2, minWidth: 190 },
-  colCategoria: { flex: 1.3, minWidth: 140 },
-  colSistema: { flex: 1.4, minWidth: 160 },
-  colExcepcion: { width: 210, paddingHorizontal: spacing.md },
-  sinExcepcion: { fontSize: fontSize.xs, color: colors.grisClaro, fontFamily: fonts.regular },
-
+  /** Los tres estados sin filas (cargando, error, sin resultados) dentro de la tabla. */
+  vacioBloque: { gap: spacing.md, alignItems: 'center', maxWidth: 460 },
+  vacioTitulo: { fontSize: fontSize.lg, color: colors.tinta, fontFamily: fonts.bold, textAlign: 'center' },
+  ayuda: { fontSize: fontSize.sm, lineHeight: 19, color: colors.gris, fontFamily: fonts.regular },
   pill: {
     flexDirection: 'row',
     alignItems: 'center',

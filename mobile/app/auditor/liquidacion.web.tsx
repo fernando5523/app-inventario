@@ -7,7 +7,16 @@ import { ActivityIndicator, Modal, Pressable, ScrollView, StyleSheet, Text, View
 
 import { useRefrescoAlEnfocar } from '../../components/hooks/useRefrescoAlEnfocar';
 import { formatoFechaHora, formatoMiles } from '../../components/ui';
-import { BotonWeb, ChipIcono, EncabezadoPagina, FilaDato, TarjetaWeb } from '../../components/web';
+import {
+  BotonWeb,
+  CeldaTexto,
+  ChipIcono,
+  EncabezadoPagina,
+  FilaDato,
+  TablaWeb,
+  TarjetaWeb,
+  type ColumnaTabla,
+} from '../../components/web';
 import { repositorioLiquidacion, repositorioSesion } from '../../lib/contenedor';
 import { estadoAjustesNegativos, notaFaltanteEmpresa } from '../../lib/dominio/ajustes-formulario';
 import { multaPorInasistencia, textoDiasAsistidos } from '../../lib/dominio/asistencia';
@@ -86,9 +95,6 @@ const nf = new Intl.NumberFormat('es-PE', { minimumFractionDigits: 2, maximumFra
 const soles = (n: number) => `S/ ${nf.format(n)}`;
 
 const ANCHO_ANGOSTO = 1180;
-
-/** Debajo de esto la tabla se desplaza en horizontal en vez de aplastar las columnas. */
-const ANCHO_MINIMO_TABLA = 910;
 
 /**
  * Por qué un monto vino en `null`: nunca "cero", nunca un guión sin
@@ -191,13 +197,17 @@ interface AvisoDeAccion {
   detalle: string;
 }
 
-interface ColumnaPlanilla {
-  clave: string;
-  titulo: string;
-  /** `null` = se lleva el espacio sobrante. El nombre es el único que puede crecer. */
-  ancho: number | null;
-  /** Derecha y `tabular-nums`: las cifras se comparan de un vistazo, columna abajo. */
-  numerica: boolean;
+/**
+ * ESTA PERSONA TIENE FALTAS Y SE SABE. Es lo que decide el tinte de la fila y
+ * el ámbar de la multa.
+ *
+ * `asistio` solo afirma algo si hay asistencia registrada: con el régimen
+ * `sin-asistencia` un `false` no quiere decir que faltó, quiere decir que
+ * nadie marcó nada. Teñir esa fila sería acusar a alguien con un dato que no
+ * existe.
+ */
+function tieneFaltas(fila: DetalleLiquidacion, liquidacion: Liquidacion): boolean {
+  return !fila.asistio && regimenDeLaMulta(liquidacion) !== 'sin-asistencia';
 }
 
 /**
@@ -205,16 +215,71 @@ interface ColumnaPlanilla {
  * número. Se parte de lo que le toca a todos, se le suma lo que le costó
  * faltar, se le resta lo que le devolvió venir, y lo último es lo que de
  * verdad se le descuenta — la única cifra que el servidor manda ya calculada.
+ *
+ * Las cuatro de plata van a la derecha y con `tabular-nums` (`CeldaTexto
+ * numero`): así las unidades quedan bajo las unidades y la columna se barre
+ * con la vista en vez de leerse cifra por cifra.
  */
-const COLUMNAS: ColumnaPlanilla[] = [
-  { clave: 'nombre', titulo: 'Colaborador', ancho: null, numerica: false },
-  { clave: 'rol', titulo: 'Rol', ancho: 110, numerica: false },
-  { clave: 'dias', titulo: 'Días', ancho: 120, numerica: false },
-  { clave: 'cuota', titulo: 'Cuota base', ancho: 120, numerica: true },
-  { clave: 'multa', titulo: 'Multa', ancho: 110, numerica: true },
-  { clave: 'bono', titulo: 'Bono', ancho: 110, numerica: true },
-  { clave: 'monto', titulo: 'A descontar', ancho: 140, numerica: true },
-];
+function columnasDeLaPlanilla(liquidacion: Liquidacion, multaPorDia: boolean): ColumnaTabla<DetalleLiquidacion>[] {
+  return [
+    // Sin `ancho`: el nombre se lleva lo que sobra. El resto queda fijo para
+    // que las cifras no se muevan de fila en fila.
+    { clave: 'nombre', titulo: 'Colaborador', celda: (p) => <CeldaTexto fuerte>{p.nombre}</CeldaTexto> },
+    { clave: 'rol', titulo: 'Rol', ancho: 100, celda: (p) => <CeldaTexto>{NOMBRE_ROL[p.rol] ?? p.rol}</CeldaTexto> },
+    {
+      clave: 'dias',
+      titulo: 'Días',
+      ancho: 110,
+      // DÍAS ASISTIDOS SOBRE DÍAS DEL INVENTARIO, los dos juntos. Nunca el
+      // numerador solo: 2 de 2 y 2 de 5 son la diferencia entre cobrar bono y
+      // pagar tres días de multa. En un cierre de la regla vieja no hay
+      // denominador, y "0 de 0 días" no dice nada de esa persona.
+      celda: (p) => (
+        <CeldaTexto>{multaPorDia ? textoDiasAsistidos(p.diasAsistidos, liquidacion.diasDelInventario) : '—'}</CeldaTexto>
+      ),
+    },
+    {
+      clave: 'cuota',
+      titulo: 'Cuota base',
+      ancho: 110,
+      alinear: 'derecha',
+      celda: () => <CeldaTexto numero>{liquidacion.cuotaBase === null ? '—' : soles(liquidacion.cuotaBase)}</CeldaTexto>,
+    },
+    {
+      clave: 'multa',
+      titulo: 'Multa',
+      ancho: 105,
+      alinear: 'derecha',
+      // La multa usa `proceso` (el estado de ATENCIÓN del design system), no el
+      // rojo de marca: en esta app el rojo es siempre la acción.
+      celda: (p) => (
+        <CeldaTexto numero color={tieneFaltas(p, liquidacion) ? colors.proceso : undefined}>
+          {multaDeLaFila(p, liquidacion)}
+        </CeldaTexto>
+      ),
+    },
+    {
+      clave: 'bono',
+      titulo: 'Bono',
+      ancho: 105,
+      alinear: 'derecha',
+      celda: (p) => (
+        <CeldaTexto numero color={p.asistio ? colors.ok : undefined}>{bonoDeLaFila(p, liquidacion)}</CeldaTexto>
+      ),
+    },
+    {
+      clave: 'monto',
+      titulo: 'A descontar',
+      ancho: 130,
+      alinear: 'derecha',
+      celda: (p) => (
+        <CeldaTexto numero fuerte>
+          {soles(p.monto)}
+        </CeldaTexto>
+      ),
+    },
+  ];
+}
 
 export default function LiquidacionWeb(): JSX.Element {
   const { sesion } = useSesion();
@@ -684,128 +749,64 @@ export default function LiquidacionWeb(): JSX.Element {
           </View>
 
           {/*
-            LA PLANILLA. "Proyectada" vs "de descuentos" es la única señal de si
-            el descuento ya está hecho: antes de liquidar son las filas que VAN
-            A pasar.
+            LA PLANILLA, en la tabla única de la web (`components/web/TablaWeb`).
+            "Proyectada" vs "de descuentos" es la única señal de si el descuento
+            ya está hecho: antes de liquidar son las filas que VAN A pasar.
+
+            LOS CHIPS DEL FILTRO VIAJARON ADENTRO DEL ENCABEZADO. Antes eran una
+            barra suelta arriba de la tabla; el filtro pertenece a la tabla que
+            recorta, y suelto se lee como un filtro de la página entera (no lo
+            es: los montos de arriba no se filtran).
+
+            SIN `onAbrirFila`: una fila de la nómina no lleva a ningún lado.
+            Pasarla dejaría el cursor de mano sobre algo que no responde.
           */}
-          <View style={styles.barraTabla}>
-            <View style={styles.barraTitulos}>
-              <Text style={styles.tablaTitulo}>
-                {liquidacion.proyectada ? 'Planilla proyectada' : 'Planilla de descuentos'}
-              </Text>
-              <Text style={styles.tablaSub}>
-                {liquidacion.planilla.length}{' '}
-                {pluralizar(liquidacion.planilla.length, 'colaborador', 'colaboradores')}
-              </Text>
-            </View>
-
-            <View style={styles.chips}>
-              {(
-                [
-                  { id: 'todos', etiqueta: 'Todos', cuenta: liquidacion.planilla.length },
-                  // '—' y no el número: sin asistencia registrada no se puede
-                  // afirmar quién vino completo. Las dos cuentas son de PERSONAS.
-                  { id: 'asistio', etiqueta: 'Sin faltas', cuenta: asistieron ?? '—' },
-                  { id: 'falto', etiqueta: 'Con faltas', cuenta: conFaltas ?? '—' },
-                ] as const
-              ).map((f) => {
-                const activo = filtro === f.id;
-                return (
-                  <Pressable
-                    key={f.id}
-                    onPress={() => setFiltro(f.id)}
-                    style={[styles.chip, activo && styles.chipActivo]}
-                    accessibilityRole="button"
-                    accessibilityState={{ selected: activo }}
-                  >
-                    <Text style={[styles.chipTexto, activo && styles.chipTextoActivo]}>
-                      {f.etiqueta} ({f.cuenta})
-                    </Text>
-                  </Pressable>
-                );
-              })}
-            </View>
-          </View>
-
-          <View style={styles.marco}>
-            {/*
-              LAS BARRAS DE SCROLL SÍ SE VEN, al revés que en el teléfono: en
-              una PC no hay gesto que descubra que hay más columnas a la
-              derecha. Mismo criterio que `matriz.web.tsx`.
-            */}
-            <ScrollView horizontal contentContainerStyle={styles.tabla}>
-              <View style={styles.tablaInterior}>
-                <View style={styles.encabezado}>
-                  {COLUMNAS.map((columna) => (
-                    <Text
-                      key={columna.clave}
-                      style={[
-                        styles.encabezadoCelda,
-                        columna.ancho === null ? styles.celdaElastica : { width: columna.ancho },
-                        columna.numerica ? styles.celdaNumerica : null,
-                      ]}
-                      numberOfLines={1}
+          <TablaWeb<DetalleLiquidacion>
+            titulo={liquidacion.proyectada ? 'Planilla proyectada' : 'Planilla de descuentos'}
+            icono={Layers}
+            columnas={columnasDeLaPlanilla(liquidacion, multaPorDia)}
+            filas={visibles}
+            claveDe={(p) => String(p.colaboradorId)}
+            tinteDeFila={(p) => (tieneFaltas(p, liquidacion) ? 'atencion' : null)}
+            herramientas={
+              <View style={styles.chips}>
+                {(
+                  [
+                    { id: 'todos', etiqueta: 'Todos', cuenta: liquidacion.planilla.length },
+                    // '—' y no el número: sin asistencia registrada no se puede
+                    // afirmar quién vino completo. Las dos cuentas son de PERSONAS.
+                    { id: 'asistio', etiqueta: 'Sin faltas', cuenta: asistieron ?? '—' },
+                    { id: 'falto', etiqueta: 'Con faltas', cuenta: conFaltas ?? '—' },
+                  ] as const
+                ).map((f) => {
+                  const activo = filtro === f.id;
+                  return (
+                    <Pressable
+                      key={f.id}
+                      onPress={() => setFiltro(f.id)}
+                      style={[styles.chip, activo && styles.chipActivo]}
+                      accessibilityRole="button"
+                      accessibilityState={{ selected: activo }}
                     >
-                      {columna.titulo}
-                    </Text>
-                  ))}
-                </View>
-
-                {visibles.length === 0 ? (
-                  <Text style={styles.tablaVacia}>
-                    Ningún colaborador entra en este filtro. Cambia de filtro para ver el resto de la planilla.
-                  </Text>
-                ) : (
-                  visibles.map((p) => {
-                    // Solo se tiñe cuando de verdad se sabe que faltó: con la
-                    // asistencia sin registrar, `asistio` no afirma nada.
-                    const conFalta = !p.asistio && regimenDeLaMulta(liquidacion) !== 'sin-asistencia';
-                    return (
-                      <View key={p.colaboradorId} style={[styles.fila_, conFalta && styles.filaConFalta]}>
-                        <Text style={[styles.celda, styles.celdaElastica, styles.celdaNombre]} numberOfLines={1} ellipsizeMode="tail">
-                          {p.nombre}
-                        </Text>
-                        <Text style={[styles.celda, { width: 110 }]} numberOfLines={1}>
-                          {NOMBRE_ROL[p.rol] ?? p.rol}
-                        </Text>
-                        {/* DÍAS ASISTIDOS SOBRE DÍAS DEL INVENTARIO, los dos
-                            juntos. Nunca el numerador solo: 2 de 2 y 2 de 5 son
-                            la diferencia entre cobrar bono y pagar tres días de
-                            multa. En un cierre de la regla vieja no hay
-                            denominador, y "0 de 0 días" no dice nada. */}
-                        <Text style={[styles.celda, { width: 120 }]} numberOfLines={1}>
-                          {multaPorDia ? textoDiasAsistidos(p.diasAsistidos, liquidacion.diasDelInventario) : '—'}
-                        </Text>
-                        <Text style={[styles.celda, styles.celdaNumerica, { width: 120 }]}>
-                          {liquidacion.cuotaBase === null ? '—' : soles(liquidacion.cuotaBase)}
-                        </Text>
-                        <Text style={[styles.celda, styles.celdaNumerica, conFalta && styles.celdaMulta, { width: 110 }]}>
-                          {multaDeLaFila(p, liquidacion)}
-                        </Text>
-                        <Text style={[styles.celda, styles.celdaNumerica, p.asistio && styles.celdaBono, { width: 110 }]}>
-                          {bonoDeLaFila(p, liquidacion)}
-                        </Text>
-                        <Text style={[styles.celda, styles.celdaNumerica, styles.celdaMonto, { width: 140 }]}>
-                          {soles(p.monto)}
-                        </Text>
-                      </View>
-                    );
-                  })
-                )}
+                      <Text style={[styles.chipTexto, activo && styles.chipTextoActivo]}>
+                        {f.etiqueta} ({f.cuenta})
+                      </Text>
+                    </Pressable>
+                  );
+                })}
               </View>
-            </ScrollView>
-          </View>
-
-          <View style={styles.pie}>
-            <Layers size={16} color={colors.grisClaro} />
-            <Text style={styles.pieTexto}>
-              Mostrando {visibles.length} de{' '}
-              <Text style={styles.pieFuerte}>
-                {liquidacion.planilla.length}{' '}
-                {pluralizar(liquidacion.planilla.length, 'colaborador', 'colaboradores')}
+            }
+            vacio={
+              <Text style={styles.parrafo}>
+                Ningún colaborador entra en este filtro. Cambia de filtro para ver el resto de la planilla.
               </Text>
-            </Text>
-          </View>
+            }
+            /* EL TOTAL ES EL DE LA PLANILLA ENTERA, no el del filtro: si se
+               muestra el del filtro, hay que decir que es del filtro. */
+            pie={(mostradas) =>
+              `Mostrando ${mostradas} de ${liquidacion.planilla.length} ${pluralizar(liquidacion.planilla.length, 'colaborador', 'colaboradores')}`
+            }
+          />
 
           <View style={[styles.fila, angosto && styles.filaApilada]}>
             {/*
@@ -1238,14 +1239,8 @@ const styles = StyleSheet.create({
   cierra: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, marginTop: spacing.xs },
   cierraTexto: { fontSize: fontSize.sm, color: colors.ok, fontFamily: fonts.semibold },
 
-  // ---------------------------------------------------------------------
-  // LA TABLA DE LA NÓMINA
-  // ---------------------------------------------------------------------
-  barraTabla: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: spacing.lg, flexWrap: 'wrap' },
-  barraTitulos: { gap: 1 },
-  tablaTitulo: { fontSize: fontSize.xl, color: colors.tinta, fontFamily: fonts.bold },
-  tablaSub: { fontSize: fontSize.sm, color: colors.gris, fontFamily: fonts.regular },
-
+  // Los chips del filtro de la planilla: viven adentro del encabezado de
+  // `TablaWeb`, a la derecha del título.
   chips: { flexDirection: 'row', gap: spacing.sm, flexWrap: 'wrap' },
   chip: {
     paddingVertical: 9,
@@ -1258,80 +1253,6 @@ const styles = StyleSheet.create({
   chipActivo: { backgroundColor: colors.rojo, borderColor: colors.rojo },
   chipTexto: { fontSize: fontSize.sm, color: colors.tinta, fontFamily: fonts.medium, fontVariant: ['tabular-nums'] },
   chipTextoActivo: { color: colors.blanco, fontFamily: fonts.bold },
-
-  marco: {
-    borderWidth: 1,
-    borderColor: colors.borde,
-    borderRadius: radius.xl,
-    backgroundColor: colors.blanco,
-    overflow: 'hidden',
-    ...shadow.tarjeta,
-  },
-  tabla: { flexGrow: 1 },
-  tablaInterior: { flexGrow: 1, minWidth: ANCHO_MINIMO_TABLA },
-
-  encabezado: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    minHeight: 40,
-    paddingHorizontal: spacing.sm,
-    borderBottomWidth: 1,
-    borderBottomColor: colors.borde,
-    backgroundColor: colors.esperaSuave,
-  },
-  encabezadoCelda: {
-    paddingHorizontal: spacing.md,
-    fontSize: fontSize.xs,
-    color: colors.gris,
-    fontFamily: fonts.bold,
-    textTransform: 'uppercase',
-    letterSpacing: 0.4,
-  },
-
-  // `fila_` y no `fila`: `fila` ya es la fila de TARJETAS de la página.
-  fila_: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    minHeight: 46,
-    paddingHorizontal: spacing.sm,
-    borderBottomWidth: 1,
-    borderBottomColor: colors.borde,
-  },
-  /**
-   * Quien tiene faltas se señala por TRES vías además del monto: el tinte de la
-   * fila, la multa en ámbar y la fracción de días. En una planilla que se firma,
-   * el renglón al que se le descuenta más tiene que saltar sin leerlo.
-   */
-  filaConFalta: { backgroundColor: colors.procesoSuave },
-
-  celda: { paddingHorizontal: spacing.md, fontSize: fontSize.sm, color: colors.tinta, fontFamily: fonts.regular },
-  /** El nombre se lleva el espacio sobrante; el resto son anchos fijos. */
-  celdaElastica: { flex: 1, minWidth: 200 },
-  celdaNombre: { fontFamily: fonts.semibold },
-  /**
-   * Las cifras a la derecha y con `tabular-nums`: todos los dígitos ocupan lo
-   * mismo, así que las unidades quedan bajo las unidades. Sin eso, una columna
-   * de números con la fuente proporcional se desalinea y hay que leer cifra por
-   * cifra en vez de barrerla con la vista.
-   */
-  celdaNumerica: { textAlign: 'right', fontVariant: ['tabular-nums'], fontFamily: fonts.medium },
-  /** La multa usa `proceso` (ATENCIÓN), no el rojo de marca: el rojo es la acción. */
-  celdaMulta: { color: colors.proceso, fontFamily: fonts.semibold },
-  celdaBono: { color: colors.ok },
-  celdaMonto: { fontSize: fontSize.base, color: colors.tinta, fontFamily: fonts.bold },
-
-  tablaVacia: { padding: spacing.lg, fontSize: fontSize.sm, color: colors.gris, fontFamily: fonts.regular },
-
-  pie: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing.sm,
-    padding: spacing.md,
-    borderRadius: radius.lg,
-    backgroundColor: colors.esperaSuave,
-  },
-  pieTexto: { fontSize: fontSize.sm, color: colors.gris, fontFamily: fonts.regular },
-  pieFuerte: { color: colors.tinta, fontFamily: fonts.bold },
 
   // Reporte a gerencia. Faltante con la paleta `falta` y sobrante con `ok`: son
   // datos del inventario, no avisos.
