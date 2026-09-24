@@ -1,6 +1,16 @@
-import { router } from 'expo-router';
+import {
+  Boxes,
+  CheckCircle2,
+  ClipboardList,
+  Layers,
+  ListChecks,
+  Store,
+  TrendingUp,
+  Users,
+  type LucideIcon,
+} from 'lucide-react-native';
 import { useCallback, useEffect, useRef, useState, type JSX } from 'react';
-import { ActivityIndicator, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, ScrollView, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
 
 import { cargarSeguro, esFallaDeRed } from '../../lib/adaptadores/_http';
 import { inventarioIdSinRed, rondaActivaSinRed, ultimaDescarga, type ResultadoDescarga } from '../../lib/adaptadores/hojas-sqlite';
@@ -14,12 +24,14 @@ import { sucursalEnFoco } from '../../lib/dominio/sucursal-en-foco';
 import type { HojaConteo, Rol, Sucursal } from '../../lib/dominio/tipos';
 import { useSesion } from '../../lib/sesion-contexto';
 import { useSucursalAuditada } from '../../lib/sucursal-auditada-contexto';
-import { colors, fonts, fontSize, spacing } from '../../lib/theme';
+import { colors, fonts, fontSize, radius, shadow, spacing } from '../../lib/theme';
 import { debeReintentarAutomaticamente, INTERVALO_REINTENTO_MS, REINTENTO_INICIAL, trasIntentoFallido } from '../hooks/refresco';
 import { useRefrescoAlEnfocar } from '../hooks/useRefrescoAlEnfocar';
 import { useRefrescarNavegacion } from '../../lib/navegacion-contexto';
-import { PantallaConTabs } from '../navegacion/PantallaConTabs';
-import { BandaSync, BarraApp, Button, formatoMiles, formatoPct, resumenParaTablero, type EstadoSincronizacion } from '../ui';
+import { BandaSync, formatoMiles, formatoPct, resumenParaTablero, type EstadoSincronizacion } from '../ui';
+import { BotonWeb, ChipIcono, EncabezadoPagina, TarjetaWeb, type TonoChip } from '../web';
+
+const ANCHO_ANGOSTO = 1180;
 
 const NOMBRE_ROL: Record<Rol, string> = {
   administrador: 'Administrador',
@@ -43,12 +55,42 @@ interface EstadoSistema {
   inventariosEnCurso: number;
 }
 
+/**
+ * Una cifra del estado. En el teléfono es un renglón; acá es una TARJETA, y
+ * las tarjetas van en fila -- en un monitor las tres entran a la vista sin
+ * bajar, que es todo lo que el Inicio tiene para decir.
+ *
+ * El `icono` es del DISEÑO y se asigna explícito en cada fila, no se deriva de
+ * la etiqueta: un icono adivinado a partir de un texto es la clase de cosa que
+ * queda mal el día que el texto cambia.
+ */
 interface FilaEstado {
   etiqueta: string;
   valor: string;
   pct?: string;
   color?: string;
+  icono: LucideIcon;
 }
+
+/**
+ * EL COLOR SIGNIFICA ALGO, también en el chip de la tarjeta: verde lo que
+ * cerró bien, ámbar lo que espera una decisión, gris lo que todavía no dice
+ * nada. Sale del MISMO `color` con el que se pinta la cifra, así que el chip y
+ * el número nunca pueden contradecirse.
+ */
+function tonoDe(color: string | undefined): TonoChip {
+  if (color === colors.ok) return 'ok';
+  if (color === colors.proceso) return 'atencion';
+  return 'neutro';
+}
+
+/** El icono del bloque de estado, según de qué habla el rol. */
+const ICONO_ESTADO: Record<Rol, LucideIcon> = {
+  administrador: Store,
+  coordinador: ClipboardList,
+  conteo: ClipboardList,
+  auditor: Layers,
+};
 
 /**
  * El estado del conjunto de hojas, nombrando LA RONDA QUE SE ESTÁ MIRANDO.
@@ -158,7 +200,13 @@ function textoQueSigue(fase: FaseDeCierre | null): string {
  * misma cuenta.
  */
 export function InicioScreen(): JSX.Element {
-  const { sesion, cerrar } = useSesion();
+  // Sin `cerrar`: "Cerrar sesión" vive en la barra lateral de la web.
+  const { sesion } = useSesion();
+  // Abajo de esto las tarjetas del estado se apilan. Es media pantalla en una
+  // PC o un monitor viejo, NO un teléfono -- el teléfono tiene su propio
+  // archivo y no pasa por acá.
+  const { width } = useWindowDimensions();
+  const angosto = width < ANCHO_ANGOSTO;
   // El Auditor sigue la sucursal COMPARTIDA que eligió en sus otras pantallas
   // (ver lib/sucursal-auditada-contexto.tsx); el padrón resuelve su nombre para
   // la barra. Para los otros roles el hook es inerte y esto no aplica.
@@ -462,11 +510,6 @@ export function InicioScreen(): JSX.Element {
       ? undefined
       : (padronSucursales.find((s) => s.id === sucursalIdEfectiva)?.nombre ?? sesion.sucursal?.nombre);
 
-  async function salir(): Promise<void> {
-    await cerrar();
-    router.replace('/');
-  }
-
   // ---------------------------------------------------------------------
   // Cifras de la barra de contexto y bloque de estado — 100% derivados de
   // lo que devolvieron los puertos, nunca una constante acá.
@@ -502,12 +545,18 @@ export function InicioScreen(): JSX.Element {
       // en "— hojas asignadas").
       cifras = `${cifraOSinRed(inventario.totalHojas)} ${pluralizar(inventario.totalHojas ?? 0, 'hoja', 'hojas')} · ${cifraOSinRed(inventario.items, formatoMiles)} ${pluralizar(inventario.items ?? 0, 'ítem', 'ítems')} · ${cifraOSinRed(asignadas)} ${pluralizar(asignadas ?? 0, 'asignada', 'asignadas')}${sinRed ? ' · sin red' : ''}`;
       filasEstado = [
-        { etiqueta: 'Hojas asignadas', valor: cifraOSinRed(asignadas), pct: asignadas === null ? 'sin red' : filaPct(asignadas, inventario.totalHojas) },
+        {
+          etiqueta: 'Hojas asignadas',
+          valor: cifraOSinRed(asignadas),
+          pct: asignadas === null ? 'sin red' : filaPct(asignadas, inventario.totalHojas),
+          icono: ClipboardList,
+        },
         {
           etiqueta: 'Hojas finalizadas',
           valor: cifraOSinRed(finalizadas),
           pct: finalizadas === null ? 'sin red' : filaPct(finalizadas, inventario.totalHojas),
           color: colors.ok,
+          icono: CheckCircle2,
         },
         // El `pct` se pinta PEGADO al `valor` (ver el render de FilaEstado), así
         // que forma frase con él: con una sola persona contando -- lo normal al
@@ -516,6 +565,7 @@ export function InicioScreen(): JSX.Element {
           etiqueta: 'Contando ahora',
           valor: cifraOSinRed(contando),
           pct: contando === null ? 'sin red' : pluralizar(contando, 'colaborador', 'colaboradores'),
+          icono: Users,
         },
       ];
       sync = resumenParaTablero(hojasDeLaRonda);
@@ -549,8 +599,9 @@ export function InicioScreen(): JSX.Element {
               // hoja (mismo criterio que textoFirmas, "0 / 1 firma").
               pct: `/ ${totalHojaActual} ${pluralizar(totalHojaActual, 'ítem', 'ítems')}`,
               color: colors.ok,
+              icono: ClipboardList,
             },
-            { etiqueta: 'Tus hojas sin empezar', valor: String(pendientes), pct: `de ${misHojas.length}` },
+            { etiqueta: 'Tus hojas sin empezar', valor: String(pendientes), pct: `de ${misHojas.length}`, icono: ListChecks },
           ]
         : [
             {
@@ -564,6 +615,7 @@ export function InicioScreen(): JSX.Element {
                   : pendientes === misHojas.length
                     ? pluralizar(misHojas.length, 'pendiente', 'todas pendientes')
                     : '',
+              icono: ClipboardList,
             },
           ];
       sync = resumenParaTablero(misHojas);
@@ -599,7 +651,12 @@ export function InicioScreen(): JSX.Element {
       // Mismo criterio que el bloque del Coordinador, más arriba.
       cifras = `${cifraOSinRed(inventario.totalHojas)} ${pluralizar(inventario.totalHojas ?? 0, 'hoja', 'hojas')} · ${cifraOSinRed(inventario.items, formatoMiles)} ${pluralizar(inventario.items ?? 0, 'ítem', 'ítems')} · ${etiquetaEstado1}${sinRed ? ' · sin red' : ''}`;
       filasEstado = [
-        { etiqueta: 'Ciclo de conteos', valor: etiquetaEstado1, color: estado1 === 'finalizada' ? colors.ok : colors.proceso },
+        {
+          etiqueta: 'Ciclo de conteos',
+          valor: etiquetaEstado1,
+          color: estado1 === 'finalizada' ? colors.ok : colors.proceso,
+          icono: Layers,
+        },
         {
           // LA RONDA REAL en el rótulo. Decía "(1er conteo)" fijo sobre los
           // ítems de la ronda activa: con las tres corridas mostraba los 3
@@ -612,6 +669,7 @@ export function InicioScreen(): JSX.Element {
               ? 'sin red'
               : 'el conteo ya cerró',
           color: colors.ok,
+          icono: CheckCircle2,
         },
         {
           // ERA "2do y 3er conteo: Sin datos todavía", un literal que ya era
@@ -621,6 +679,7 @@ export function InicioScreen(): JSX.Element {
           // afirmar que no hay datos.
           etiqueta: 'Qué sigue',
           valor: textoQueSigue(fase),
+          icono: TrendingUp,
         },
       ];
     }
@@ -638,11 +697,13 @@ export function InicioScreen(): JSX.Element {
           valor: String(estadoSistema.tiendasActivas),
           pct: filaPct(estadoSistema.tiendasActivas, estadoSistema.totalTiendas),
           color: colors.ok,
+          icono: Store,
         },
         {
           etiqueta: 'Usuarios habilitados',
           valor: String(estadoSistema.usuariosActivos),
           pct: filaPct(estadoSistema.usuariosActivos, estadoSistema.totalUsuarios),
+          icono: Users,
         },
         {
           etiqueta: 'Inventarios en curso',
@@ -654,15 +715,38 @@ export function InicioScreen(): JSX.Element {
               ? 'ninguno ahora'
               : pluralizar(estadoSistema.inventariosEnCurso, 'sucursal contando', 'sucursales contando'),
           color: estadoSistema.inventariosEnCurso > 0 ? colors.proceso : undefined,
+          icono: Boxes,
         },
       ];
     }
   }
 
   return (
-    <PantallaConTabs scrollable contentStyle={styles.contenido}>
-      {/* Sin `sede`: el Administrador no pertenece a una sola sucursal. */}
-      <BarraApp rotulo="Inicio" sede={nombreSede} cifras={cifras} onSalir={salir} />
+    <ScrollView style={styles.pagina} contentContainerStyle={styles.contenido} showsVerticalScrollIndicator={false}>
+      {/*
+        SIN BOTÓN DE SALIR: "Cerrar sesión" ya está en la barra lateral
+        (`RolTabsLayout.web.tsx`), y repetirlo acá es el mismo ruido que las
+        tarjetas de acceso que este archivo ya sacaba. En el teléfono va en la
+        `BarraApp` porque ahí no hay barra lateral que lo tenga.
+      */}
+      <EncabezadoPagina
+        migas={['Inicio']}
+        titulo={`Hola, ${primerNombre}`}
+        sub={`${sesion.colaborador.nombre} · ${NOMBRE_ROL[rol]}`}
+      />
+
+      {/* LA SEDE Y LAS CIFRAS que en el teléfono lleva la `BarraApp`: son el
+          contexto de las tarjetas de abajo. El Administrador no tiene sede
+          (no pertenece a una sola sucursal), así que ahí queda solo la cifra. */}
+      {nombreSede !== undefined || cifras !== undefined ? (
+        <View style={styles.banda}>
+          <ChipIcono icono={Store} />
+          <View style={styles.bandaTextos}>
+            {nombreSede !== undefined ? <Text style={styles.bandaSede}>{nombreSede}</Text> : null}
+            {cifras !== undefined ? <Text style={styles.bandaSub}>{cifras}</Text> : null}
+          </View>
+        </View>
+      ) : null}
 
       <BandaSync
         estado={sync.estado}
@@ -670,98 +754,98 @@ export function InicioScreen(): JSX.Element {
         onSincronizar={rol === 'coordinador' || rol === 'conteo' ? () => sincronizador.sincronizar() : undefined}
       />
 
-      <View style={styles.saludo}>
-        <Text style={styles.saludoNombre}>Hola, {primerNombre}</Text>
-        <Text style={styles.saludoSub}>
-          {sesion.colaborador.nombre} · {NOMBRE_ROL[rol]}
-        </Text>
-      </View>
-
-      <View style={styles.tarjetaEstado}>
-        <Text style={styles.estadoTitulo}>{tituloEstado}</Text>
-        {cargando ? (
+      {cargando ? (
+        <TarjetaWeb titulo={tituloEstado} icono={ICONO_ESTADO[rol]} tono="neutro">
           <ActivityIndicator color={colors.rojo} style={styles.cargandoEstado} />
-        ) : errorSistema ? (
-          <View style={styles.errorSistema}>
-            <Text style={styles.estadoPendiente}>{errorSistema}</Text>
-            <Button label="Reintentar" size="sm" onPress={refrescar} />
-          </View>
-        ) : filasEstado.length > 0 ? (
-          <View style={styles.filasEstado}>
+        </TarjetaWeb>
+      ) : errorSistema ? (
+        <TarjetaWeb titulo={tituloEstado} icono={ICONO_ESTADO[rol]} tono="atencion">
+          <Text style={styles.estadoPendiente}>{errorSistema}</Text>
+          {/* El único botón rojo de la pantalla, y solo existe cuando hay algo
+              que reintentar. */}
+          <BotonWeb etiqueta="Reintentar" variante="principal" onPress={refrescar} />
+        </TarjetaWeb>
+      ) : filasEstado.length > 0 ? (
+        <>
+          <Text style={styles.seccionTitulo}>{tituloEstado}</Text>
+          {/* UNA TARJETA POR CIFRA, EN FILA. En el teléfono son renglones
+              apilados porque la pantalla es una columna de 400px; en un monitor
+              las tres entran a la vista y el Inicio se lee de un vistazo, que
+              es lo único que tiene para ofrecer. Abajo de ANCHO_ANGOSTO se
+              apilan: es media pantalla de una PC, no un teléfono. */}
+          <View style={[styles.fila, angosto && styles.filaApilada]}>
             {filasEstado.map((f) => (
-              <View key={f.etiqueta} style={styles.filaEstado}>
-                <Text style={styles.filaEtiqueta}>{f.etiqueta}</Text>
-                <Text style={[styles.filaValor, f.color ? { color: f.color } : null]}>
-                  {f.valor} <Text style={styles.filaPct}>{f.pct}</Text>
-                </Text>
-              </View>
+              <TarjetaWeb
+                key={f.etiqueta}
+                titulo={f.etiqueta}
+                icono={f.icono}
+                tono={tonoDe(f.color)}
+                style={styles.kpi}
+              >
+                {/* El `pct` va PEGADO al valor, como en el teléfono: forma
+                    frase con él ("1 pendiente", "/ 10 ítems (30%)"). */}
+                <View style={styles.kpiValorFila}>
+                  <Text style={[styles.kpiValor, f.color ? { color: f.color } : null]}>{f.valor}</Text>
+                  {f.pct ? <Text style={styles.kpiPct}>{f.pct}</Text> : null}
+                </View>
+              </TarjetaWeb>
             ))}
           </View>
-        ) : (
+        </>
+      ) : (
+        <TarjetaWeb titulo={tituloEstado} icono={ICONO_ESTADO[rol]} tono="neutro">
           <Text style={styles.estadoPendiente}>
             {inventario === null
               ? 'Todavía no hay un inventario en curso para esta sucursal.'
               : 'Esperando datos…'}
           </Text>
-        )}
-      </View>
+        </TarjetaWeb>
+      )}
 
       {/*
         SIN "Tus accesos": la barra lateral de `RolTabsLayout.web.tsx` ya tiene
         esa misma lista. Ver la cabecera de este archivo.
       */}
-    </PantallaConTabs>
+    </ScrollView>
   );
 }
 
 const styles = StyleSheet.create({
   /**
-   * EN WEB EL ANCHO SE APROVECHA, pero con un tope. Sin `maxWidth` las filas
-   * del estado quedan con la etiqueta pegada a la izquierda y el valor a 1800px
-   * a la derecha, y el ojo no las relaciona. Con tope, la pantalla se centra y
-   * las filas siguen siendo legibles en un monitor grande.
+   * SIN `ScreenContainer` NI TOPE DE ANCHO. Aquellos pintan fondo blanco encima
+   * y tapan el lienzo gris sobre el que flotan las tarjetas, que es lo que hace
+   * que se lean como tarjetas (ver `colors.lienzo`). El ancho lo administra la
+   * fila de tarjetas, que se apila sola cuando la ventana se angosta.
    */
-  contenido: {
-    paddingHorizontal: spacing.lg,
-    paddingTop: spacing.sm,
-    gap: spacing.lg,
-    maxWidth: 1100,
-    width: '100%',
-    alignSelf: 'center',
-  },
-  saludo: { gap: 2 },
-  saludoNombre: { fontSize: fontSize.xxl - 3, color: colors.rojo, fontFamily: fonts.marca },
-  saludoSub: { fontSize: 13.5, color: colors.gris, fontFamily: fonts.regular },
-  tarjetaEstado: {
-    padding: 15,
-    gap: 10,
-    backgroundColor: colors.campo,
+  pagina: { flex: 1 },
+  contenido: { padding: spacing.xxl, gap: spacing.lg },
+
+  banda: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.md,
+    backgroundColor: colors.blanco,
+    borderRadius: radius.xl,
     borderWidth: 1,
     borderColor: colors.borde,
-    borderRadius: 13,
+    padding: spacing.lg,
+    ...shadow.tarjeta,
   },
-  estadoTitulo: { fontSize: 14.5, color: colors.tinta, fontFamily: fonts.bold },
-  estadoPendiente: { fontSize: 12.5, color: colors.grisClaro, fontFamily: fonts.regular },
-  errorSistema: { gap: 10, alignItems: 'flex-start' },
+  bandaTextos: { flex: 1, gap: 2 },
+  bandaSede: { fontSize: fontSize.lg, color: colors.tinta, fontFamily: fonts.bold },
+  bandaSub: { fontSize: fontSize.sm, color: colors.gris, fontFamily: fonts.regular },
+
+  estadoPendiente: { fontSize: fontSize.sm, lineHeight: 20, color: colors.gris, fontFamily: fonts.regular },
   cargandoEstado: { alignSelf: 'flex-start' },
-  /**
-   * Las filas del estado EN GRILLA, no apiladas: en web entran varias por
-   * renglon y el bloque deja de ser una tira vertical de 400px en un monitor
-   * de 1900. `minWidth` para que una fila nunca se comprima tanto que la
-   * etiqueta y el valor se toquen.
-   */
-  filasEstado: { flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
-  filaEstado: {
-    flexDirection: 'row',
-    alignItems: 'baseline',
-    justifyContent: 'space-between',
-    gap: 10,
-    flexGrow: 1,
-    flexBasis: 240,
-    minWidth: 240,
-  },
-  filaEtiqueta: { fontSize: 12.5, color: colors.gris, fontFamily: fonts.regular },
-  filaValor: { fontSize: 16, color: colors.tinta, fontFamily: fonts.bold },
-  filaPct: { fontSize: 11.5, color: colors.gris, fontFamily: fonts.medium },
-  seccionTitulo: { fontSize: 11, letterSpacing: 1.3, textTransform: 'uppercase', color: colors.gris, fontFamily: fonts.semibold },
+
+  fila: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.lg, alignItems: 'stretch' },
+  filaApilada: { flexDirection: 'column' },
+  /** `flexBasis` en vez del `flex: 1` de `TarjetaWeb`: con tres o con una, la tarjeta nunca queda más angosta que su número. */
+  kpi: { flexGrow: 1, flexShrink: 1, flexBasis: 260, minWidth: 240 },
+  kpiValorFila: { flexDirection: 'row', alignItems: 'baseline', flexWrap: 'wrap', gap: 6 },
+  /** La cifra es lo que se viene a mirar: grande, y con `tabular-nums` para que dos tarjetas alineen sus dígitos. */
+  kpiValor: { fontSize: fontSize.xxl, color: colors.tinta, fontFamily: fonts.bold, fontVariant: ['tabular-nums'] },
+  kpiPct: { fontSize: fontSize.sm, color: colors.gris, fontFamily: fonts.medium },
+
+  seccionTitulo: { fontSize: fontSize.xs, letterSpacing: 1.3, textTransform: 'uppercase', color: colors.gris, fontFamily: fonts.semibold },
 });

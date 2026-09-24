@@ -1,0 +1,1412 @@
+import { File, Paths } from 'expo-file-system';
+import { router } from 'expo-router';
+import * as Sharing from 'expo-sharing';
+import { ChevronLeft, History, Lock, ShieldAlert, ShieldCheck, TrendingUp } from 'lucide-react-native';
+import { useCallback, useEffect, useRef, useState, type JSX } from 'react';
+import { ActivityIndicator, Alert, Pressable, RefreshControl, ScrollView, StyleSheet, Text, View } from 'react-native';
+
+import { useRefrescoAlEnfocar } from '../hooks/useRefrescoAlEnfocar';
+import { repositorioHistorial, repositorioSesion } from '../../lib/contenedor';
+import { conteoAbierto } from '../../lib/dominio/ajuste-final';
+import { estadoExportacion, nombreArchivoConsolidado, nombreArchivoDiferencias } from '../../lib/dominio/exportar-diferencias';
+import { limiteParaRefrescar } from '../../lib/dominio/paginacion';
+import type { Rol, Sucursal } from '../../lib/dominio/tipos';
+import type {
+  DetalleInventarioHistorico,
+  DiferenciaHistorica,
+  EstadoInventario,
+  HistoricoItem,
+  InventarioHistorico,
+  LiquidacionInventario,
+  ResultadoInventario,
+  SeccionSellada,
+  VerificacionSello,
+} from '../../lib/puertos/repositorios';
+import { pluralizar } from '../../lib/dominio/plural';
+import { sucursalEnFoco } from '../../lib/dominio/sucursal-en-foco';
+import { textoFirmadoPor, textoFirmas, textoFirmasPendientes } from '../../lib/dominio/texto-firmas';
+import { useSesion } from '../../lib/sesion-contexto';
+import { useSucursalAuditada } from '../../lib/sucursal-auditada-contexto';
+import { colors, fonts, fontSize, radius, spacing } from '../../lib/theme';
+import { BotonWeb, EncabezadoPagina, TarjetaWeb } from '../web';
+import {
+  Badge,
+  type BadgeVariant,
+  BarraApp,
+  Button,
+  ChipsFiltro,
+  EmptyState,
+  formatoFecha,
+  formatoFechaHora,
+  formatoMiles,
+  formatoMoneda,
+  formatoPct,
+  MESES_CORTOS,
+  ModalExportarConsolidado,
+  SelectorSucursal,
+  type OpcionChip,
+} from '../ui';
+
+/** Cuántos inventarios se piden por página — ver `cargar`/`cargarMas`. */
+const TAMANO_PAGINA = 20;
+
+/** Sentinel de chip para "sin filtro de esta dimensión" — nunca un id real. */
+const TODAS = 'todas';
+const TODOS = 'todos';
+
+/**
+ * Años que se ofrecen para filtrar por período. No hay un endpoint que
+ * diga "qué años tienen inventarios" — se ofrece el actual y los 3
+ * anteriores, rango razonable para un sistema que recién empezó a operar.
+ */
+function aniosDisponibles(): number[] {
+  const actual = new Date().getFullYear();
+  return [actual, actual - 1, actual - 2, actual - 3];
+}
+
+/**
+ * Cada estado del ciclo de vida, con lo único que importa a nivel visual:
+ * si está SELLADO o todavía se puede tocar.
+ *
+ * `sellado` no es cosmética. Es la diferencia entre "esto ya es historia" y
+ * "esto todavía se puede modificar", y es lo que decide el borde de la
+ * tarjeta, el candado y la franja del folio — tres señales que dicen lo
+ * mismo, porque en una lista que se escanea de un vistazo el ojo lee la
+ * forma antes que la palabra.
+ */
+const ESTADOS: Record<EstadoInventario, { etiqueta: string; badge: BadgeVariant; sellado: boolean }> = {
+  en_curso: { etiqueta: 'En curso', badge: 'proceso', sellado: false },
+  // Sigue ABIERTO, no cerrado: el auditor está cambiando valores. Va con el
+  // mismo badge `proceso` que "En curso" a propósito -- son la misma cosa
+  // para quien mira el historial (todavía no hay resultado), y pintarlo de
+  // otro color sugeriría un cierre que no ocurrió.
+  ajuste_auditor: { etiqueta: 'Ajuste del auditor', badge: 'proceso', sellado: false },
+  conteo_cerrado: { etiqueta: 'Conteo cerrado', badge: 'default', sellado: false },
+  liquidado: { etiqueta: 'Liquidado', badge: 'default', sellado: false },
+  lacrado: { etiqueta: 'Lacrado', badge: 'ok', sellado: true },
+  anulado: { etiqueta: 'Anulado', badge: 'espera', sellado: false },
+};
+
+/**
+ * Orden en que se listan las secciones alteradas: primero las tres que
+ * cubre el sello sustantivamente (resultado, diferencias, planilla — la
+ * regla del cliente de liquidar antes de lacrar), después el control de
+ * dos personas, y al final la metadata agrupada.
+ */
+const ORDEN_SECCIONES: SeccionSellada[] = ['resultado', 'diferencias', 'planilla', 'aprobaciones', 'datosDelInventario'];
+
+const NOMBRE_SECCION: Record<SeccionSellada, string> = {
+  resultado: 'Resultado del ciclo',
+  diferencias: 'Diferencias detectadas',
+  planilla: 'Planilla (liquidación)',
+  aprobaciones: 'Firmas de aprobación',
+  datosDelInventario: 'Datos del inventario (sucursal, período, hojas)',
+};
+
+const FILTROS: { clave: EstadoInventario | 'todos'; etiqueta: string }[] = [
+  { clave: 'todos', etiqueta: 'Todos' },
+  { clave: 'en_curso', etiqueta: 'En curso' },
+  { clave: 'ajuste_auditor', etiqueta: 'Ajuste del auditor' },
+  { clave: 'conteo_cerrado', etiqueta: 'Conteo cerrado' },
+  { clave: 'liquidado', etiqueta: 'Liquidado' },
+  { clave: 'lacrado', etiqueta: 'Lacrado' },
+];
+
+export interface HistorialScreenProps {
+  rol: Extract<Rol, 'administrador' | 'auditor'>;
+}
+
+/**
+ * ---------------------------------------------------------------------------
+ * EL HISTORIAL EN EL NAVEGADOR
+ * ---------------------------------------------------------------------------
+ * Clon de `HistorialScreen.tsx`; el del teléfono no se toca. Mismos
+ * repositorios, mismos textos y mismos mensajes.
+ *
+ * LO QUE SE REDISEÑÓ ES LA LISTA, que es lo que se pidió: los filtros pasan a
+ * una tarjeta arriba y los inventarios a una tabla, período por período, donde
+ * se barre la columna de estado de arriba abajo.
+ *
+ * EL DETALLE Y LA HISTORIA DE UN ÍTEM SE COPIARON VERBATIM, a propósito y no
+ * por falta de tiempo: son dos sub-pantallas de cuarenta bloques donde cada
+ * párrafo dice qué se puede afirmar y qué no (`sinResultado`, `motivoSinNeto`,
+ * las firmas, el sello). Rehacerlas a mano es reescribir cuarenta textos que
+ * ya se discutieron uno por uno, y la regla del lote es que la funcionalidad
+ * no cambia. Quedan con la presentación del teléfono dentro del marco de la
+ * web; rediseñarlas es un lote aparte, con su propia revisión de textos.
+ *
+ * Historial de inventarios (mobile/design/historial.html) — el registro de
+ * todos los inventarios: en qué estado está cada uno, cómo cerró y quién lo
+ * firmó. Responde la pregunta del cliente: *"falta el registro de todos los
+ * inventarios, dónde llevaremos el control y el histórico"*.
+ *
+ * Un solo componente para Administrador y Auditor (mismo criterio que
+ * UsuariosScreen): la diferencia es el ALCANCE — el Administrador ve las 4
+ * sucursales, el Auditor solo la suya. El recorte real lo aplica el backend
+ * (historial.permisos.ts); acá se manda el filtro para no pedir de más y
+ * para que la barra de contexto diga la verdad sobre qué se está viendo.
+ *
+ * SOLO lectura. Firmar y lacrar viven en app/auditor/lacrado.tsx, donde el
+ * control de dos personas ya está resuelto: un histórico que además escribe
+ * es un histórico que se puede reescribir.
+ */
+export function HistorialScreen({ rol }: HistorialScreenProps): JSX.Element {
+  const { sesion } = useSesion();
+  const [cargando, setCargando] = useState(true);
+  const [cargandoMas, setCargandoMas] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [inventarios, setInventarios] = useState<InventarioHistorico[]>([]);
+  const [total, setTotal] = useState(0);
+  const [desplazamiento, setDesplazamiento] = useState(0);
+  const [filtro, setFiltro] = useState<EstadoInventario | 'todos'>('todos');
+
+  // Solo el Administrador elige sucursal en el filtro base de la lista de
+  // abajo (chip "Sucursal") -- eso NO cambió. El padrón en sí (`sucursales`)
+  // ahora se carga para los dos roles porque el Auditor SÍ lo necesita para
+  // el checklist real de `ModalExportarConsolidado` (corrección del
+  // cliente, 2026-09-09: el auditor accede a todas las sucursales).
+  const [sucursales, setSucursales] = useState<Sucursal[]>([]);
+  const [filtroSucursalId, setFiltroSucursalId] = useState<number | typeof TODAS>(TODAS);
+  // El Auditor NO usa el filtro de arriba: elige la sucursal COMPARTIDA con sus
+  // otras pantallas (Auditoría, Ciclo, Inicio), así que ver Carhuaz en una es
+  // ver Carhuaz en todas. El Administrador sigue con `filtroSucursalId` (y su
+  // opción "Todas"); para él el hook del contexto es inerte.
+  const { elegida: sucursalElegida, elegir: elegirSucursal } = useSucursalAuditada();
+  const sucursalAuditor = sucursalEnFoco({ rol, sucursalDeSesion: sesion?.sucursal?.id ?? null, elegida: sucursalElegida });
+
+  // Período: año primero, mes solo tiene sentido una vez elegido un año —
+  // filtrar por mes sin año mezclaría "marzo de cualquier año".
+  const [filtroAnio, setFiltroAnio] = useState<number | null>(null);
+  const [filtroMes, setFiltroMes] = useState<number | null>(null);
+
+  /**
+   * CUANTOS inventarios hay cargados, en un ref.
+   *
+   * `cargar` lo necesita para refrescar todas las páginas que ya estaban (ver
+   * `limiteParaRefrescar`), pero NO puede depender del array: `cargar` cambia
+   * de identidad con cada dependencia, y el efecto de "cambió un filtro" corre
+   * con `[cargar]` -- una dependencia que se mueve en cada carga lo volvería
+   * un bucle de pedidos.
+   */
+  const inventariosRef = useRef(0);
+  inventariosRef.current = inventarios.length;
+
+  const [detalle, setDetalle] = useState<DetalleInventarioHistorico | null>(null);
+  const [cargandoDetalle, setCargandoDetalle] = useState(false);
+
+  const [verificacion, setVerificacion] = useState<VerificacionSello | null>(null);
+  const [verificandoSello, setVerificandoSello] = useState(false);
+  const [errorVerificacion, setErrorVerificacion] = useState<string | null>(null);
+
+  // DUEÑO: el Auditor (decisión del cliente, 2026-09-08) -- el Administrador
+  // es un rol técnico que no participa del proceso de inventario, así que
+  // el botón ni se ofrece para ese rol, aunque el backend lo deje pasar.
+  const [exportando, setExportando] = useState(false);
+
+  // DUEÑO: el Auditor (lo dijo desde el principio: "administrador es
+  // técnico, no tiene nada que ver en el proceso de inventario"). El
+  // checklist de tiendas de `ModalExportarConsolidado` SÍ tiene efecto real
+  // para él -- corrección del cliente (2026-09-09): el auditor accede a
+  // TODAS las sucursales (resolverSucursalesConsultables,
+  // historial.permisos.ts, ya no lo recorta a la suya). Por eso recibe el
+  // padrón real (`tiendas={sucursales}` más abajo), igual que antes solo
+  // ofrecía el Administrador. El Administrador, dueño técnico, no lo ve.
+  const [modalConsolidadoVisible, setModalConsolidadoVisible] = useState(false);
+  const [exportandoConsolidado, setExportandoConsolidado] = useState(false);
+
+  const [diferencias, setDiferencias] = useState<DiferenciaHistorica[]>([]);
+  const [liquidacion, setLiquidacion] = useState<LiquidacionInventario | null>(null);
+  const [errorCierre, setErrorCierre] = useState<string | null>(null);
+
+  // Historia de un ítem — tercer nivel dentro del mismo componente (mismo
+  // criterio que `detalle`): se abre desde una fila de Diferencias y vuelve
+  // al detalle, no a la lista.
+  const [historicoItem, setHistoricoItem] = useState<HistoricoItem | null>(null);
+  const [cargandoHistoricoItem, setCargandoHistoricoItem] = useState(false);
+
+  /**
+   * EL PADRON DE SUCURSALES, EN CADA REFRESCO.
+   *
+   * Antes se pedía UNA vez al montar, con el argumento de que "no cambia entre
+   * pantallazos". No es cierto, y se ve en una sesión: el Administrador crea
+   * "Market Huaraz" en Tiendas, pasa a Historial, y el filtro de sucursal NO
+   * la ofrece -- no hay forma de que aparezca sin reiniciar la app. Es un
+   * pedido barato (el mismo endpoint sin sesión del login) al lado del listado
+   * de inventarios que ya se está pidiendo igual.
+   *
+   * SIN RED NO SE VACIA: el `catch` deja el padrón anterior en pantalla. Una
+   * lista de sucursales vacía apagaría el filtro entero, y no porque no haya
+   * tiendas sino porque no se pudo preguntar -- que son cosas distintas.
+   */
+  const cargarSucursales = useCallback(async () => {
+    try {
+      setSucursales(await repositorioSesion.sucursales());
+    } catch {
+      /* se conserva el padrón que ya estaba: ver arriba */
+    }
+  }, []);
+
+  // El filtro completo de la pantalla, en la forma que pide el puerto. Un
+  // solo lugar arma esto: `cargar()` (primera página) y `cargarMas()` (la
+  // siguiente) tienen que mandar EXACTAMENTE los mismos filtros — si no,
+  // "cargar más" podría traer una página de un filtro distinto al que se ve.
+  const filtroActual = useCallback(
+    (desplazamientoPedido: number) => ({
+      sucursalId: rol === 'auditor' ? (sucursalAuditor ?? undefined) : filtroSucursalId === TODAS ? undefined : filtroSucursalId,
+      estado: filtro === TODOS ? undefined : filtro,
+      periodoAnio: filtroAnio ?? undefined,
+      periodoMes: filtroAnio !== null ? (filtroMes ?? undefined) : undefined,
+      limite: TAMANO_PAGINA,
+      desplazamiento: desplazamientoPedido,
+    }),
+    [rol, sucursalAuditor, filtroSucursalId, filtro, filtroAnio, filtroMes],
+  );
+
+  // Trae la PRIMERA página, con los filtros actuales — reemplaza la lista.
+  // El estado (chip) y el período (año/mes) se filtran del lado del
+  // SERVIDOR, no sobre lo ya cargado: con paginación real, filtrar client-
+  // side sobre una página parcial escondería resultados que existen pero
+  // todavía no se pidieron (ver historial-como-registro.md, punto 3).
+  const cargar = useCallback(async () => {
+    if (!sesion) return;
+    setError(null);
+    // El spinner de pantalla completa queda SOLO para la primera carga (lo
+    // deja prendido el `useState(true)` de arriba). En un refresco -- al
+    // volver de otra pestaña, al volver la app del bolsillo, al tirar de la
+    // lista -- se mantiene lo que ya está en pantalla hasta que llegue el
+    // dato nuevo, en vez de tapar la lista con una rueda. Ver
+    // useRefrescoAlEnfocar.
+    try {
+      // `limiteParaRefrescar` y no `TAMANO_PAGINA`: si ya se habían cargado
+      // tres páginas, el refresco las trae TODAS de nuevo en vez de dejar la
+      // lista en la primera. Ver lib/dominio/paginacion.ts.
+      const cuantas = limiteParaRefrescar(inventariosRef.current, TAMANO_PAGINA);
+      const [pagina] = await Promise.all([
+        repositorioHistorial.listar({ ...filtroActual(0), limite: cuantas }),
+        cargarSucursales(),
+      ]);
+      setInventarios(pagina.inventarios);
+      setTotal(pagina.total);
+      // El desplazamiento sale de lo que el servidor DEVOLVIO, no de lo que se
+      // pidió: si ahora hay menos inventarios que antes, "cargar más" tiene que
+      // seguir desde ahí y no saltearse filas que sí existen.
+      setDesplazamiento(Math.max(0, pagina.inventarios.length - TAMANO_PAGINA));
+    } catch (e) {
+      // No hay adaptador en memoria a propósito (ver contenedor.ts): sin
+      // backend se dice que no se pudo cargar. Un histórico inventado es
+      // peor que una pantalla vacía.
+      setError(e instanceof Error ? e.message : 'No se pudo cargar el historial.');
+    } finally {
+      setCargando(false);
+    }
+  }, [sesion, filtroActual, cargarSucursales]);
+
+  // Trae la página SIGUIENTE y la agrega al final — nunca reemplaza lo que
+  // ya está en pantalla ni reinicia el desplazamiento.
+  async function cargarMas(): Promise<void> {
+    if (cargandoMas) return;
+    setCargandoMas(true);
+    try {
+      const siguiente = desplazamiento + TAMANO_PAGINA;
+      const pagina = await repositorioHistorial.listar(filtroActual(siguiente));
+      setInventarios((actuales) => [...actuales, ...pagina.inventarios]);
+      setTotal(pagina.total);
+      setDesplazamiento(siguiente);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'No se pudo traer más inventarios.');
+    } finally {
+      setCargandoMas(false);
+    }
+  }
+
+  /**
+   * SE REFRESCA LO QUE SE ESTA VIENDO, no siempre la lista.
+   *
+   * Antes el refresco estaba PAUSADO con el detalle abierto, y eso dejaba el
+   * agujero más caro de esta pantalla: el Administrador abre el inventario
+   * 8040, deja el teléfono, vuelve media hora después y sigue leyendo "sin
+   * lacrar" y el bloque de firmas viejo aunque el Auditor haya lacrado en el
+   * medio -- y el botón de exportar aparece o no según ese estado vencido
+   * (`estadoExportacion` se calcula con `detalle.estado`). Para actualizarlo
+   * había que cerrar el detalle y volver a abrirlo, o sea adivinar que hacía
+   * falta.
+   *
+   * Pausar era la decisión correcta para lo que se quería evitar -- que
+   * `cargar` recargara la LISTA que está debajo del detalle -- pero se resolvía
+   * no refrescando NADA. Acá se refresca la vista de arriba, que es la que la
+   * persona está mirando.
+   *
+   * LA HISTORIA DE UN ITEM sigue pausada: es un tercer nivel que se abre de una
+   * fila puntual y se cierra enseguida. Con `recuperarAlDespausar` el disparo
+   * que llegue ahí no se pierde -- corre al volver al detalle.
+   */
+  // `traerDetalle` queda FUERA de las dependencias a propósito: es una función
+  // del cuerpo del componente, así que cambia de identidad en cada render y
+  // acá adentro volvería inestable a lo que el hook guarda. Lo que necesita
+  // esta closure es el `detalle` de ahora, y ese sí está en la lista.
+  const refrescarLoQueSeVe = useCallback(async () => {
+    if (detalle !== null) {
+      await traerDetalle(detalle.id);
+      return;
+    }
+    await cargar();
+  }, [detalle, cargar]);
+
+  // useRefrescoAlEnfocar recarga al ENFOCAR y al volver la app a primer plano
+  // (pedido del cliente: "cualquier dato actualizado no debe depender de cerrar
+  // sesión y volver"). Pero NO recarga al cambiar un filtro sin salir: guarda
+  // `cargar` en un ref a propósito (ver ese hook). Eso lo hace el efecto de
+  // abajo.
+  const { refrescando, refrescar } = useRefrescoAlEnfocar(refrescarLoQueSeVe, {
+    pausado: historicoItem !== null,
+    recuperarAlDespausar: true,
+  });
+
+  // Recarga al cambiar CUALQUIER filtro (la sucursal incluida): `cargar` cambia
+  // con `filtroActual`, y este efecto sí corre por eso. Se limpia la lista
+  // ANTES de que llegue lo nuevo -- la barra ya dice la sucursal nueva, así que
+  // mostrar los inventarios de la tienda anterior sería un número con el
+  // apellido equivocado (skill, Honestidad de los datos en pantalla). El primer
+  // render lo saltea: esa carga inicial la hace useRefrescoAlEnfocar, y correr
+  // las dos duplicaría el pedido.
+  const primerRender = useRef(true);
+  useEffect(() => {
+    if (primerRender.current) {
+      primerRender.current = false;
+      return;
+    }
+    setInventarios([]);
+    setDesplazamiento(0);
+    setCargando(true);
+    void cargar();
+  }, [cargar]);
+
+  async function abrirDetalle(id: number): Promise<void> {
+    setCargandoDetalle(true);
+    // Un inventario nuevo no hereda nada del anterior.
+    setVerificacion(null);
+    setErrorVerificacion(null);
+    setDiferencias([]);
+    setLiquidacion(null);
+    setErrorCierre(null);
+    setHistoricoItem(null);
+    try {
+      await traerDetalle(id);
+    } finally {
+      setCargandoDetalle(false);
+    }
+  }
+
+  /**
+   * EL DETALLE, SIN TOCAR NADA DE LO QUE LA PERSONA YA PIDIO.
+   *
+   * Lo usan dos caminos con necesidades opuestas, y por eso lo que se limpia
+   * quedó ARRIBA en `abrirDetalle` y no acá:
+   *
+   *   ABRIR otro inventario tiene que borrar el sello verificado, las
+   *   diferencias y la planilla del anterior -- si no, quedarían bajo un
+   *   encabezado que no les corresponde.
+   *
+   *   REFRESCAR el que ya está abierto NO puede borrar nada de eso: el
+   *   resultado de "verificar sello" lo pidió la persona a mano hace un rato,
+   *   y hacérselo desaparecer porque volvió a la app desde el segundo plano es
+   *   tirarle un trabajo que no pidió repetir.
+   *
+   * Si falla, se deja lo que estaba: sin red, lo que ya está en la pantalla es
+   * lo bueno (mismo principio que la reconciliación de las hojas -- borra una
+   * respuesta, nunca el silencio).
+   */
+  async function traerDetalle(id: number): Promise<void> {
+    try {
+      const det = await repositorioHistorial.detalle(id);
+      setDetalle(det);
+      // Con el conteo todavía abierto no hay diferencias fijadas (recién se
+      // calculan al cerrar) ni planilla (se liquida después). Pedirlas ahí
+      // solo traería listas vacías.
+      //
+      // `conteoAbierto` y no `!== 'en_curso'`: el ajuste del auditor tampoco
+      // cerró nada, y con la comparación contra el literal se pedían las dos
+      // cosas en medio del ajuste.
+      if (!conteoAbierto(det.estado)) {
+        try {
+          const [difs, liq] = await Promise.all([repositorioHistorial.diferencias(id), repositorioHistorial.liquidacion(id)]);
+          setDiferencias(difs);
+          setLiquidacion(liq);
+        } catch (e) {
+          // El detalle YA cargó bien: un fallo acá no debe tirar abajo toda
+          // la pantalla, solo estas dos secciones.
+          setErrorCierre(e instanceof Error ? e.message : 'No se pudieron cargar las diferencias y la planilla.');
+        }
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'No se pudo abrir el inventario.');
+    }
+  }
+
+  async function verificarSello(): Promise<void> {
+    if (!detalle) return;
+    setVerificandoSello(true);
+    setErrorVerificacion(null);
+    try {
+      setVerificacion(await repositorioHistorial.verificarSello(detalle.id));
+    } catch (e) {
+      setErrorVerificacion(e instanceof Error ? e.message : 'No se pudo verificar el sello.');
+    } finally {
+      setVerificandoSello(false);
+    }
+  }
+
+  /**
+   * El .xlsx de faltantes/sobrantes: se descarga a un archivo TEMPORAL (caché
+   * del teléfono, no la carpeta de Descargas) y de ahí se abre el selector
+   * nativo para compartir -- pedido del cliente: el destino es WhatsApp o
+   * correo, no el teléfono. Un Alert, no un estado de pantalla nuevo: es una
+   * acción puntual de un botón, mismo criterio que `abrirHistoricoItem`.
+   */
+  async function exportarDiferencias(): Promise<void> {
+    if (!detalle) return;
+    setExportando(true);
+    try {
+      const puedeCompartir = await Sharing.isAvailableAsync();
+      if (!puedeCompartir) {
+        Alert.alert('No se puede compartir', 'Este dispositivo no tiene disponible el selector nativo para compartir archivos.');
+        return;
+      }
+      const bytes = await repositorioHistorial.exportarDiferencias(detalle.id);
+      const nombreArchivo = nombreArchivoDiferencias(detalle.sucursalNombre, detalle.periodoAnio, detalle.periodoMes, detalle.id);
+      const archivo = new File(Paths.cache, nombreArchivo);
+      if (archivo.exists) archivo.delete();
+      archivo.write(new Uint8Array(bytes));
+      await Sharing.shareAsync(archivo.uri, {
+        mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        dialogTitle: 'Compartir diferencias',
+        UTI: 'org.openxmlformats.spreadsheetml.sheet',
+      });
+    } catch (e) {
+      Alert.alert('No se pudo exportar', e instanceof Error ? e.message : 'Intenta de nuevo.');
+    } finally {
+      setExportando(false);
+    }
+  }
+
+  /**
+   * El consolidado de varias tiendas (o todas) en un mismo período -- mismo
+   * flujo de descarga-a-caché-y-compartir que `exportarDiferencias`, pero
+   * con `sucursalIds` (`undefined` = todas) en vez de un solo `inventarioId`.
+   * Exige año Y mes elegidos arriba (los mismos chips de Período): un
+   * "informe de saldo" es de un mes puntual, no de todo el histórico.
+   */
+  async function exportarConsolidado(sucursalIds: number[] | undefined): Promise<void> {
+    if (filtroAnio === null || filtroMes === null) {
+      Alert.alert('Elige un período', 'El consolidado necesita año y mes -- son los mismos chips de "Período" de arriba.');
+      return;
+    }
+    setExportandoConsolidado(true);
+    try {
+      const puedeCompartir = await Sharing.isAvailableAsync();
+      if (!puedeCompartir) {
+        Alert.alert('No se puede compartir', 'Este dispositivo no tiene disponible el selector nativo para compartir archivos.');
+        return;
+      }
+      const bytes = await repositorioHistorial.exportarDiferenciasConsolidado({ sucursalIds, periodoAnio: filtroAnio, periodoMes: filtroMes });
+      const nombreArchivo = nombreArchivoConsolidado(filtroAnio, filtroMes);
+      const archivo = new File(Paths.cache, nombreArchivo);
+      if (archivo.exists) archivo.delete();
+      archivo.write(new Uint8Array(bytes));
+      setModalConsolidadoVisible(false);
+      await Sharing.shareAsync(archivo.uri, {
+        mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        dialogTitle: 'Compartir consolidado',
+        UTI: 'org.openxmlformats.spreadsheetml.sheet',
+      });
+    } catch (e) {
+      Alert.alert('No se pudo exportar', e instanceof Error ? e.message : 'Intenta de nuevo.');
+    } finally {
+      setExportandoConsolidado(false);
+    }
+  }
+
+  // `sucursalId` del inventario que se está mirando: recorta la historia a
+  // ESA sucursal para el Administrador (igual que en el resto de la
+  // pantalla, no trae de más), y para el Auditor no cambia nada -- el
+  // backend ya lo recorta a la suya sin importar qué se mande.
+  async function abrirHistoricoItem(codigo: string): Promise<void> {
+    if (!detalle) return;
+    setCargandoHistoricoItem(true);
+    try {
+      setHistoricoItem(await repositorioHistorial.historicoDeItem(codigo, { sucursalId: detalle.sucursalId }));
+    } catch (e) {
+      // No hay un tercer nivel de pantalla que mostrar si esto falla (a
+      // diferencia de `error`/`errorCierre`, que sí tienen su bloque en el
+      // detalle) — es una acción puntual de tocar una fila, mismo criterio
+      // que el resto de la app para una acción que puede fallar (login,
+      // reseteo de PIN): un Alert, no un estado de pantalla nuevo.
+      Alert.alert('No se pudo abrir la historia', e instanceof Error ? e.message : 'Intenta de nuevo.');
+    } finally {
+      setCargandoHistoricoItem(false);
+    }
+  }
+
+  if (!sesion) return <View />;
+
+  // Sin contador por chip a propósito: con el filtro resuelto en el
+  // SERVIDOR (no sobre lo ya cargado), contar "cuántos lacrados hay" exigiría
+  // una consulta aparte por cada chip solo para mostrar un número — más
+  // ruido que ayuda. El total real de la vista actual ya se ve en "X de Y".
+  const opcionesChip: OpcionChip[] = FILTROS.map((f) => ({ id: f.clave, etiqueta: f.etiqueta }));
+
+  const opcionesSucursal: OpcionChip[] = [
+    { id: TODAS, etiqueta: 'Todas' },
+    ...sucursales.map((s) => ({ id: String(s.id), etiqueta: s.nombre })),
+  ];
+
+  const opcionesAnio: OpcionChip[] = [
+    { id: TODOS, etiqueta: 'Todos' },
+    ...aniosDisponibles().map((a) => ({ id: String(a), etiqueta: String(a) })),
+  ];
+  const opcionesMes: OpcionChip[] = [
+    { id: TODOS, etiqueta: 'Todo el año' },
+    ...MESES_CORTOS.map((m, i) => ({ id: String(i + 1), etiqueta: m })),
+  ];
+
+  // ------------------------------------------------------- historia de un ítem
+  if (historicoItem) {
+    const h = historicoItem;
+    return (
+      <ScrollView style={styles.paginaWeb} contentContainerStyle={styles.contenidoWeb} showsVerticalScrollIndicator={false}>
+        <BarraApp rotulo="Historia del ítem" sede={h.codigo} cifras={h.descripcion ?? undefined} />
+
+        <Pressable style={styles.volver} onPress={() => setHistoricoItem(null)} accessibilityRole="button">
+          <ChevronLeft size={15} color={colors.rojo} />
+          <Text style={styles.volverTexto}>Volver al inventario</Text>
+        </Pressable>
+
+        <View style={styles.tarjeta}>
+          <Dato etiqueta="Apareció con diferencia" valor={`${h.resumen.veces} ${h.resumen.veces === 1 ? 'vez' : 'veces'}`} />
+          <Dato etiqueta="Como faltante" valor={`${h.resumen.vecesFaltante} · ${formatoMiles(h.resumen.unidadesFaltantes)} und`} tono={h.resumen.vecesFaltante > 0 ? 'falta' : undefined} />
+          <Dato etiqueta="Como sobrante" valor={`${h.resumen.vecesSobrante} · ${formatoMiles(h.resumen.unidadesSobrantes)} und`} />
+          <Dato
+            etiqueta="Monto acumulado"
+            valor={`S/ ${formatoMoneda(Math.abs(h.resumen.montoAcumulado))} ${h.resumen.montoAcumulado < 0 ? 'en contra' : h.resumen.montoAcumulado > 0 ? 'a favor' : ''}`}
+            tono={h.resumen.montoAcumulado < 0 ? 'falta' : undefined}
+          />
+          {h.resumen.peorPeriodo ? (
+            <Dato
+              etiqueta="Peor diferencia"
+              valor={`${formatoMiles(Math.abs(h.resumen.peorPeriodo.diferencia))} und en ${MESES_CORTOS[h.resumen.peorPeriodo.mes - 1]} ${h.resumen.peorPeriodo.anio}`}
+              tono="falta"
+            />
+          ) : null}
+        </View>
+
+        <Text style={styles.seccion}>Apariciones por período</Text>
+        <View style={styles.tarjeta}>
+          {h.apariciones.length === 0 ? (
+            <Text style={styles.sinDatos}>Este código no tuvo diferencias en ningún inventario cerrado anterior.</Text>
+          ) : (
+            // Cronológico ascendente (mismo orden que manda el backend) —
+            // se invierte para leer del más reciente hacia atrás.
+            [...h.apariciones].reverse().map((a) => (
+              <View key={a.inventarioId} style={styles.difFila}>
+                <View style={styles.difCabecera}>
+                  <Text style={styles.difCodigo}>
+                    {MESES_CORTOS[a.periodoMes - 1]} {a.periodoAnio} · {a.sucursalNombre}
+                  </Text>
+                  <Badge label={a.diferencia < 0 ? 'Faltante' : 'Sobrante'} variant={a.diferencia < 0 ? 'falta' : 'ok'} />
+                </View>
+                <Text style={styles.difMeta}>
+                  ERP {formatoMiles(a.stockSistema)} · contado {formatoMiles(a.conteoFinal)} · resuelto en el {a.resueltoEnConteo}º conteo
+                </Text>
+                <View style={styles.difValores}>
+                  <Text style={[styles.difCifra, a.diferencia < 0 ? styles.datoFalta : styles.datoOk]}>
+                    {formatoMiles(Math.abs(a.diferencia))} und
+                  </Text>
+                  <Text style={styles.difMonto}>
+                    {a.montoDiferencia === null ? 'Sin precio para valorizar' : `S/ ${formatoMoneda(Math.abs(a.montoDiferencia))}`}
+                  </Text>
+                </View>
+              </View>
+            ))
+          )}
+        </View>
+      </ScrollView>
+    );
+  }
+
+  // ---------------------------------------------------------------- detalle
+  if (detalle) {
+    const est = ESTADOS[detalle.estado];
+    const r = detalle.resultado;
+    // Si hay algo que exportar y, si no, por qué. Ver
+    // dominio/exportar-diferencias.ts#estadoExportacion.
+    const exportacion = estadoExportacion(detalle.estado, diferencias.length);
+    return (
+      <ScrollView style={styles.paginaWeb} contentContainerStyle={styles.contenidoWeb} showsVerticalScrollIndicator={false}>
+        <BarraApp rotulo="Historial" sede={detalle.sucursalNombre} cifras={detalle.periodo} />
+
+        <Pressable style={styles.volver} onPress={() => setDetalle(null)} accessibilityRole="button">
+          <ChevronLeft size={15} color={colors.rojo} />
+          <Text style={styles.volverTexto}>Volver al historial</Text>
+        </Pressable>
+
+        <View style={styles.tarjeta}>
+          <View style={styles.tarjetaCabecera}>
+            <Text style={styles.tarjetaTitulo}>
+              {MESES_CORTOS[detalle.periodoMes - 1]} {detalle.periodoAnio}
+            </Text>
+            <Badge label={est.etiqueta} variant={est.badge} />
+          </View>
+          <Text style={styles.ayuda}>
+            Creado el {formatoFecha(detalle.abiertoEn)} · {formatoMiles(detalle.snapshotItems)} ítems
+            {detalle.tamanoHoja ? ` · hojas de ${detalle.tamanoHoja}` : ''}
+            {detalle.cerradoEn ? ` · conteo cerrado el ${formatoFecha(detalle.cerradoEn)}` : ' · conteo todavía abierto'}
+            {detalle.cerradoPor ? ` por ${detalle.cerradoPor.nombre}` : ''}
+          </Text>
+        </View>
+
+        <Text style={styles.seccion}>Resultado del ciclo</Text>
+        <View style={styles.tarjeta}>
+          {r ? (
+            <>
+              <Dato etiqueta="Ítems totales" valor={formatoMiles(r.itemsTotales)} />
+              <Dato etiqueta="Ítems cuadrados" valor={`${formatoMiles(r.itemsCuadrados)} (${formatoPct(r.porcentajeCuadrado)}%)`} tono="ok" />
+              <Dato etiqueta="Ítems con diferencia" valor={formatoMiles(r.itemsConDiferencia)} tono="falta" />
+              {r.itemsSegundoConteo !== undefined ? (
+                <Dato etiqueta="Fueron a 2º conteo" valor={formatoMiles(r.itemsSegundoConteo)} />
+              ) : null}
+              {r.itemsTercerConteo !== undefined ? (
+                <Dato etiqueta="Fueron a 3º conteo" valor={formatoMiles(r.itemsTercerConteo)} />
+              ) : null}
+              {r.unidadesFaltantes !== undefined ? (
+                <Dato etiqueta="Unidades faltantes" valor={formatoMiles(r.unidadesFaltantes)} tono="falta" />
+              ) : null}
+              {r.unidadesSobrantes !== undefined ? (
+                <Dato etiqueta="Unidades sobrantes" valor={formatoMiles(r.unidadesSobrantes)} />
+              ) : null}
+              <Dato etiqueta="Faltante bruto" valor={`S/ ${formatoMoneda(r.montoFaltanteBruto)}`} />
+              {/* null NO es 0: "todavía no se liquidó" y "no falta nada" son
+                  cosas distintas, y confundirlas en un inventario es grave.
+                  Y "sin liquidar todavía" tampoco es lo mismo que "el conteo
+                  ya cerró pero falta un dato que hoy no se puede cargar" --
+                  motivoSinNeto distingue las dos razones, no las une en un
+                  mismo cartel. */}
+              <Dato
+                etiqueta="Faltante neto"
+                valor={r.montoFaltanteNeto === null ? motivoSinNeto(r) : `S/ ${formatoMoneda(r.montoFaltanteNeto)}`}
+                tono={r.montoFaltanteNeto === null ? undefined : 'falta'}
+              />
+              <Dato
+                etiqueta="Cuota por colaborador"
+                valor={r.cuotaBase === null ? motivoSinNeto(r) : `S/ ${formatoMoneda(r.cuotaBase)}`}
+              />
+            </>
+          ) : (
+              <Text style={styles.sinDatos}>{sinResultado(detalle.estado)}</Text>
+          )}
+        </View>
+
+        {/* La sección se muestra SIEMPRE, incluso con el conteo abierto.
+            Antes desaparecía entera cuando el inventario estaba `en_curso`, y
+            el Auditor que entraba a exportar no veía ni el botón ni una
+            explicación (hallazgo 2026-09-08) -- "no está" y "todavía no" se
+            ven igual cuando no hay nada en pantalla. Las diferencias siguen
+            sin pedirse hasta el cierre (ver abrirDetalle): lo que cambia es
+            que ahora se dice por qué. */}
+        <>
+            <Text style={styles.seccion}>Diferencias</Text>
+            <View style={styles.tarjeta}>
+              {errorCierre ? (
+                <Text style={styles.ayuda}>{errorCierre}</Text>
+              ) : !exportacion.puedeExportar ? (
+                // El motivo REAL, no uno genérico: distingue "todavía no
+                // cerró" de "cerró y cuadró" de "se anuló". Ver
+                // dominio/exportar-diferencias.ts#estadoExportacion.
+                <Text style={styles.sinDatos}>{exportacion.motivo}</Text>
+              ) : (
+                // Ya vienen ordenadas por valor absoluto descendente (ver
+                // historial-api.ts#aDiferencias): lo que más plata mueve arriba.
+                diferencias.map((d) => (
+                  <Pressable
+                    key={d.codigo}
+                    style={styles.difFila}
+                    onPress={() => abrirHistoricoItem(d.codigo)}
+                    disabled={cargandoHistoricoItem}
+                    accessibilityRole="button"
+                    accessibilityLabel={`Ver la historia de ${d.descripcion}`}
+                  >
+                    <View style={styles.difCabecera}>
+                      <Text style={styles.difCodigo}>
+                        {d.codigo} · {d.descripcion}
+                      </Text>
+                      <Badge label={d.tipo === 'faltante' ? 'Faltante' : 'Sobrante'} variant={d.tipo === 'faltante' ? 'falta' : 'ok'} />
+                    </View>
+                    <Text style={styles.difMeta}>
+                      ERP {formatoMiles(d.stockSistema)} · contado {formatoMiles(d.conteoFinal)} · resuelto en el {d.resueltoEnConteo}º conteo
+                    </Text>
+                    <View style={styles.difValores}>
+                      <Text style={[styles.difCifra, d.tipo === 'faltante' ? styles.datoFalta : styles.datoOk]}>
+                        {formatoMiles(Math.abs(d.diferencia))} und
+                      </Text>
+                      <Text style={styles.difMonto}>
+                        {d.montoDiferencia === null ? 'Sin precio para valorizar' : `S/ ${formatoMoneda(Math.abs(d.montoDiferencia))}`}
+                      </Text>
+                    </View>
+                    <Text style={styles.difVerHistoria}>Ver historia de este ítem →</Text>
+                  </Pressable>
+                ))
+              )}
+            </View>
+
+            {/* DUEÑO: el Auditor -- pedido del cliente. El Administrador es
+                un rol técnico que no participa del inventario, así que no
+                se le ofrece el botón (aunque el backend lo dejaría pasar).
+
+                Y SOLO cuando hay algo que exportar: con el inventario cerrado
+                y cero diferencias el botón habría generado un .xlsx con solo
+                los encabezados. Un archivo vacío mandado por WhatsApp es peor
+                que no tener el botón -- quien lo recibe no sabe si el
+                inventario cuadró o si la exportación falló. Se oculta, y el
+                renglón de arriba dice por qué. */}
+            {rol === 'auditor' && exportacion.puedeExportar ? (
+              <Pressable
+                style={[styles.verificarBtn, exportando && styles.verificarBtnDeshabilitado]}
+                onPress={exportarDiferencias}
+                disabled={exportando}
+                accessibilityRole="button"
+                accessibilityLabel="Exportar diferencias a Excel y compartir"
+              >
+                {exportando ? (
+                  <ActivityIndicator color={colors.blanco} size="small" />
+                ) : (
+                  <Text style={styles.verificarBtnTexto}>Exportar a Excel</Text>
+                )}
+              </Pressable>
+            ) : null}
+        </>
+
+        <Text style={styles.seccion}>Hojas de conteo</Text>
+        <View style={styles.tarjeta}>
+          {detalle.hojas.length === 0 ? (
+            <Text style={styles.sinDatos}>Este inventario no tiene el detalle de hojas guardado.</Text>
+          ) : (
+            detalle.hojas.map((h) => (
+              <View key={h.id} style={styles.hojaMini}>
+                <Text style={styles.hojaMiniTitulo}>Hoja #{h.numero}</Text>
+                <Text style={styles.hojaMiniMeta}>
+                  {h.contados}/{h.productos} · {h.asignados.map((a) => a.nombre).join(', ') || 'Sin asignar'}
+                </Text>
+              </View>
+            ))
+          )}
+        </View>
+
+        {/* Se liquida ANTES de lacrar (regla del cliente): un `conteo_cerrado`
+            recién cerrado puede no tener planilla todavía -- la sección lo
+            dice, no lo esconde. */}
+        {!conteoAbierto(detalle.estado) ? (
+          <>
+            <Text style={styles.seccion}>Planilla de liquidación</Text>
+            <View style={styles.tarjeta}>
+              {errorCierre ? (
+                <Text style={styles.ayuda}>{errorCierre}</Text>
+              ) : liquidacion === null ? (
+                <Text style={styles.sinDatos}>Todavía no se liquidó este inventario.</Text>
+              ) : liquidacion.planilla.length === 0 ? (
+                <Text style={styles.sinDatos}>Todavía no se liquidó este inventario.</Text>
+              ) : (
+                <>
+                  {liquidacion.resumen ? (
+                    <>
+                      <Dato etiqueta="Faltante neto a repartir" valor={`S/ ${formatoMoneda(liquidacion.resumen.montoFaltanteNeto)}`} tono="falta" />
+                      <Dato etiqueta="Cuota base por colaborador" valor={`S/ ${formatoMoneda(liquidacion.resumen.cuotaBase)}`} />
+                      {liquidacion.resumen.faltantes > 0 ? (
+                        <Dato
+                          etiqueta={`Multa por inasistencia (${liquidacion.resumen.faltantes})`}
+                          valor={`S/ ${formatoMoneda(liquidacion.resumen.fondoMultas)}`}
+                        />
+                      ) : null}
+                    </>
+                  ) : (
+                    // null NO es un resumen con ceros: falta un dato de captura,
+                    // no falta plata. Mismo criterio que motivoSinNeto.
+                    <Text style={styles.sinDatos}>
+                      {liquidacion.asistenciaSinRegistrar && liquidacion.ajustesSinRegistrar
+                        ? 'Falta registrar la asistencia y los ajustes del mes: el resumen no se puede calcular todavía.'
+                        : liquidacion.asistenciaSinRegistrar
+                          ? 'Falta registrar la asistencia: el resumen no se puede calcular todavía.'
+                          : 'Faltan los ajustes del mes: el resumen no se puede calcular todavía.'}
+                    </Text>
+                  )}
+
+                  {liquidacion.planilla.map((p) => (
+                    <View key={p.colaboradorId} style={[styles.planillaFila, !p.asistio && styles.planillaFilaFalto]}>
+                      <View style={styles.planillaDatos}>
+                        <Text style={styles.planillaNombre}>{p.nombre}</Text>
+                        <Text style={styles.planillaSub}>
+                          {ESTADOS_ROL(p.rol)} · {p.asistio ? 'Asistió' : 'Faltó'}
+                          {p.nombreActual !== p.nombre ? ` · ahora: ${p.nombreActual}` : ''}
+                        </Text>
+                      </View>
+                      <Text style={[styles.planillaMonto, !p.asistio && styles.datoFalta]}>S/ {formatoMoneda(p.totalDescuento)}</Text>
+                    </View>
+                  ))}
+                </>
+              )}
+            </View>
+          </>
+        ) : null}
+
+        {/* Que este bloque exista o no es, en sí mismo, la señal más fuerte:
+            un inventario que todavía se puede tocar no tiene sello, ni folio,
+            ni firmas que mostrar. */}
+        {detalle.lacrado ? (
+          <>
+            <Text style={styles.seccion}>Lacrado</Text>
+            <View style={styles.tarjeta}>
+              <View style={styles.tarjetaCabecera}>
+                <Lock size={17} color={colors.rojo} />
+                <Text style={styles.tarjetaTitulo}>Sello inmutable</Text>
+              </View>
+              <Dato etiqueta="Folio" valor={detalle.lacrado.folio} />
+              <Dato etiqueta="Lacrado el" valor={formatoFechaHora(detalle.lacrado.lacradoEn)} />
+              <Dato etiqueta="Ejecutado por" valor={detalle.lacrado.lacradoPor.nombre} />
+              <Text style={styles.ayuda}>
+                Huella SHA-256 del contenido del cierre. Sirve para cotejar contra el acta: si el dato cambiara, el
+                hash recalculado no coincidiría.
+              </Text>
+              <Text style={styles.hash}>{detalle.lacrado.hash}</Text>
+
+              {/* Recalcula el hash contra el contenido ACTUAL y compara. No
+                  muta nada -- es una lectura que compara, nunca una
+                  escritura, por eso no hace falta ningún control de dos
+                  personas para tocarla. */}
+              <Pressable
+                style={[styles.verificarBtn, verificandoSello && styles.verificarBtnDeshabilitado]}
+                onPress={verificarSello}
+                disabled={verificandoSello}
+                accessibilityRole="button"
+              >
+                {verificandoSello ? (
+                  <ActivityIndicator color={colors.blanco} size="small" />
+                ) : (
+                  <Text style={styles.verificarBtnTexto}>Verificar sello</Text>
+                )}
+              </Pressable>
+
+              {errorVerificacion ? (
+                <View style={styles.verifTarjeta}>
+                  <Text style={styles.ayuda}>{errorVerificacion}</Text>
+                </View>
+              ) : null}
+
+              {/* El resultado tiene que ser inequívoco: un "hash: a3f9..."
+                  no le dice nada a nadie. Verde = nada cambió. Rojo = QUÉ
+                  cambió, sección por sección, no solo que algo cambió. */}
+              {verificacion ? (
+                verificacion.intacto ? (
+                  <View style={[styles.verifTarjeta, styles.verifOk]}>
+                    <View style={styles.verifCabecera}>
+                      <ShieldCheck size={18} color={colors.ok} />
+                      <Text style={[styles.verifTitulo, styles.verifTituloOk]}>
+                        El sello coincide: nada cambió desde el lacrado
+                      </Text>
+                    </View>
+                    <Text style={styles.ayuda}>Verificado el {formatoFechaHora(verificacion.verificadoEn)}.</Text>
+                  </View>
+                ) : (
+                  <View style={[styles.verifTarjeta, styles.verifAlerta]}>
+                    <View style={styles.verifCabecera}>
+                      <ShieldAlert size={18} color={colors.falta} />
+                      <Text style={[styles.verifTitulo, styles.verifTituloAlerta]}>
+                        El sello NO coincide: esto cambió desde el lacrado
+                      </Text>
+                    </View>
+                    {ORDEN_SECCIONES.filter((s) => verificacion.seccionesAlteradas.includes(s)).map((s) => (
+                      <Text key={s} style={styles.verifSeccion}>
+                        • {NOMBRE_SECCION[s]}
+                      </Text>
+                    ))}
+                    <Text style={styles.ayuda}>Verificado el {formatoFechaHora(verificacion.verificadoEn)}.</Text>
+                  </View>
+                )
+              ) : null}
+
+              {/* Aparte de intacto/alterado a propósito: si cambió el
+                  FORMATO del contenido sellado (una migración del backend
+                  entre el lacrado y hoy), la comparación campo por campo ya
+                  no es 100% confiable aunque diga "intacto". Mezclarlo con
+                  "alterado" confundiría un cambio de formato con una
+                  manipulación real. */}
+              {verificacion?.versionDistinta ? (
+                <View style={[styles.verifTarjeta, styles.verifAdvertencia]}>
+                  <Text style={styles.ayuda}>
+                    El formato con el que se guarda el sello cambió desde que se lacró este inventario. La
+                    comparación de arriba no es 100% concluyente: si hay dudas, contrasta el hash a mano contra el
+                    acta.
+                  </Text>
+                </View>
+              ) : null}
+            </View>
+
+            <Text style={styles.seccion}>Doble validación</Text>
+            <View style={styles.tarjeta}>
+              <Text style={styles.ayuda}>
+                Las dos firmas que habilitaron el lacrado. El rol es el que la persona tenía{' '}
+                <Text style={styles.negrita}>al firmar</Text>: si después cambia de rol, la firma sigue diciendo con
+                qué autoridad se dio.
+              </Text>
+              {detalle.aprobaciones.map((a) => (
+                <View key={a.aprobadorId} style={styles.firma}>
+                  <Text style={styles.firmaNombre}>{a.aprobadorNombre}</Text>
+                  <Text style={styles.firmaMeta}>
+                    {ESTADOS_ROL(a.rolAlAprobar)} al firmar · {formatoFechaHora(a.aprobadoEn)}
+                  </Text>
+                  {a.nota ? <Text style={styles.firmaNota}>“{a.nota}”</Text> : null}
+                </View>
+              ))}
+            </View>
+
+            <Text style={styles.seccion}>Registro en Dynamics</Text>
+            <View style={styles.tarjeta}>
+              <Text style={styles.ayuda}>
+                {detalle.lacrado.registroErp
+                  ? `Registrado a mano en Dynamics por ${detalle.lacrado.registroErp.registradoPor.nombre} el ${formatoFecha(detalle.lacrado.registroErp.registradoEn)} · referencia ${detalle.lacrado.registroErp.referencia}.`
+                  : 'Todavía no se registró en Dynamics. El ajuste automático es fase 2: por ahora lo carga TI a mano.'}
+              </Text>
+            </View>
+          </>
+        ) : (
+          <View style={styles.tarjeta}>
+            <View style={styles.tarjetaCabecera}>
+              <Text style={styles.tarjetaTitulo}>Todavía no está lacrado</Text>
+              <Badge
+                label={`${detalle.aprobaciones.length} / ${detalle.aprobacionesRequeridas} firmado`}
+                variant={detalle.aprobaciones.length >= detalle.aprobacionesRequeridas ? 'ok' : 'default'}
+              />
+            </View>
+            <Text style={styles.ayuda}>
+              {detalle.estado === 'en_curso'
+                ? `El conteo sigue abierto: este inventario todavía se puede modificar. El lacrado llega al final del ciclo, con ${detalle.aprobacionesRequeridas === 1 ? 'la firma' : `las ${detalle.aprobacionesRequeridas} firmas`} de auditoría.`
+                : `Este inventario ya no se recuenta, pero todavía no está sellado: ${textoFirmasPendientes(detalle.aprobaciones.length, detalle.aprobacionesRequeridas)}. Hasta que se lacre, sigue siendo modificable.`}
+            </Text>
+          </View>
+        )}
+      </ScrollView>
+    );
+  }
+
+  // ------------------------------------------------------------------- lista
+  return (
+    <ScrollView style={styles.paginaWeb} contentContainerStyle={styles.contenidoWeb} showsVerticalScrollIndicator={false}>
+      <EncabezadoPagina
+        migas={[rol === 'auditor' ? 'Auditoría' : 'Administración', 'Historial']}
+        titulo="Historial de inventarios"
+        sub="El registro de todos los inventarios: en qué estado quedó cada uno, cómo cerró y quién lo firmó."
+        onInicio={() => router.push('/')}
+        acciones={
+          /* El comparativo es OTRA lectura del mismo registro, no un
+             inventario más para abrir. Secundario: el rojo de esta página no
+             lo usa nadie -- es una pantalla de solo lectura, y no hay una
+             acción principal que destacar. */
+          <BotonWeb
+            etiqueta="Comparativo mensual"
+            icono={TrendingUp}
+            onPress={() => router.push(`/${rol}/comparativo` as never)}
+          />
+        }
+      />
+
+      {cargando || cargandoDetalle ? (
+        <ActivityIndicator color={colors.rojo} style={styles.cargando} />
+      ) : error ? (
+        <TarjetaWeb titulo="No se pudo cargar el historial" icono={History} tono="neutro">
+          <Text style={styles.ayuda}>{error}</Text>
+          <Text style={styles.ayuda}>
+            El histórico se lee del servidor y no tiene copia local: es el registro de lo que ya pasó, y un histórico
+            armado en el teléfono no sería un registro.
+          </Text>
+        </TarjetaWeb>
+      ) : (
+        <>
+          {/* LOS FILTROS ARRIBA Y JUNTOS, en una sola tarjeta. En el teléfono
+              van apilados porque no hay ancho; acá las tres dimensiones
+              -sucursal, estado y período- entran a la vista y se ve de una
+              qué recorte está puesto. */}
+          <TarjetaWeb titulo="Filtros" icono={History} style={styles.filtros}>
+            {/* El Administrador filtra con "Todas" + tiendas. El Auditor elige
+                UNA sucursal (sin "Todas"): su selección es la COMPARTIDA con
+                Auditoría/Ciclo/Inicio, así que cambiarla acá las cambia todas.
+                El informe consolidado de toda la cadena sale por el botón de
+                exportación, no por este filtro de la lista. */}
+            {rol === 'administrador' ? (
+              <View style={styles.filtroBloque}>
+                <Text style={styles.filtroLabel}>Sucursal</Text>
+                <ChipsFiltro
+                  opciones={opcionesSucursal}
+                  activo={String(filtroSucursalId)}
+                  onCambiar={(id) => setFiltroSucursalId(id === TODAS ? TODAS : Number(id))}
+                />
+              </View>
+            ) : rol === 'auditor' ? (
+              <SelectorSucursal
+                label="Sucursal a auditar"
+                sucursales={sucursales}
+                sucursalId={sucursalAuditor}
+                onElegir={elegirSucursal}
+              />
+            ) : null}
+
+            <View style={styles.filtroBloque}>
+              <Text style={styles.filtroLabel}>Estado</Text>
+              <ChipsFiltro opciones={opcionesChip} activo={filtro} onCambiar={(id) => setFiltro(id as EstadoInventario | 'todos')} />
+            </View>
+
+            <View style={styles.filtroBloque}>
+              <Text style={styles.filtroLabel}>Período</Text>
+              <ChipsFiltro
+                opciones={opcionesAnio}
+                activo={filtroAnio === null ? TODOS : String(filtroAnio)}
+                onCambiar={(id) => {
+                  setFiltroAnio(id === TODOS ? null : Number(id));
+                  // Cambiar de año invalida el mes elegido: "marzo de 2025"
+                  // no dice nada cuando se vuelve a "todos los años".
+                  setFiltroMes(null);
+                }}
+              />
+              {/* El mes solo aparece con un año ya elegido — filtrar por mes
+                  sin año mezclaría todos los marzos de la historia en uno. */}
+              {filtroAnio !== null ? (
+                <ChipsFiltro
+                  opciones={opcionesMes}
+                  activo={filtroMes === null ? TODOS : String(filtroMes)}
+                  onCambiar={(id) => setFiltroMes(id === TODOS ? null : Number(id))}
+                />
+              ) : null}
+            </View>
+
+            {/* Consolidado: SOLO auditor. Exige año Y mes elegidos: habilitarlo
+                antes invitaría a tocarlo para enterarse recién adentro de que
+                falta el período. */}
+            {rol === 'auditor' && filtroAnio !== null && filtroMes !== null ? (
+              <BotonWeb etiqueta="Exportar consolidado" onPress={() => setModalConsolidadoVisible(true)} />
+            ) : null}
+          </TarjetaWeb>
+
+          {inventarios.length === 0 ? (
+            <TarjetaWeb titulo="Ningún inventario con estos filtros" icono={History} tono="neutro">
+              <Text style={styles.ayuda}>Prueba con otra combinación.</Text>
+            </TarjetaWeb>
+          ) : (
+            <TarjetaWeb
+              titulo="Inventarios"
+              sub={`${inventarios.length} de ${total} ${pluralizar(total, 'inventario', 'inventarios')}`}
+              icono={History}
+            >
+              <View style={styles.marco}>
+                <View style={styles.encabezadoTabla}>
+                  <Text style={[styles.encabezadoCelda, styles.colPeriodo]}>Período</Text>
+                  <Text style={[styles.encabezadoCelda, styles.colSucursal]}>Sucursal</Text>
+                  <Text style={[styles.encabezadoCelda, styles.colEstado]}>Estado</Text>
+                  <Text style={[styles.encabezadoCelda, styles.colItems]}>Ítems</Text>
+                  <Text style={[styles.encabezadoCelda, styles.colDif]}>Diferencias</Text>
+                  <Text style={[styles.encabezadoCelda, styles.colFirmas]}>Firmas</Text>
+                </View>
+                {inventarios.map((inv) => (
+                  <FilaInventarioWeb key={inv.id} inventario={inv} onAbrir={() => abrirDetalle(inv.id)} />
+                ))}
+              </View>
+
+              {/* Nunca más un techo silencioso: mientras queden inventarios
+                  sin traer para este filtro, el botón sigue ahí. */}
+              {inventarios.length < total ? (
+                <BotonWeb
+                  etiqueta={`Cargar más (${total - inventarios.length} ${pluralizar(total - inventarios.length, 'restante', 'restantes')})`}
+                  cargando={cargandoMas}
+                  onPress={() => void cargarMas()}
+                />
+              ) : null}
+            </TarjetaWeb>
+          )}
+        </>
+      )}
+
+      {rol === 'auditor' ? (
+        <ModalExportarConsolidado
+          visible={modalConsolidadoVisible}
+          // El padrón real: el checklist SÍ tiene efecto para el Auditor
+          // (ver comentario de `modalConsolidadoVisible` más arriba).
+          tiendas={sucursales}
+          exportando={exportandoConsolidado}
+          onExportar={exportarConsolidado}
+          onCerrar={() => setModalConsolidadoVisible(false)}
+        />
+      ) : null}
+    </ScrollView>
+  );
+}
+
+
+/** El rol congelado al firmar, capitalizado para mostrar. */
+function ESTADOS_ROL(rol: Rol): string {
+  return rol.charAt(0).toUpperCase() + rol.slice(1);
+}
+
+function Dato({ etiqueta, valor, tono }: { etiqueta: string; valor: string; tono?: 'ok' | 'falta' }): JSX.Element {
+  return (
+    <View style={styles.dato}>
+      <Text style={styles.datoEtiqueta}>{etiqueta}</Text>
+      <Text style={[styles.datoValor, tono === 'ok' && styles.datoOk, tono === 'falta' && styles.datoFalta]}>{valor}</Text>
+    </View>
+  );
+}
+
+/**
+ * Una fila de la tabla de inventarios: los MISMOS datos que la tarjeta del
+ * teléfono, puestos en columnas para que se puedan barrer de arriba abajo.
+ * Reemplaza a `TarjetaInventario`, que no se copió acá justamente porque es la
+ * pieza que este rediseño viene a cambiar.
+ */
+function FilaInventarioWeb({
+  inventario,
+  onAbrir,
+}: {
+  inventario: InventarioHistorico;
+  onAbrir: () => void;
+}): JSX.Element {
+  const r = inventario.resultado;
+  // El MISMO texto que el pie de la tarjeta del teléfono: firmado por, o
+  // cuántas firmas faltan.
+  const firmas = inventario.folio
+    ? textoFirmadoPor(inventario.aprobacionesRequeridas)
+    : textoFirmas(inventario.aprobaciones, inventario.aprobacionesRequeridas);
+  const est = ESTADOS[inventario.estado];
+  return (
+    <Pressable
+      style={styles.fila}
+      onPress={onAbrir}
+      accessibilityRole="button"
+      accessibilityLabel={`Abrir inventario de ${inventario.sucursalNombre}, ${MESES_CORTOS[inventario.periodoMes - 1]} ${inventario.periodoAnio}`}
+    >
+      <Text style={[styles.celda, styles.colPeriodo, styles.celdaFuerte]} numberOfLines={1}>
+        {MESES_CORTOS[inventario.periodoMes - 1]} {inventario.periodoAnio}
+      </Text>
+      <Text style={[styles.celda, styles.colSucursal]} numberOfLines={1}>
+        {inventario.sucursalNombre}
+      </Text>
+      <View style={styles.colEstado}>
+        {/* `ESTADOS` es la MISMA tabla que usa la tarjeta del teléfono: una
+            sola fuente para la etiqueta y el color de cada estado. */}
+        <Badge label={est.etiqueta} variant={est.badge} />
+      </View>
+      {/* Sin resultado calculado no se inventa un 0: el guion dice "todavía no
+          se sabe", que es lo que pasa con un inventario en curso. */}
+      <Text style={[styles.celda, styles.colItems, styles.celdaNumerica]}>
+        {r === null ? '—' : formatoMiles(r.itemsTotales)}
+      </Text>
+      <Text style={[styles.celda, styles.colDif, styles.celdaNumerica, r !== null && r.itemsConDiferencia > 0 ? styles.celdaFalta : null]}>
+        {r === null ? '—' : formatoMiles(r.itemsConDiferencia)}
+      </Text>
+      <Text style={[styles.celda, styles.colFirmas]} numberOfLines={1}>
+        {firmas}
+      </Text>
+    </Pressable>
+  );
+}
+
+
+/**
+ * Por qué este inventario no tiene NI SIQUIERA el bloque de resultado
+ * (`r === null`) todavía.
+ *
+ * El backend calcula `ResultadoInventario` en el momento de cerrar el
+ * conteo, no al liquidar -- así que un `conteo_cerrado` normalmente YA
+ * trae el bloque entero (itemsTotales, montoFaltanteBruto, el embudo),
+ * aunque `montoFaltanteNeto`/`cuotaBase` adentro puedan seguir en null
+ * (ver `motivoSinNeto`, más abajo, para ESA distinción). La rama
+ * `conteo_cerrado` de acá solo debería verse en inventarios cerrados
+ * ANTES de que este cálculo existiera.
+ */
+function sinResultado(estado: EstadoInventario): string {
+  if (estado === 'en_curso') return 'Conteo en marcha: los resultados se calculan al cerrar el ciclo.';
+  if (estado === 'ajuste_auditor') {
+    return 'El auditor está haciendo el ajuste final: los resultados se calculan cuando lo cierre.';
+  }
+  if (estado === 'conteo_cerrado') return 'Conteo cerrado, pero este inventario es de antes de que se calculara el resultado al cierre.';
+  if (estado === 'anulado') return 'Inventario anulado: no produjo resultados.';
+  return 'Sin resultados calculados.';
+}
+
+/**
+ * Por qué `montoFaltanteNeto`/`cuotaBase` son null CON el resto del
+ * bloque ya real (itemsTotales, montoFaltanteBruto). Dos razones
+ * DISTINTAS que no se pueden confundir bajo el mismo "sin liquidar
+ * todavía": el inventario en curso -- eso ya lo cubre `sinResultado` --
+ * y el conteo ya cerrado pero sin asistencia/ajustes capturados, que es
+ * lo que este texto explica.
+ */
+function motivoSinNeto(r: ResultadoInventario): string {
+  const razones: string[] = [];
+  if (r.asistenciaSinRegistrar) razones.push('falta registrar la asistencia');
+  if (r.ajustesSinRegistrar) razones.push('faltan los ajustes del mes');
+  return razones.length > 0 ? `No se puede calcular: ${razones.join(' y ')}.` : 'No se puede calcular todavía.';
+}
+
+/**
+ * Misma razón que `motivoSinNeto`, en el espacio angosto de la tarjeta del
+ * listado (`Cifra`, `width: '46%'`) -- corto pero sigue diciendo POR QUÉ,
+ * nunca un guión ni "Sin liquidar" genérico que confundiría esto con un
+ * inventario que todavía ni cerró.
+ */
+function motivoSinNetoCorto(r: ResultadoInventario): string {
+  if (r.asistenciaSinRegistrar && r.ajustesSinRegistrar) return 'Falta asistencia y ajustes';
+  if (r.asistenciaSinRegistrar) return 'Falta asistencia';
+  if (r.ajustesSinRegistrar) return 'Faltan ajustes';
+  return 'No calculado';
+}
+
+function Cifra({ etiqueta, valor, tono }: { etiqueta: string; valor: string; tono?: 'ok' | 'falta' }): JSX.Element {
+  return (
+    <View style={styles.cifra}>
+      <Text style={styles.cifraEtiqueta}>{etiqueta}</Text>
+      <Text style={[styles.cifraValor, tono === 'ok' && styles.datoOk, tono === 'falta' && styles.datoFalta]}>{valor}</Text>
+    </View>
+  );
+}
+
+const styles = StyleSheet.create({
+  cargando: { marginTop: 24 },
+
+  tarjeta: { gap: 10, padding: 15, backgroundColor: colors.campo, borderWidth: 1, borderColor: colors.borde, borderRadius: 13 },
+  tarjetaCabecera: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  tarjetaTitulo: { flex: 1, fontSize: 14.5, color: colors.tinta, fontFamily: fonts.bold },
+  ayuda: { fontSize: 12.5, lineHeight: 17.5, color: colors.gris, fontFamily: fonts.regular },
+  negrita: { fontFamily: fonts.bold, color: colors.tinta },
+  sinDatos: { fontSize: 12, color: colors.grisClaro, fontFamily: fonts.regular, fontStyle: 'italic' },
+  seccion: { fontSize: 11, letterSpacing: 1.3, textTransform: 'uppercase', color: colors.gris, fontFamily: fonts.semibold },
+
+  filtroBloque: { gap: 6 },
+  filtroLabel: { fontSize: 11, letterSpacing: 0.5, color: colors.gris, fontFamily: fonts.semibold },
+
+
+
+  cifra: { width: '46%', gap: 1 },
+  cifraEtiqueta: { fontSize: 10.5, color: colors.gris, fontFamily: fonts.regular },
+  cifraValor: { fontSize: 13.5, color: colors.tinta, fontFamily: fonts.bold },
+
+
+  volver: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  volverTexto: { fontSize: 13, color: colors.rojo, fontFamily: fonts.semibold },
+
+  dato: {
+    flexDirection: 'row',
+    alignItems: 'baseline',
+    justifyContent: 'space-between',
+    gap: 10,
+    paddingVertical: 7,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.borde,
+  },
+  datoEtiqueta: { flex: 1, fontSize: 12, color: colors.gris, fontFamily: fonts.regular },
+  datoValor: { fontSize: 13, color: colors.tinta, fontFamily: fonts.bold },
+  datoOk: { color: colors.ok },
+  datoFalta: { color: colors.falta },
+
+  hash: {
+    padding: 9,
+    borderRadius: radius.sm,
+    backgroundColor: colors.esperaSuave,
+    fontSize: 10.5,
+    lineHeight: 16,
+    color: colors.gris,
+    fontFamily: 'monospace',
+  },
+
+  firma: { gap: 2, padding: 10, borderRadius: radius.md, backgroundColor: colors.okSuave },
+  firmaNombre: { fontSize: 13, color: colors.tinta, fontFamily: fonts.bold },
+  firmaMeta: { fontSize: 11, color: colors.gris, fontFamily: fonts.regular },
+  firmaNota: { fontSize: 11.5, color: colors.gris, fontFamily: fonts.regular, fontStyle: 'italic' },
+
+  hojaMini: { gap: 2, paddingVertical: 9, paddingHorizontal: 11, borderWidth: 1, borderColor: colors.borde, borderRadius: radius.md },
+  hojaMiniTitulo: { fontSize: 12.5, color: colors.tinta, fontFamily: fonts.semibold },
+  hojaMiniMeta: { fontSize: 11.5, color: colors.gris, fontFamily: fonts.regular },
+
+  verificarBtn: {
+    alignSelf: 'flex-start',
+    paddingVertical: 9,
+    paddingHorizontal: 16,
+    borderRadius: radius.md,
+    backgroundColor: colors.rojo,
+  },
+  verificarBtnDeshabilitado: { opacity: 0.6 },
+  verificarBtnTexto: { fontSize: 12.5, color: colors.blanco, fontFamily: fonts.bold },
+
+  verifTarjeta: { gap: 6, padding: 12, borderRadius: radius.md, borderWidth: 1, borderColor: colors.borde },
+  verifOk: { backgroundColor: colors.okSuave, borderColor: 'rgba(10,107,87,0.3)' },
+  verifAlerta: { backgroundColor: colors.faltaSuave, borderColor: 'rgba(162,59,46,0.3)' },
+  verifAdvertencia: { backgroundColor: colors.procesoSuave, borderColor: 'rgba(138,90,5,0.3)' },
+  verifCabecera: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  verifTitulo: { flex: 1, fontSize: 13, fontFamily: fonts.bold },
+  verifTituloOk: { color: colors.ok },
+  verifTituloAlerta: { color: colors.falta },
+  verifSeccion: { fontSize: 12.5, color: colors.tinta, fontFamily: fonts.semibold, paddingLeft: 4 },
+
+  difFila: { gap: 5, paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: colors.borde },
+  difCabecera: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 },
+  difCodigo: { flex: 1, fontSize: 12.5, color: colors.tinta, fontFamily: fonts.semibold },
+  difMeta: { fontSize: 11, color: colors.gris, fontFamily: fonts.regular },
+  difValores: { flexDirection: 'row', alignItems: 'baseline', justifyContent: 'space-between' },
+  difCifra: { fontSize: 13, fontFamily: fonts.bold },
+  difMonto: { fontSize: 12.5, color: colors.tinta, fontFamily: fonts.bold },
+  difVerHistoria: { marginTop: 2, fontSize: 11, color: colors.rojo, fontFamily: fonts.semibold },
+
+  planillaFila: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 10,
+    paddingVertical: 9,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.borde,
+  },
+  planillaFilaFalto: { backgroundColor: colors.faltaSuave, marginHorizontal: -15, paddingHorizontal: 15, borderBottomColor: 'transparent' },
+  planillaDatos: { flex: 1, gap: 2 },
+  planillaNombre: { fontSize: 13, color: colors.tinta, fontFamily: fonts.semibold },
+  planillaSub: { fontSize: 11, color: colors.gris, fontFamily: fonts.regular },
+  planillaMonto: { fontSize: 13.5, color: colors.tinta, fontFamily: fonts.bold },
+
+  // --------------------------------------------------------------- diseño web
+  paginaWeb: { flex: 1 },
+  contenidoWeb: { padding: spacing.xxl, gap: spacing.lg },
+  filtros: { flexGrow: 0 },
+  marco: { borderWidth: 1, borderColor: colors.borde, borderRadius: radius.md, overflow: 'hidden' },
+  encabezadoTabla: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    minHeight: 38,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.borde,
+    backgroundColor: colors.esperaSuave,
+  },
+  encabezadoCelda: {
+    paddingHorizontal: spacing.md,
+    fontSize: 11.5,
+    color: colors.gris,
+    fontFamily: fonts.bold,
+    textTransform: 'uppercase',
+    letterSpacing: 0.4,
+  },
+  fila: { flexDirection: 'row', alignItems: 'center', minHeight: 50, borderBottomWidth: 1, borderBottomColor: colors.borde },
+  celda: { paddingHorizontal: spacing.md, fontSize: fontSize.sm, color: colors.gris, fontFamily: fonts.regular },
+  celdaFuerte: { color: colors.tinta, fontFamily: fonts.semibold, fontSize: fontSize.base },
+  /** Cifras a la derecha y `tabular-nums`: se comparan columna abajo. */
+  celdaNumerica: { textAlign: 'right', fontVariant: ['tabular-nums'], fontFamily: fonts.medium, color: colors.tinta },
+  /** Solo las diferencias, que son lo que se viene a buscar. */
+  celdaFalta: { color: colors.falta, fontFamily: fonts.bold },
+
+  colPeriodo: { width: 120 },
+  colSucursal: { flex: 1.6, minWidth: 150 },
+  colEstado: { width: 170, paddingHorizontal: spacing.md },
+  colItems: { width: 92 },
+  colDif: { width: 108 },
+  colFirmas: { flex: 1.4, minWidth: 150 },
+});
