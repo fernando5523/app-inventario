@@ -4,10 +4,8 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState, type JSX } fro
 import { ActivityIndicator, FlatList, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import { useRefrescoAlEnfocar } from '../../components/hooks/useRefrescoAlEnfocar';
-import { PantallaConTabs } from '../../components/navegacion/PantallaConTabs';
+import { EncabezadoPagina } from '../../components/web';
 import {
-  BandaSync,
-  BarraApp,
   EmptyState,
   formatoMiles,
   ModalFiltrosMatriz,
@@ -31,7 +29,7 @@ import { ordinal } from '../../lib/dominio/texto-cierre-ronda';
 import type { ItemAuditoria, Sucursal, VeredictoAuditoria } from '../../lib/dominio/tipos';
 import { useSesion } from '../../lib/sesion-contexto';
 import { useSucursalAuditada } from '../../lib/sucursal-auditada-contexto';
-import { colors, fonts, radius } from '../../lib/theme';
+import { colors, fonts, radius, spacing } from '../../lib/theme';
 
 /**
  * ---------------------------------------------------------------------------
@@ -335,28 +333,25 @@ export default function MatrizWebScreen(): JSX.Element {
   });
   const nombreSucursal = sucursales.find((s) => s.id === sucursalId)?.nombre ?? sesion.sucursal?.nombre;
 
-  async function salir(): Promise<void> {
-    await cerrar();
-    router.replace('/');
-  }
 
   return (
     // `anchoCompleto`: una tabla de diez columnas no entra en el tope de
     // lectura de 1120px, y el tope existe para un renglón de texto, no para
     // esto. Es opt-in, así que ninguna otra pantalla se entera.
-    <PantallaConTabs anchoCompleto contentStyle={styles.contenido}>
-      <BarraApp
-        rotulo="Auditoría · Matriz comparativa"
-        sede={nombreSucursal}
-        cifras={
+    <View style={styles.pagina}>
+      {/* El mismo encabezado que el Panel: miga de pan, titulo grande y la
+          tienda debajo. `BarraApp` es la barra del telefono -- rotulo chiquito
+          y boton de salir -- y acá el salir vive en la barra lateral. */}
+      <EncabezadoPagina
+        migas={['Auditoría', 'Matriz comparativa']}
+        titulo="Matriz comparativa"
+        sub={
           cargando
-            ? undefined
+            ? 'Revisando ítem por ítem contra el stock del ERP.'
             : `${items.length} ${pluralizar(items.length, 'ítem', 'ítems')} · ${resumen.conDiferencia} con diferencia`
         }
-        onSalir={salir}
+        onInicio={() => router.push('/auditor')}
       />
-
-      <BandaSync estado="ok" mensaje="Sincronizado" />
 
       <SelectorSucursal
         label="Sucursal a auditar"
@@ -536,11 +531,17 @@ export default function MatrizWebScreen(): JSX.Element {
         }}
         onCerrar={() => setModalFiltrosVisible(false)}
       />
-    </PantallaConTabs>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
+  /**
+   * SIN `backgroundColor`, a proposito: asi se ve el lienzo gris del marco
+   * (`RolTabsLayout.web.tsx`). Cualquier pantalla que pinte blanco acá tapa el
+   * lienzo y las tarjetas dejan de despegarse del fondo.
+   */
+  pagina: { flex: 1, padding: spacing.xxl, gap: spacing.lg },
   contenido: { paddingHorizontal: 16, paddingTop: 8, gap: 14 },
   cargando: { marginTop: 24 },
   tarjeta: {
