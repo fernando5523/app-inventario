@@ -131,7 +131,9 @@ export function RolTabsLayout({ rol }: RolTabsLayoutProps): JSX.Element | null {
 }
 
 const styles = StyleSheet.create({
-  marco: { flex: 1, flexDirection: 'row', backgroundColor: colors.fondo },
+  // El LIENZO gris: es lo que hace que las tarjetas blancas se lean como
+  // piezas y no como manchas. Ver `colors.lienzo` para por qué solo en web.
+  marco: { flex: 1, flexDirection: 'row', backgroundColor: colors.lienzo },
   marcoAngosto: { flexDirection: 'column' },
 
   barra: {

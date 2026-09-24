@@ -35,6 +35,22 @@ export const colors = {
   overlay: 'rgba(28, 25, 23, 0.42)',
   /** Superficie del control deshabilitado: #F7F5F4 en la maqueta. */
   campoDeshabilitado: '#F7F5F4',
+  /**
+   * EL GRIS DE LA PÁGINA, y por qué existe SOLO para la web.
+   *
+   * En el teléfono el fondo es blanco y las tarjetas también: se separan por
+   * su borde, y alcanza porque la pantalla mide 400px y hay una cosa a la vez.
+   * En un monitor no alcanza -- blanco sobre blanco a 1900px de ancho es una
+   * lámina sin relieve, y las tarjetas dejan de leerse como tarjetas.
+   *
+   * Este gris es el lienzo sobre el que flotan. Es el cambio que más hace por
+   * el diseño nuevo y el único color que hubo que agregar: el resto de la
+   * paleta del mockup ya estaba (el rojo de marca, el `rojoSuave` de las
+   * bandas, el verde de sobrante, el rojo de faltante).
+   *
+   * NO se usa en Android ni iOS. Ver `RolTabsLayout.web.tsx`.
+   */
+  lienzo: '#F7F6F5',
 } as const;
 
 export const spacing = { xs: 4, sm: 8, md: 12, lg: 16, xl: 20, xxl: 24, xxxl: 32 } as const;
@@ -56,6 +72,21 @@ export const fonts = {
 } as const;
 
 export const shadow = {
+  /**
+   * La sombra de una TARJETA en web: apenas un despegue del lienzo, no un
+   * relieve. Con el gris de fondo (`colors.lienzo`) y el borde, esto es lo
+   * último que hace falta para que la tarjeta se lea como una pieza aparte.
+   *
+   * Mucho más suave que `modal`: un modal se pone ENCIMA de todo y tiene que
+   * decirlo; una tarjeta es parte de la página.
+   */
+  tarjeta: {
+    shadowColor: colors.tinta,
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.05,
+    shadowRadius: 3,
+    elevation: 2,
+  },
   modal: {
     shadowColor: colors.tinta,
     shadowOffset: { width: 0, height: 14 },
