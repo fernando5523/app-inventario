@@ -42,60 +42,15 @@
  * SQLite, que es la fuente de verdad del lado del teléfono.
  */
 
-import * as SQLite from 'expo-sqlite';
-
 import type { Colaborador, Sesion, Sucursal } from '../dominio/tipos';
 import type { RepositorioSesion } from '../puertos/repositorios';
 import { pedir, pedirSinCuerpo, recordarToken, registrarLectorDeToken } from './_http';
+// DONDE se guarda la sesion entre arranques depende de la plataforma: SQLite
+// en el telefono, localStorage en el navegador. Metro elige el archivo; este
+// adaptador no se entera. Ver `sesion-local.web.ts` para el bug que lo obligo.
+import { borrarSesionLocal, guardarSesionLocal, leerSesionLocal } from './sesion-local';
 
 const RUTA = '/api/sesion';
-
-// ---------------------------------------------------------------------------
-// Persistencia local de la sesión (expo-sqlite) — sobrevive a un reinicio.
-// ---------------------------------------------------------------------------
-
-const dbPromise = SQLite.openDatabaseAsync('sesion.db');
-
-let tablaLista: Promise<void> | null = null;
-function asegurarTabla(): Promise<void> {
-  if (!tablaLista) {
-    tablaLista = dbPromise.then(async (db) => {
-      await db.execAsync(
-        'CREATE TABLE IF NOT EXISTS sesion_activa (id INTEGER PRIMARY KEY CHECK (id = 1), payload TEXT NOT NULL);',
-      );
-    });
-  }
-  return tablaLista;
-}
-
-async function guardarSesionLocal(sesion: Sesion): Promise<void> {
-  await asegurarTabla();
-  const db = await dbPromise;
-  await db.runAsync(
-    'INSERT INTO sesion_activa (id, payload) VALUES (1, ?) ON CONFLICT(id) DO UPDATE SET payload = excluded.payload;',
-    [JSON.stringify(sesion)],
-  );
-}
-
-async function leerSesionLocal(): Promise<Sesion | null> {
-  await asegurarTabla();
-  const db = await dbPromise;
-  const fila = await db.getFirstAsync<{ payload: string }>('SELECT payload FROM sesion_activa WHERE id = 1;');
-  if (!fila) return null;
-
-  const sesion = JSON.parse(fila.payload) as Sesion;
-  if (new Date(sesion.expiraEn).getTime() < Date.now()) {
-    await borrarSesionLocal();
-    return null;
-  }
-  return sesion;
-}
-
-async function borrarSesionLocal(): Promise<void> {
-  await asegurarTabla();
-  const db = await dbPromise;
-  await db.runAsync('DELETE FROM sesion_activa WHERE id = 1;');
-}
 
 // ---------------------------------------------------------------------------
 // Token compartido con el resto de los adaptadores
