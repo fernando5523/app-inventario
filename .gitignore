@@ -50,3 +50,6 @@ requerimiento/*.xlsx
 
 # El export web (npm run build:web) -- se genera, no se versiona.
 mobile/dist-web/
+
+# El export web que el backend sirve: se genera al construir la imagen.
+backend/public/
