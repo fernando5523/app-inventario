@@ -40,6 +40,21 @@ import { colors, fonts, fontSize, radius, shadow, spacing } from '../../lib/them
  */
 const ANCHO_ANGOSTO = 1180;
 
+/**
+ * EL TOPE DE ANCHO del contenido, aunque la ventana tenga 1.900.
+ *
+ * Sin esto cada fila de "etiqueta a la izquierda, número a la derecha" se
+ * estira medio metro y hay que barrer la cabeza para juntar el concepto con su
+ * cifra -- *"parecen estirados"*. La matriz es la excepción y usa todo el
+ * ancho: ahí el ancho de más son columnas, no aire.
+ *
+ * Va en cada BLOQUE y como ANCHO FIJO, no como porcentaje: el contenedor del
+ * scroll se ajusta a su contenido, así que un `width: 100%` adentro se resuelve
+ * contra algo que a su vez depende de él y la página terminaba encogida a la
+ * mitad. 1.132 = las tres columnas (430 + 330 + 340) más sus dos separaciones.
+ */
+const TOPE_ANCHO = 1132;
+
 interface EstadoDelCartel {
   titulo: string;
   detalle: string;
@@ -188,6 +203,7 @@ export default function PanelAuditoriaWeb(): JSX.Element {
       ) : (
         <>
           <View style={[styles.fila, angosto && styles.filaApilada]}>
+            <View style={styles.colAncha}>
             <TarjetaWeb titulo="Resultado del conteo" icono={BarChart3}>
               <FilaDato
                 etiqueta="Cuadrado"
@@ -201,6 +217,9 @@ export default function PanelAuditoriaWeb(): JSX.Element {
               <FilaDato etiqueta="Lo asume la empresa" valor={monto(cuadros?.empresa.valorFaltante, true)} />
             </TarjetaWeb>
 
+            </View>
+
+            <View style={styles.colMedia}>
             <TarjetaWeb titulo="Productos de empresa" icono={Boxes} tono="atencion">
               <FilaDato etiqueta="Productos contados" valor={String(resumen.contadosDeEmpresa)} />
               <FilaDato etiqueta="Faltante" valor={monto(cuadros?.empresa.valorFaltante, true)} />
@@ -212,6 +231,9 @@ export default function PanelAuditoriaWeb(): JSX.Element {
               />
             </TarjetaWeb>
 
+            </View>
+
+            <View style={styles.colAcciones}>
             <TarjetaWeb titulo="Acciones" icono={Zap} tono="ok">
               <BotonWeb
                 etiqueta="Ir a aprobación y lacrado"
@@ -226,13 +248,16 @@ export default function PanelAuditoriaWeb(): JSX.Element {
                 onPress={() => router.push('/auditor/matriz')}
               />
             </TarjetaWeb>
+            </View>
           </View>
 
-          <BotonWeb
-            etiqueta="¿Un conteo quedó mal cargado? Corrígelo — el stock no se toca"
-            icono={PencilLine}
-            onPress={() => router.push('/auditor/corregir')}
-          />
+          <View style={styles.banner}>
+            <BotonWeb
+              etiqueta="¿Un conteo quedó mal cargado? Corrígelo — el stock no se toca"
+              icono={PencilLine}
+              onPress={() => router.push('/auditor/corregir')}
+            />
+          </View>
         </>
       )}
     </ScrollView>
@@ -249,11 +274,25 @@ const estilosCartel = StyleSheet.create({
 
 const styles = StyleSheet.create({
   pagina: { flex: 1 },
+  /**
+   * UN TOPE DE ANCHO, aunque la ventana tenga 1.900.
+   *
+   * Sin esto cada fila de "etiqueta a la izquierda, número a la derecha" se
+   * estira medio metro y hay que barrer la cabeza para juntar el concepto con
+   * su cifra -- *"parecen estirados"*. La matriz es la excepción y por eso usa
+   * todo el ancho: ahí el ancho de más son columnas, no aire.
+   *
+   * Pegado a la IZQUIERDA y no centrado: la barra lateral ya está a ese lado y
+   * el ojo viene de ahí; centrarlo abriría un pasillo vacío entre el menú y el
+   * contenido.
+   */
   contenido: { padding: spacing.xxl, gap: spacing.lg },
   centro: { flex: 1 },
   cargando: { marginTop: spacing.xxl },
 
   banda: {
+    width: TOPE_ANCHO,
+    maxWidth: '100%',
     flexDirection: 'row',
     alignItems: 'center',
     gap: spacing.lg,
@@ -275,7 +314,51 @@ const styles = StyleSheet.create({
   cartelTitulo: { fontSize: fontSize.lg, fontFamily: fonts.bold },
   cartelDetalle: { fontSize: fontSize.sm, color: colors.gris, fontFamily: fonts.regular },
 
-  fila: { flexDirection: 'row', gap: spacing.lg, alignItems: 'stretch' },
+  fila: { flexDirection: 'row', gap: spacing.lg, alignItems: 'stretch', width: TOPE_ANCHO, maxWidth: '100%' },
+  /**
+   * LAS TRES TARJETAS NO MIDEN LO MISMO, y no es capricho: miden lo que
+   * necesita su contenido. En tercios iguales, la de Acciones -- dos botones y
+   * nada más -- quedaba con medio metro de blanco abajo y los botones
+   * estirados de borde a borde. Corrección del usuario: *"parecen estirados"*.
+   *
+   * La de Resultado es la que más filas tiene, así que se lleva la parte más
+   * ancha; la de Acciones toma un ancho fijo, el de sus botones.
+   */
+  /**
+   * ANCHOS FIJOS y no fracciones del ancho disponible.
+   *
+   * Con `flex: 1` cada tarjeta se estiraba hasta donde diera la ventana, y en
+   * un monitor ancho la etiqueta quedaba a medio metro de su cifra. Con una
+   * medida propia, una fila se lee de un golpe de vista en cualquier pantalla
+   * -- que es de lo que se trata esta tarjeta.
+   *
+   * La de Resultado es la más ancha porque tiene las etiquetas más largas
+   * ("Se le descuenta al personal"); la de Acciones mide lo que miden sus
+   * botones.
+   */
+  // `flexShrink: 0` ademas del ancho: en la web el default de `flexShrink` es
+  // 1 (en React Native es 0), asi que sin esto las tarjetas se encogian hasta
+  // el tamaño de su texto y el ancho pedido no se respetaba. Es el mismo
+  // desencuentro que cortaba los badges de Usuarios.
+  /**
+   * EL ANCHO VA EN UNA COLUMNA QUE ENVUELVE, no en la tarjeta.
+   *
+   * `TarjetaWeb` trae `flex: 1` en su estilo base, y en la web ese atajo se
+   * traduce a `flex: 1 1 0%`: le gana a cualquier `flexBasis` que se le pase
+   * después, así que el ancho pedido se ignoraba y la tarjeta se encogía hasta
+   * el tamaño de su texto. Envolviéndola, el ancho lo fija la columna y la
+   * tarjeta simplemente la llena.
+   *
+   * `flexShrink: 0` porque en la web el default es 1 -- en React Native es 0 --
+   * y sin eso las columnas también se encogen. Es el mismo desencuentro que
+   * cortaba los badges de Usuarios.
+   */
+  colAncha: { width: 430, flexGrow: 0, flexShrink: 0 },
+  colMedia: { width: 330, flexGrow: 0, flexShrink: 0 },
+  colAcciones: { width: 340, flexGrow: 0, flexShrink: 0 },
+  /** El banner de corregir tampoco cruza la pantalla: un renglón de texto de
+   *  1.300px obliga a barrer la cabeza para llegar del ícono al chevron. */
+  banner: { maxWidth: 620 },
   filaApilada: { flexDirection: 'column' },
 
   error: { fontSize: fontSize.sm, color: colors.gris, fontFamily: fonts.regular },
