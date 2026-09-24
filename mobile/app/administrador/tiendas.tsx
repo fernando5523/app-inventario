@@ -546,7 +546,10 @@ const styles = StyleSheet.create({
   filaTextos: { flex: 1, minWidth: 0 },
   filaNombre: { fontSize: 13.5, color: colors.tinta, fontFamily: fonts.bold },
   filaMeta: { marginTop: 2, fontSize: 11.5, color: colors.gris, fontFamily: fonts.regular },
-  filaBadges: { flex: 0, alignItems: 'flex-end', gap: 6 },
+  // `flexShrink: 0`: en web el default es 1 y los badges salen cortados contra
+  // el borde. Mismo caso que `UsuariosScreen.tsx#filaBadges`, donde esta la
+  // explicacion larga -- es la misma lista con la misma estructura.
+  filaBadges: { flexGrow: 0, flexShrink: 0, alignItems: 'flex-end', gap: 6 },
   avisoAlmacen: { flexDirection: 'row', alignItems: 'flex-start', gap: 6, marginTop: 4 },
   avisoAlmacenTexto: { flex: 1, fontSize: 11, lineHeight: 15, color: colors.falta, fontFamily: fonts.regular },
   // Misma senal que la tarjeta seleccionada en Usuarios: borde rojo y fondo

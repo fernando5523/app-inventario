@@ -741,7 +741,20 @@ const styles = StyleSheet.create({
   filaTextos: { flex: 1, minWidth: 0 },
   filaNombre: { fontSize: 13.5, color: colors.tinta, fontFamily: fonts.bold },
   filaMeta: { marginTop: 2, fontSize: 11.5, color: colors.gris, fontFamily: fonts.regular },
-  filaBadges: { flex: 0, alignItems: 'flex-end', gap: 6 },
+  /**
+   * `flexShrink: 0` -- SIN ESTO LOS BADGES SE CORTAN EN WEB.
+   *
+   * React Native y la web no tienen el mismo default: en RN `flexShrink` es 0
+   * y en la web es 1. Con `flex: 0` a secas, en el navegador esta columna se
+   * encogia por debajo del ancho de su contenido y los badges salian cortados
+   * contra el borde -- "Coo...", "Aud...", "Hab..." (visto en /auditor/usuarios
+   * a 1568px). En el telefono no se notaba: ahi el default ya era 0.
+   *
+   * Quien tiene que ceder ancho es la columna de TEXTOS (`filaTextos`, con
+   * `flex: 1` y `minWidth: 0`): un nombre largo se trunca y se sigue
+   * reconociendo por como empieza. Un badge cortado no dice nada.
+   */
+  filaBadges: { flexGrow: 0, flexShrink: 0, alignItems: 'flex-end', gap: 6 },
   speedDialContenedor: {
     position: 'absolute',
     right: 16,

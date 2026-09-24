@@ -69,7 +69,7 @@ const MOTIVO_SIN_AJUSTES = 'No se puede calcular: faltan los ajustes del mes.';
  * la persona tocando un botón en loop.
  */
 const SIN_CICLO_CERRADO =
-  'Todavía no hay un inventario con el conteo cerrado en esta tienda. Cuando se cierren las 3 rondas en Ciclo de conteos, vuelve aquí.';
+  'Todavía no hay un inventario con el conteo cerrado en esta tienda. Cuando el auditor cierre el ajuste final en Ciclo de conteos, vuelve aquí.';
 
 /**
  * Auditor sin tienda en la ficha que todavía no eligió ninguna: no hay
@@ -433,7 +433,7 @@ export default function LiquidacionScreen(): JSX.Element {
       refreshControl={<RefreshControl refreshing={refrescando} onRefresh={refrescar} tintColor={colors.rojo} colors={[colors.rojo]} />}
     >
       <BarraApp
-        rotulo="Gestión masiva"
+        rotulo="Liquidación y nómina"
         sede={nombreSucursal ? `Liquidación · ${nombreSucursal}` : 'Liquidación'}
         cifras={liquidacion ? `${liquidacion.periodo} · ${liquidacion.planilla.length} colaboradores` : undefined}
         onSalir={salir}
