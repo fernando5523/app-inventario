@@ -47,3 +47,6 @@ mobile/design/_*
 # de los requisitos. Si algún día hace falta el formato del Excel, se replica
 # en un archivo de ejemplo con datos inventados.
 requerimiento/*.xlsx
+
+# El export web (npm run build:web) -- se genera, no se versiona.
+mobile/dist-web/
