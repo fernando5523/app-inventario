@@ -55,6 +55,7 @@ export function BotonWeb({
       <Pressable
         style={[
           styles.boton,
+          sub ? styles.botonConSub : null,
           principal ? styles.principal : styles.secundario,
           apagado && (principal ? styles.principalApagado : styles.secundarioApagado),
         ]}
@@ -66,7 +67,7 @@ export function BotonWeb({
         {cargando ? (
           <ActivityIndicator size="small" color={tinta} />
         ) : Icono ? (
-          <Icono size={18} color={apagado && !principal ? colors.grisClaro : tinta} />
+          <Icono size={16} color={apagado && !principal ? colors.grisClaro : tinta} />
         ) : null}
         <View style={styles.textos}>
           <Text style={[styles.etiqueta, { color: apagado && !principal ? colors.grisClaro : tinta }]} numberOfLines={1}>
@@ -78,7 +79,7 @@ export function BotonWeb({
             </Text>
           ) : null}
         </View>
-        <ChevronRight size={18} color={principal ? colors.blanco : colors.grisClaro} />
+        <ChevronRight size={16} color={principal ? colors.blanco : colors.grisClaro} />
       </Pressable>
       {deshabilitado && motivo ? <Text style={styles.motivo}>{motivo}</Text> : null}
     </View>
@@ -87,22 +88,34 @@ export function BotonWeb({
 
 const styles = StyleSheet.create({
   bloque: { gap: 6 },
+  /**
+   * ALTO DE MOUSE, NO DE DEDO.
+   *
+   * Arrancó en 52px, que es la medida del teléfono: un dedo necesita 44-48px
+   * para no errarle. Un puntero acierta en 36 y los botones de 52 en una
+   * pantalla ancha se ven inflados -- corrección del usuario mirando la web.
+   *
+   * 40 es el piso cómodo con mouse. El secundario CON subtítulo crece a 52
+   * porque ahí hay dos renglones de texto, no porque sea un botón más
+   * importante.
+   */
   boton: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: spacing.md,
-    minHeight: 52,
-    paddingHorizontal: spacing.lg,
-    borderRadius: radius.lg,
+    gap: spacing.sm,
+    minHeight: 40,
+    paddingHorizontal: spacing.md,
+    borderRadius: radius.md,
   },
+  botonConSub: { minHeight: 52, paddingVertical: 7 },
   principal: { backgroundColor: colors.rojo },
   principalApagado: { backgroundColor: colors.grisClaro },
   secundario: { backgroundColor: colors.blanco, borderWidth: 1, borderColor: colors.borde },
   secundarioApagado: { backgroundColor: colors.campoDeshabilitado, borderColor: colors.campoDeshabilitado },
 
   textos: { flex: 1, gap: 1 },
-  etiqueta: { fontSize: fontSize.base, fontFamily: fonts.bold },
-  sub: { fontSize: fontSize.sm, color: colors.gris, fontFamily: fonts.regular },
+  etiqueta: { fontSize: 13.5, fontFamily: fonts.bold },
+  sub: { fontSize: 12, color: colors.gris, fontFamily: fonts.regular },
   /** Sobre el rojo, el subtítulo va en blanco apagado y no en gris: el gris no contrasta. */
   subPrincipal: { color: 'rgba(255,255,255,0.82)' },
   motivo: { fontSize: fontSize.sm, color: colors.gris, fontFamily: fonts.regular, paddingHorizontal: 2 },
