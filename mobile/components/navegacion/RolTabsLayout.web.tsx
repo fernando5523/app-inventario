@@ -60,12 +60,22 @@ export function RolTabsLayout({ rol }: RolTabsLayoutProps): JSX.Element | null {
 
   const inicio = `/${rol}`;
   /**
-   * El Inicio no viene en `accesos` (en el teléfono es la primera pestaña), y
-   * en la barra tiene que estar: es a donde se vuelve. Se agrega acá y no en
-   * el catálogo del backend para no cambiarle el home a las tres plataformas
-   * por una necesidad de esta.
+   * ---------------------------------------------------------------------------
+   * EN WEB NO HAY "INICIO", Y NO ES UN OLVIDO
+   * ---------------------------------------------------------------------------
+   * En el teléfono el Inicio es la única navegación que existe: la grilla de
+   * accesos ES el menú. Acá el menú está siempre a la vista en esta barra, así
+   * que el Inicio quedaba como una pantalla que repite lo que ya se ve al
+   * costado y que hay que atravesar para llegar a donde se iba. Decisión del
+   * usuario mirándolo.
+   *
+   * Entrar a `/auditor` -- que es donde cae el login -- REDIRIGE al primer
+   * acceso del rol. No se borra la ruta: sigue existiendo para el teléfono y
+   * como destino del login, solo deja de ser una parada.
    */
-  const enlaces = [{ titulo: 'Inicio', sub: 'Estado del inventario', ruta: inicio }, ...accesos];
+  const enlaces = accesos;
+  const primero = accesos[0]?.ruta;
+  if (ruta === inicio && primero !== undefined) return <Redirect href={primero as never} />;
 
   async function salir(): Promise<void> {
     await cerrar();
