@@ -1,10 +1,10 @@
 import { router } from 'expo-router';
 import { BarChart3, Filter, RefreshCw, Search } from 'lucide-react-native';
-import { memo, useCallback, useEffect, useMemo, useRef, useState, type JSX } from 'react';
-import { ActivityIndicator, FlatList, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { useCallback, useEffect, useMemo, useRef, useState, type JSX } from 'react';
+import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { useRefrescoAlEnfocar } from '../../components/hooks/useRefrescoAlEnfocar';
-import { EncabezadoPagina } from '../../components/web';
+import { CeldaTexto, EncabezadoPagina, TablaWeb, type ColumnaTabla, type TinteFila } from '../../components/web';
 import {
   EmptyState,
   formatoMiles,
@@ -60,11 +60,11 @@ import { colors, fonts, radius, spacing } from '../../lib/theme';
  */
 
 /**
- * Alto de fila FIJO, y por eso la descripción trunca en una línea: con un alto
- * conocido, `getItemLayout` le ahorra a la lista medir 985 filas y el scroll
- * deja de dar saltos. Incluye el borde inferior (React Native mide border-box).
+ * Lo que ocupa la tarjeta de `TablaWeb` fuera de las filas: su encabezado con
+ * el chip y las herramientas (~70), la cabecera de columnas (~40) y el pie
+ * (~36). Se le resta al alto medido para saber cuánto le queda a la lista.
  */
-const ALTO_FILA = 38;
+const ALTO_CHROME_TABLA = 146;
 
 /** El ancho de "Descripción" antes de repartirle el espacio sobrante. */
 const ANCHO_DESCRIPCION = 300;
@@ -78,6 +78,15 @@ interface Celda {
   etiqueta?: string;
 }
 
+/**
+ * Una columna de ESTA pantalla antes de pasarla a `TablaWeb`.
+ *
+ * Se declara aparte y no se arma el `ColumnaTabla` directo porque el ancho de
+ * "Descripción" depende de lo que sobre, y para eso hace falta sumar los
+ * anchos ANTES de convertir. `numerica` viaja hasta el final: decide la
+ * alineación de la columna Y el `tabular-nums` de la celda, que son dos cosas
+ * distintas en `TablaWeb`.
+ */
 interface Columna {
   clave: string;
   titulo: string;
@@ -141,50 +150,6 @@ function celdaCuadro(item: ItemAuditoria, v: VeredictoAuditoria): Celda {
   return { texto: 'Sin repartir', color: colors.gris };
 }
 
-interface FilaProps {
-  item: ItemAuditoria;
-  columnas: readonly Columna[];
-}
-
-/**
- * `memo` por la misma razón que la tarjeta del teléfono: son cientos de filas
- * montadas, y sin esto cada cambio del padre (poner un filtro) las vuelve a
- * renderizar todas. `item` y `columnas` son referencias estables.
- */
-const Fila = memo(function FilaComponent({ item, columnas }: FilaProps): JSX.Element {
-  // EL TINTE DE LA FILA ES SOLO PARA LO QUE TIENE DIFERENCIA. Las 979 que
-  // cuadran quedan en blanco: si se pintan todas, el color deja de señalar
-  // nada y las 6 que importan se pierden entre las demás.
-  const dif = diferenciaUnidades(item);
-  const tinte = dif === null || dif === 0 ? null : dif < 0 ? styles.filaFalta : styles.filaSobra;
-  return (
-    <View style={[styles.fila, tinte]}>
-      {columnas.map((columna) => {
-        const celda = columna.celda(item);
-        return (
-          <Text
-            key={columna.clave}
-            style={[
-              styles.celda,
-              { width: columna.ancho },
-              columna.numerica ? styles.celdaNumerica : null,
-              celda.fuerte ? styles.celdaFuerte : null,
-              celda.color === undefined ? null : { color: celda.color },
-            ]}
-            // Trunca al FINAL, nunca al medio: la persona sigue reconociendo el
-            // producto por cómo empieza el nombre.
-            numberOfLines={1}
-            ellipsizeMode="tail"
-            {...(celda.etiqueta === undefined ? {} : { accessibilityLabel: celda.etiqueta })}
-          >
-            {celda.texto}
-          </Text>
-        );
-      })}
-    </View>
-  );
-});
-
 export default function MatrizWebScreen(): JSX.Element {
   const { sesion, cerrar } = useSesion();
   const [cargando, setCargando] = useState(true);
@@ -192,8 +157,27 @@ export default function MatrizWebScreen(): JSX.Element {
   const [items, setItems] = useState<ItemAuditoria[]>([]);
   const [filtro, setFiltro] = useState<FiltroMatriz>(FILTRO_MATRIZ_VACIO);
   const [modalFiltrosVisible, setModalFiltrosVisible] = useState(false);
-  /** Lo que mide el marco de la tabla; lo que sobra se lo lleva "Descripción". */
+  /**
+   * Lo que mide la página; lo que sobra se lo lleva "Descripción".
+   *
+   * Se mide ACÁ y no en la tabla porque `TablaWeb` no expone su ancho: recibe
+   * `anchoTotal` ya calculado. Se le resta el padding de la página a mano --
+   * `onLayout` devuelve el ancho del contenedor, no el del contenido.
+   */
   const [anchoDisponible, setAnchoDisponible] = useState(0);
+  /**
+   * El alto de la zona donde entra la tabla.
+   *
+   * HACE FALTA, no es cosmético: `TablaWeb` pagina por SCROLL, y su `FlatList`
+   * solo dispara `onEndReached` si tiene un alto acotado. Sin esto la lista
+   * crece con su contenido, nadie llega nunca al final y la tabla se queda
+   * clavada en la primera tanda de 60 -- con la barra de scroll de la ventana
+   * corriendo por debajo de una tabla que se sale de la pantalla.
+   *
+   * Se MIDE en vez de estimarse: la ventana de una PC cambia de tamaño, y un
+   * alto fijo deja aire abajo en un monitor grande y corta filas en uno chico.
+   */
+  const [altoZona, setAltoZona] = useState(0);
 
   const [sucursales, setSucursales] = useState<Sucursal[]>([]);
   // LA MISMA sucursal compartida que el Panel, el Ciclo, el Historial y el
@@ -319,7 +303,62 @@ export default function MatrizWebScreen(): JSX.Element {
     return base.map((c) => (c.clave === 'descripcion' ? { ...c, ancho: c.ancho + sobra } : c));
   }, [rondas, anchoDisponible]);
 
+  /**
+   * Las mismas columnas, en la forma que pide `TablaWeb`.
+   *
+   * Todas llevan `ancho` FIJO, ninguna `flex`: con `anchoTotal` la tabla se
+   * desplaza a lo ancho, y una columna elástica adentro de un contenedor más
+   * ancho que la pantalla no tiene contra qué repartirse. El reparto del
+   * sobrante ya lo hizo el `useMemo` de arriba.
+   */
+  const columnasTabla = useMemo<ColumnaTabla<ItemAuditoria>[]>(
+    () =>
+      columnas.map((col) => ({
+        clave: col.clave,
+        titulo: col.titulo,
+        ancho: col.ancho,
+        ...(col.numerica ? { alinear: 'derecha' as const } : {}),
+        celda: (item: ItemAuditoria) => {
+          const celda = col.celda(item);
+          const texto = (
+            <CeldaTexto
+              numero={col.numerica}
+              fuerte={celda.fuerte === true}
+              {...(celda.color === undefined ? {} : { color: celda.color })}
+            >
+              {celda.texto}
+            </CeldaTexto>
+          );
+          // LA ETIQUETA QUE EXPLICA EL GUION. "—" solo no dice nada a un
+          // lector de pantalla, y es justamente el caso donde hay algo que
+          // decir ("Sin hoja asignada"). Va en un `View` accesible porque
+          // `CeldaTexto` no toma etiqueta: envolver es más barato que
+          // agregarle una prop a la tabla compartida por un caso de una
+          // pantalla.
+          return celda.etiqueta === undefined ? (
+            texto
+          ) : (
+            <View accessible accessibilityLabel={celda.etiqueta}>
+              {texto}
+            </View>
+          );
+        },
+      })),
+    [columnas],
+  );
+
   const anchoTabla = useMemo(() => columnas.reduce((suma, c) => suma + c.ancho, 0), [columnas]);
+
+  /**
+   * EL TINTE, SOLO PARA LO QUE HAY QUE MIRAR. Las 979 filas que cuadran quedan
+   * en blanco: si se pintan todas, el color deja de señalar nada y las 6 que
+   * importan se pierden entre las demás.
+   */
+  const tinteDeFila = useCallback((item: ItemAuditoria): TinteFila => {
+    const dif = diferenciaUnidades(item);
+    if (dif === null || dif === 0) return null;
+    return dif < 0 ? 'falta' : 'ok';
+  }, []);
 
   const filtrosActivos = contarFiltrosActivos(filtro);
   const filtroTexto = textoFiltroActivo(filtro);
@@ -338,7 +377,16 @@ export default function MatrizWebScreen(): JSX.Element {
     // `anchoCompleto`: una tabla de diez columnas no entra en el tope de
     // lectura de 1120px, y el tope existe para un renglón de texto, no para
     // esto. Es opt-in, así que ninguna otra pantalla se entera.
-    <View style={styles.pagina}>
+    <View
+      style={styles.pagina}
+      onLayout={(e) => {
+        // El ancho ÚTIL: el del contenedor menos su padding a los dos lados.
+        // Es lo que se reparte entre las columnas, y de acá sale lo que le
+        // sobra a "Descripción".
+        const ancho = Math.round(e.nativeEvent.layout.width) - spacing.xxl * 2;
+        setAnchoDisponible((previo) => (previo === ancho ? previo : ancho));
+      }}
+    >
       {/* El mismo encabezado que el Panel: miga de pan, titulo grande y la
           tienda debajo. `BarraApp` es la barra del telefono -- rotulo chiquito
           y boton de salir -- y acá el salir vive en la barra lateral. */}
@@ -348,7 +396,10 @@ export default function MatrizWebScreen(): JSX.Element {
         sub={
           cargando
             ? 'Revisando ítem por ítem contra el stock del ERP.'
-            : `${items.length} ${pluralizar(items.length, 'ítem', 'ítems')} · ${resumen.conDiferencia} con diferencia`
+            : // `contados` estaba en el pie propio de la pantalla, que se fue
+              // con la tabla compartida. No se pierde: sube acá, donde además
+              // es SIEMPRE del inventario entero y no de lo que dejó el filtro.
+              `${items.length} ${pluralizar(items.length, 'ítem', 'ítems')} · ${resumen.contados} ${pluralizar(resumen.contados, 'contado', 'contados')} · ${resumen.conDiferencia} con diferencia`
         }
         onInicio={() => router.push('/auditor')}
       />
@@ -359,45 +410,6 @@ export default function MatrizWebScreen(): JSX.Element {
         sucursalId={sucursalId}
         onElegir={setSucursalElegida}
       />
-
-      <View style={styles.barraHerramientas}>
-        <Pressable
-          style={styles.btnFiltros}
-          onPress={() => setModalFiltrosVisible(true)}
-          accessibilityRole="button"
-          accessibilityLabel={
-            filtrosActivos > 0 ? `Filtros, ${filtrosActivos} activo${filtrosActivos === 1 ? '' : 's'}` : 'Filtros'
-          }
-        >
-          <Filter size={17} color={colors.tinta} />
-          <Text style={styles.btnFiltrosTexto}>Filtros</Text>
-          {filtrosActivos > 0 ? (
-            <View style={styles.filtrosBadge}>
-              <Text style={styles.filtrosBadgeTexto}>{filtrosActivos}</Text>
-            </View>
-          ) : null}
-        </Pressable>
-
-        {/* EN EL NAVEGADOR NO HAY "TIRAR PARA REFRESCAR": no hay gesto. La
-            pantalla igual se recarga sola al enfocarse y al volver al frente
-            (useRefrescoAlEnfocar), pero sin un control a mano la única salida
-            es F5, que recarga la app entera. */}
-        <Pressable
-          style={styles.btnActualizar}
-          onPress={refrescar}
-          disabled={refrescando}
-          accessibilityRole="button"
-          accessibilityLabel="Actualizar la matriz"
-        >
-          <RefreshCw size={16} color={refrescando ? colors.grisClaro : colors.tinta} />
-          <Text style={[styles.btnActualizarTexto, refrescando ? styles.btnActualizarInerte : null]}>
-            {refrescando ? 'Actualizando…' : 'Actualizar'}
-          </Text>
-        </Pressable>
-
-        {/* QUÉ está aplicado: el badge dice cuántos, esto dice cuáles. */}
-        {filtroTexto !== null ? <Text style={styles.filtroActivo}>Filtro: {filtroTexto}</Text> : null}
-      </View>
 
       {cargando ? (
         <ActivityIndicator color={colors.rojo} style={styles.cargando} />
@@ -415,107 +427,87 @@ export default function MatrizWebScreen(): JSX.Element {
           title="Todavía no hay nada para auditar"
           subtitle="No hay un inventario en curso para esta sucursal, o el ciclo de conteos no cerró ningún ítem todavía."
         />
-      ) : visibles.length === 0 ? (
-        // La matriz completa vacía ya se resolvió arriba: si se llega acá es
-        // porque el filtro no dejó pasar nada.
-        <EmptyState
-          icon={Search}
-          title="Ningún ítem entra en este filtro"
-          subtitle={
-            filtroTexto === null
-              ? 'Cambia de filtro para ver otros ítems.'
-              : `Ninguno de los ${items.length} ítems de este inventario cumple con ${filtroTexto}. Abre Filtros y quita alguno.`
-          }
-        />
       ) : (
         <View
-          style={styles.marco}
+          style={styles.zonaTabla}
           onLayout={(e) => {
-            const ancho = Math.round(e.nativeEvent.layout.width);
-            setAnchoDisponible((previo) => (previo === ancho ? previo : ancho));
+            const alto = Math.round(e.nativeEvent.layout.height);
+            setAltoZona((previo) => (previo === alto ? previo : alto));
           }}
         >
-          {/*
-            EL ENCABEZADO NO SCROLLEA CON LAS FILAS, pero sí con las columnas:
-            por eso vive DENTRO del scroll horizontal y FUERA de la lista
-            vertical. Con 985 filas, un encabezado que se va para arriba al
-            primer scrollazo deja diez columnas de números sin nombre.
-          */}
-          {/*
-            LAS BARRAS DE SCROLL SÍ SE VEN, al revés que en el teléfono (donde
-            la skill las pide ocultas). En una PC no hay gesto que descubra que
-            hay más: la barra horizontal es lo único que avisa que quedan
-            columnas a la derecha, y la vertical es la que dice en qué parte de
-            las 985 filas está parado. Ocultarlas sería copiar un criterio
-            táctil a una plataforma que no tiene el gesto.
-          */}
-          <ScrollView
-            horizontal
-            style={styles.scrollHorizontal}
-            contentContainerStyle={styles.scrollHorizontalContenido}
-          >
-            <View style={{ width: anchoTabla }}>
-              <View style={styles.encabezado}>
-                {columnas.map((columna) => (
-                  <Text
-                    key={columna.clave}
-                    style={[
-                      styles.encabezadoCelda,
-                      { width: columna.ancho },
-                      columna.numerica ? styles.celdaNumerica : null,
-                    ]}
-                    numberOfLines={1}
-                    ellipsizeMode="tail"
-                  >
-                    {columna.titulo}
-                  </Text>
-                ))}
-              </View>
+        <TablaWeb
+          titulo="Matriz comparativa"
+          sub={filtroTexto === null ? undefined : `Filtro: ${filtroTexto}`}
+          icono={BarChart3}
+          columnas={columnasTabla}
+          filas={visibles}
+          claveDe={(item) => String(item.productoId)}
+          tinteDeFila={tinteDeFila}
+          // ONCE COLUMNAS no entran en ninguna pantalla: con `anchoTotal` la
+          // tabla se desplaza a lo ancho y la cabecera viaja con las filas.
+          anchoTotal={anchoTabla}
+          // El alto de las FILAS: la zona medida menos lo que ocupa el resto de
+          // la tarjeta (encabezado, cabecera de columnas y pie). Se descuenta
+          // con una constante porque esas tres partes son de `TablaWeb` y esta
+          // pantalla no las mide; si algún día cambian de alto, lo que se nota
+          // es un poco de aire abajo, no una tabla rota.
+          {...(altoZona > ALTO_CHROME_TABLA ? { alto: altoZona - ALTO_CHROME_TABLA } : {})}
+          // NO se pasa `onAbrirFila`: desde acá no se abre ningún detalle, y
+          // una mano del cursor sobre una fila que no responde es una promesa
+          // rota. Corregir un conteo vive en su propia pantalla.
+          herramientas={
+            <>
+              <Pressable
+                style={styles.btnFiltros}
+                onPress={() => setModalFiltrosVisible(true)}
+                accessibilityRole="button"
+                accessibilityLabel={
+                  filtrosActivos > 0 ? `Filtros, ${filtrosActivos} activo${filtrosActivos === 1 ? '' : 's'}` : 'Filtros'
+                }
+              >
+                <Filter size={17} color={colors.tinta} />
+                <Text style={styles.btnFiltrosTexto}>Filtros</Text>
+                {filtrosActivos > 0 ? (
+                  <View style={styles.filtrosBadge}>
+                    <Text style={styles.filtrosBadgeTexto}>{filtrosActivos}</Text>
+                  </View>
+                ) : null}
+              </Pressable>
 
-              {/*
-                FlatList y no un `.map`: 985 filas montadas de una cuelgan el
-                navegador antes de pintar nada (con el catálogo completo son
-                hasta 8.000). `getItemLayout` va porque el alto es fijo -- sin
-                él la lista mide fila por fila y la barra de scroll salta.
-
-                Sin `removeClippedSubviews`: en web deja filas en blanco al
-                scrollear rápido, y acá no compra nada (el navegador ya no
-                dibuja lo que está fuera de la ventana).
-              */}
-              <FlatList
-                style={styles.lista}
-                data={visibles}
-                extraData={columnas}
-                keyExtractor={(item) => String(item.productoId)}
-                renderItem={({ item }) => <Fila item={item} columnas={columnas} />}
-                getItemLayout={(_datos, indice) => ({
-                  length: ALTO_FILA,
-                  offset: ALTO_FILA * indice,
-                  index: indice,
-                })}
-                initialNumToRender={30}
-                maxToRenderPerBatch={30}
-                windowSize={11}
-              />
-            </View>
-          </ScrollView>
+              {/* EN EL NAVEGADOR NO HAY "TIRAR PARA REFRESCAR": no hay gesto.
+                  La pantalla igual se recarga sola al enfocarse y al volver al
+                  frente, pero sin un control a mano la única salida es F5, que
+                  recarga la app entera. */}
+              <Pressable
+                style={styles.btnActualizar}
+                onPress={refrescar}
+                disabled={refrescando}
+                accessibilityRole="button"
+                accessibilityLabel="Actualizar la matriz"
+              >
+                <RefreshCw size={16} color={refrescando ? colors.grisClaro : colors.tinta} />
+                <Text style={[styles.btnActualizarTexto, refrescando ? styles.btnActualizarInerte : null]}>
+                  {refrescando ? 'Actualizando…' : 'Actualizar'}
+                </Text>
+              </Pressable>
+            </>
+          }
+          vacio={
+            // La matriz completa vacía ya se resolvió arriba: si se llega acá
+            // es porque el filtro no dejó pasar nada.
+            <EmptyState
+              icon={Search}
+              title="Ningún ítem entra en este filtro"
+              subtitle={
+                filtroTexto === null
+                  ? 'Cambia de filtro para ver otros ítems.'
+                  : `Ninguno de los ${items.length} ítems de este inventario cumple con ${filtroTexto}. Abre Filtros y quita alguno.`
+              }
+            />
+          }
+        />
         </View>
       )}
-
-      {items.length > 0 && !cargando && error === null && visibles.length > 0 ? (
-        <View style={styles.pie}>
-          {/*
-            EL TOTAL ES EL DEL INVENTARIO, no el del filtro. Si se muestra el
-            del filtro, se dice que es del filtro -- por eso la frase tiene las
-            dos cifras y no una sola. Es el MISMO texto que el pie del teléfono.
-          */}
-          <Text style={styles.pieTexto}>
-            Mostrando {visibles.length} de <Text style={styles.pieFuerte}>{items.length} ítems</Text> ·{' '}
-            {resumen.contados} {pluralizar(resumen.contados, 'contado', 'contados')} · {resumen.conDiferencia} con
-            diferencia en total
-          </Text>
-        </View>
-      ) : null}
 
       {/* Fuera de la tabla: es un `Modal`, se monta sobre todo. `onAplicar` es
           el ÚNICO camino por el que el filtro llega a la lista. Es el MISMO
@@ -542,7 +534,8 @@ const styles = StyleSheet.create({
    * lienzo y las tarjetas dejan de despegarse del fondo.
    */
   pagina: { flex: 1, padding: spacing.xxl, gap: spacing.lg },
-  contenido: { paddingHorizontal: 16, paddingTop: 8, gap: 14 },
+  /** Se come el alto que sobra: de acá sale el `alto` que la tabla necesita para paginar. */
+  zonaTabla: { flex: 1 },
   cargando: { marginTop: 24 },
   tarjeta: {
     padding: 15,
@@ -555,7 +548,6 @@ const styles = StyleSheet.create({
   tarjetaTitulo: { fontSize: 14.5, color: colors.tinta, fontFamily: fonts.bold },
   tarjetaTexto: { fontSize: 12.5, lineHeight: 18, color: colors.gris, fontFamily: fonts.regular },
 
-  barraHerramientas: { flexDirection: 'row', alignItems: 'center', gap: 12, flexWrap: 'wrap' },
   btnFiltros: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -591,73 +583,11 @@ const styles = StyleSheet.create({
   },
   btnActualizarTexto: { fontSize: 13.5, color: colors.tinta, fontFamily: fonts.semibold },
   btnActualizarInerte: { color: colors.grisClaro },
-  /** Qué está aplicado: dato, no acción — gris y sin peso. */
-  filtroActivo: { flex: 1, fontSize: 11.5, lineHeight: 16, color: colors.gris, fontFamily: fonts.regular },
 
-  marco: {
-    flex: 1,
-    borderWidth: 1,
-    borderColor: colors.borde,
-    borderRadius: radius.md,
-    backgroundColor: colors.campo,
-    overflow: 'hidden',
-  },
-  scrollHorizontal: { flex: 1 },
-  scrollHorizontalContenido: { flexGrow: 1 },
-  lista: { flex: 1 },
 
-  encabezado: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    height: ALTO_FILA,
-    paddingHorizontal: 4,
-    borderBottomWidth: 1,
-    borderBottomColor: colors.borde,
-    backgroundColor: colors.esperaSuave,
-  },
-  encabezadoCelda: {
-    paddingHorizontal: 8,
-    fontSize: 11.5,
-    color: colors.gris,
-    fontFamily: fonts.bold,
-    textTransform: 'uppercase',
-    letterSpacing: 0.4,
-  },
 
-  fila: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    height: ALTO_FILA,
-    paddingHorizontal: 4,
-    borderBottomWidth: 1,
-    borderBottomColor: colors.borde,
-  },
-  /** Faltante y sobrante. Solo las filas con diferencia: son 6 de 985. */
-  filaFalta: { backgroundColor: colors.faltaSuave },
-  filaSobra: { backgroundColor: colors.okSuave },
 
-  celda: {
-    paddingHorizontal: 8,
-    fontSize: 13,
-    color: colors.tinta,
-    fontFamily: fonts.regular,
-  },
-  /**
-   * Las cifras a la derecha y con `tabular-nums`: todos los dígitos ocupan lo
-   * mismo, así que las unidades quedan bajo las unidades y las decenas bajo
-   * las decenas. Sin eso, una columna de números con la fuente proporcional se
-   * desalinea y hay que leer cifra por cifra en vez de barrerla con la vista.
-   */
-  celdaNumerica: {
-    textAlign: 'right',
-    fontVariant: ['tabular-nums'],
-    fontFamily: fonts.medium,
-  },
-  celdaFuerte: { fontFamily: fonts.bold },
 
-  pie: { padding: 11, borderRadius: 11, backgroundColor: colors.esperaSuave },
-  pieTexto: { fontSize: 12.5, lineHeight: 18, color: colors.gris, fontFamily: fonts.regular },
-  pieFuerte: { color: colors.tinta, fontFamily: fonts.bold },
 
   accion: {
     minHeight: 46,
