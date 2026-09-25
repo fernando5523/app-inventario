@@ -1,12 +1,18 @@
 import { router } from 'expo-router';
-import { BarChart3, Boxes, CheckCircle2, ClipboardList, Lock, PencilLine, Store, Zap } from 'lucide-react-native';
+import { BarChart3, Boxes, CheckCircle2, ClipboardList, Download, Lock, PencilLine, Store, Zap } from 'lucide-react-native';
 import { useCallback, useEffect, useState, type JSX } from 'react';
 import { ActivityIndicator, ScrollView, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
 
 import { EncabezadoPagina, FilaDato, TarjetaWeb, BotonWeb, ChipIcono } from '../../components/web';
 import { formatoMoneda, SelectorSucursal } from '../../components/ui';
-import { repositorioAuditoria, repositorioInventario, repositorioSesion } from '../../lib/contenedor';
+import { repositorioAuditoria, repositorioHistorial, repositorioInventario, repositorioSesion } from '../../lib/contenedor';
+import { descargarArchivo } from '../../lib/descargar-archivo';
 import { pagaLaEmpresa } from '../../lib/dominio/auditoria';
+import {
+  estadoExportacionCuadros,
+  nombreCuadrosDeRespaldo,
+  notaExportacionCuadros,
+} from '../../lib/dominio/exportar-cuadros';
 import { pluralizar } from '../../lib/dominio/plural';
 import { sucursalEnFoco } from '../../lib/dominio/sucursal-en-foco';
 import type { Sucursal } from '../../lib/dominio/tipos';
@@ -88,6 +94,8 @@ export default function PanelAuditoriaWeb(): JSX.Element {
   const [estado, setEstado] = useState<EstadoInventario | null>(null);
   const [cargando, setCargando] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [inventarioId, setInventarioId] = useState<number | null>(null);
+  const [bajando, setBajando] = useState(false);
 
   useEffect(() => {
     repositorioSesion.sucursales().then(setSucursales).catch(() => undefined);
@@ -103,6 +111,7 @@ export default function PanelAuditoriaWeb(): JSX.Element {
     if (sucursalId === null) {
       setResumen(null);
       setEstado(null);
+      setInventarioId(null);
       setCargando(false);
       return;
     }
@@ -112,10 +121,12 @@ export default function PanelAuditoriaWeb(): JSX.Element {
       if (!activo) {
         setResumen(null);
         setEstado(null);
+        setInventarioId(null);
         setCargando(false);
         return;
       }
       setEstado(activo.estado);
+      setInventarioId(activo.inventarioId);
       // Solo el resumen: la matriz vive en su propia pantalla desde que se
       // separó, y pedirla acá serían 16 páginas de API para pintar cifras que
       // el servidor ya calcula.
@@ -142,6 +153,35 @@ export default function PanelAuditoriaWeb(): JSX.Element {
   const cuadros = resumen?.porClase ?? null;
   const conDiferencia = resumen === null ? 0 : resumen.conFalta + resumen.deEmpresa;
 
+  /**
+   * LA PLANILLA DE CUADROS -- las cuatro hojas del formato mensual: FALTANTES,
+   * SOBRANTES, EMPRESA y DESCUENTO. Es el archivo que Gilmer arma a mano y la
+   * razón por la que esta pantalla existe.
+   *
+   * Se me habia caido al rehacer el panel para web: estaba en el telefono y no
+   * acá. Lo pregunto el usuario -- *"¿dónde está la opción de exportar en
+   * excel?"* -- y tenia razon.
+   *
+   * El boton NO desaparece cuando no se puede: queda apagado con el motivo.
+   * Quien viene a bajar el archivo tiene que encontrar el camino y leer qué
+   * falta, no un hueco.
+   */
+  const planilla = estado === null ? null : estadoExportacionCuadros(estado, resumen?.auditables ?? 0);
+  const notaPlanilla = estado === null ? null : notaExportacionCuadros(estado);
+
+  async function bajarPlanilla(): Promise<void> {
+    if (inventarioId === null) return;
+    setBajando(true);
+    try {
+      const { bytes, nombreArchivo } = await repositorioHistorial.exportarCuadros(inventarioId);
+      descargarArchivo(bytes, nombreArchivo ?? nombreCuadrosDeRespaldo(inventarioId));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'No se pudo bajar la planilla.');
+    } finally {
+      setBajando(false);
+    }
+  }
+
   /** "-S/ 161,70" / "S/ 130,40". El signo lo decide quién llama, no el dato. */
   const monto = (valor: number | undefined, negativo: boolean): string =>
     valor === undefined ? '—' : `${negativo && valor !== 0 ? '-' : ''}S/ ${formatoMoneda(valor)}`;
@@ -153,6 +193,18 @@ export default function PanelAuditoriaWeb(): JSX.Element {
         titulo="Panel de auditoría"
         sub="Compara los conteos físicos contra el ERP y revisa las diferencias antes de la aprobación."
         onInicio={() => router.push('/auditor')}
+        acciones={
+          planilla === null ? null : (
+            <BotonWeb
+              etiqueta="Exportar la planilla (Excel)"
+              icono={Download}
+              onPress={() => void bajarPlanilla()}
+              cargando={bajando}
+              deshabilitado={!planilla.puedeExportar}
+              motivo={planilla.puedeExportar ? (notaPlanilla ?? undefined) : planilla.motivo}
+            />
+          )
+        }
       />
 
       {/* LA TIENDA Y SU ESTADO, en una banda: son el contexto de todo lo de
