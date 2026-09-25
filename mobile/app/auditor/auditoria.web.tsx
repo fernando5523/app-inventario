@@ -291,6 +291,13 @@ const styles = StyleSheet.create({
   cargando: { marginTop: spacing.xxl },
 
   banda: {
+    // `zIndex` para que el desplegable del selector de sucursal se dibuje
+    // ENCIMA de las tarjetas de abajo. Sin esto la lista se abre pero queda
+    // tapada: en la web, a igual zIndex, gana el que viene despues en el DOM,
+    // y las tarjetas vienen despues. Tiene que estar en la BANDA y no en el
+    // select: el apilamiento se resuelve entre hermanos, y el hermano de las
+    // tarjetas es la banda entera.
+    zIndex: 10,
     width: TOPE_ANCHO,
     maxWidth: '100%',
     flexDirection: 'row',
