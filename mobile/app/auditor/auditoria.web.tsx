@@ -3,7 +3,7 @@ import { BarChart3, Boxes, CheckCircle2, ClipboardList, Download, Lock, PencilLi
 import { useCallback, useEffect, useState, type JSX } from 'react';
 import { ActivityIndicator, ScrollView, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
 
-import { EncabezadoPagina, FilaDato, TarjetaWeb, BotonWeb, ChipIcono } from '../../components/web';
+import { BotonIcono, BotonWeb, ChipIcono, EncabezadoPagina, FilaDato, TarjetaWeb } from '../../components/web';
 import { formatoMoneda, SelectorSucursal } from '../../components/ui';
 import { repositorioAuditoria, repositorioHistorial, repositorioInventario, repositorioSesion } from '../../lib/contenedor';
 import { descargarArchivo } from '../../lib/descargar-archivo';
@@ -193,18 +193,6 @@ export default function PanelAuditoriaWeb(): JSX.Element {
         titulo="Panel de auditoría"
         sub="Compara los conteos físicos contra el ERP y revisa las diferencias antes de la aprobación."
         onInicio={() => router.push('/auditor')}
-        acciones={
-          planilla === null ? null : (
-            <BotonWeb
-              etiqueta="Exportar la planilla (Excel)"
-              icono={Download}
-              onPress={() => void bajarPlanilla()}
-              cargando={bajando}
-              deshabilitado={!planilla.puedeExportar}
-              motivo={planilla.puedeExportar ? (notaPlanilla ?? undefined) : planilla.motivo}
-            />
-          )
-        }
       />
 
       {/* LA TIENDA Y SU ESTADO, en una banda: son el contexto de todo lo de
@@ -229,6 +217,26 @@ export default function PanelAuditoriaWeb(): JSX.Element {
             ) : null}
           </View>
         </View>
+
+        {/* LA PLANILLA, al lado del estado y no arriba en el encabezado.
+            Decisión del usuario señalando el lugar: acá está pegada a la
+            tienda y al momento del inventario, que es de lo que habla el
+            archivo. Solo el ícono: el motivo por el que a veces no se puede lo
+            dice el cartel de al lado, y repetirlo en un párrafo gris sería
+            decir dos veces lo mismo. */}
+        {planilla !== null ? (
+          <BotonIcono
+            icono={Download}
+            etiqueta={
+              planilla.puedeExportar
+                ? `Exportar la planilla en Excel: faltantes, sobrantes, empresa y descuento.${notaPlanilla === null ? '' : ` ${notaPlanilla}`}`
+                : `Exportar la planilla en Excel: no disponible todavía. ${planilla.motivo}`
+            }
+            onPress={() => void bajarPlanilla()}
+            cargando={bajando}
+            deshabilitado={!planilla.puedeExportar}
+          />
+        ) : null}
 
         <View style={[styles.cartel, estilosCartel[cartel.tono]]}>
           <CheckCircle2 size={22} color={tintaCartel[cartel.tono]} />

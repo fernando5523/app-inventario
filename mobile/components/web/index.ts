@@ -11,6 +11,7 @@
  * otra forma de usar la que ya había.
  */
 export { BadgeDiferencia, BadgeEstado, type BadgeEstadoProps } from './BadgeEstado';
+export { BotonIcono, type BotonIconoProps } from './BotonIcono';
 export { BotonWeb, type BotonWebProps } from './BotonWeb';
 export { ChipIcono, type ChipIconoProps, type TonoChip } from './ChipIcono';
 export { EncabezadoPagina, type EncabezadoPaginaProps } from './EncabezadoPagina';
