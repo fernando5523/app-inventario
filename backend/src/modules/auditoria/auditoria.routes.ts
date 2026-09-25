@@ -3,7 +3,7 @@ import { requiereSesion } from '../../middleware/auth.middleware';
 import { requiereRol } from '../../middleware/autorizacion.middleware';
 import { validar } from '../../middleware/validation.middleware';
 import * as controller from './auditoria.controller';
-import { listarAuditablesQuerySchema, matrizQuerySchema, parametrosInventarioSchema } from './auditoria.schema';
+import { cadenaQuerySchema, listarAuditablesQuerySchema, matrizQuerySchema, parametrosInventarioSchema } from './auditoria.schema';
 
 /**
  * La matriz de auditoria: ERP contra los 3 conteos.
@@ -25,6 +25,17 @@ export const auditoriaRouter = Router();
 auditoriaRouter.use(requiereSesion, requiereRol('administrador', 'auditor', 'coordinador'));
 
 auditoriaRouter.get('/inventarios', validar(listarAuditablesQuerySchema, 'query'), controller.listarAuditables);
+
+/**
+ * LA CADENA: las diez tiendas de un periodo en una sola llamada.
+ *
+ * `coordinador` ENTRA al router pero NO a esta ruta: el recorte vive en
+ * `validarAccesoALaCadena` y no acá con un `requiereRol` propio, por lo mismo
+ * que el resto del modulo -- una segunda lista de roles en el archivo de rutas
+ * es media regla escrita en otro lugar, la mitad que alguien actualiza sin
+ * mirar la otra.
+ */
+auditoriaRouter.get('/cadena', validar(cadenaQuerySchema, 'query'), controller.cadena);
 
 auditoriaRouter.get(
   '/inventarios/:inventarioId/resumen',

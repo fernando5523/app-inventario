@@ -14,11 +14,18 @@
  * en mis-hojas.html/conteo.html con las hojas sin catálogo cargado.
  */
 
-import { obtenerInventario, simularLatencia } from './_compartido';
+import { obtenerInventario, obtenerInventarioDeSucursal, simularLatencia } from './_compartido';
 import { claseEfectiva } from '../dominio/clasificacion';
 import { conteoFinal, cuadroDelItem, diferenciaUnidades, resumirAuditoria } from '../dominio/auditoria';
-import { ajustesEnMemoria } from './ajuste-memoria';
-import type { CuadroDeDiferencias, RepositorioAuditoria, ResumenPorClase } from '../puertos/repositorios';
+import { ajustesEnMemoria, estadoDeInventarioEnMemoria } from './ajuste-memoria';
+import { sesionMemoria } from './sesion-memoria';
+import type {
+  CuadroDeDiferencias,
+  RepositorioAuditoria,
+  ResumenCadena,
+  ResumenPorClase,
+  ResumenTiendaCadena,
+} from '../puertos/repositorios';
 import type { AtribucionItem, ItemAuditoria } from '../dominio/tipos';
 
 interface SemillaItem {
@@ -92,6 +99,19 @@ function acumular(cuadro: CuadroDeDiferencias, unidades: number, precioVenta: nu
     cuadro.unidadesSobrantes += unidades;
     cuadro.valorSobrante += valor;
   }
+}
+
+function porClaseVacio(): ResumenPorClase {
+  return { unidad: cuadroVacio(), paquete: cuadroVacio(), empresa: cuadroVacio() };
+}
+
+/** Suma `sumando` dentro de `acumulado`. Muta el primero, como `acumular`. */
+function sumarCuadro(acumulado: CuadroDeDiferencias, sumando: CuadroDeDiferencias): void {
+  acumulado.items += sumando.items;
+  acumulado.unidadesFaltantes += sumando.unidadesFaltantes;
+  acumulado.unidadesSobrantes += sumando.unidadesSobrantes;
+  acumulado.valorFaltante += sumando.valorFaltante;
+  acumulado.valorSobrante += sumando.valorSobrante;
 }
 
 /**
@@ -191,6 +211,91 @@ export const auditoriaMemoria: RepositorioAuditoria = {
       sinPrecio,
       porClase,
     };
+  },
+
+  /**
+   * LA CADENA ENTERA, armada sobre el padrón REAL del mock.
+   *
+   * Recorre las cuatro tiendas sembradas (`sesion-memoria.ts#SUCURSALES`), no
+   * solo las que tienen inventario: una tienda sin inventario del período es
+   * una FILA con guiones, que es justo el caso que la pantalla tiene que saber
+   * dibujar (ver `ResumenTiendaCadena` en el puerto). El mock siembra una sola
+   * tienda con datos, así que la demo muestra 1 de 4 -- que es la verdad de
+   * este dataset, no un relleno para que la tabla se vea llena.
+   *
+   * El período es el del calendario del equipo: el mock no tiene inventarios
+   * fechados, y es lo único que puede afirmar sin inventar.
+   */
+  async cadena() {
+    await simularLatencia();
+    const sucursales = await sesionMemoria.sucursales();
+
+    const tiendas: ResumenTiendaCadena[] = [];
+    for (const sucursal of sucursales) {
+      const inventario = await obtenerInventarioDeSucursal(sucursal.id);
+      if (!inventario) {
+        tiendas.push({
+          sucursalId: sucursal.id,
+          sucursal: sucursal.nombre,
+          inventarioId: null,
+          estado: null,
+          items: 0,
+          auditables: 0,
+          cuadrados: 0,
+          valorFaltante: 0,
+          valorSobrante: 0,
+          porClase: porClaseVacio(),
+        });
+        continue;
+      }
+      const r = await auditoriaMemoria.resumen(inventario.id);
+      tiendas.push({
+        sucursalId: sucursal.id,
+        sucursal: sucursal.nombre,
+        inventarioId: inventario.id,
+        estado: estadoDeInventarioEnMemoria(inventario.id),
+        items: r.items,
+        auditables: r.auditables,
+        cuadrados: r.cuadrados,
+        valorFaltante: r.valorFaltante,
+        valorSobrante: r.valorSobrante,
+        porClase: r.porClase,
+      });
+    }
+
+    // El total se suma SOBRE LAS FILAS, no sobre el padrón: una tienda sin
+    // inventario aporta 0 a las cifras pero 0 también a `conInventario`, y esa
+    // distinción es lo que evita que "2.964 ítems" se lea como si fuera de las
+    // cuatro tiendas.
+    const porClase = porClaseVacio();
+    const total = {
+      tiendas: tiendas.length,
+      conInventario: tiendas.filter((t) => t.inventarioId !== null).length,
+      items: 0,
+      cuadrados: 0,
+      auditables: 0,
+      valorFaltante: 0,
+      valorSobrante: 0,
+      porClase,
+    };
+    for (const tienda of tiendas) {
+      total.items += tienda.items;
+      total.cuadrados += tienda.cuadrados;
+      total.auditables += tienda.auditables;
+      total.valorFaltante += tienda.valorFaltante;
+      total.valorSobrante += tienda.valorSobrante;
+      sumarCuadro(porClase.unidad, tienda.porClase.unidad);
+      sumarCuadro(porClase.paquete, tienda.porClase.paquete);
+      sumarCuadro(porClase.empresa, tienda.porClase.empresa);
+    }
+
+    const ahora = new Date();
+    const cadena: ResumenCadena = {
+      periodo: { anio: ahora.getFullYear(), mes: ahora.getMonth() + 1 },
+      total,
+      tiendas,
+    };
+    return cadena;
   },
 
   async matriz(inventarioId) {

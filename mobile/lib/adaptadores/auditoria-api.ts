@@ -13,6 +13,9 @@
  *       ?limite=&desplazamiento=
  *   → { total, limite, desplazamiento, resumen, embudo, matriz: [...] }
  *
+ *   GET /api/auditoria/cadena?anio=&mes=
+ *   → { periodo, total, tiendas: [...] }   (ver `ResumenCadena` en el puerto)
+ *
  * Rol: `administrador`, `auditor` o `coordinador` (el router monta
  * `requiereRol` con los tres). Un rol `conteo` recibe 403 — correcto: el
  * conteo es ciego, quien cuenta no puede ver el stock del ERP.
@@ -26,7 +29,7 @@
  */
 
 import type { ItemAuditoria } from '../dominio/tipos';
-import type { RepositorioAuditoria, ResumenAuditoriaServidor } from '../puertos/repositorios';
+import type { RepositorioAuditoria, ResumenAuditoriaServidor, ResumenCadena } from '../puertos/repositorios';
 import { pedir } from './_http';
 
 /**
@@ -108,6 +111,26 @@ export const auditoriaApi: RepositorioAuditoria = {
   async resumen(inventarioId) {
     const respuesta = await pedir<RespuestaResumen>(`/api/auditoria/inventarios/${inventarioId}/resumen`);
     return respuesta.resumen;
+  },
+
+  /**
+   * `GET /api/auditoria/cadena?anio=&mes=`.
+   *
+   * Se pasa TAL CUAL: el cuerpo de esta respuesta ya tiene la forma del puerto
+   * (período, total y tiendas), así que no hay nada que reconstruir. Sin
+   * `periodo` no se manda query y el período lo resuelve el servidor -- que es
+   * quien sabe cuál es el del inventario en curso.
+   *
+   * NO HAY RELLENO acá: si el endpoint falla, falla, y la pantalla lo dice. Un
+   * adaptador que devolviera una cadena vacía o inventada mostraría "0 tiendas
+   * con inventario" sobre una cadena que sí está contando.
+   */
+  async cadena(periodo) {
+    const q =
+      periodo === undefined
+        ? ''
+        : `?${new URLSearchParams({ anio: String(periodo.anio), mes: String(periodo.mes) }).toString()}`;
+    return pedir<ResumenCadena>(`/api/auditoria/cadena${q}`);
   },
 
   async matriz(inventarioId) {

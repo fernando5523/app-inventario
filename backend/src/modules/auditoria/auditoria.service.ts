@@ -18,14 +18,24 @@ import {
   diferenciaUnidades,
   diferenciaValor,
   embudoDeConteos,
+  filaDeCadena,
+  filaDeCadenaSinInventario,
   resumir,
+  totalizarCadena,
   veredicto,
   type AtribucionItem,
+  type FilaCadena,
   type ItemAuditoria,
+  type TotalCadena,
   type VeredictoAuditoria,
 } from './auditoria.calculos';
-import { puedeVerLaMatriz, validarAccesoALaMatriz, validarSucursal } from './auditoria.permisos';
-import type { ListarAuditablesQuery, MatrizQuery } from './auditoria.schema';
+import {
+  puedeVerLaMatriz,
+  validarAccesoALaCadena,
+  validarAccesoALaMatriz,
+  validarSucursal,
+} from './auditoria.permisos';
+import type { CadenaQuery, ListarAuditablesQuery, MatrizQuery } from './auditoria.schema';
 import { aplicarClasificacionVigente } from '../liquidacion/liquidacion.reclasificacion';
 
 // ---------------------------------------------------------------------------
@@ -427,4 +437,127 @@ export async function listarAuditables(
       };
     }),
   };
+}
+
+// ---------------------------------------------------------------------------
+// LA CADENA: las diez tiendas de un periodo en una sola llamada
+// ---------------------------------------------------------------------------
+
+export interface CadenaDto {
+  periodo: { anio: number; mes: number };
+  total: TotalCadena;
+  tiendas: FilaCadena[];
+}
+
+/**
+ * LA TABLA DE TODAS LAS SUCURSALES DE UN PERIODO.
+ *
+ * Pedido del usuario: *"¿podemos mostrar una tabla con todas las sucursales
+ * implicadas en el inventario?"*. El Panel muestra una tienda por vez y el
+ * Auditor tiene diez: sin esto, la pantalla haria diez pedidos a `/resumen`
+ * desde el navegador y armaria el total en el cliente -- o sea, una segunda
+ * cuenta de la plata, en el unico lugar donde nadie la puede auditar.
+ *
+ * ---------------------------------------------------------------------------
+ * CADA CIFRA SALE DE LA MISMA TUBERIA QUE `/resumen`
+ * ---------------------------------------------------------------------------
+ * `armarMatriz` -> `aplicarClasificacionVigente` -> `resumir`, con el umbral
+ * de CADA inventario. No hay ni una cuenta nueva acá: si esta tabla y el panel
+ * de una tienda dieran distinto, la pantalla mostraria dos verdades.
+ *
+ * El umbral es el de cada inventario (`umbralMediaUnidadPaquete`, congelado al
+ * abrirlo) y no una constante ni la config de hoy: dos tiendas del mismo mes
+ * pueden tener umbrales distintos si la perilla se movio entre un snapshot y
+ * el otro, y recalcular con la de hoy cambiaria un descuento ya comunicado.
+ *
+ * ---------------------------------------------------------------------------
+ * CUANTO CUESTA -- MEDIDO, NO ESTIMADO
+ * ---------------------------------------------------------------------------
+ * Medido el 2026-09-25 contra la base de desarrollo, con `armarMatriz` +
+ * `aplicarClasificacionVigente` + `resumir` por tienda (mejor de 3 corridas):
+ *
+ *   una tienda de   985 items ->   18 ms
+ *   una tienda de    40 items ->    1 ms
+ *   el endpoint entero (11 tiendas, 2 con inventario, 1.025 items) -> 18 ms
+ *   respuesta: 5,6 KB de JSON
+ *
+ * O sea ~54 items por milisegundo, y el costo es del ARMADO, no de las
+ * consultas: las nueve tiendas sin inventario no cuestan nada porque no se les
+ * arma matriz.
+ *
+ * PROYECCION, dicha como proyeccion y no como medicion: diez tiendas de ~1.000
+ * items son ~180 ms. Con el catalogo ANUAL completo (11.835 items por tienda)
+ * serian ~2 s, y ahi si habria que hablarlo -- pero el anual es una vez al ano
+ * y hoy no existe ninguno en la base para medirlo de verdad.
+ *
+ * ---------------------------------------------------------------------------
+ * UNA TIENDA, UN INVENTARIO -- Y EL PERIODO PUEDE TENER DOS
+ * ---------------------------------------------------------------------------
+ * La unique del schema es `[sucursalId, periodoAnio, periodoMes, tipo]`: una
+ * tienda puede tener el MENSUAL y el ANUAL del mismo periodo. La tabla tiene
+ * una fila por tienda, asi que hay que elegir, y manda el MENSUAL: es el que se
+ * hace todos los meses, el anual es la excepcion y hay que pedirlo explicito
+ * (ver el comentario de `Inventario.tipo` en schema.prisma). Con un solo
+ * inventario -- el caso normal -- la regla no se nota.
+ */
+export async function cadena(actor: ColaboradorAutenticado, query: CadenaQuery): Promise<CadenaDto> {
+  validarAccesoALaCadena(actor);
+
+  // El periodo en curso es la hora del servidor, igual que al TOMAR el snapshot
+  // (d365-catalogo.service.ts): las dos puntas tienen que estar de acuerdo en
+  // qué mes es, o el panel pediria un periodo en el que nadie creo nada.
+  const ahora = new Date();
+  const anio = query.anio ?? ahora.getFullYear();
+  const mes = query.mes ?? ahora.getMonth() + 1;
+
+  const [sucursales, inventarios] = await Promise.all([
+    // TODAS las tiendas activas, con inventario o sin el: `inventarioId: null`
+    // es la cobertura del periodo, no un hueco que convenga esconder.
+    // Las inactivas no van -- una tienda cerrada no deberia contar este mes --
+    // pero sus inventarios historicos siguen existiendo (Sucursal.activa).
+    prisma.sucursal.findMany({ where: { activa: true }, select: { id: true, nombre: true }, orderBy: { id: 'asc' } }),
+    prisma.inventario.findMany({
+      // Un inventario anulado no se audita: no produce resultado (misma regla
+      // que `listarAuditables`).
+      where: { periodoAnio: anio, periodoMes: mes, estado: { not: 'anulado' } },
+      select: { id: true, sucursalId: true, estado: true, tipo: true, umbralMediaUnidadPaquete: true },
+      orderBy: { id: 'asc' },
+    }),
+  ]);
+
+  const porSucursal = new Map<number, (typeof inventarios)[number]>();
+  for (const inv of inventarios) {
+    const previo = porSucursal.get(inv.sucursalId);
+    if (previo === undefined || (previo.tipo !== 'mensual' && inv.tipo === 'mensual')) {
+      porSucursal.set(inv.sucursalId, inv);
+    }
+  }
+
+  /**
+   * SECUENCIAL, no `Promise.all`. Es la forma obvia y la que acota la memoria:
+   * con diez matrices en paralelo hay diez catalogos completos vivos a la vez
+   * (~10.000 items con sus conteos) en vez de uno. Paralelizar es la palanca
+   * que queda si el numero de arriba dejara de alcanzar -- no se toma por
+   * cuenta propia.
+   */
+  const filas: FilaCadena[] = [];
+  for (const suc of sucursales) {
+    const inv = porSucursal.get(suc.id);
+    if (inv === undefined) {
+      filas.push(filaDeCadenaSinInventario(suc.id, suc.nombre));
+      continue;
+    }
+    const estado = inv.estado as EstadoInventario;
+    // LA MISMA fuente que la matriz y que la liquidacion: la clasificacion
+    // vigente del Auditor, no la del snapshot (ver liquidacion.reclasificacion).
+    const completa = await aplicarClasificacionVigente(inv.id, estado, await armarMatriz(inv.id));
+    filas.push(
+      filaDeCadena(
+        { sucursalId: suc.id, sucursal: suc.nombre, inventarioId: inv.id, estado },
+        resumir(completa, inv.umbralMediaUnidadPaquete.toNumber()),
+      ),
+    );
+  }
+
+  return { periodo: { anio, mes }, total: totalizarCadena(filas), tiendas: filas };
 }

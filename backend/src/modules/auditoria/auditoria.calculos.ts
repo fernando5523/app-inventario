@@ -36,6 +36,7 @@ import {
   type RepartoDeDiferencia,
 } from '../../dominio/faltante-por-paquete';
 import { redondear } from '../historial/historial.calculos';
+import type { EstadoInventario } from '../historial/historial.permisos';
 
 /**
  * Espeja tipos.ts#ItemAuditoria, con UNA diferencia deliberada:
@@ -986,4 +987,144 @@ export function cuadrosParaExportar(items: ItemAuditoria[], umbral: number): Cua
   }
 
   return cuadros;
+}
+
+// ---------------------------------------------------------------------------
+// LA CADENA: las diez tiendas de un periodo, en una sola tabla
+// ---------------------------------------------------------------------------
+
+/**
+ * Una tienda en la tabla de la cadena.
+ *
+ * Es un RECORTE de `ResumenAuditoria`, no un resumen nuevo: cada cifra sale de
+ * la misma llamada a `resumir()` que alimenta `/resumen` de esa tienda. Por eso
+ * no hay ninguna cuenta acá -- si esta tabla y el panel de una tienda dieran
+ * distinto, la pantalla mostraria dos verdades y nadie sabria cual creer.
+ *
+ * `inventarioId: null` NO es un hueco a esconder: es la COBERTURA DEL PERIODO
+ * -- esa tienda todavia no arranco el mes. Es justamente lo que el Auditor
+ * quiere ver de un vistazo en una cadena de diez tiendas.
+ */
+export interface FilaCadena {
+  sucursalId: number;
+  sucursal: string;
+  /** null = esta tienda no tiene inventario en este periodo. */
+  inventarioId: number | null;
+  /** null junto con `inventarioId`: sin inventario no hay estado que declarar. */
+  estado: EstadoInventario | null;
+  items: number;
+  auditables: number;
+  cuadrados: number;
+  valorFaltante: number;
+  valorSobrante: number;
+  porClase: PorClase;
+}
+
+/** El pie de la tabla: la cadena entera. */
+export interface TotalCadena {
+  /** Cuantas tiendas activas hay. Es el denominador de la cobertura. */
+  tiendas: number;
+  /** De esas, cuantas arrancaron el periodo. */
+  conInventario: number;
+  items: number;
+  cuadrados: number;
+  auditables: number;
+  valorFaltante: number;
+  valorSobrante: number;
+  porClase: PorClase;
+}
+
+/** Los tres cuadros en cero, para una tienda sin inventario y para arrancar a sumar. */
+export function porClaseVacia(): PorClase {
+  return { unidad: cuadroVacio(), paquete: cuadroVacio(), empresa: cuadroVacio() };
+}
+
+function sumarCuadro(acumulado: CuadroDeDiferencias, cuadro: CuadroDeDiferencias): void {
+  acumulado.items += cuadro.items;
+  acumulado.unidadesFaltantes += cuadro.unidadesFaltantes;
+  acumulado.unidadesSobrantes += cuadro.unidadesSobrantes;
+  acumulado.valorFaltante += cuadro.valorFaltante;
+  acumulado.valorSobrante += cuadro.valorSobrante;
+}
+
+/**
+ * EL TOTAL ES LA SUMA DE LAS FILAS, no un `resumir()` sobre los items de las
+ * diez tiendas juntas.
+ *
+ * Las dos vias darian lo mismo en unidades, pero no necesariamente al centavo:
+ * `resumir` redondea al final de cada tienda, asi que sumar los items crudos
+ * puede diferir en un centavo de la suma de lo que muestra cada fila. Y lo que
+ * tiene que cerrar es la TABLA: quien mira el pie va a sumar la columna con la
+ * calculadora, y si no da, el numero que sobra o falta no esta en ninguna parte
+ * que se pueda señalar.
+ *
+ * Se vuelve a redondear porque sumar decimales de punto flotante los desvia
+ * (161.7 + 88 da 249.70000000000002): sin esto el JSON llevaria esa cola.
+ */
+export function totalizarCadena(filas: readonly FilaCadena[]): TotalCadena {
+  const total: TotalCadena = {
+    tiendas: filas.length,
+    conInventario: filas.filter((f) => f.inventarioId !== null).length,
+    items: 0,
+    cuadrados: 0,
+    auditables: 0,
+    valorFaltante: 0,
+    valorSobrante: 0,
+    porClase: porClaseVacia(),
+  };
+
+  for (const fila of filas) {
+    total.items += fila.items;
+    total.cuadrados += fila.cuadrados;
+    total.auditables += fila.auditables;
+    total.valorFaltante += fila.valorFaltante;
+    total.valorSobrante += fila.valorSobrante;
+    sumarCuadro(total.porClase.unidad, fila.porClase.unidad);
+    sumarCuadro(total.porClase.paquete, fila.porClase.paquete);
+    sumarCuadro(total.porClase.empresa, fila.porClase.empresa);
+  }
+
+  total.valorFaltante = redondear(total.valorFaltante);
+  total.valorSobrante = redondear(total.valorSobrante);
+  for (const cuadro of [total.porClase.unidad, total.porClase.paquete, total.porClase.empresa]) {
+    cuadro.valorFaltante = redondear(cuadro.valorFaltante);
+    cuadro.valorSobrante = redondear(cuadro.valorSobrante);
+  }
+  return total;
+}
+
+/**
+ * El recorte de `ResumenAuditoria` que viaja en la tabla de la cadena. Vive
+ * acá y no en el service para que se pueda probar sin base: lo unico que hace
+ * es elegir campos, y eso es exactamente lo que no puede equivocarse.
+ */
+export function filaDeCadena(
+  tienda: { sucursalId: number; sucursal: string; inventarioId: number; estado: EstadoInventario },
+  resumen: ResumenAuditoria,
+): FilaCadena {
+  return {
+    ...tienda,
+    items: resumen.items,
+    auditables: resumen.auditables,
+    cuadrados: resumen.cuadrados,
+    valorFaltante: resumen.valorFaltante,
+    valorSobrante: resumen.valorSobrante,
+    porClase: resumen.porClase,
+  };
+}
+
+/** Una tienda que no arranco el periodo: todo en cero y los dos ids en null. */
+export function filaDeCadenaSinInventario(sucursalId: number, sucursal: string): FilaCadena {
+  return {
+    sucursalId,
+    sucursal,
+    inventarioId: null,
+    estado: null,
+    items: 0,
+    auditables: 0,
+    cuadrados: 0,
+    valorFaltante: 0,
+    valorSobrante: 0,
+    porClase: porClaseVacia(),
+  };
 }

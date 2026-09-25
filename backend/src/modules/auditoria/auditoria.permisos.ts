@@ -90,19 +90,52 @@ export function validarAccesoALaMatriz(actor: ColaboradorAutenticado, inventario
 }
 
 /**
- * El administrador no pertenece a ninguna sucursal (sucursalId null): es
- * del sistema y ve todo. El auditor TAMBIEN ve cualquier sucursal --
- * corregido por el cliente (2026-09-09): audita toda la cadena, no una
- * tienda. Coordinador y conteo si quedan atados a la propia: salir de ahi
- * esta prohibido, si no cualquiera leeria el inventario de otra sucursal
- * cambiando un id en la URL. Mismo criterio que hojas.permisos.ts#validarSucursal
- * (esa SI sigue recortando al auditor -- ver el comentario ahi, es otro dominio).
+ * QUIENES NO ESTAN ATADOS A UNA TIENDA.
+ *
+ * El administrador no pertenece a ninguna sucursal (sucursalId null): es del
+ * sistema y ve todo. El auditor TAMBIEN ve cualquier sucursal -- corregido por
+ * el cliente (2026-09-09): audita toda la cadena, no una tienda.
+ *
+ * Es UNA sola lista y la leen las dos funciones de abajo, a proposito: "quien
+ * puede ver el inventario de otra tienda" y "quien puede ver la tabla de las
+ * diez" son la MISMA pregunta. Con dos listas, agregar un rol a una y olvidarse
+ * de la otra deja un rol que ve la cadena entera pero no puede abrir ninguna de
+ * sus filas -- o al reves.
+ */
+const ROLES_DE_TODA_LA_CADENA: readonly Rol[] = ['administrador', 'auditor'];
+
+/**
+ * Coordinador y conteo quedan atados a la propia tienda: salir de ahi esta
+ * prohibido, si no cualquiera leeria el inventario de otra sucursal cambiando
+ * un id en la URL. Mismo criterio que hojas.permisos.ts#validarSucursal (esa SI
+ * sigue recortando al auditor -- ver el comentario ahi, es otro dominio).
  */
 export function validarSucursal(actor: ColaboradorAutenticado, sucursalIdDelInventario: number): void {
-  if (actor.rol === 'administrador' || actor.rol === 'auditor') return;
+  if (ROLES_DE_TODA_LA_CADENA.includes(actor.rol)) return;
   if (actor.sucursalId !== sucursalIdDelInventario) {
     throw new Prohibido('Ese inventario es de otra sucursal.');
   }
+}
+
+/**
+ * LA TABLA DE LAS DIEZ TIENDAS: solo auditor y administrador.
+ *
+ * EL COORDINADOR NO ENTRA, y no es el recorte de `validarAccesoALaMatriz` (que
+ * SI lo deja pasar con el inventario ya cerrado). Acá el motivo es otro y no
+ * depende del estado de nada: el coordinador coordina UNA tienda. Los faltantes
+ * de las otras nueve no son su trabajo, y el descuento del personal de otra
+ * sucursal es plata de gente que no conoce.
+ *
+ * Por eso no se reusa `validarAccesoALaMatriz`: esa pregunta "puede ver el
+ * stock de ESTE inventario", que es una pregunta sobre el conteo ciego. Esta
+ * pregunta si el actor tiene alcance de cadena, y la respuesta es la MISMA
+ * lista que decide si puede salirse de su sucursal.
+ */
+export function validarAccesoALaCadena(actor: ColaboradorAutenticado): void {
+  if (ROLES_DE_TODA_LA_CADENA.includes(actor.rol)) return;
+  throw new Prohibido(
+    'La tabla de todas las sucursales es del auditor y del administrador. Tu rol ve el inventario de su tienda.',
+  );
 }
 
 /**

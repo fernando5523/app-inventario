@@ -2,7 +2,7 @@ import type { Response } from 'express';
 import { asyncHandler } from '../../shared/asyncHandler';
 import type { RequestAutenticado } from '../../shared/tipos';
 import * as service from './auditoria.service';
-import type { ListarAuditablesQuery, MatrizQuery, ParametrosInventario } from './auditoria.schema';
+import type { CadenaQuery, ListarAuditablesQuery, MatrizQuery, ParametrosInventario } from './auditoria.schema';
 
 /**
  * Traduce req/res y nada mas -- ni Prisma ni logica de negocio (regla de
@@ -22,4 +22,8 @@ export const matriz = asyncHandler(async (req: RequestAutenticado, res: Response
 export const resumen = asyncHandler(async (req: RequestAutenticado, res: Response) => {
   const { inventarioId } = req.params as unknown as ParametrosInventario;
   res.json(await service.resumen(req.colaborador!, inventarioId));
+});
+
+export const cadena = asyncHandler(async (req: RequestAutenticado, res: Response) => {
+  res.json(await service.cadena(req.colaborador!, req.query as unknown as CadenaQuery));
 });

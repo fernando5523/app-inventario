@@ -204,6 +204,69 @@ export interface ResumenAuditoriaServidor {
   porClase: ResumenPorClase;
 }
 
+/**
+ * UNA TIENDA en el panel de la cadena.
+ *
+ * ---------------------------------------------------------------------------
+ * `inventarioId: null` NO ES UN HUECO: ES LA COBERTURA DEL MES
+ * ---------------------------------------------------------------------------
+ * Una tienda que todavía no abrió su inventario del período SE LISTA IGUAL,
+ * con guiones en las cifras. Es la pregunta que el Auditor se hace primero
+ * -- *"¿qué tiendas faltan?"* -- y una lista que solo trae las que ya
+ * empezaron la contesta al revés: parecería que están todas.
+ *
+ * Por eso los contadores vienen en 0 y NO se leen como cifras: la pantalla
+ * mira `inventarioId` para decidir si muestra el número o el guion. Un 0 en
+ * "Faltante" sobre una tienda que no contó nada diría "cuadró", que es
+ * exactamente lo contrario de lo que pasa.
+ */
+export interface ResumenTiendaCadena {
+  sucursalId: number;
+  sucursal: string;
+  /** `null` = esta tienda no tiene inventario en el período. Ver arriba. */
+  inventarioId: number | null;
+  /** `null` con el mismo criterio que `inventarioId`. */
+  estado: EstadoInventario | null;
+  items: number;
+  auditables: number;
+  cuadrados: number;
+  valorFaltante: number;
+  valorSobrante: number;
+  porClase: ResumenPorClase;
+}
+
+/**
+ * EL TOTAL DE LA CADENA. Lo suma el SERVIDOR, no la pantalla.
+ *
+ * Podría parecer que sumar seis columnas de una tabla que ya está en memoria
+ * no necesita al servidor. Sí lo necesita: `porClase` sale del reparto por
+ * cuadro, que depende del umbral CONGELADO EN CADA INVENTARIO -- y cada tienda
+ * tiene el suyo. Sumarlos acá sería la segunda copia de la regla que decide a
+ * quién se le descuenta la plata (misma razón que `ResumenAuditoriaServidor`).
+ *
+ * `tiendas` son TODAS las de la cadena; `conInventario`, las que ya abrieron
+ * el del período. Los dos juntos y nunca uno solo: "2.964 ítems" sin saber que
+ * son de 1 de 4 tiendas es un total que se lee como si fuera el de la cadena.
+ */
+export interface TotalCadena {
+  tiendas: number;
+  conInventario: number;
+  items: number;
+  cuadrados: number;
+  auditables: number;
+  valorFaltante: number;
+  valorSobrante: number;
+  porClase: ResumenPorClase;
+}
+
+/** Lo que devuelve `GET /api/auditoria/cadena`. */
+export interface ResumenCadena {
+  /** El período que el servidor resolvió. La pantalla lo MUESTRA, no lo asume. */
+  periodo: { anio: number; mes: number };
+  total: TotalCadena;
+  tiendas: ResumenTiendaCadena[];
+}
+
 export interface RepositorioAuditoria {
   /** Matriz ítem por ítem (ERP vs los conteos) del inventario dado. */
   matriz(inventarioId: number): Promise<ItemAuditoria[]>;
@@ -212,6 +275,16 @@ export interface RepositorioAuditoria {
    * `ResumenAuditoriaServidor` para por qué no se calcula acá.
    */
   resumen(inventarioId: number): Promise<ResumenAuditoriaServidor>;
+  /**
+   * TODAS las tiendas del período en una sola respuesta, con el total de la
+   * cadena ya sumado.
+   *
+   * Sin `periodo` lo resuelve el SERVIDOR y lo devuelve en la respuesta. Es a
+   * propósito: el "mes en curso" de un inventario no es necesariamente el mes
+   * del calendario del equipo que mira la pantalla, y adivinarlo desde acá
+   * sería pedir un período y mostrar otro sin que nadie se entere.
+   */
+  cadena(periodo?: { anio: number; mes: number }): Promise<ResumenCadena>;
 }
 
 /**

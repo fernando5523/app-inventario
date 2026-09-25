@@ -31,3 +31,19 @@ export const listarAuditablesQuerySchema = z.object({
   sucursalId: z.coerce.number().int().positive().optional(),
 });
 export type ListarAuditablesQuery = z.infer<typeof listarAuditablesQuerySchema>;
+
+/**
+ * El periodo de la tabla de la cadena. Los DOS opcionales: sin ellos se usa el
+ * periodo en curso, que es el caso normal -- el Auditor entra a ver el mes que
+ * esta corriendo, no a elegirlo.
+ *
+ * `mes` se valida 1..12 acá y no en el service: un 13 no es un periodo vacio,
+ * es una URL mal armada, y contestar una tabla en cero lo haria parecer un mes
+ * sin inventarios. El anio tiene piso 2000 por lo mismo -- `?anio=20` es un
+ * dedo, no una consulta.
+ */
+export const cadenaQuerySchema = z.object({
+  anio: z.coerce.number().int().min(2000).max(2100).optional(),
+  mes: z.coerce.number().int().min(1).max(12).optional(),
+});
+export type CadenaQuery = z.infer<typeof cadenaQuerySchema>;
