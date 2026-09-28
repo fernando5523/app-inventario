@@ -2,15 +2,13 @@ import { router } from 'expo-router';
 import {
   BarChart3,
   Boxes,
-  Building2,
   CheckCircle2,
   ClipboardList,
   Download,
+  FileSpreadsheet,
   Lock,
-  Package,
   PencilLine,
   Store,
-  Users,
   Zap,
 } from 'lucide-react-native';
 import { useCallback, useEffect, useState, type JSX } from 'react';
@@ -32,13 +30,24 @@ import { repositorioAuditoria, repositorioHistorial, repositorioInventario } fro
 import { descargarArchivo } from '../../lib/descargar-archivo';
 import { pagaLaEmpresa } from '../../lib/dominio/auditoria';
 import {
+  estadoExportacionCadena,
+  nombreCadenaDeRespaldo,
+  notaExportacionCadena,
+} from '../../lib/dominio/exportar-cadena';
+import {
   estadoExportacionCuadros,
   nombreCuadrosDeRespaldo,
   notaExportacionCuadros,
 } from '../../lib/dominio/exportar-cuadros';
 import { pluralizar } from '../../lib/dominio/plural';
 import { sucursalEnFoco } from '../../lib/dominio/sucursal-en-foco';
-import type { EstadoInventario, ResumenAuditoriaServidor, ResumenCadena, ResumenTiendaCadena } from '../../lib/puertos/repositorios';
+import type {
+  EstadoInventario,
+  ResumenAuditoriaServidor,
+  ResumenCadena,
+  ResumenTiendaCadena,
+  TotalCadena,
+} from '../../lib/puertos/repositorios';
 import { useSesion } from '../../lib/sesion-contexto';
 import { useSucursalAuditada } from '../../lib/sucursal-auditada-contexto';
 import { colors, fonts, fontSize, radius, shadow, spacing } from '../../lib/theme';
@@ -169,7 +178,57 @@ function monto(valor: number | undefined, negativo: boolean): string {
 }
 
 /**
- * LAS SEIS COLUMNAS DE LA TABLA DE TIENDAS.
+ * EL TOTAL DE LA CADENA, EN EL SUBTÍTULO DE LA TABLA.
+ *
+ * Antes eran cuatro tarjetas arriba (Total de la cadena · Al personal · Por
+ * paquete · Empresa). El usuario las sacó -- *"quita estos cards"* -- y tenía
+ * razón: repetían en grande lo que la tabla dice tienda por tienda, y empujaban
+ * la tabla, que es lo que se vino a mirar, media pantalla hacia abajo.
+ *
+ * Lo que NO se puede perder con ellas es el total de la cadena: sumar once
+ * filas a ojo para saber cuánto se descuenta en el mes es exactamente lo que
+ * esta pantalla existe para evitar. Así que el total baja a dos renglones
+ * pegados al título de la tabla -- misma información, sin el bloque.
+ *
+ * Los cuadros `paquete` y `empresa` siguen acá aunque no tengan columna: son
+ * plata que NO entra al descuento, y la diferencia entre "faltó S/ 161,70" y
+ * "se descuenta S/ 4,10" solo se explica nombrándolos.
+ */
+function resumenDeCadena(total: TotalCadena): string {
+  const cobertura = `${total.conInventario} de ${total.tiendas} ${pluralizar(total.tiendas, 'tienda', 'tiendas')} con inventario del período`;
+  // Sin auditables NO se muestra un porcentaje: 0 de 0 daría "100%" o "0%" y
+  // las dos cosas serían una afirmación sobre un conteo que no existe.
+  const cuadre =
+    total.auditables === 0
+      ? 'todavía no hay ítems auditables'
+      : `${formatoMiles(total.cuadrados)} cuadrados de ${formatoMiles(total.auditables)} auditables (${formatoPct((total.cuadrados / total.auditables) * 100)}%)`;
+  const plata = [
+    `${monto(total.valorFaltante, true)} de faltante`,
+    `${monto(total.valorSobrante, false)} de sobrante`,
+    `${monto(total.porClase.paquete.valorFaltante, true)} por paquete`,
+    `${monto(total.porClase.empresa.valorFaltante, true)} de empresa`,
+    `${monto(total.valorADescontar, true)} a descontar`,
+  ].join(' · ');
+  return `${cobertura} · ${cuadre}\nEn toda la cadena: ${plata}`;
+}
+
+/**
+ * LAS OCHO COLUMNAS DE LA TABLA DE TIENDAS.
+ *
+ * ---------------------------------------------------------------------------
+ * FALTANTE Y SOBRANTE, LOS DOS, UNO AL LADO DEL OTRO
+ * ---------------------------------------------------------------------------
+ * Pedido del usuario: *"incluir los sobrantes y faltantes en la tabla, así
+ * puede sacar sus cálculos"*. No es una columna de adorno: el descuento del mes
+ * es `faltantes + sobrantes` -- los sobrantes COMPENSAN, y esa resta es la
+ * cuenta que Gilmer hace a mano en su hoja DESCUENTO (ver
+ * `historial.exportar-cuadros.ts` en el backend, con el cruce contra su archivo
+ * de julio). Con solo la columna de faltante, la tabla mostraba la mitad de una
+ * resta y había que abrir cada tienda para conseguir la otra mitad.
+ *
+ * El sobrante va en VERDE y sin signo, el faltante en negativo: son plata que
+ * se mueve para lados distintos, y pintarlos iguales obliga a leer el
+ * encabezado para saber qué significa cada número.
  *
  * `elegida` solo decide el COLOR del nombre: el rojo de marca es, en esta app,
  * el de la opción seleccionada (ver la paleta de la skill). No se usa un tinte
@@ -198,7 +257,7 @@ function columnasDeTiendas(elegida: number | null): ColumnaTabla<ResumenTiendaCa
     {
       clave: 'estado',
       titulo: 'Estado',
-      ancho: 180,
+      ancho: 160,
       celda: (tn) => {
         const badge = badgeDeTienda(tn);
         return <Badge label={badge.etiqueta} variant={badge.variante} />;
@@ -207,14 +266,14 @@ function columnasDeTiendas(elegida: number | null): ColumnaTabla<ResumenTiendaCa
     {
       clave: 'items',
       titulo: 'Ítems',
-      ancho: 100,
+      ancho: 90,
       alinear: 'derecha',
       celda: (tn) => <CeldaTexto numero>{cifra(tn, () => formatoMiles(tn.items))}</CeldaTexto>,
     },
     {
       clave: 'cuadrados',
       titulo: 'Cuadrados',
-      ancho: 150,
+      ancho: 140,
       alinear: 'derecha',
       // Los dos números juntos: "2.951" solo no dice si es bueno o malo.
       celda: (tn) => (
@@ -226,27 +285,78 @@ function columnasDeTiendas(elegida: number | null): ColumnaTabla<ResumenTiendaCa
     {
       clave: 'faltante',
       titulo: 'Faltante',
-      ancho: 130,
+      ancho: 120,
       alinear: 'derecha',
       celda: (tn) => <CeldaTexto numero>{cifra(tn, () => monto(tn.valorFaltante, true))}</CeldaTexto>,
     },
     {
+      clave: 'sobrante',
+      titulo: 'Sobrante',
+      ancho: 120,
+      alinear: 'derecha',
+      // EN VERDE Y SIN SIGNO: es lo que aparece de más, y compensa el faltante
+      // en la cuenta del descuento. En `ok` y no en `falta` porque no es plata
+      // que se le saca a nadie -- el mismo color que ya tiene "Sobrante del
+      // conteo" en la tarjeta de resultado, abajo.
+      celda: (tn) => (
+        <CeldaTexto numero color={tn.inventarioId !== null && tn.valorSobrante > 0 ? colors.ok : undefined}>
+          {cifra(tn, () => monto(tn.valorSobrante, false))}
+        </CeldaTexto>
+      ),
+    },
+    {
       clave: 'personal',
       titulo: 'Al personal',
-      ancho: 130,
+      ancho: 120,
       alinear: 'derecha',
-      // LA columna que se barre de arriba abajo: es la plata que sale del
-      // sueldo de alguien. En `falta` (el color del DATO faltante), no en el
-      // rojo de marca, que acá ya significa "tienda elegida".
+      // El faltante BRUTO del cuadro único. Queda al lado de "A descontar"
+      // porque es lo que la explica: la diferencia entre las dos es el
+      // sobrante que el personal recupera, y sin este número el neto parece
+      // salido de la nada.
       celda: (tn) => (
-        <CeldaTexto
-          numero
-          fuerte
-          color={tn.inventarioId !== null && tn.porClase.unidad.valorFaltante > 0 ? colors.falta : undefined}
-        >
+        <CeldaTexto numero color={tn.inventarioId !== null && tn.porClase.unidad.valorFaltante > 0 ? colors.falta : undefined}>
           {cifra(tn, () => monto(tn.porClase.unidad.valorFaltante, true))}
         </CeldaTexto>
       ),
+    },
+    {
+      clave: 'descontar',
+      titulo: 'A descontar',
+      ancho: 130,
+      alinear: 'derecha',
+      /**
+       * LA COLUMNA QUE SE BARRE DE ARRIBA ABAJO: es la plata que efectivamente
+       * sale del sueldo de alguien, y de acá sale la cuota de cada persona
+       * (`montoFaltanteNeto / colaboradoresAlcanzados`, liquidación).
+       *
+       * NO ES "Al personal": ese es el faltante bruto del cuadro único. El
+       * neto le resta el sobrante del mismo cuadro y los ajustes del mes.
+       * Pedido del usuario: *"falta el total a descontar del cálculo del
+       * sobrante y faltante por cada tienda"* -- antes había que hacer la
+       * resta a mano, tienda por tienda.
+       *
+       * LO CALCULA EL SERVIDOR (`valorADescontar`). Restar acá dos columnas
+       * que ya están a la vista sería tentador y sería una segunda copia de la
+       * regla que decide cuánto se le descuenta a la gente -- la misma razón
+       * por la que los cuadros no se calculan en el teléfono.
+       *
+       * PUEDE SER NEGATIVO, o sea a favor del personal, cuando el sobrante
+       * supera al faltante. Ahí va en verde y sin el signo de resta: decisión
+       * del cliente ya documentada en el backend, el neto se muestra tal cual
+       * da y no se recorta a cero.
+       */
+      celda: (tn) => {
+        const aFavor = tn.valorADescontar < 0;
+        return (
+          <CeldaTexto
+            numero
+            fuerte
+            color={tn.inventarioId === null ? undefined : aFavor ? colors.ok : tn.valorADescontar > 0 ? colors.falta : undefined}
+          >
+            {cifra(tn, () => (aFavor ? monto(Math.abs(tn.valorADescontar), false) : monto(tn.valorADescontar, true)))}
+          </CeldaTexto>
+        );
+      },
     },
   ];
 }
@@ -263,6 +373,18 @@ export default function PanelAuditoriaWeb(): JSX.Element {
   const [error, setError] = useState<string | null>(null);
   const [inventarioId, setInventarioId] = useState<number | null>(null);
   const [bajando, setBajando] = useState(false);
+  /**
+   * LA BAJADA DEL DETALLE DE LA CADENA, con su propio spinner y su propio
+   * aviso. Son DOS archivos distintos en la misma pantalla (la planilla de la
+   * tienda elegida y el detalle de todas), y un solo par de estados haría
+   * girar el spinner del botón que nadie tocó.
+   *
+   * El aviso NO va a `errorCadena`: ese reemplaza el bloque entero por una
+   * tarjeta de error, así que una descarga fallida se llevaría puesta la tabla
+   * que se está mirando.
+   */
+  const [bajandoCadena, setBajandoCadena] = useState(false);
+  const [avisoExport, setAvisoExport] = useState<string | null>(null);
 
   /**
    * LA CADENA, en su propio estado y con su propia carga.
@@ -372,6 +494,42 @@ export default function PanelAuditoriaWeb(): JSX.Element {
   const planilla = estado === null ? null : estadoExportacionCuadros(estado, resumen?.auditables ?? 0);
   const notaPlanilla = estado === null ? null : notaExportacionCuadros(estado);
 
+  /**
+   * EL DETALLE POR PRODUCTO DE TODA LA CADENA -- la otra mitad del pedido:
+   * *"exportar el detalle de sobrantes y faltantes por productos"*. La tabla da
+   * los totales por tienda; este archivo los explica ítem por ítem, con la
+   * tienda, la hoja y el cuadro en columnas, para que el Auditor arme sus
+   * cuentas en Excel.
+   *
+   * Ver `dominio/exportar-cadena.ts` para por qué este SÍ se puede bajar en
+   * medio del ajuste mientras la planilla del mes no.
+   */
+  const exportCadena = cadena === null ? null : estadoExportacionCadena(cadena.total);
+  const notaCadena = cadena === null ? null : notaExportacionCadena(cadena.tiendas);
+
+  async function bajarDetalleDeCadena(): Promise<void> {
+    if (cadena === null) return;
+    setBajandoCadena(true);
+    setAvisoExport(null);
+    try {
+      /**
+       * EL PERÍODO VA EXPLÍCITO, aunque el servidor sepa resolverlo solo.
+       *
+       * Es el que devolvió la respuesta que dibujó la tabla. Sin mandarlo, el
+       * servidor lo resolvería otra vez con su reloj -- y una pestaña abierta
+       * desde ayer, o un clic pasada la medianoche del 1°, bajaría el detalle
+       * de OTRO mes que el que se está mirando. El archivo tiene que ser el de
+       * la tabla que se tiene adelante.
+       */
+      const { bytes, nombreArchivo } = await repositorioAuditoria.exportarDiferenciasCadena(cadena.periodo);
+      descargarArchivo(bytes, nombreArchivo ?? nombreCadenaDeRespaldo(cadena.periodo.anio, cadena.periodo.mes));
+    } catch (e) {
+      setAvisoExport(e instanceof Error ? e.message : 'No se pudo bajar el detalle de la cadena.');
+    } finally {
+      setBajandoCadena(false);
+    }
+  }
+
   async function bajarPlanilla(): Promise<void> {
     if (inventarioId === null) return;
     setBajando(true);
@@ -417,53 +575,6 @@ export default function PanelAuditoriaWeb(): JSX.Element {
         </TarjetaWeb>
       ) : cadena !== null ? (
         <>
-          <View style={[styles.filaCifras, angosto && styles.filaApilada]}>
-            <View style={styles.colTotal}>
-            <TarjetaWeb titulo="Total de la cadena" icono={Store} tono="neutro">
-              <Text style={styles.cifra}>{formatoMiles(cadena.total.items)} ítems</Text>
-              {/* LOS DOS NÚMEROS JUNTOS, nunca "2.964 ítems" solo: sin saber
-                  que son de 1 de 4 tiendas, ese total se lee como si fuera el
-                  de la cadena entera. */}
-              <Text style={styles.cifraPie}>
-                {cadena.total.conInventario} de {cadena.total.tiendas}{' '}
-                {pluralizar(cadena.total.tiendas, 'tienda', 'tiendas')} con inventario del período
-              </Text>
-              {/* Sin auditables no se muestra un porcentaje: 0 de 0 daría
-                  "100%" o "0%" y las dos cosas serían una afirmación sobre un
-                  conteo que no existe. */}
-              <Text style={styles.cifraPie}>
-                {cadena.total.auditables === 0
-                  ? 'Todavía no hay ítems auditables'
-                  : `${formatoMiles(cadena.total.cuadrados)} cuadrados de ${formatoMiles(cadena.total.auditables)} auditables (${formatoPct((cadena.total.cuadrados / cadena.total.auditables) * 100)}%)`}
-              </Text>
-            </TarjetaWeb>
-
-            </View>
-
-            <View style={styles.colCifra}>
-            <TarjetaWeb titulo="Al personal" icono={Users} tono="marca">
-              <Text style={[styles.cifra, styles.cifraFalta]}>{monto(cadena.total.porClase.unidad.valorFaltante, true)}</Text>
-              <Text style={styles.cifraPie}>Se le descuenta al personal</Text>
-            </TarjetaWeb>
-
-            </View>
-
-            <View style={styles.colCifra}>
-            <TarjetaWeb titulo="Por paquete" icono={Package} tono="atencion">
-              <Text style={[styles.cifra, styles.cifraAtencion]}>{monto(cadena.total.porClase.paquete.valorFaltante, true)}</Text>
-              <Text style={styles.cifraPie}>Se audita aparte</Text>
-            </TarjetaWeb>
-
-            </View>
-
-            <View style={styles.colCifra}>
-            <TarjetaWeb titulo="Empresa" icono={Building2} tono="atencion">
-              <Text style={[styles.cifra, styles.cifraAtencion]}>{monto(cadena.total.porClase.empresa.valorFaltante, true)}</Text>
-              <Text style={styles.cifraPie}>Lo asume la empresa</Text>
-            </TarjetaWeb>
-            </View>
-          </View>
-
           {/*
             LA TABLA ES EL SELECTOR. Tocar una fila elige esa tienda y las
             tarjetas de abajo pasan a mostrarla (`useSucursalAuditada`, el
@@ -477,6 +588,7 @@ export default function PanelAuditoriaWeb(): JSX.Element {
           <View style={styles.tabla}>
             <TablaWeb<ResumenTiendaCadena>
               titulo="Tiendas del período"
+              sub={resumenDeCadena(cadena.total)}
               icono={Store}
               columnas={columnasDeTiendas(sucursalId)}
               filas={cadena.tiendas}
@@ -486,7 +598,40 @@ export default function PanelAuditoriaWeb(): JSX.Element {
               pie={(mostradas, total) =>
                 `Mostrando ${mostradas} de ${total} ${pluralizar(total, 'tienda', 'tiendas')}`
               }
+              /* EXPORTAR VA EN LA TABLA, no en el encabezado de la página: el
+                 archivo es el detalle de ESTAS filas, y un botón lejos de lo
+                 que baja obliga a adivinar qué alcance tiene.
+
+                 OTRO ÍCONO que el de la planilla de abajo (`Download`): son dos
+                 .xlsx distintos en la misma pantalla -- este es la cadena
+                 entera, aquel la tienda elegida -- y con el mismo ícono dos
+                 veces, bajar el equivocado se descubre recién al abrirlo. */
+              herramientas={
+                exportCadena !== null ? (
+                  <BotonIcono
+                    icono={FileSpreadsheet}
+                    etiqueta={
+                      exportCadena.puedeExportar
+                        ? `Exportar el detalle en Excel: una fila por producto con faltante o sobrante, de todas las tiendas del período.${notaCadena === null ? '' : ` ${notaCadena}`}`
+                        : `Exportar el detalle en Excel: no disponible todavía. ${exportCadena.motivo}`
+                    }
+                    onPress={() => void bajarDetalleDeCadena()}
+                    cargando={bajandoCadena}
+                    deshabilitado={!exportCadena.puedeExportar}
+                  />
+                ) : null
+              }
             />
+            {/* EL MOTIVO A LA VISTA, no solo en el tooltip del botón apagado.
+                Un ícono gris sin texto manda a pasar el mouse por encima para
+                averiguar qué falta, y en la banda de abajo el motivo de la
+                planilla lo dice el cartel de estado -- acá no hay cartel. */}
+            {exportCadena !== null && !exportCadena.puedeExportar ? (
+              <Text style={styles.notaExport}>{exportCadena.motivo}</Text>
+            ) : notaCadena !== null ? (
+              <Text style={styles.notaExport}>{notaCadena}</Text>
+            ) : null}
+            {avisoExport !== null ? <Text style={styles.error}>{avisoExport}</Text> : null}
           </View>
         </>
       ) : null}
@@ -580,9 +725,28 @@ export default function PanelAuditoriaWeb(): JSX.Element {
               />
               <FilaDato etiqueta="Faltante del conteo" valor={monto(resumen.valorFaltante, true)} />
               <FilaDato etiqueta="Sobrante del conteo" valor={monto(resumen.valorSobrante, false)} color={colors.ok} />
-              <FilaDato etiqueta="Se le descuenta al personal" valor={monto(cuadros?.unidad.valorFaltante, true)} destacada />
+              <FilaDato etiqueta="Falta al personal" valor={monto(cuadros?.unidad.valorFaltante, true)} />
               <FilaDato etiqueta="Se audita aparte (paquete)" valor={monto(cuadros?.paquete.valorFaltante, true)} />
               <FilaDato etiqueta="Lo asume la empresa" valor={monto(cuadros?.empresa.valorFaltante, true)} />
+              {/*
+                EL NETO, y es la fila destacada de la tarjeta: es la plata que
+                sale del sueldo.
+
+                Sale de `valorADescontar` de la cadena y NO de `resumen`, que
+                trae el faltante BRUTO del cuadro único (4,50 donde el neto es
+                4,10). Con el bruto acá, la tarjeta y la columna "A descontar"
+                de la tabla decían dos números distintos para lo mismo sobre la
+                MISMA tienda -- y el de la tarjeta era el que no se le descuenta
+                a nadie.
+
+                Guion si la cadena no cargó: antes que mostrar el bruto
+                haciéndolo pasar por el neto, se dice que no se sabe.
+              */}
+              <FilaDato
+                etiqueta="Se le descuenta al personal"
+                valor={tiendaElegida === null ? '—' : monto(tiendaElegida.valorADescontar, true)}
+                destacada
+              />
             </TarjetaWeb>
 
             </View>
@@ -692,22 +856,19 @@ const styles = StyleSheet.create({
    * medio metro de su número. La primera es más ancha porque lleva tres
    * renglones de texto; las tres de plata miden lo que mide un monto.
    */
-  filaCifras: { flexDirection: 'row', gap: spacing.lg, alignItems: 'stretch', width: TOPE_ANCHO, maxWidth: '100%' },
   /**
    * EL ANCHO VA EN LA COLUMNA QUE ENVUELVE, nunca en la tarjeta: `TarjetaWeb`
    * trae `flex: 1`, que en la web es `flex: 1 1 0%` y le gana a cualquier
    * ancho que se le pase después. Pasado a la tarjeta, las cuatro se
    * encogieron hasta una letra de ancho y el texto salió en vertical.
    */
-  colTotal: { width: 358, flexGrow: 0, flexShrink: 0 },
-  colCifra: { width: 244, flexGrow: 0, flexShrink: 0 },
-  cifra: { fontSize: fontSize.xxl, color: colors.tinta, fontFamily: fonts.bold, fontVariant: ['tabular-nums'] },
-  cifraFalta: { color: colors.rojo },
-  cifraAtencion: { color: colors.proceso },
-  cifraPie: { fontSize: fontSize.sm, lineHeight: 19, color: colors.gris, fontFamily: fonts.regular },
 
   /** La tabla sí usa el ancho de las cuatro tarjetas: acá el ancho son columnas, no aire. */
-  tabla: { width: TOPE_ANCHO, maxWidth: '100%' },
+  /** El ancho del bloque, y el aire entre la tabla y la nota de la
+   *  exportación que puede quedar debajo. */
+  tabla: { width: TOPE_ANCHO, maxWidth: '100%', gap: spacing.sm },
+  /** El motivo (o la salvedad) de la exportación, debajo de la tabla. */
+  notaExport: { fontSize: fontSize.sm, color: colors.gris, fontFamily: fonts.regular, lineHeight: 19 },
 
   cartel: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, borderRadius: radius.lg, padding: spacing.md, minWidth: 320 },
   cartelTextos: { flex: 1, gap: 1 },

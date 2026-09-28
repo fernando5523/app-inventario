@@ -35,7 +35,7 @@ import {
   type ClaseItem,
   type RepartoDeDiferencia,
 } from '../../dominio/faltante-por-paquete';
-import { redondear } from '../historial/historial.calculos';
+import { calcularFaltanteNeto, redondear } from '../historial/historial.calculos';
 import type { EstadoInventario } from '../historial/historial.permisos';
 
 /**
@@ -911,6 +911,46 @@ export interface FilaDeCuadro {
 }
 
 /**
+ * LOS TRES CUADROS, vistos como destino de la diferencia de UN item. Son los
+ * mismos tres de `PorClase` y las mismas tres etiquetas que el Auditor lee en
+ * el panel ("Al personal", "Por paquete", "Empresa").
+ */
+export type CuadroDeDestino = 'unidad' | 'paquete' | 'empresa';
+
+/**
+ * A QUE CUADRO VA LA DIFERENCIA DE ESTE ITEM.
+ *
+ * SE DECIDE POR DONDE FUERON LAS UNIDADES, NO POR LA CLASE DEL ITEM. No es lo
+ * mismo, y confundirlos fue un bug real que encontro la comparacion del Excel
+ * contra la pantalla (2026-09-19):
+ *
+ *   un item de clase `paquete` cuya razon NO supera el umbral -- faltan 2 de
+ *   un empaque de 6, 0.33 -- tiene sus unidades en `alPersonal`, o sea que va
+ *   al cuadro UNICO. Agruparlo por su clase lo mandaba al cuadro de paquetes,
+ *   y entonces el Excel repartia distinto que el panel de auditoria sobre los
+ *   mismos items.
+ *
+ * La clase dice CON QUE REGLA se midio; el reparto dice DONDE CAYO. El cuadro
+ * es lo segundo.
+ *
+ * ES UNA FUNCION Y NO UN `if` EN CADA LLAMADOR porque hay DOS exports que
+ * reparten los mismos items con formatos distintos -- la planilla de Gilmer
+ * (`cuadrosParaExportar` -> historial.exportar-cuadros.ts) y la tabla plana de
+ * la cadena (`detalleDeDiferencias` -> auditoria.exportar-diferencias.ts). Con
+ * la decision escrita dos veces, los dos archivos podrian mandar el mismo item
+ * a cuadros distintos y nadie sabria cual de los dos miente. Los tests la
+ * comparan cruzada: las filas del detalle contra los seis grupos de la
+ * planilla, sobre la MISMA matriz.
+ */
+export function cuadroDeLaDiferencia(
+  atribucion: Pick<AtribucionItem, 'unidadesAEmpresa' | 'unidadesAPaquetes'>,
+): CuadroDeDestino {
+  if (atribucion.unidadesAEmpresa !== 0) return 'empresa';
+  if (atribucion.unidadesAPaquetes !== 0) return 'paquete';
+  return 'unidad';
+}
+
+/**
  * Los seis grupos del archivo de Gilmer: los cuatro cuadros mas los dos de
  * empresa.
  */
@@ -965,21 +1005,13 @@ export function cuadrosParaExportar(items: ItemAuditoria[], umbral: number): Cua
 
     const esFaltante = diferencia < 0;
 
-    // SE AGRUPA POR DONDE FUERON LAS UNIDADES, NO POR LA CLASE DEL ITEM. No es
-    // lo mismo, y confundirlos fue un bug real que encontro la comparacion del
-    // Excel contra la pantalla (2026-09-19):
-    //
-    //   un item de clase `paquete` cuya razon NO supera el umbral -- faltan 2
-    //   de un empaque de 6, 0.33 -- tiene sus unidades en `alPersonal`, o sea
-    //   que va al cuadro UNICO. Agruparlo por su clase lo mandaba al cuadro de
-    //   paquetes, y entonces el Excel repartia distinto que el panel de
-    //   auditoria sobre los mismos items.
-    //
-    // La clase dice CON QUE REGLA se midio; el reparto dice DONDE CAYO. El
-    // cuadro es lo segundo.
-    if (a.unidadesAEmpresa !== 0) {
+    // POR DONDE FUERON LAS UNIDADES, no por la clase del item -- la decision
+    // es de `cuadroDeLaDiferencia` y NO se repite acá (ver su comentario: el
+    // bug de 2026-09-19 y por que hay una sola funcion que decide).
+    const cuadro = cuadroDeLaDiferencia(a);
+    if (cuadro === 'empresa') {
       (esFaltante ? cuadros.empresaFaltantes : cuadros.empresaSobrantes).push(fila);
-    } else if (a.unidadesAPaquetes !== 0) {
+    } else if (cuadro === 'paquete') {
       (esFaltante ? cuadros.faltantesPaquete : cuadros.sobrantesPaquete).push(fila);
     } else {
       (esFaltante ? cuadros.faltantesUnicos : cuadros.sobrantesUnicos).push(fila);
@@ -987,6 +1019,131 @@ export function cuadrosParaExportar(items: ItemAuditoria[], umbral: number): Cua
   }
 
   return cuadros;
+}
+
+// ---------------------------------------------------------------------------
+// EL DETALLE POR PRODUCTO, TABLA PLANA -- para el .xlsx de la cadena
+// (auditoria.exportar-diferencias.ts)
+// ---------------------------------------------------------------------------
+
+/**
+ * Un producto con diferencia, con TODO lo que la tabla plana necesita de el.
+ *
+ * ES EL MISMO ITEM QUE `FilaDeCuadro`, con mas columnas. `FilaDeCuadro` solo
+ * lleva codigo/descripcion/cantidad/precio/total porque la planilla de Gilmer
+ * no tiene mas columnas que esas; el archivo de la cadena se analiza en tablas
+ * dinamicas y necesita con que agrupar y filtrar (zona, hoja, empaque, cuadro)
+ * y contra que comparar (stock del ERP y conteo final).
+ *
+ * LO QUE NO LLEVA: sucursal, periodo ni inventario. Esta unidad es pura y ve UN
+ * inventario por vez; esas tres columnas las pone quien recorre las tiendas
+ * (auditoria.service.ts#exportarDiferenciasDeLaCadena), que es el unico que
+ * sabe de que tienda es la matriz que le paso.
+ */
+export interface FilaDetalleDiferencia {
+  codigo: string;
+  descripcion: string;
+  /** De `ItemAuditoria.zona`. VACIA si ninguna hoja finalizada lo incluye. */
+  zona: string;
+  /** De `ItemAuditoria.hoja`, el rotulo ("003"). VACIO, igual que la zona. */
+  hoja: string;
+  /**
+   * "Emp.6" TAL CUAL LO DICE EL ERP, sin traducir a "caja" ni a "display".
+   * `null` = el snapshot no lo trajo.
+   */
+  empaqueSimbolo: string | null;
+  /**
+   * EL QUE SE USO PARA MEDIR (`empaqueCompraCorregido ?? empaqueCompra`), que
+   * puede NO ser el del simbolo de arriba. `null` = no habia con que medir.
+   */
+  empaqueUsado: number | null;
+  /** `true` = el de arriba lo corrigio el Auditor, no lo dijo Dynamics. */
+  empaqueEsCorregido: boolean;
+  /** Los tres cuadros del panel. Lo decide `cuadroDeLaDiferencia`. */
+  cuadro: CuadroDeDestino;
+  tipo: 'faltante' | 'sobrante';
+  /** `CatalogoItem.stockErp`. Nunca null en una fila: sin el no hay diferencia. */
+  stockErp: number;
+  /** El ultimo conteo que manda. Nunca null en una fila, por lo mismo. */
+  conteoFinal: number;
+  /** CON SIGNO: negativo = faltante. */
+  diferencia: number;
+  /** `null` = el snapshot no trajo precio: la fila existe, el monto no. */
+  precioUnitario: number | null;
+  /** `diferencia x precioUnitario`, CON SIGNO. `null` sin precio. */
+  monto: number | null;
+}
+
+/**
+ * EL DETALLE POR PRODUCTO de los faltantes y sobrantes de UN inventario.
+ *
+ * Pedido textual del usuario: *"Incluir los sobrantes y faltantes en la tabla,
+ * asi puede sacar sus calculos y exportar el detalle de sobrantes y faltantes
+ * por productos"* -- la tabla es la de tiendas del panel de auditoria, y estas
+ * son las filas que la respaldan.
+ *
+ * SALE DEL MISMO CALCULO QUE EL RESUMEN Y QUE LA PLANILLA: `atribucionDelItem`
+ * -> `repartoDelItem`, y el cuadro lo decide `cuadroDeLaDiferencia`, la misma
+ * funcion que usa `cuadrosParaExportar`. No hay ni una cuenta nueva acá, y eso
+ * es el requisito que hace util al archivo: la suma de `monto` filtrando
+ * cuadro `unidad` y tipo `faltante` tiene que dar EXACTAMENTE la columna "Al
+ * personal" de la tabla de tiendas (`resumir(...).porClase.unidad.valorFaltante`).
+ * Si no diera, el archivo no respaldaria la tabla: la contradiria.
+ *
+ * SOLO LOS ITEMS CON DIFERENCIA distinta de 0 y no nula. Los que no se pueden
+ * auditar (`sin_erp`, `sin_contar`) y los que cuadraron no aportan fila: no hay
+ * diferencia que reportar. Misma regla que `cuadrosParaExportar` y que
+ * `diferenciasParaPersistir`.
+ *
+ * ORDENADO POR CODIGO acá y no en el llamador: asi el orden es parte del
+ * contrato de esta funcion y no depende de como venga la matriz (que hoy ya
+ * viene ordenada, porque `armarMatriz` consulta el catalogo con
+ * `orderBy: codigo`). El orden entre TIENDAS lo pone el llamador, que es el
+ * unico que conoce los nombres.
+ */
+export function detalleDeDiferencias(items: ItemAuditoria[], umbral: number): FilaDetalleDiferencia[] {
+  const filas: FilaDetalleDiferencia[] = [];
+
+  for (const item of items) {
+    const diferencia = diferenciaUnidades(item);
+    const final = conteoFinal(item);
+    // Los dos chequeos de mas (`stockErp`/`final`) son los MISMOS que hace
+    // `diferenciaUnidades` para devolver null, y estan por el tipo: en una fila
+    // con diferencia los dos lados existen siempre, y asi queda dicho en el
+    // tipo en vez de con un `!` que hay que creer.
+    if (diferencia === null || diferencia === 0 || item.stockErp === null || final === null) continue;
+
+    const a = atribucionDelItem(item, umbral);
+    filas.push({
+      codigo: item.codigo,
+      // Congelada, como en el resto del historico: la descripcion de HOY puede
+      // haber cambiado en Dynamics y el archivo tiene que decir que se conto.
+      descripcion: item.descripcion,
+      zona: item.zona,
+      hoja: item.hoja,
+      // LOS TRES DATOS DEL EMPAQUE, separados, igual que en la matriz: el
+      // simbolo verbatim del ERP, el numero con el que se MIDIO, y si ese
+      // numero lo puso el Auditor. Juntarlos acá en un solo texto seria decidir
+      // la presentacion en la unidad pura; la decide el export (ver
+      // auditoria.exportar-diferencias.ts#textoDeEmpaque), que es quien sabe
+      // que va a una sola columna.
+      empaqueSimbolo: a.empaqueSimbolo,
+      empaqueUsado: a.empaqueUsado,
+      empaqueEsCorregido: a.empaqueEsCorregido,
+      cuadro: cuadroDeLaDiferencia(a),
+      tipo: diferencia < 0 ? 'faltante' : 'sobrante',
+      stockErp: item.stockErp,
+      conteoFinal: final,
+      diferencia,
+      precioUnitario: item.precioVenta,
+      // CON SIGNO y con la misma funcion que valoriza en todo el modulo: una
+      // magnitud sin signo sumada en una tabla dinamica da un total que no
+      // existe. `null` sin precio -- un item sin precio no vale 0.
+      monto: diferenciaValor(item),
+    });
+  }
+
+  return filas.sort((a, b) => a.codigo.localeCompare(b.codigo, 'es'));
 }
 
 // ---------------------------------------------------------------------------
@@ -1018,6 +1175,36 @@ export interface FilaCadena {
   valorFaltante: number;
   valorSobrante: number;
   porClase: PorClase;
+  /**
+   * LA PLATA QUE SE LE DESCUENTA AL PERSONAL DE ESTA TIENDA -- el NETO, no el
+   * bruto del cuadro `unidad`.
+   *
+   * Pedido del usuario mirando esta tabla: *"falta el total a descontar del
+   * calculo del sobrante y faltante por cada tienda"*. La tabla ya mostraba
+   * "Al personal" (`porClase.unidad.valorFaltante`), que es el faltante BRUTO:
+   * no le resta el sobrante que lo compensa, asi que NO es la plata que sale
+   * del sueldo. Este campo si lo es.
+   *
+   * SALE DE `historial.calculos.ts#calcularFaltanteNeto`, la misma funcion que
+   * usa la liquidacion para calcular `cuotaBase`: el numero de esta tabla es el
+   * que va a salir en la planilla, no una aproximacion parecida.
+   *
+   * POSITIVO como el resto de los montos del DTO (`valorFaltante` y
+   * `valorSobrante` tambien vienen en positivo y el signo lo pone la pantalla),
+   * PERO PUEDE DAR NEGATIVO cuando el sobrante supera al faltante. Decision
+   * explicita del cliente, ya documentada en
+   * `ResumenLiquidacion.montoFaltanteNeto`: *"si los sobrantes y negativos
+   * superan al faltante, el neto se muestra negativo tal cual da"*. Un
+   * `Math.max(0, ...)` puesto de buena fe romperia la planilla, porque la
+   * compensacion a favor del personal desapareceria de la vista sin dejar
+   * rastro.
+   *
+   * ANTES DE LOS AJUSTES DEL MES cuando el inventario todavia no tiene
+   * `ResultadoInventario` -- que es SIEMPRE el caso de un inventario en
+   * `ajuste_auditor`, el estado en el que esta tabla se mira. Ver
+   * `filaDeCadena`.
+   */
+  valorADescontar: number;
 }
 
 /** El pie de la tabla: la cadena entera. */
@@ -1032,6 +1219,21 @@ export interface TotalCadena {
   valorFaltante: number;
   valorSobrante: number;
   porClase: PorClase;
+  /**
+   * LA SUMA de `valorADescontar` de las tiendas -- toda la plata que la cadena
+   * le descuenta al personal en el periodo.
+   *
+   * Se suma y NO se recalcula sobre los cuadros del total: el neto de cada
+   * tienda resta SU sobrante y SUS ajustes del mes, y una cuenta sobre los
+   * cuadros ya sumados daria el mismo numero solo por casualidad (el dia que
+   * una tienda tenga negativos y otra no, deja de darlo). Misma razon por la que
+   * el total de la cadena es la suma de las filas y no un `resumir()` sobre
+   * todos los items juntos.
+   *
+   * Puede ser negativo por lo mismo que cada fila: si en la cadena sobro mas de
+   * lo que falto, el total lo dice.
+   */
+  valorADescontar: number;
 }
 
 /** Los tres cuadros en cero, para una tienda sin inventario y para arrancar a sumar. */
@@ -1071,6 +1273,7 @@ export function totalizarCadena(filas: readonly FilaCadena[]): TotalCadena {
     valorFaltante: 0,
     valorSobrante: 0,
     porClase: porClaseVacia(),
+    valorADescontar: 0,
   };
 
   for (const fila of filas) {
@@ -1079,6 +1282,7 @@ export function totalizarCadena(filas: readonly FilaCadena[]): TotalCadena {
     total.auditables += fila.auditables;
     total.valorFaltante += fila.valorFaltante;
     total.valorSobrante += fila.valorSobrante;
+    total.valorADescontar += fila.valorADescontar;
     sumarCuadro(total.porClase.unidad, fila.porClase.unidad);
     sumarCuadro(total.porClase.paquete, fila.porClase.paquete);
     sumarCuadro(total.porClase.empresa, fila.porClase.empresa);
@@ -1086,6 +1290,7 @@ export function totalizarCadena(filas: readonly FilaCadena[]): TotalCadena {
 
   total.valorFaltante = redondear(total.valorFaltante);
   total.valorSobrante = redondear(total.valorSobrante);
+  total.valorADescontar = redondear(total.valorADescontar);
   for (const cuadro of [total.porClase.unidad, total.porClase.paquete, total.porClase.empresa]) {
     cuadro.valorFaltante = redondear(cuadro.valorFaltante);
     cuadro.valorSobrante = redondear(cuadro.valorSobrante);
@@ -1101,6 +1306,29 @@ export function totalizarCadena(filas: readonly FilaCadena[]): TotalCadena {
 export function filaDeCadena(
   tienda: { sucursalId: number; sucursal: string; inventarioId: number; estado: EstadoInventario },
   resumen: ResumenAuditoria,
+  /**
+   * `ResultadoInventario.montoNegativos` de ESTE inventario: los ajustes del
+   * mes (mermas documentadas) que el Excel de Dynamics escribe antes de
+   * liquidar (`liquidacion.ajustes.ts`). Restan del neto.
+   *
+   * `null` = NO SE CAPTURO, y son dos casos distintos que aca terminan igual:
+   * el inventario todavia no tiene `ResultadoInventario` (se crea al cerrar el
+   * conteo, asi que un inventario en `ajuste_auditor` -- el estado en el que se
+   * mira esta tabla -- SIEMPRE cae aca), o lo tiene con la columna en NULL
+   * porque nadie importo el Excel. En los dos, `valorADescontar` es el neto
+   * ANTES DE LOS AJUSTES DEL MES: va a bajar cuando se carguen.
+   *
+   * La resta trata `null` y `0` igual, pero el TIPO mantiene la distincion
+   * porque en el resto del sistema no es la misma cosa: un `0` explicito
+   * significa "se importo y no habia ajustes" y destraba la liquidacion; un
+   * NULL la bloquea con 409 (ver el encabezado de `liquidacion.ajustes.ts`).
+   *
+   * OBLIGATORIO y sin default, misma razon que el `umbral` de `resumir`: de
+   * este numero depende cuanta plata sale del sueldo, y un default silencioso
+   * dejaria compilando a un llamador que no se entero y devolveria un neto
+   * plausible calculado sin los ajustes que si existian.
+   */
+  montoNegativos: number | null,
 ): FilaCadena {
   return {
     ...tienda,
@@ -1110,6 +1338,23 @@ export function filaDeCadena(
     valorFaltante: resumen.valorFaltante,
     valorSobrante: resumen.valorSobrante,
     porClase: resumen.porClase,
+    // LA FUNCION DE LA LIQUIDACION, no una copia de su formula. La equivalencia
+    // monto por monto esta verificada en auditoria.cadena-descontar.test.ts:
+    //   montoFaltanteBruto   = resumen.valorFaltante
+    //   montoFaltanteEmpresa = porClase.empresa.valorFaltante
+    //   montoFaltantePaquete = porClase.paquete.valorFaltante
+    //   montoSobranteEmpleado = porClase.unidad.valorSobrante  (el sobrante que
+    //     `repartoDelItem` manda `alPersonal` de los items que no son de empresa,
+    //     que es exactamente lo que suma `reclasificarAlLiquidar`)
+    // Con los tres cuadros sumando el faltante total, el neto se reduce a
+    // `unidad.valorFaltante - unidad.valorSobrante - negativos`.
+    valorADescontar: calcularFaltanteNeto({
+      montoFaltanteBruto: resumen.valorFaltante,
+      montoNegativos: montoNegativos ?? 0,
+      montoFaltanteEmpresa: resumen.porClase.empresa.valorFaltante,
+      montoFaltantePaquete: resumen.porClase.paquete.valorFaltante,
+      montoSobranteEmpleado: resumen.porClase.unidad.valorSobrante,
+    }),
   };
 }
 
@@ -1126,5 +1371,9 @@ export function filaDeCadenaSinInventario(sucursalId: number, sucursal: string):
     valorFaltante: 0,
     valorSobrante: 0,
     porClase: porClaseVacia(),
+    // 0 como el resto de los contadores, y por la misma razon: la pantalla mira
+    // `inventarioId` para decidir si dibuja el numero o el guion. Sin items no
+    // hay faltante ni sobrante que netear, asi que no hay nada que descontar.
+    valorADescontar: 0,
   };
 }

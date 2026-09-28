@@ -15,6 +15,7 @@ import {
   aplicarFiltro,
   atribucionDelItem,
   conteoFinal,
+  detalleDeDiferencias,
   diferenciaUnidades,
   diferenciaValor,
   embudoDeConteos,
@@ -29,6 +30,11 @@ import {
   type TotalCadena,
   type VeredictoAuditoria,
 } from './auditoria.calculos';
+import {
+  armarLibroDiferenciasCadena,
+  nombreArchivoDiferenciasCadena,
+  type FilaExportDiferenciaCadena,
+} from './auditoria.exportar-diferencias';
 import {
   puedeVerLaMatriz,
   validarAccesoALaCadena,
@@ -449,6 +455,111 @@ export interface CadenaDto {
   tiendas: FilaCadena[];
 }
 
+/** El inventario que manda en una tienda de un periodo, listo para armar su matriz. */
+interface InventarioDeLaCadena {
+  id: number;
+  sucursalId: number;
+  estado: EstadoInventario;
+  /** `mensual` o `anual`. Viaja porque es lo que DECIDE cual manda -- ver abajo. */
+  tipo: string;
+  /** `Inventario.umbralMediaUnidadPaquete`, ya en `number`. */
+  umbral: number;
+  /**
+   * `ResultadoInventario.montoNegativos` -- los ajustes del mes, que restan del
+   * total a descontar. `null` = no se capturo (ver `filaDeCadena`), y son dos
+   * casos: el inventario no tiene resultado todavia, o lo tiene con la columna
+   * en NULL porque nadie importo el Excel de Dynamics.
+   *
+   * Viaja junto al inventario y NO en una consulta por tienda: sale del mismo
+   * `findMany` de arriba por la relacion `resultado`, asi que la cadena entera
+   * cuesta lo mismo que antes.
+   */
+  montoNegativos: number | null;
+}
+
+interface PeriodoDeLaCadena {
+  anio: number;
+  mes: number;
+  /** sucursalId -> el inventario que manda ahi. Sin entrada = no arranco el periodo. */
+  porSucursal: Map<number, InventarioDeLaCadena>;
+}
+
+/**
+ * QUE PERIODO ES Y QUE INVENTARIO MANDA EN CADA TIENDA. Es la entrada comun de
+ * `cadena` (la tabla) y de `exportarDiferenciasDeLaCadena` (el .xlsx que la
+ * respalda).
+ *
+ * ESTA EXTRAIDO Y NO COPIADO A PROPOSITO. Si la tabla y su archivo de respaldo
+ * eligieran los inventarios con reglas separadas, algun dia dirian cosas
+ * distintas sobre los MISMOS items -- el Auditor baja el detalle para explicar
+ * una cifra de la tabla y el detalle no suma esa cifra. Es el peor resultado
+ * posible de este endpoint, peor que no tenerlo.
+ *
+ * Las tres reglas que viven acá:
+ *
+ *   1. EL PERIODO EN CURSO ES LA HORA DEL SERVIDOR, igual que al TOMAR el
+ *      snapshot (d365-catalogo.service.ts): las dos puntas tienen que estar de
+ *      acuerdo en qué mes es, o el panel pediria un periodo en el que nadie creo
+ *      nada. Y el nombre del archivo sale de acá por lo mismo -- el front no
+ *      conoce el mes que eligio el servidor.
+ *   2. UN INVENTARIO ANULADO NO SE AUDITA: no produce resultado (misma regla que
+ *      `listarAuditables`).
+ *   3. UNA TIENDA, UN INVENTARIO -- Y EL PERIODO PUEDE TENER DOS. La unique del
+ *      schema es `[sucursalId, periodoAnio, periodoMes, tipo]`, asi que una
+ *      tienda puede tener el MENSUAL y el ANUAL del mismo periodo. La tabla
+ *      tiene una fila por tienda, asi que hay que elegir, y MANDA EL MENSUAL: es
+ *      el que se hace todos los meses, el anual es la excepcion y hay que
+ *      pedirlo explicito (ver el comentario de `Inventario.tipo` en
+ *      schema.prisma). Con un solo inventario -- el caso normal -- no se nota.
+ */
+async function inventariosDelPeriodo(query: CadenaQuery): Promise<PeriodoDeLaCadena> {
+  const ahora = new Date();
+  const anio = query.anio ?? ahora.getFullYear();
+  const mes = query.mes ?? ahora.getMonth() + 1;
+
+  const inventarios = await prisma.inventario.findMany({
+    where: { periodoAnio: anio, periodoMes: mes, estado: { not: 'anulado' } },
+    select: {
+      id: true,
+      sucursalId: true,
+      estado: true,
+      tipo: true,
+      umbralMediaUnidadPaquete: true,
+      // LOS AJUSTES DEL MES EN LA MISMA CONSULTA, por la relacion: el total a
+      // descontar de cada tienda los resta, y pedirlos tienda por tienda
+      // volveria a la cadena en N+1 justo en el endpoint que existe para
+      // ahorrar las diez llamadas del navegador.
+      resultado: { select: { montoNegativos: true } },
+    },
+    orderBy: { id: 'asc' },
+  });
+
+  const porSucursal = new Map<number, InventarioDeLaCadena>();
+  for (const inv of inventarios) {
+    const previo = porSucursal.get(inv.sucursalId);
+    if (previo === undefined || (previo.tipo !== 'mensual' && inv.tipo === 'mensual')) {
+      porSucursal.set(inv.sucursalId, {
+        id: inv.id,
+        sucursalId: inv.sucursalId,
+        estado: inv.estado as EstadoInventario,
+        tipo: inv.tipo,
+        // CONGELADO al abrir el inventario, no la config de hoy, y de CADA
+        // inventario y no una constante: dos tiendas del mismo mes pueden tener
+        // umbrales distintos si la perilla se movio entre un snapshot y el otro,
+        // y recalcular con la de hoy cambiaria un descuento ya comunicado.
+        umbral: inv.umbralMediaUnidadPaquete.toNumber(),
+        // Sin resultado Y con la columna en NULL colapsan al mismo `null`: la
+        // formula del neto trata los dos igual ("no se capturo"), y quien
+        // necesita distinguirlos -- la guarda de `liquidar()` -- lee la columna
+        // directo, no esta tabla.
+        montoNegativos: inv.resultado?.montoNegativos?.toNumber() ?? null,
+      });
+    }
+  }
+
+  return { anio, mes, porSucursal };
+}
+
 /**
  * LA TABLA DE TODAS LAS SUCURSALES DE UN PERIODO.
  *
@@ -493,45 +604,21 @@ export interface CadenaDto {
  * ---------------------------------------------------------------------------
  * UNA TIENDA, UN INVENTARIO -- Y EL PERIODO PUEDE TENER DOS
  * ---------------------------------------------------------------------------
- * La unique del schema es `[sucursalId, periodoAnio, periodoMes, tipo]`: una
- * tienda puede tener el MENSUAL y el ANUAL del mismo periodo. La tabla tiene
- * una fila por tienda, asi que hay que elegir, y manda el MENSUAL: es el que se
- * hace todos los meses, el anual es la excepcion y hay que pedirlo explicito
- * (ver el comentario de `Inventario.tipo` en schema.prisma). Con un solo
- * inventario -- el caso normal -- la regla no se nota.
+ * La regla ("manda el MENSUAL") y la del periodo en curso viven en
+ * `inventariosDelPeriodo`, compartidas con el export del detalle: ver su
+ * comentario para por que estan extraidas y no copiadas.
  */
 export async function cadena(actor: ColaboradorAutenticado, query: CadenaQuery): Promise<CadenaDto> {
   validarAccesoALaCadena(actor);
 
-  // El periodo en curso es la hora del servidor, igual que al TOMAR el snapshot
-  // (d365-catalogo.service.ts): las dos puntas tienen que estar de acuerdo en
-  // qué mes es, o el panel pediria un periodo en el que nadie creo nada.
-  const ahora = new Date();
-  const anio = query.anio ?? ahora.getFullYear();
-  const mes = query.mes ?? ahora.getMonth() + 1;
-
-  const [sucursales, inventarios] = await Promise.all([
+  const [sucursales, periodo] = await Promise.all([
     // TODAS las tiendas activas, con inventario o sin el: `inventarioId: null`
     // es la cobertura del periodo, no un hueco que convenga esconder.
     // Las inactivas no van -- una tienda cerrada no deberia contar este mes --
     // pero sus inventarios historicos siguen existiendo (Sucursal.activa).
     prisma.sucursal.findMany({ where: { activa: true }, select: { id: true, nombre: true }, orderBy: { id: 'asc' } }),
-    prisma.inventario.findMany({
-      // Un inventario anulado no se audita: no produce resultado (misma regla
-      // que `listarAuditables`).
-      where: { periodoAnio: anio, periodoMes: mes, estado: { not: 'anulado' } },
-      select: { id: true, sucursalId: true, estado: true, tipo: true, umbralMediaUnidadPaquete: true },
-      orderBy: { id: 'asc' },
-    }),
+    inventariosDelPeriodo(query),
   ]);
-
-  const porSucursal = new Map<number, (typeof inventarios)[number]>();
-  for (const inv of inventarios) {
-    const previo = porSucursal.get(inv.sucursalId);
-    if (previo === undefined || (previo.tipo !== 'mensual' && inv.tipo === 'mensual')) {
-      porSucursal.set(inv.sucursalId, inv);
-    }
-  }
 
   /**
    * SECUENCIAL, no `Promise.all`. Es la forma obvia y la que acota la memoria:
@@ -542,22 +629,127 @@ export async function cadena(actor: ColaboradorAutenticado, query: CadenaQuery):
    */
   const filas: FilaCadena[] = [];
   for (const suc of sucursales) {
-    const inv = porSucursal.get(suc.id);
+    const inv = periodo.porSucursal.get(suc.id);
     if (inv === undefined) {
       filas.push(filaDeCadenaSinInventario(suc.id, suc.nombre));
       continue;
     }
-    const estado = inv.estado as EstadoInventario;
     // LA MISMA fuente que la matriz y que la liquidacion: la clasificacion
     // vigente del Auditor, no la del snapshot (ver liquidacion.reclasificacion).
-    const completa = await aplicarClasificacionVigente(inv.id, estado, await armarMatriz(inv.id));
+    const completa = await aplicarClasificacionVigente(inv.id, inv.estado, await armarMatriz(inv.id));
     filas.push(
       filaDeCadena(
-        { sucursalId: suc.id, sucursal: suc.nombre, inventarioId: inv.id, estado },
-        resumir(completa, inv.umbralMediaUnidadPaquete.toNumber()),
+        { sucursalId: suc.id, sucursal: suc.nombre, inventarioId: inv.id, estado: inv.estado },
+        resumir(completa, inv.umbral),
+        // Los ajustes del mes de ESTA tienda. Con esto, el total a descontar de
+        // la fila es identico al que Liquidacion va a mostrar para el mismo
+        // inventario; sin ellos (lo normal en `ajuste_auditor`, que no tiene
+        // resultado todavia) es el neto antes de los ajustes.
+        inv.montoNegativos,
       ),
     );
   }
 
-  return { periodo: { anio, mes }, total: totalizarCadena(filas), tiendas: filas };
+  return { periodo: { anio: periodo.anio, mes: periodo.mes }, total: totalizarCadena(filas), tiendas: filas };
+}
+
+/**
+ * EL .XLSX CON EL DETALLE POR PRODUCTO de la tabla de arriba: una fila por
+ * producto con diferencia, de TODAS las tiendas del periodo, en una sola hoja.
+ *
+ * Pedido del usuario: *"Incluir los sobrantes y faltantes en la tabla, asi
+ * puede sacar sus calculos y exportar el detalle de sobrantes y faltantes por
+ * productos"*. La tabla dice cuanta plata; este archivo dice CUALES productos.
+ *
+ * ---------------------------------------------------------------------------
+ * LA MISMA TUBERIA QUE LA TABLA, HASTA EL ULTIMO PASO
+ * ---------------------------------------------------------------------------
+ *   `inventariosDelPeriodo` -> `armarMatriz` -> `aplicarClasificacionVigente`
+ *      -> y acá `detalleDeDiferencias` donde la tabla usa `resumir`
+ *
+ * Los tres primeros pasos son LITERALMENTE los mismos que `cadena`, no una
+ * copia: el primero porque esta extraido, y los otros dos porque son las mismas
+ * dos llamadas. Por eso la suma de `Monto` del archivo filtrada por cuadro
+ * cierra contra la columna correspondiente de la tabla -- y por eso NO se lee
+ * `DiferenciaItem` (ver el comentario de cabecera de
+ * auditoria.exportar-diferencias.ts: los dos inventarios de 2026-09 tienen 0
+ * filas ahi, el archivo bajaria vacio justo cuando se lo necesita).
+ *
+ * TIENDAS ACTIVAS, ordenadas por NOMBRE. Activas por lo mismo que la tabla: una
+ * tienda desactivada conserva sus inventarios historicos y si aportara filas, el
+ * archivo no cerraria contra la tabla que no la muestra. Por nombre y no por id
+ * -- el unico lugar donde este endpoint difiere de `/cadena` a proposito --
+ * porque en un archivo de diez tiendas las filas de una misma tienda tienen que
+ * quedar juntas y en un orden legible, que es lo mismo que ya hace
+ * `exportarDiferenciasConsolidado`. La tabla, en cambio, tiene su propio orden
+ * de pantalla y no se toca.
+ *
+ * Una tienda sin inventario en el periodo NO aporta filas y eso no es esconderla:
+ * la cobertura del periodo la reporta la tabla con su fila en cero, este archivo
+ * es el detalle de las diferencias y una tienda que no arranco no tiene ninguna.
+ *
+ * ---------------------------------------------------------------------------
+ * CUANTO CUESTA -- MEDIDO, NO ESTIMADO
+ * ---------------------------------------------------------------------------
+ * Medido el 2026-09-25 contra la base de desarrollo, por API y contra el backend
+ * vivo (11 tiendas activas, 2 con inventario en 2026-09: el 8078 de Luzuriaga
+ * con 985 items y el 8079 de Trujillo Piloto con 40), mejor de 3 corridas y con
+ * `scripts/verificar-export-cadena-api.mjs`:
+ *
+ *   el endpoint entero (1.025 items, 6 filas de producto)  ->  25 ms
+ *   el .xlsx que devuelve                                  ->  7,2 KB
+ *   `/cadena` para el mismo periodo, para comparar          ->  21 ms
+ *
+ * O sea que armar el libro sobre las filas que quedan cuesta ~4 ms: el costo es
+ * del ARMADO DE LAS MATRICES, igual que en `/cadena`, y las nueve tiendas sin
+ * inventario no cuestan nada porque no se les arma matriz.
+ *
+ * PROYECCION, dicha como proyeccion: diez tiendas de ~1.000 items son ~250 ms, y
+ * con el catalogo ANUAL completo (11.835 items por tienda) ~3 s. Lejos de los
+ * 230 s de timeout del Azure Web App -- pero el anual es una vez al año y hoy no
+ * existe ninguno en la base para medirlo de verdad.
+ *
+ * SECUENCIAL, igual que `cadena` y por la misma razon (diez catalogos completos
+ * vivos a la vez). No se paraleliza por cuenta propia.
+ */
+export async function exportarDiferenciasDeLaCadena(
+  actor: ColaboradorAutenticado,
+  query: CadenaQuery,
+): Promise<{ buffer: Buffer; nombreArchivo: string }> {
+  // EL MISMO PERMISO que `/cadena`, sin excepciones ni recortes nuevos: el
+  // Auditor audita la cadena entera (correccion del cliente del 2026-09-09, ver
+  // auditoria.permisos.ts). El corte esta acá, antes de armar una sola matriz.
+  validarAccesoALaCadena(actor);
+
+  const [sucursales, periodo] = await Promise.all([
+    prisma.sucursal.findMany({
+      where: { activa: true },
+      select: { id: true, nombre: true },
+      orderBy: { nombre: 'asc' },
+    }),
+    inventariosDelPeriodo(query),
+  ]);
+
+  const filas: FilaExportDiferenciaCadena[] = [];
+  for (const suc of sucursales) {
+    const inv = periodo.porSucursal.get(suc.id);
+    if (inv === undefined) continue;
+    const completa = await aplicarClasificacionVigente(inv.id, inv.estado, await armarMatriz(inv.id));
+    for (const fila of detalleDeDiferencias(completa, inv.umbral)) {
+      // Las cuatro columnas que la unidad pura no puede poner: de que tienda,
+      // de que periodo y de que inventario es esta fila.
+      filas.push({
+        ...fila,
+        sucursal: suc.nombre,
+        periodoAnio: periodo.anio,
+        periodoMes: periodo.mes,
+        inventarioId: inv.id,
+      });
+    }
+  }
+
+  return {
+    buffer: await armarLibroDiferenciasCadena(filas),
+    nombreArchivo: nombreArchivoDiferenciasCadena(periodo.anio, periodo.mes),
+  };
 }

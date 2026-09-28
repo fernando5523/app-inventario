@@ -233,6 +233,32 @@ export interface ResumenTiendaCadena {
   valorFaltante: number;
   valorSobrante: number;
   porClase: ResumenPorClase;
+  /**
+   * EL TOTAL A DESCONTAR AL PERSONAL DE ESTA TIENDA -- el NETO, no el bruto.
+   *
+   * Pedido del usuario mirando esta tabla: *"falta el total a descontar del
+   * cálculo del sobrante y faltante por cada tienda"*. La columna "Al personal"
+   * es `porClase.unidad.valorFaltante`, el faltante BRUTO del cuadro único: no
+   * le resta el sobrante que lo compensa, así que no es la plata que se le
+   * descuenta a la gente. Esta sí.
+   *
+   * Es el faltante del cuadro único MENOS su sobrante, menos los ajustes del
+   * mes cuando existen. Lo calcula el SERVIDOR con la misma función que usa la
+   * liquidación (`historial.calculos.ts#calcularFaltanteNeto`): el número de
+   * esta tabla es el que va a salir en la planilla, no uno parecido.
+   *
+   * PUEDE SER NEGATIVO cuando el sobrante supera al faltante -- decisión
+   * explícita del cliente: *"si sobra, irá a su favor"*. Llega sin recortar a
+   * cero y la pantalla lo muestra tal cual da: un `Math.max(0, …)` acá
+   * escondería la compensación a favor del personal. Es la diferencia con
+   * `pagaLaEmpresa`, que sí recorta -- porque nadie paga una cantidad negativa,
+   * pero al personal sí se le puede descontar de menos.
+   *
+   * En una tienda sin inventario del período llega en 0 como el resto de los
+   * contadores: la pantalla mira `inventarioId` para decidir el número o el
+   * guion.
+   */
+  valorADescontar: number;
 }
 
 /**
@@ -257,6 +283,15 @@ export interface TotalCadena {
   valorFaltante: number;
   valorSobrante: number;
   porClase: ResumenPorClase;
+  /**
+   * TODA la plata que la cadena le descuenta al personal en el período: la SUMA
+   * de los netos de las tiendas, sumada por el servidor.
+   *
+   * No se recalcula sobre `porClase` del total: cada tienda resta SU sobrante y
+   * SUS ajustes del mes, y una cuenta sobre los cuadros ya sumados daría lo
+   * mismo solo por casualidad. Puede ser negativo por lo mismo que cada fila.
+   */
+  valorADescontar: number;
 }
 
 /** Lo que devuelve `GET /api/auditoria/cadena`. */
@@ -285,6 +320,46 @@ export interface RepositorioAuditoria {
    * sería pedir un período y mostrar otro sin que nadie se entere.
    */
   cadena(periodo?: { anio: number; mes: number }): Promise<ResumenCadena>;
+  /**
+   * El .xlsx con el DETALLE POR PRODUCTO de los faltantes y sobrantes de TODAS
+   * las tiendas del período -- la fila por fila detrás de los totales que
+   * muestra `cadena`. Es el archivo que el Auditor manda por correo MIENTRAS
+   * decide, antes de cerrar nada.
+   *
+   * Sin `periodo` lo resuelve el SERVIDOR, igual que `cadena` y por la misma
+   * razón: el "mes en curso" de los inventarios no es necesariamente el mes
+   * del calendario del equipo que mira la pantalla. Mismo permiso que `cadena`
+   * (auditor y administrador), y el Auditor ve la cadena ENTERA acá también,
+   * no recortada a su sucursal.
+   *
+   * EL NOMBRE VIENE DEL SERVIDOR, no se arma de este lado -- mismo criterio
+   * que `RepositorioHistorial.exportarCuadros`: hay UN solo dueño del formato
+   * del nombre, y dos formatos se desalinean con el tiempo. Acá pesa el doble,
+   * porque cuando no se manda `periodo` este lado NO SABE cuál resolvió el
+   * servidor: un nombre armado en el teléfono tendría que adivinar el mes que
+   * el archivo trae adentro, y el cliente recibe varios .xlsx el mismo día y
+   * los distingue justamente por ahí. Por eso `ArchivoExportado` y no
+   * `ArrayBuffer` pelado.
+   *
+   * POR QUÉ NO SE USA `RepositorioHistorial.exportarDiferenciasConsolidado`,
+   * que ya existe y parece hacer exactamente esto: porque BAJA VACÍO justo en
+   * el estado en que el Auditor necesita el detalle. Ese consolidado lee la
+   * tabla `DiferenciaItem`, que el backend persiste UNA sola vez, al cerrar el
+   * ajuste. Medido contra la base de desarrollo el 2026-09-25: los dos
+   * inventarios de 2026-09 están en `ajuste_auditor` y `en_curso` y tienen 0
+   * filas ahí -- o sea que ese archivo sale sin una sola diferencia mientras
+   * el Auditor todavía está decidiendo, que es cuando el detalle sirve. Un
+   * .xlsx vacío se lee como "no falta nada", el error más caro que tuvo esta
+   * app.
+   *
+   * Este método sale de la MATRIZ VIVA, la misma fuente que alimenta la tabla
+   * de tiendas del panel, así que el archivo y la pantalla dicen el mismo
+   * número. Segunda diferencia con el consolidado: aquel descarta los ítems de
+   * empresa (se queda solo con `responsable === 'empleado'`) y la tabla de la
+   * cadena SÍ los muestra -- dos archivos del mismo período con universos
+   * distintos es cómo se llega a que gerencia discuta cuánto falta.
+   */
+  exportarDiferenciasCadena(periodo?: { anio: number; mes: number }): Promise<ArchivoExportado>;
 }
 
 /**

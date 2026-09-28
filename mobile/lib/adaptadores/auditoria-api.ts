@@ -16,6 +16,10 @@
  *   GET /api/auditoria/cadena?anio=&mes=
  *   → { periodo, total, tiendas: [...] }   (ver `ResumenCadena` en el puerto)
  *
+ *   GET /api/auditoria/cadena/diferencias/exportar?anio=&mes=
+ *   → el BINARIO del .xlsx, con el nombre en `Content-Disposition`
+ *     (`diferencias-cadena-2026-09.xlsx`). Mismo permiso que `/cadena`.
+ *
  * Rol: `administrador`, `auditor` o `coordinador` (el router monta
  * `requiereRol` con los tres). Un rol `conteo` recibe 403 — correcto: el
  * conteo es ciego, quien cuenta no puede ver el stock del ERP.
@@ -29,7 +33,12 @@
  */
 
 import type { ItemAuditoria } from '../dominio/tipos';
-import type { RepositorioAuditoria, ResumenAuditoriaServidor, ResumenCadena } from '../puertos/repositorios';
+import type {
+  ArchivoExportado,
+  RepositorioAuditoria,
+  ResumenAuditoriaServidor,
+  ResumenCadena,
+} from '../puertos/repositorios';
 import { pedir } from './_http';
 
 /**
@@ -96,6 +105,23 @@ interface RespuestaResumen {
   resumen: ResumenAuditoriaServidor;
 }
 
+/**
+ * La query del período, compartida por `cadena` y `exportarDiferenciasCadena`.
+ *
+ * Los dos endpoints resuelven el mes con la MISMA regla del servidor cuando no
+ * se manda nada, así que armar la query dos veces serían dos formas de pedir
+ * lo mismo que se pueden desalinear -- y el día que se desalineen, el .xlsx
+ * traería un período distinto del que muestra la tabla de al lado.
+ *
+ * Sin `periodo` devuelve la cadena VACÍA, no un `?` pelado: un `?` ya es una
+ * query, y este adaptador no manda ninguna cuando el período lo decide el
+ * servidor (ver `cadena`).
+ */
+function consultaPeriodo(periodo?: { anio: number; mes: number }): string {
+  if (periodo === undefined) return '';
+  return `?${new URLSearchParams({ anio: String(periodo.anio), mes: String(periodo.mes) }).toString()}`;
+}
+
 export const auditoriaApi: RepositorioAuditoria = {
   /**
    * `GET /api/auditoria/inventarios/:id/resumen`.
@@ -126,11 +152,35 @@ export const auditoriaApi: RepositorioAuditoria = {
    * con inventario" sobre una cadena que sí está contando.
    */
   async cadena(periodo) {
-    const q =
-      periodo === undefined
-        ? ''
-        : `?${new URLSearchParams({ anio: String(periodo.anio), mes: String(periodo.mes) }).toString()}`;
-    return pedir<ResumenCadena>(`/api/auditoria/cadena${q}`);
+    return pedir<ResumenCadena>(`/api/auditoria/cadena${consultaPeriodo(periodo)}`);
+  },
+
+  /**
+   * `GET /api/auditoria/cadena/diferencias/exportar?anio=&mes=`.
+   *
+   * `binario: true` porque el cuerpo es un .xlsx: son bytes, y hacerlos pasar
+   * por `.text()`/`JSON.parse` los corrompe (ver la opción en _http.ts).
+   *
+   * `conNombreDeArchivo: true` porque el nombre lo arma el SERVIDOR con el
+   * período que ÉL resolvió, y cuando no se manda `periodo` este lado no
+   * conoce ese período -- ver `RepositorioAuditoria.exportarDiferenciasCadena`
+   * para por qué no se rearma acá.
+   *
+   * Es el MISMO par de opciones que `historial-api.ts#exportarCuadros`, a
+   * propósito: es la única mecánica del repo para bajar bytes con nombre, y
+   * arrastra gratis el token, el timeout, los reintentos y la traducción de
+   * errores que ya tiene `pedir`. Una descarga con `fetch` a mano perdería las
+   * cuatro cosas, y un .xlsx también se cae con la WiFi de la tienda.
+   *
+   * SIN RELLENO, igual que `cadena`: si el endpoint falla, falla. Devolver un
+   * archivo vacío bajaría una planilla sin diferencias sobre una cadena que sí
+   * tiene faltantes.
+   */
+  async exportarDiferenciasCadena(periodo): Promise<ArchivoExportado> {
+    return pedir<ArchivoExportado>(`/api/auditoria/cadena/diferencias/exportar${consultaPeriodo(periodo)}`, {
+      binario: true,
+      conNombreDeArchivo: true,
+    });
   },
 
   async matriz(inventarioId) {

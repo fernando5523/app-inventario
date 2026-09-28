@@ -63,6 +63,10 @@ function fila(sucursalId: number, nombre: string, items: ItemAuditoria[]): FilaC
   return filaDeCadena(
     { sucursalId, sucursal: nombre, inventarioId: 8000 + sucursalId, estado: 'ajuste_auditor' },
     resumir(items, UMBRAL),
+    // Sin ajustes del mes: en `ajuste_auditor` el inventario todavia no tiene
+    // `ResultadoInventario`, asi que `null` es el caso normal de esta tabla. Lo
+    // que el neto hace con ellos se prueba en auditoria.cadena-descontar.test.ts.
+    null,
   );
 }
 

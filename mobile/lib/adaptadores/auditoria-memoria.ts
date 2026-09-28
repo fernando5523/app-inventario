@@ -20,6 +20,7 @@ import { conteoFinal, cuadroDelItem, diferenciaUnidades, resumirAuditoria } from
 import { ajustesEnMemoria, estadoDeInventarioEnMemoria } from './ajuste-memoria';
 import { sesionMemoria } from './sesion-memoria';
 import type {
+  ArchivoExportado,
   CuadroDeDiferencias,
   RepositorioAuditoria,
   ResumenCadena,
@@ -83,6 +84,13 @@ function conAjuste(conteos: ReadonlyArray<number | null>, ajuste: number | undef
  */
 const UMBRAL_DEMO = 0.5;
 
+/**
+ * Ver `exportarDiferenciasCadena` abajo: el mock no tiene con qué escribir un
+ * .xlsx, así que lo dice en vez de bajar uno que no lo sea.
+ */
+const SIN_SERVIDOR_EXPORT_CADENA =
+  'El detalle por producto de toda la cadena se arma en el servidor: se necesita conexión para bajarlo.';
+
 function cuadroVacio(): CuadroDeDiferencias {
   return { items: 0, unidadesFaltantes: 0, unidadesSobrantes: 0, valorFaltante: 0, valorSobrante: 0 };
 }
@@ -103,6 +111,28 @@ function acumular(cuadro: CuadroDeDiferencias, unidades: number, precioVenta: nu
 
 function porClaseVacio(): ResumenPorClase {
   return { unidad: cuadroVacio(), paquete: cuadroVacio(), empresa: cuadroVacio() };
+}
+
+/**
+ * EL TOTAL A DESCONTAR de una tienda del mock: el faltante del cuadro único
+ * menos su sobrante.
+ *
+ * SIN AJUSTES DEL MES y sin poder tenerlos: el mock no tiene
+ * `ResultadoInventario` (se crea al liquidar), así que acá el neto es siempre el
+ * de antes de los ajustes -- el mismo caso que en el servidor para un
+ * inventario en `ajuste_auditor`, que es el estado en el que se mira esta tabla.
+ *
+ * SIN RECORTAR A CERO, igual que el servidor: si sobró más de lo que faltó, el
+ * número sale negativo y la pantalla lo muestra así (ver
+ * `ResumenTiendaCadena.valorADescontar` en el puerto). Es lo contrario de
+ * `pagaLaEmpresa`, que sí recorta.
+ *
+ * Se redondea la resta y no cada término: los dos ya vienen redondeados del
+ * resumen, pero restar decimales de punto flotante deja cola (4.5 - 0.4 da
+ * 4.1000000000000005) y esa cola llegaría al JSON de la demo.
+ */
+function descontarDelCuadroUnico(unidad: CuadroDeDiferencias): number {
+  return Math.round((unidad.valorFaltante - unidad.valorSobrante) * 100) / 100;
 }
 
 /** Suma `sumando` dentro de `acumulado`. Muta el primero, como `acumular`. */
@@ -245,6 +275,7 @@ export const auditoriaMemoria: RepositorioAuditoria = {
           valorFaltante: 0,
           valorSobrante: 0,
           porClase: porClaseVacio(),
+          valorADescontar: 0,
         });
         continue;
       }
@@ -260,6 +291,7 @@ export const auditoriaMemoria: RepositorioAuditoria = {
         valorFaltante: r.valorFaltante,
         valorSobrante: r.valorSobrante,
         porClase: r.porClase,
+        valorADescontar: descontarDelCuadroUnico(r.porClase.unidad),
       });
     }
 
@@ -277,6 +309,7 @@ export const auditoriaMemoria: RepositorioAuditoria = {
       valorFaltante: 0,
       valorSobrante: 0,
       porClase,
+      valorADescontar: 0,
     };
     for (const tienda of tiendas) {
       total.items += tienda.items;
@@ -284,10 +317,14 @@ export const auditoriaMemoria: RepositorioAuditoria = {
       total.auditables += tienda.auditables;
       total.valorFaltante += tienda.valorFaltante;
       total.valorSobrante += tienda.valorSobrante;
+      // SE SUMAN LOS NETOS DE LAS FILAS, no se netea el cuadro ya sumado: es la
+      // misma regla del servidor (ver `TotalCadena.valorADescontar`).
+      total.valorADescontar += tienda.valorADescontar;
       sumarCuadro(porClase.unidad, tienda.porClase.unidad);
       sumarCuadro(porClase.paquete, tienda.porClase.paquete);
       sumarCuadro(porClase.empresa, tienda.porClase.empresa);
     }
+    total.valorADescontar = Math.round(total.valorADescontar * 100) / 100;
 
     const ahora = new Date();
     const cadena: ResumenCadena = {
@@ -296,6 +333,28 @@ export const auditoriaMemoria: RepositorioAuditoria = {
       tiendas,
     };
     return cadena;
+  },
+
+  /**
+   * ACÁ NO HAY ARCHIVO, y fallar es la respuesta honesta.
+   *
+   * El .xlsx lo escribe el servidor con una librería de planillas que el bundle
+   * del teléfono no tiene. Las dos salidas posibles para no fallar serían
+   * devolver un `ArrayBuffer` vacío o un CSV con extensión .xlsx: la primera
+   * baja un archivo que Excel abre roto, la segunda uno que abre bien y afirma
+   * lo que este mock no sabe. Las dos terminan en el peor resultado de esta
+   * app -- un archivo que se lee como "no falta nada" sin que nadie haya
+   * contado.
+   *
+   * Mismo criterio que `liquidacion-memoria.ts#exportarReporteGerencia`: se
+   * rechaza con el motivo escrito para la persona, y la pantalla lo muestra
+   * tal cual en vez de un "error" pelado. Los datos de la tabla SÍ los sirve
+   * este mock (`cadena`): lo que falta es el formato del archivo, no las
+   * cifras, y eso es exactamente lo que dice el mensaje.
+   */
+  async exportarDiferenciasCadena(): Promise<ArchivoExportado> {
+    await simularLatencia();
+    throw new Error(SIN_SERVIDOR_EXPORT_CADENA);
   },
 
   async matriz(inventarioId) {

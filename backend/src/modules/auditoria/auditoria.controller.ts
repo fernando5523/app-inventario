@@ -27,3 +27,21 @@ export const resumen = asyncHandler(async (req: RequestAutenticado, res: Respons
 export const cadena = asyncHandler(async (req: RequestAutenticado, res: Response) => {
   res.json(await service.cadena(req.colaborador!, req.query as unknown as CadenaQuery));
 });
+
+/**
+ * El .xlsx con el DETALLE POR PRODUCTO que respalda la tabla de `/cadena` --
+ * ver auditoria.service.ts#exportarDiferenciasDeLaCadena.
+ *
+ * EL NOMBRE DEL ARCHIVO LO MANDA EL SERVIDOR y no el front: sin `anio`/`mes` en
+ * la query el periodo lo resuelve el servidor con su propio reloj, asi que el
+ * front no sabe de que mes es el archivo que acaba de bajar.
+ */
+export const exportarDiferenciasDeLaCadena = asyncHandler(async (req: RequestAutenticado, res: Response) => {
+  const { buffer, nombreArchivo } = await service.exportarDiferenciasDeLaCadena(
+    req.colaborador!,
+    req.query as unknown as CadenaQuery,
+  );
+  res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+  res.setHeader('Content-Disposition', `attachment; filename="${nombreArchivo}"`);
+  res.send(buffer);
+});

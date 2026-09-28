@@ -37,6 +37,26 @@ auditoriaRouter.get('/inventarios', validar(listarAuditablesQuerySchema, 'query'
  */
 auditoriaRouter.get('/cadena', validar(cadenaQuerySchema, 'query'), controller.cadena);
 
+/**
+ * EL .XLSX QUE RESPALDA ESA TABLA: el detalle por producto de los faltantes y
+ * sobrantes de todas las tiendas del periodo.
+ *
+ * MISMA query y MISMO permiso que `/cadena` -- `cadenaQuerySchema` y
+ * `validarAccesoALaCadena`, sin un recorte propio. Son la tabla y su respaldo:
+ * quien puede ver una cifra puede bajar el detalle que la explica, y al reves
+ * seria peor (una tabla que no se puede auditar).
+ *
+ * VA ARRIBA DE CUALQUIER `/cadena/:algo` QUE ALGUIEN AGREGUE. Hoy no hay
+ * ninguna ruta con parametro bajo `/cadena` -- `/cadena` es exacta y no captura
+ * a esta -- pero un `/cadena/:sucursalId` declarado antes se comeria
+ * `/cadena/diferencias` y devolveria 400 por un "sucursalId" que es una palabra.
+ */
+auditoriaRouter.get(
+  '/cadena/diferencias/exportar',
+  validar(cadenaQuerySchema, 'query'),
+  controller.exportarDiferenciasDeLaCadena,
+);
+
 auditoriaRouter.get(
   '/inventarios/:inventarioId/resumen',
   validar(parametrosInventarioSchema, 'params'),

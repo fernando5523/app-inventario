@@ -112,6 +112,55 @@ export interface EntradaLiquidacion {
 }
 
 /**
+ * LOS CINCO MONTOS Y NADA MAS: lo que hace falta para saber cuanta plata sale
+ * del sueldo. Ni la gente ni la multa entran en el neto -- esos reparten el
+ * neto, no lo forman.
+ *
+ * Es un `Pick` de `EntradaLiquidacion` y no una interfaz nueva a proposito: el
+ * dia que un monto cambie de tipo o de opcionalidad, el que llama con media
+ * entrada tiene que romper igual que el que llama con la entrada completa.
+ */
+export type EntradaFaltanteNeto = Pick<
+  EntradaLiquidacion,
+  'montoFaltanteBruto' | 'montoNegativos' | 'montoFaltanteEmpresa' | 'montoSobranteEmpleado' | 'montoFaltantePaquete'
+>;
+
+/**
+ * LA CUENTA QUE DECIDE CUANTA PLATA SALE DEL SUELDO:
+ *
+ *   bruto - negativos - empresa - sobranteEmpleado - paquetes
+ *
+ * Esta extraida de `calcularResumenLiquidacion` (y no copiada) porque la tabla
+ * de la cadena del Auditor muestra el MISMO numero por tienda antes de
+ * liquidar (`auditoria.calculos.ts#filaDeCadena`). Dos copias de esta resta en
+ * dos modulos es exactamente el caso que este repo evita en todos lados: la
+ * cuenta que se muestra es la que se guarda, y si dos pantallas muestran el
+ * mismo numero sale de la misma funcion. Con la copia, el dia que el cliente
+ * agregue un sexto termino una de las dos pantallas se queda vieja y nadie se
+ * entera hasta que Contabilidad reclame.
+ *
+ * SIN RECORTAR A CERO -- decision del cliente, ver `ResumenLiquidacion.montoFaltanteNeto`:
+ * si los sobrantes y negativos superan al faltante, el neto se devuelve
+ * negativo tal cual da. Un `Math.max(0, ...)` puesto de buena fe aca esconderia
+ * la compensacion a favor del personal y la planilla dejaria de cerrar.
+ *
+ * `null`/`undefined` en `montoSobranteEmpleado` y `montoFaltantePaquete` es
+ * "ese dato no existe para este inventario" (los liquidados antes de la regla),
+ * no un cero medido -- ver sus comentarios en `EntradaLiquidacion`. La resta
+ * los trata igual; el tipo mantiene la distincion porque es la que decide si se
+ * puede liquidar.
+ */
+export function calcularFaltanteNeto(e: EntradaFaltanteNeto): number {
+  return redondear(
+    e.montoFaltanteBruto -
+      e.montoNegativos -
+      e.montoFaltanteEmpresa -
+      (e.montoSobranteEmpleado ?? 0) -
+      (e.montoFaltantePaquete ?? 0),
+  );
+}
+
+/**
  * CUANTA GENTE VINO Y CUANTA FALTO, con las tres invariantes que un conteo
  * de PERSONAS no puede violar nunca:
  *
@@ -178,13 +227,10 @@ export interface ResumenLiquidacion {
 }
 
 export function calcularResumenLiquidacion(e: EntradaLiquidacion): ResumenLiquidacion {
-  const montoFaltanteNeto = redondear(
-    e.montoFaltanteBruto -
-      e.montoNegativos -
-      e.montoFaltanteEmpresa -
-      (e.montoSobranteEmpleado ?? 0) -
-      (e.montoFaltantePaquete ?? 0),
-  );
+  // La resta vive en `calcularFaltanteNeto`, arriba: la tabla de la cadena del
+  // Auditor muestra el mismo neto por tienda ANTES de liquidar, y tiene que
+  // salir de aca y no de una segunda copia de la formula.
+  const montoFaltanteNeto = calcularFaltanteNeto(e);
 
   const cuotaBase = e.colaboradoresAlcanzados === 0 ? 0 : redondear(montoFaltanteNeto / e.colaboradoresAlcanzados);
 
