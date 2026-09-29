@@ -25,11 +25,17 @@
  * conteo es ciego, quien cuenta no puede ver el stock del ERP.
  *
  * Cada fila de `matriz` trae los campos de `ItemAuditoria` tal cual
- * (`FilaMatrizDto extends ItemAuditoria` del lado del servidor), más tres
+ * (`FilaMatrizDto extends ItemAuditoria` del lado del servidor), más los
  * derivados que el puerto no pide (`conteoFinal`, `diferenciaUnidades`,
- * `veredicto`). Se descartan acá: el dominio del front los calcula solo
- * (dominio/auditoria.ts) y tener dos fuentes para el mismo número es cómo se
- * llega a que la pantalla y el servidor discutan sobre cuánto falta.
+ * `veredicto`, `stockDeLaMedicion`). Se descartan acá: el dominio del front los
+ * calcula solo (dominio/auditoria.ts) y tener dos fuentes para el mismo número
+ * es cómo se llega a que la pantalla y el servidor discutan sobre cuánto falta.
+ *
+ * QUE SE DESCARTEN NO ES DESPERDICIO: son la única forma de verificar que las dos
+ * copias siguen coincidiendo. `auditoria-api.paridad.test.ts` le pasa a la copia
+ * local las filas que manda el servidor y falla si los derivados difieren — sin
+ * eso, las dos copias se separan con el tiempo y nadie se entera hasta que el
+ * Auditor ve un número en la matriz y otro en el cierre.
  */
 
 import type { ItemAuditoria } from '../dominio/tipos';
@@ -93,6 +99,13 @@ function aItemAuditoria(fila: ItemAuditoria): ItemAuditoria {
     // Antes eran tres campos fijos, y con eso un 4to conteo llegaba y se
     // descartaba en silencio -- el Auditor lo habría visto desaparecer.
     conteos: fila.conteos,
+    // EL STOCK DE CADA RONDA, tal cual lo manda el servidor. Sin esta línea el
+    // campo llega y se tira (esta función reconstruye el objeto campo por campo,
+    // ver su cabecera), y el teléfono mediría TODAS las rondas contra el stock
+    // del día 22 mientras el servidor mide cada una contra la suya: dos
+    // diferencias distintas sobre el mismo ítem, que es exactamente el bug que
+    // `dominio/auditoria.ts` existe para evitar. Un inventario viejo trae `[]`.
+    stockPorRonda: fila.stockPorRonda,
     // El reparto ya resuelto por el servidor: se pasa tal cual. Ver
     // `AtribucionItem` para por qué no se calcula de este lado.
     atribucion: fila.atribucion,

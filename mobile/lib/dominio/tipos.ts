@@ -362,7 +362,16 @@ export interface ItemAuditoria {
   hoja: string;
   /** null = el snapshot de Dynamics no trajo precio: la diferencia no se puede valorizar. */
   precioVenta: number | null;
-  /** null = el snapshot no trajo stock: este ítem NO se puede auditar (veredicto `sin_erp`). */
+  /**
+   * null = el snapshot no trajo stock: este ítem NO se puede auditar (veredicto
+   * `sin_erp`).
+   *
+   * ES EL DE LA RONDA 1, Y SIGUE SIENDO EL QUE MANDA PARA ESA RONDA. Desde que
+   * cada reconteo baja su propio stock (ver `stockPorRonda`) dejó de ser LA vara
+   * del inventario y pasó a ser la de la primera pasada. No se renombra: es el
+   * mismo campo que ya leen el sello del lacrado y los inventarios históricos,
+   * y es la cifra a la que cae una ronda que no trajo stock propio.
+   */
   stockErp: number | null;
   /**
    * UN ELEMENTO POR RONDA, EN ORDEN: `conteos[0]` es la 1ra pasada.
@@ -375,6 +384,43 @@ export interface ItemAuditoria {
    * no en esta cifra.
    */
   conteos: ReadonlyArray<number | null>;
+  /**
+   * EL STOCK DEL ERP CONTRA EL QUE SE MIDIÓ **CADA** RONDA. Índice 0 = ronda 1.
+   *
+   * MISMA FORMA Y MISMAS REGLAS DE `null` QUE `conteos` (leer su comentario): la
+   * POSICIÓN es la ronda, y un `null` en una posición NO ES 0 — quiere decir que
+   * esa ronda no trajo stock para este ítem, que es distinto de "el ERP dice que
+   * no debería haber ninguno". Tampoco tiene largo fijo ni tiene por qué
+   * coincidir con el largo de `conteos`.
+   *
+   * =========================================================================
+   * DECISIÓN DEL CLIENTE (Gilmer, 2026-09-29): CADA RECONTEO TRAE STOCK NUEVO
+   * =========================================================================
+   * Antes había UNA vara para las tres rondas (`stockErp`, congelada al abrir el
+   * mes). El primer conteo se hace el día 22 y los reconteos los días
+   * siguientes, así que entre una ronda y la otra el ERP se movió: ventas,
+   * transferencias y los ajustes que el cliente parcha a mano. Ahora cada
+   * reconteo baja el stock nuevo, y solo de los faltantes y sobrantes que
+   * arrastra esa ronda. Comparar la ronda 2 contra el stock del día 22 mide
+   * contra una vara que ya no existe.
+   *
+   * LO QUE ESTO LE CAMBIA AL SIGNIFICADO DEL RECONTEO: con stock nuevo por
+   * ronda, EL RECONTEO YA NO VERIFICA AL CONTEO ANTERIOR — es una medición
+   * independiente. Un ítem con "falta 1" el lunes puede salir cuadrado el martes
+   * SIN QUE NADIE TOQUE EL ESTANTE, solo porque se vendió una unidad.
+   *
+   * LA POSICIÓN 0 ES REDUNDANTE CON `stockErp` a propósito, y de las dos manda
+   * `stockErp`: ver su comentario y `auditoria.ts#stockDeLaMedicion`.
+   *
+   * REQUERIDO Y NO OPCIONAL, con el mismo criterio que tomó el backend: un
+   * campo opcional dejaría compilando un adaptador que se olvidó de llenarlo, y
+   * ese inventario mediría TODAS sus rondas contra la vara del día 22 sin que
+   * nadie se enterara. `[]` es la forma de decir "este inventario no tiene stock
+   * por ronda" — todos los que ya estaban en la base antes del cambio — y con
+   * ella todo cae a la ronda 1 y el inventario se comporta EXACTAMENTE como
+   * antes. Que haya que escribirlo es el punto.
+   */
+  stockPorRonda: ReadonlyArray<number | null>;
   /**
    * A QUÉ CUADRO FUE LA DIFERENCIA DE ESTE ÍTEM, y por qué. Lo calcula el
    * SERVIDOR (`auditoria.calculos.ts#repartoDelItem`) y llega resuelto.

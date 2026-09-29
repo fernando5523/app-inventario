@@ -25,6 +25,11 @@ import {
   textoRepartoHecho,
 } from '../../lib/dominio/reparto-de-hojas';
 import { avanceParaMostrar } from '../../lib/dominio/avance-snapshot';
+import {
+  sincronizacionConfirmada,
+  sincronizacionDeRonda,
+  type DatosDeSincronizacion,
+} from '../../lib/dominio/sincronizacion-de-ronda';
 import { textoDeCriterios } from '../../lib/dominio/criterios-snapshot';
 import { rotuloHojasCreadas } from '../../lib/dominio/rotulo-armado';
 import { partirEnHojas } from '../../lib/dominio/lote';
@@ -287,6 +292,15 @@ export default function ArmarHojasScreen(): JSX.Element {
   /** `true` = las hojas que se muestran salen de la copia local sin haberse podido contrastar. */
   const [hojasSinVerificar, setHojasSinVerificar] = useState(false);
 
+  /**
+   * EL STOCK DE LA RONDA QUE SE ESTÁ ARMANDO. Desde que cada reconteo trae el
+   * suyo (cliente, 2026-09-29), `inventarioId` ya no alcanza para saber si el
+   * paso 1 está hecho: dice que el inventario existe, no que ESTA ronda tenga
+   * contra qué compararse. Ver `dominio/sincronizacion-de-ronda.ts`.
+   */
+  const [stockRondaItems, setStockRondaItems] = useState<number | null>(null);
+  const [stockRondaTomadoEn, setStockRondaTomadoEn] = useState<string | null>(null);
+
   const [tipoElegido, setTipoElegido] = useState<TipoInventario>('mensual');
   const [desglose, setDesglose] = useState<DesgloseSnapshot | null>(null);
   const [criterios, setCriterios] = useState<CriteriosSnapshot | null>(null);
@@ -325,6 +339,11 @@ export default function ArmarHojasScreen(): JSX.Element {
     // La marca PROPIA del cierre. Sin esto, una ronda cerrada sin nada que
     // recontar seguia leyendose como "en curso" -- ver faseDeCierre.
     let ultimaRondaCerrada: number | null = null;
+    // El stock propio de la ronda activa. `null` = esta ronda todavía no lo
+    // bajó -- y `0` NO es `null`: una ronda que no arrastró nada y sincronizó
+    // igual cuenta como hecha (ver el puerto).
+    let stockDeRondaItems: number | null = null;
+    let stockDeRondaTomadoEn: string | null = null;
     // Distingue "el servidor contestó y no hay inventario todavía" (estado
     // normal: hay que tomar el snapshot en el paso 1) de "no se pudo ni
     // preguntar" (sin red) — confundirlas mostraría "no se pudo conectar"
@@ -339,6 +358,8 @@ export default function ArmarHojasScreen(): JSX.Element {
       estadoActivo = activo?.estado ?? null;
       totalHojas = activo?.totalHojas ?? 0;
       ultimaRondaCerrada = activo?.ultimaRondaCerrada ?? null;
+      stockDeRondaItems = activo?.stockDeRondaItems ?? null;
+      stockDeRondaTomadoEn = activo?.stockDeRondaTomadoEn ?? null;
     } catch {
       activoFallo = true;
       inventarioActivo = await inventarioIdSinRed();
@@ -374,6 +395,8 @@ export default function ArmarHojasScreen(): JSX.Element {
       setItems(itemsSnapshot);
       setTomadoEn(tomadoEnSnapshot);
       setRonda(rondaActiva ?? 1);
+      setStockRondaItems(stockDeRondaItems);
+      setStockRondaTomadoEn(stockDeRondaTomadoEn);
       setFase(estadoActivo === null ? null : faseDeCierre(estadoActivo, rondaActiva, totalHojas, ultimaRondaCerrada));
       if (rondaActiva === null) {
         // Sin ronda abierta no hay hojas que traer: o todavía no se creó
@@ -450,15 +473,32 @@ export default function ArmarHojasScreen(): JSX.Element {
    */
   const sinAlmacen = sesion?.sucursal?.almacenId === null;
 
-  const paso1Hecho = inventarioId !== null;
-  // SOLO para el check visual (verde "Hecho") -- `paso1Hecho` sigue
-  // decidiendo la ACCION del botón sin tocar (offline: hay inventarioId
-  // local pero todavía no `items`/`tomadoEn`, y ahí el botón tiene que
-  // seguir mandando a "crear hojas", no a "traer catálogo" de nuevo). Bug
-  // real de honestidad (2026-09-10, ver d365-catalogo.service.ts#crearSnapshot):
-  // la pantalla no puede pintar el check verde sin poder mostrar CON QUÉ
-  // datos -- cantidad e instante exacto -- respalda ese "Hecho".
-  const paso1Confirmado = paso1Hecho && items !== null && tomadoEn !== null;
+  /**
+   * EL PASO 1 YA NO ES "¿existe el inventario?", y ese es el cambio.
+   *
+   * Desde que cada reconteo trae su propio stock (cliente, 2026-09-29), armar
+   * la ronda 2 sin sincronizar la compararía contra el stock del día 22 --
+   * entre un día y otro hubo ventas. Así que el paso VUELVE a estar pendiente
+   * en cada ronda nueva, y la decisión vive en el dominio, con tests: de esto
+   * depende que se pueda o no crear las hojas, y el error caro no es que la
+   * pantalla se vea mal sino dejar armar un reconteo contra la vara vieja.
+   *
+   * `sincronizacionConfirmada` sigue separando el check verde de la acción del
+   * botón, por la misma razón de honestidad de siempre (bug del 2026-09-10):
+   * sin red hay inventario local pero todavía no llegaron `items`/`tomadoEn`,
+   * y ahí el botón tiene que mandar a crear hojas, no a traer todo de nuevo.
+   */
+  const datosSincronizacion: DatosDeSincronizacion = {
+    ronda: inventarioId === null ? null : ronda,
+    inventarioId,
+    items: ronda > 1 ? stockRondaItems : items,
+    tomadoEn: ronda > 1 ? stockRondaTomadoEn : tomadoEn,
+  };
+  const sincronizacion = sincronizacionDeRonda(datosSincronizacion, formatoMiles, formatoFechaHora);
+  const paso1Hecho = sincronizacion.hecho;
+  const paso1Confirmado = sincronizacionConfirmada(sincronizacion, datosSincronizacion);
+  /** Un reconteo baja solo lo que arrastra; la ronda 1, el catálogo entero. */
+  const esReconteo = sincronizacion.alcance === 'arrastre';
   const paso2Hecho = hojas.length > 0;
   const paso3Hecho = paso2Hecho && hojas.every((h) => h.asignados.length > 0);
 
@@ -628,9 +668,13 @@ export default function ArmarHojasScreen(): JSX.Element {
     }
   }
 
-  async function traerSnapshot(): Promise<void> {
+  /**
+   * EL PASO 1, sea la ronda que sea: el catálogo entero la primera vez, el
+   * stock de hoy de lo que arrastra en un reconteo. Ver la rama de adentro.
+   */
+  async function sincronizarRonda(): Promise<void> {
     // Cinturón de seguridad además de `loading` en el botón (ver más
-    // abajo): dos snapshots en simultáneo duplican trabajo y pueden
+    // abajo): dos descargas en simultáneo duplican trabajo y pueden
     // dejar dos inventarios activos.
     if (trayendoSnapshot) return;
 
@@ -639,6 +683,25 @@ export default function ArmarHojasScreen(): JSX.Element {
     const controlador = new AbortController();
     controladorSnapshotRef.current = controlador;
     try {
+      /**
+       * DOS DESCARGAS DISTINTAS BAJO EL MISMO PASO.
+       *
+       * En un reconteo NO se vuelve a traer el catálogo: el inventario ya
+       * existe y su universo ya está fijado. Lo que se trae es el stock de HOY
+       * de los productos que quedaron faltantes y sobrantes -- decenas o
+       * cientos, no los ~11.863 del almacén. Por eso son dos métodos del
+       * puerto y no un parámetro: son dos costos y dos significados distintos.
+       */
+      if (esReconteo) {
+        const resultado = await repositorioInventario.traerStockDeRonda(inventarioId!, ronda, {
+          onAvance: setAvanceSnapshot,
+          signal: controlador.signal,
+        });
+        setStockRondaItems(resultado.items);
+        setStockRondaTomadoEn(resultado.tomadoEn);
+        return;
+      }
+
       const resultado = await repositorioInventario.traerSnapshot(sesion!.sucursal!.id, {
         tipo: tipoElegido,
         onAvance: setAvanceSnapshot,
@@ -647,6 +710,11 @@ export default function ArmarHojasScreen(): JSX.Element {
       setInventarioId(resultado.inventarioId);
       setItems(resultado.items);
       setTomadoEn(resultado.tomadoEn);
+      // La ronda 1 sincroniza el catálogo Y fija su propio stock: son la misma
+      // cifra, y dejarlas desalineadas haría que el paso 1 de la ronda 1 se
+      // leyera como pendiente apenas termina de traerse.
+      setStockRondaItems(resultado.items);
+      setStockRondaTomadoEn(resultado.tomadoEn);
       // `?? null`: si el servidor no informó el desglose, se guarda la
       // ausencia. La pantalla calla en vez de mostrar ceros que se leerían
       // como "no se excluyó ninguno".
@@ -790,16 +858,19 @@ export default function ArmarHojasScreen(): JSX.Element {
           <PasoTarjeta
             numero={1}
             icon={CloudDownload}
-            titulo="Catálogo de Dynamics"
+            /* EL TÍTULO Y EL TEXTO SALEN DEL DOMINIO y cambian con la ronda:
+               en la 1 se trae el catálogo del almacén, en un reconteo solo el
+               stock de hoy de lo que arrastra. Ver sincronizacion-de-ronda.ts. */
+            titulo={sincronizacion.titulo}
             estado={paso1Confirmado ? 'hecho' : 'pendiente'}
             texto={
               sinAlmacen
                 ? 'Esta sucursal todavía no tiene asociado un almacén de Dynamics, y sin almacén no hay stock contra el cual contar. Un Administrador se lo asigna en Tiendas.'
-                : paso1Hecho && items && tomadoEn
-                  ? `${formatoMiles(items)} ítems traídos de Dynamics · ${formatoFechaHora(tomadoEn)}. Es una lectura del catálogo — no escribe ni ajusta nada en Dynamics.`
-                  : trayendoSnapshot
-                    ? 'Trayendo el catálogo por páginas — con la WiFi de la tienda puede tardar varios minutos, no te vayas de la pantalla.'
-                    : 'Trae de Dynamics los productos con stock en el almacén de esta sucursal: es la foto contra la que se compara todo el inventario. Es una lectura — no escribe ni ajusta nada en Dynamics.'
+                : trayendoSnapshot
+                  ? esReconteo
+                    ? 'Trayendo el stock de hoy de los productos que quedaron faltantes y sobrantes.'
+                    : 'Trayendo el catálogo por páginas — con la WiFi de la tienda puede tardar varios minutos, no te vayas de la pantalla.'
+                  : sincronizacion.texto
             }
           >
             {/* El motivo escrito y la salida, como en "Elige primero la
@@ -826,11 +897,20 @@ export default function ArmarHojasScreen(): JSX.Element {
 
             {/* Antes de traer: qué universo. Después, ya no se puede cambiar
                 sin rehacer el snapshot, así que desaparece. */}
-            {!paso1Hecho && !sinAlmacen ? (
+            {/* El universo (mensual o anual) se elige UNA vez, al abrir el
+                inventario. En un reconteo ya está fijado por la ronda 1 y
+                volver a preguntarlo invitaría a cambiarlo a mitad del ciclo. */}
+            {!paso1Hecho && !sinAlmacen && !esReconteo ? (
               <SelectorTipo valor={tipoElegido} onElegir={setTipoElegido} disabled={trayendoSnapshot} />
             ) : null}
 
-            {paso1Hecho ? <ResumenSnapshot items={items} desglose={desglose} criterios={criterios} tipo={tipoElegido} /> : null}
+            {/* El resumen del catálogo es de la ronda 1: habla de cuántos ítems
+                entraron y con qué filtros. En un reconteo no aplica -- ahí lo
+                que importa es de cuándo es el stock, y eso ya lo dice el texto
+                del paso. */}
+            {paso1Hecho && !esReconteo ? (
+              <ResumenSnapshot items={items} desglose={desglose} criterios={criterios} tipo={tipoElegido} />
+            ) : null}
 
             {trayendoSnapshot ? (
               <>
@@ -854,12 +934,23 @@ export default function ArmarHojasScreen(): JSX.Element {
             numero={2}
             icon={LayoutGrid}
             titulo="Crear hojas de conteo"
-            estado={!paso1Hecho ? 'bloqueado' : paso2Hecho ? 'hecho' : 'pendiente'}
+            /* `paso2Hecho` MANDA sobre el bloqueo, y el orden importa: al cerrar
+               una ronda el backend crea las hojas de la siguiente, así que en un
+               reconteo el paso 2 ya está hecho ANTES de sincronizar. Con el
+               bloqueo primero, la pantalla decía "Bloqueado - trae primero el
+               stock" sobre unas hojas que el encabezado ya contaba como
+               creadas. Medido en el emulador, ronda 4 del 8078. */
+            estado={paso2Hecho ? 'hecho' : !paso1Hecho ? 'bloqueado' : 'pendiente'}
+            /* MISMO ORDEN QUE EL ESTADO, y por lo mismo: con las hojas ya
+               creadas por el cierre de la ronda anterior, el texto de "trae
+               primero el stock" aparecía sobre un paso marcado Hecho. */
             texto={
-              !paso1Hecho
-                ? 'Trae primero el catálogo de Dynamics para poder crear las hojas.'
-                : paso2Hecho
-                  ? rotuloHojasCreadas(hojas, ronda, formatoMiles)
+              paso2Hecho
+                ? rotuloHojasCreadas(hojas, ronda, formatoMiles)
+                : !paso1Hecho
+                  ? esReconteo
+                    ? 'Trae primero el stock de hoy: sin eso, el reconteo se compararía contra el stock del primer conteo.'
+                    : 'Trae primero el catálogo de Dynamics para poder crear las hojas.'
                   : 'Elige cuántos ítems por hoja quieres y mira cuántas hojas salen antes de crearlas.'
             }
           >
@@ -931,13 +1022,21 @@ export default function ArmarHojasScreen(): JSX.Element {
             />
           ) : null}
 
-          {!paso3Hecho ? (
+          {/* EL BOTÓN VIVE MIENTRAS FALTE ALGO, y sincronizar es "algo".
+              Antes la condición era solo `!paso3Hecho`: en un reconteo, con las
+              hojas creadas y repartidas por el cierre de la ronda anterior, el
+              wizard se daba por terminado y el paso 1 quedaba PENDIENTE SIN
+              BOTÓN -- el coordinador veía qué faltaba y no tenía cómo hacerlo.
+              Encontrado en el emulador, ronda 4 del 8078. */}
+          {!paso1Hecho || !paso3Hecho ? (
             <Button
               label={
                 !paso1Hecho
                   ? sinAlmacen
                     ? 'Falta configurar el almacén'
-                    : `Traer catálogo ${tipoElegido === 'anual' ? 'anual' : 'mensual'} de Dynamics`
+                    : esReconteo
+                      ? `Traer el stock de hoy para la ronda ${ronda}`
+                      : `Traer catálogo ${tipoElegido === 'anual' ? 'anual' : 'mensual'} de Dynamics`
                   : !paso2Hecho
                     ? tamanoElegido
                       ? `Crear ${previa ? formatoMiles(previa.total) : ''} ${pluralizar(previa?.total ?? 0, 'hoja', 'hojas')} de ${tamanoElegido} ítems`
@@ -953,12 +1052,19 @@ export default function ArmarHojasScreen(): JSX.Element {
               // un botón gris sin motivo obliga a la persona a adivinar.
               // Con las hojas creadas, el botón solo reparte si la asistencia
               // se verificó y hay a quién: su propio label dice por qué no.
+              /* CADA CONDICIÓN CORRESPONDE A LA ACCIÓN QUE EL BOTÓN VA A
+                 EJECUTAR, y esa correspondencia hay que sostenerla: con las
+                 hojas ya creadas y la asistencia sin tomar, la falta de
+                 asistencia apagaba un botón que en ese momento iba a
+                 SINCRONIZAR, no a repartir. El coordinador veía el paso 1
+                 pendiente y el botón muerto, sin nada que dijera por qué.
+                 Medido en el emulador, ronda 4 del 8078. */
               disabled={
                 sinAlmacen ||
                 (paso1Hecho && !paso2Hecho && !tamanoElegido) ||
-                (paso2Hecho && !puedeRepartir)
+                (paso1Hecho && paso2Hecho && !puedeRepartir)
               }
-              onPress={!paso1Hecho ? traerSnapshot : !paso2Hecho ? crearHojasAhora : asignarAhora}
+              onPress={!paso1Hecho ? sincronizarRonda : !paso2Hecho ? crearHojasAhora : asignarAhora}
             />
           ) : (
             // Ya está todo hecho y esta pantalla ya no compite con ninguna

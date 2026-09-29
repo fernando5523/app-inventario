@@ -31,7 +31,13 @@ import {
   textoItemSalioDeRonda,
   textoRondaQueYaNoExiste,
 } from '../../lib/dominio/ajuste-final';
-import { diferenciaUnidades, veredicto } from '../../lib/dominio/auditoria';
+import {
+  diferenciaUnidades,
+  rotuloStockDeLaMedicion,
+  stockDeLaMedicion,
+  textoStockDeLaMedicion,
+  veredicto,
+} from '../../lib/dominio/auditoria';
 import { totalUnidades } from '../../lib/dominio/empaque';
 import { pluralizar } from '../../lib/dominio/plural';
 import { sucursalEnFoco } from '../../lib/dominio/sucursal-en-foco';
@@ -248,6 +254,17 @@ export default function AuditorCorregirScreen(): JSX.Element {
 
   const sePuedeCorregir = fase !== null && puedeCorregirLoContado(fase);
   const bloqueo = fase === null ? null : motivoSinCorregir(fase, 'auditor');
+  /**
+   * CONTRA QUÉ STOCK SE MIDIÓ EL ÍTEM QUE SE ESTÁ CORRIGIENDO. `null` = no hay
+   * nada abierto, o la matriz no trajo ese ítem.
+   *
+   * Sale del dominio y no de `item.stockErp`: desde que cada reconteo baja su
+   * propio stock, el de la ronda 1 es la vara de la PRIMERA pasada. El modal
+   * muestra este número como referencia para decidir el valor, así que tiene que
+   * ser el mismo contra el que se calcula la diferencia de la fila.
+   */
+  const itemEnEdicion = enEdicion?.item ?? null;
+  const medicionEnEdicion = itemEnEdicion === null ? null : stockDeLaMedicion(itemEnEdicion);
   const nombreSucursal = sucursales.find((s) => s.id === sucursalId)?.nombre ?? sesion.sucursal?.nombre;
 
   async function guardarCorreccion(fila: FilaCorregible, conteo: Conteo, motivo: string): Promise<void> {
@@ -428,7 +445,12 @@ export default function AuditorCorregirScreen(): JSX.Element {
         pedirMotivo
         tituloMotivo="Reemplaza el valor que cargó quien contó. Queda registrado con tu nombre y la hora."
         // La ÚNICA pantalla que pasa esta prop. Ver ModalConteo#stockErpDeReferencia.
-        stockErpDeReferencia={enEdicion?.item?.stockErp ?? null}
+        //
+        // EL STOCK DE LA MEDICIÓN, no `item.stockErp`: con stock por ronda, el de
+        // la ronda 1 es la vara de la primera pasada, y quien corrige un valor de
+        // la ronda 3 estaría comparándolo contra el stock del día 22 sin saberlo.
+        stockErpDeReferencia={medicionEnEdicion === null ? null : medicionEnEdicion.stockErp}
+        notaStockDeReferencia={medicionEnEdicion === null ? null : textoStockDeLaMedicion(medicionEnEdicion)}
         onGuardar={(conteo, motivo) => void guardarCorreccion(enEdicion!, conteo, motivo)}
         onCerrar={() => setEnEdicion(null)}
       />
@@ -449,6 +471,9 @@ export default function AuditorCorregirScreen(): JSX.Element {
 function FilaItem({ fila, onPress }: { fila: FilaCorregible; onPress: () => void }): JSX.Element {
   const diferencia = fila.item ? diferenciaUnidades(fila.item) : null;
   const cuadra = diferencia === 0;
+  // CONTRA QUÉ STOCK SE MIDIÓ. Tiene que ser el mismo que usó la diferencia del
+  // badge de al lado, o la fila mostraría una resta que no cierra consigo misma.
+  const medicion = fila.item === null ? null : stockDeLaMedicion(fila.item);
 
   return (
     <Pressable
@@ -473,9 +498,14 @@ function FilaItem({ fila, onPress }: { fila: FilaCorregible; onPress: () => void
           <Text style={styles.celdaValor}>{fila.contado === null ? '—' : formatoMiles(fila.contado)}</Text>
         </View>
         <View style={styles.celda}>
-          <Text style={styles.celdaEtiqueta}>Stock</Text>
+          {/* EL RÓTULO LLEVA LA RONDA del stock cuando no es la del conteo
+              ("Stock 1°"): es el mismo criterio con el que la app marca el
+              empaque que corrigió el auditor -- el número va tal cual y al lado
+              se dice de dónde salió. El porqué completo va en el modal, que es
+              donde se cambia el valor. */}
+          <Text style={styles.celdaEtiqueta}>{medicion === null ? 'Stock' : rotuloStockDeLaMedicion(medicion, 'Stock')}</Text>
           <Text style={[styles.celdaValor, styles.celdaValorInerte]}>
-            {fila.item?.stockErp === null || fila.item === null ? '—' : formatoMiles(fila.item.stockErp)}
+            {medicion === null || medicion.stockErp === null ? '—' : formatoMiles(medicion.stockErp)}
           </Text>
         </View>
         {/* La diferencia con la paleta de ESTADO: `ok` cuando cuadra, `proceso`

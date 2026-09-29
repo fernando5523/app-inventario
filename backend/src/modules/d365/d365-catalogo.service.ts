@@ -338,6 +338,147 @@ export function agruparStockPorItem(filas: D365StockAlmacen[]): Map<string, numb
 }
 
 /**
+ * ---------------------------------------------------------------------------
+ * EL STOCK DE UNA LISTA ACOTADA DE CODIGOS -- la descarga por RONDA
+ * ---------------------------------------------------------------------------
+ * Misma entidad y mismo almacen que el snapshot (`WarehousesOnHandV2`), pero
+ * al reves: el snapshot trae el almacen ENTERO (11.863 items) y filtra
+ * despues; esto pide POR CODIGO los pocos que arrastra un reconteo -- decenas
+ * o cientos. Ver `d365.stock-ronda.service.ts` para por que existe.
+ *
+ * NO es un segundo cliente de Dynamics: pagina con `d365EntityService`, el
+ * mismo que usa el snapshot, con su renovacion de token y su `$count`. Lo
+ * unico propio es el `$filter`, que es justamente lo que lo hace barato.
+ *
+ * POR QUE EN LOTES Y NO UN SOLO `$filter`. La lista viaja en la URL
+ * (`ItemNumber eq '101127' or ...`), y una URL no es infinita: IIS corta en
+ * ~16 KB y un proxy en el camino puede cortar antes, con un 404 o un 414 que
+ * no dice nada de codigos. Con ~25 caracteres por codigo, 80 codigos son
+ * ~2 KB de filtro -- margen de sobra y todavia una sola vuelta de red para el
+ * caso normal (una ronda de 130 items son 2 lotes).
+ */
+export const CODIGOS_POR_CONSULTA = 80;
+
+/**
+ * Parte una lista en lotes de `porLote`. Pura, para poder probar el borde sin
+ * red y sin base. Una lista vacia da CERO lotes, no un lote vacio: un lote
+ * vacio armaria un `$filter` con `()` o un INSERT sin filas, y los dos fallan.
+ */
+export function enLotes<T>(items: readonly T[], porLote: number): T[][] {
+  if (porLote <= 0) throw new Error('enLotes: el tamaño de lote tiene que ser positivo.');
+  const lotes: T[][] = [];
+  for (let i = 0; i < items.length; i += porLote) lotes.push(items.slice(i, i + porLote));
+  return lotes;
+}
+
+/** Los codigos que entran en UNA consulta a Dynamics. El limite es la URL -- ver arriba. */
+export function lotesDeCodigos(codigos: readonly string[], porLote = CODIGOS_POR_CONSULTA): string[][] {
+  return enLotes(codigos, porLote);
+}
+
+/**
+ * CUANTAS FILAS ENTRAN EN UN `createMany`, y el limite no es de Prisma: es de
+ * Postgres, que acepta 65.535 PARAMETROS por statement. Una fila de
+ * `stock_rondas` son 5 columnas, asi que el techo duro esta en ~13.100 filas --
+ * y el catalogo anual real tiene 11.863. O sea que un solo INSERT entra HOY y
+ * revienta el dia que el catalogo crezca un 10%, con un error de Postgres que no
+ * nombra ni la tabla ni el snapshot.
+ *
+ * 5.000 deja el statement en 25.000 parametros (tres INSERT para el anual
+ * completo) y saca el problema de la lista de cosas que pueden pasar. Los lotes
+ * van TODOS en la misma `$transaction`, asi que partirlos no parte la atomicidad.
+ */
+export const FILAS_POR_INSERT = 5000;
+
+/** Los lotes de un `createMany`. El limite es el de parametros de Postgres -- ver arriba. */
+export function lotesDeFilas<T>(filas: readonly T[], porLote = FILAS_POR_INSERT): T[][] {
+  return enLotes(filas, porLote);
+}
+
+/**
+ * Escapa un literal de texto de OData: la comilla simple se duplica.
+ *
+ * Los ItemNumber del tenant son numericos ("101127"), asi que hoy esto no
+ * cambia ninguna consulta. Va igual y no "por si acaso": el codigo entra por
+ * la URL de un endpoint HTTP -- sale de la base, pero la base se llena con lo
+ * que trae Dynamics -- y un apostrofo sin escapar no da un error, CIERRA el
+ * literal y el resto del codigo pasa a ser sintaxis del filtro. Eso no falla:
+ * devuelve otras filas, o todas, y el stock de un reconteo queda mal sin que
+ * nadie vea un error.
+ */
+export function comillarLiteralOData(valor: string): string {
+  return `'${valor.replace(/'/g, "''")}'`;
+}
+
+/** El `$filter` de un lote: el almacen (AND) y los codigos del lote (OR). */
+export function filtroStockDeCodigos(almacen: string, codigos: readonly string[]): string {
+  const porCodigo = codigos.map((c) => `ItemNumber eq ${comillarLiteralOData(c)}`).join(' or ');
+  // El parentesis alrededor del OR NO es cosmetico: sin el, `and` liga mas
+  // fuerte que `or` y el filtro pasaria a ser "(almacen y el primer codigo) o
+  // cualquiera de los demas EN CUALQUIER ALMACEN" -- traeria el stock de las
+  // otras tres tiendas y la auditoria compararia contra numeros de Luzuriaga
+  // sumados a los de Huaraz. Es el mismo error caro que el comentario de
+  // `almacenOverride` describe, por otra via.
+  return `InventoryWarehouseId eq ${comillarLiteralOData(almacen)} and (${porCodigo})`;
+}
+
+/**
+ * El stock de HOY en `almacen` para esos codigos, agrupado por item.
+ *
+ * UN CODIGO QUE NO VUELVE NO ESTA EN EL MAPA -- y eso NO es 0. Quien llama
+ * tiene que distinguir "el ERP no tiene registro de ese item en ese almacen"
+ * de "el ERP dice que hay cero", igual que hace el snapshot (ver
+ * `tieneExistencia` y `CatalogoItem.stockErp`). Devolver un Map y no un
+ * arreglo de pares es justamente lo que obliga a decidir el `?? null`.
+ *
+ * LOS ERRORES SE PROPAGAN TAL CUAL, con su status. El snapshot envuelve esta
+ * misma consulta en un `.catch(() => [])` porque alla el stock es UNA de siete
+ * entidades y un catalogo sin stock es mejor que ningun catalogo. Aca el stock
+ * es lo unico que se vino a buscar: tragarse el error dejaria una ronda entera
+ * con `stockErp: null`, o sea "no se puede auditar nada", como si Dynamics
+ * hubiera contestado eso. El 502 de `d365EntityService` es lo que la pantalla
+ * usa para distinguir "Azure rechazo las credenciales" de "Dynamics contesto
+ * mal" (ver `inventario-api.ts#comoErrorSnapshot`).
+ *
+ * `onLote` se llama con el acumulado y el total DE CODIGOS PEDIDOS -- no de
+ * filas traidas. Es el numero que el Coordinador reconoce: pidio stock para
+ * 130 items, la barra habla de 130. Ver `d365.progreso.ts`.
+ */
+export async function stockDeCodigos(
+  almacen: string,
+  codigos: readonly string[],
+  onLote?: (resueltos: number, total: number) => void,
+): Promise<Map<string, number>> {
+  if (codigos.length === 0) return new Map();
+
+  const lotes = lotesDeCodigos(codigos);
+  const filas: D365StockAlmacen[] = [];
+  let pedidos = 0;
+  for (const lote of lotes) {
+    filas.push(
+      ...(await d365EntityService.obtenerTodos<D365StockAlmacen>('WarehousesOnHandV2', {
+        $filter: filtroStockDeCodigos(almacen, lote),
+        $select: 'ItemNumber,InventoryWarehouseId,OnHandQuantity,AvailableOnHandQuantity,TotalAvailableQuantity',
+      })),
+    );
+    pedidos += lote.length;
+    // Igual que `obtenerTodos#avisar`: reportar el avance nunca puede voltear
+    // la descarga.
+    try {
+      onLote?.(pedidos, codigos.length);
+    } catch {
+      /* el progreso es accesorio */
+    }
+  }
+
+  // `agruparStockPorItem` y no un `new Map(filas.map(...))`: es la MISMA
+  // funcion que agrupa el stock del snapshot, con su suma de filas repetidas
+  // por dimension de inventario. Dos formas de agrupar el mismo dato darian
+  // dos stocks distintos para el mismo item segun por donde entre.
+  return agruparStockPorItem(filas);
+}
+
+/**
  * Normaliza un simbolo de unidad para poder cruzarlo entre entidades.
  *
  * NO es cosmetica: medido contra el tenant real, `ReleasedProductsV2` dice
@@ -1215,8 +1356,8 @@ async function guardarSnapshot(args: {
     // `createMany` no acepta escrituras anidadas (cada item ahora trae una
     // LISTA de empaques, no columnas planas) -- por eso es un create por
     // item envuelto en $transaction, y no un solo createMany masivo.
-    await prisma.$transaction(
-      catalogo.map((item) =>
+    await prisma.$transaction([
+      ...catalogo.map((item) =>
         prisma.catalogoItem.create({
           data: {
             inventarioId: inventario.id,
@@ -1266,7 +1407,70 @@ async function guardarSnapshot(args: {
           },
         }),
       ),
-    );
+      /**
+       * -----------------------------------------------------------------------
+       * Y LA RONDA 1 EN `StockRonda`, EN LA MISMA TRANSACCION.
+       * -----------------------------------------------------------------------
+       * Desde el cambio del 2026-09-29 cada ronda tiene su propia vara del ERP
+       * (ver `StockRonda` en schema.prisma y `d365.stock-ronda.service.ts`). La
+       * de la ronda 1 es ESTE snapshot, asi que se escribe ACA -- es el unico
+       * lugar donde existe. La migracion de datos relleno los inventarios que ya
+       * estaban, pero eso fue de una sola vez: sin esto, un inventario creado de
+       * ahora en adelante nace sin la fila de la ronda 1.
+       *
+       * QUE SE ROMPE SIN ESTO, y no es el calculo: la ronda 1 se resuelve
+       * SIEMPRE por `CatalogoItem.stockErp` (ver
+       * `auditoria.calculos.ts#stockDeLaMedicion`), asi que ningun numero sale
+       * mal. Lo que se rompe es `inventarios.service.ts#activo`, que devuelve
+       * `stockDeRondaItems: null` -- y con eso la pantalla del Coordinador marca
+       * el paso 1 como PENDIENTE con el catalogo ya traido. La app le pide
+       * sincronizar lo que acaba de sincronizar.
+       *
+       * EN LA MISMA TRANSACCION QUE `catalogo_items`, y eso es el punto: si se
+       * escribiera una y no la otra quedaria un inventario con catalogo y sin
+       * stock de la ronda 1, que es exactamente el estado que no deberia poder
+       * existir. Por eso entra en el array de `$transaction` y no en un `await`
+       * aparte despues.
+       *
+       * SON LA MISMA CIFRA QUE `CatalogoItem.stockErp` y esa es la que manda:
+       * esta fila es la copia legible por ronda, no una segunda fuente. Que la
+       * ronda 1 fuera el caso especial "esa esta en la otra tabla" garantiza que
+       * algun dia alguien lea una y no la otra.
+       *
+       * `item.stockErp` TAL CUAL, `null` incluido: un item que el ERP no trajo
+       * queda en `null` aca tambien. Un 0 afirmaria "el ERP esperaba cero" sobre
+       * un dato que nunca existio, y eso se liquida.
+       *
+       * `tomadoEn` es el del snapshot -- el mismo que `Inventario.snapshotTomadoEn`
+       * y el mismo para todas las filas --, no un `now()` por fila: la fecha
+       * tiene que decir cuando se bajo esa cifra de Dynamics.
+       *
+       * -----------------------------------------------------------------------
+       * CUANTO CUESTA -- MEDIDO el 2026-09-29 contra la base de desarrollo
+       * -----------------------------------------------------------------------
+       * Las dos escrituras del guardado, sobre items reales:
+       *
+       *        985 items   catalogo   250 ms   stock_rondas   21 ms   (+8,4%)
+       *      6.297 items   catalogo 1.525 ms   stock_rondas  135 ms   (+8,9%)
+       *     11.863 items   catalogo 2.962 ms   stock_rondas  223 ms   (+7,5%)
+       *
+       * O sea ~8% MAS DE LA FASE DE GUARDADO, y esa fase no es la que se siente:
+       * el snapshot lo domina Dynamics (~90 s por 951 items, medido el
+       * 2026-09-05; varios minutos con el catalogo anual). Sobre el total, los
+       * 223 ms del peor caso son menos del 0,2%. Es un `createMany` por cada
+       * 5.000 filas contra 11.863 `create` individuales: por eso cuesta un
+       * orden de magnitud menos que el catalogo aunque escriba las mismas filas.
+       */
+      ...lotesDeFilas(
+        catalogo.map((item) => ({
+          inventarioId: inventario.id,
+          numeroConteo: 1,
+          codigo: item.codigo,
+          stockErp: item.stockErp,
+          tomadoEn,
+        })),
+      ).map((lote) => prisma.stockRonda.createMany({ data: lote })),
+    ]);
   }
 
   /**

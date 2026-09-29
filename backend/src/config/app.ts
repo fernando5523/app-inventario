@@ -10,7 +10,7 @@ import { clasificacionRouter } from '../modules/clasificacion';
 import { configRouter } from '../modules/config';
 import { configDynamicsRouter } from '../modules/config-dynamics';
 import { hojasRouter } from '../modules/hojas';
-import { d365Router } from '../modules/d365';
+import { d365Router, stockRondaRouter } from '../modules/d365';
 import { historialRouter } from '../modules/historial';
 import { liquidacionRouter, reporteGerenciaRouter } from '../modules/liquidacion';
 import { navegacionRouter } from '../modules/navegacion';
@@ -145,6 +145,11 @@ export function crearApp(opciones: OpcionesApp = {}): Express {
   // otro tema, otro archivo, dos personas sin pisarse). Por eso su rol va por
   // ruta y no a nivel del router -- ver asistencia.routes.ts.
   app.use('/api/inventarios', asistenciaRouter);
+  // El stock del ERP de CADA reconteo. Tercer router en el mismo prefijo, por
+  // la misma razon que asistenciaRouter: es otro tema -- la conversacion con
+  // Dynamics -- y vive con el resto de la integracion, en modules/d365/. Su rol
+  // va por ruta, nunca a nivel de router: ver d365.stock-ronda.routes.ts.
+  app.use('/api/inventarios', stockRondaRouter);
   app.use('/api/d365', d365Router);
   app.use('/api/historial', historialRouter);
   app.use('/api/auditoria', auditoriaRouter);

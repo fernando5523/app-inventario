@@ -17,6 +17,12 @@ const prismaMock = vi.hoisted(() => ({
   hojaConteo: { aggregate: vi.fn(), findMany: vi.fn(), update: vi.fn(), delete: vi.fn(), count: vi.fn() },
   producto: { findFirst: vi.fn(), findMany: vi.fn(), delete: vi.fn(), count: vi.fn() },
   catalogoItem: { findFirst: vi.fn(), findMany: vi.fn() },
+  // ADITIVO (stock por ronda, 2026-09-29): `armarMatriz` y `universoDeLaRonda`
+  // leen `StockRonda` para saber contra que stock se midio cada ronda. VACIO por
+  // defecto = este inventario no tiene stock por ronda, que es como se comportan
+  // todos los que ya estaban en la base: todo cae al de la ronda 1 y estos tests
+  // siguen afirmando exactamente lo que afirmaban.
+  stockRonda: { findMany: vi.fn(async () => []) },
   inventario: { findUnique: vi.fn(), update: vi.fn() },
   colaborador: { count: vi.fn() },
   $transaction: vi.fn(),

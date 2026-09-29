@@ -6,8 +6,11 @@ import {
   diferenciaUnidades,
   diferenciaValor,
   rondasNecesarias,
+  rotuloStockDeLaMedicion,
+  stockDeLaMedicion,
   textoCuadro,
   textoPorQueCuadro,
+  textoStockDeLaMedicion,
   veredicto,
 } from '../../lib/dominio/auditoria';
 import { formatoPct } from './formato';
@@ -124,6 +127,15 @@ function TarjetaItemAuditoriaComponent({ item }: TarjetaItemAuditoriaProps): JSX
   // `formatoPct` y no `toFixed`: un decimal con coma, como el resto de la app
   // (los datos ICU de es-PE no están garantizados en Hermes, ver formato.ts).
   const porQue = textoPorQueCuadro(item.atribucion, diferenciaUnidades(item) ?? 0, (n) => formatoPct(n));
+  /**
+   * CONTRA QUÉ STOCK SE MIDIÓ ESTA FILA. La celda de arriba muestra ESTE número
+   * y no `item.stockErp`: desde que cada reconteo baja su propio stock, el de la
+   * ronda 1 es la vara de la PRIMERA pasada, y ponerlo al lado de un conteo de la
+   * ronda 3 dejaría la fila mostrando una resta que no da la diferencia que ella
+   * misma escribe dos líneas más abajo.
+   */
+  const medicion = stockDeLaMedicion(item);
+  const notaStock = textoStockDeLaMedicion(medicion);
 
   return (
     <View style={[styles.raiz, { borderColor: BORDE_VEREDICTO[v] }]}>
@@ -152,16 +164,35 @@ function TarjetaItemAuditoriaComponent({ item }: TarjetaItemAuditoriaProps): JSX
         ya no entran en una fila del teléfono.
       */}
       <View style={styles.grilla}>
-        <Celda etiqueta="ERP" valor={item.stockErp} coincideConErp />
+        {/*
+          EL RÓTULO LLEVA LA RONDA DEL STOCK cuando no es la del conteo ("ERP 1°"
+          al lado de una celda que dice "2°"). Es el mismo criterio con el que la
+          app marca el empaque que corrigió el auditor: el número se muestra tal
+          cual y al lado se dice de dónde salió, en vez de pasarlo como si fuera
+          el esperado. Así la resta se explica sola en una lista de cientos de
+          filas, y el porqué completo va en la nota de abajo.
+        */}
+        <Celda etiqueta={rotuloStockDeLaMedicion(medicion, 'ERP')} valor={medicion.stockErp} coincideConErp />
         {item.conteos.map((valor, indice) => (
           <Celda
             key={indice}
             etiqueta={etiquetaRonda(indice)}
             valor={valor ?? null}
-            coincideConErp={valor === item.stockErp}
+            // Contra el stock DE LA MEDICIÓN: pintar de verde un conteo que
+            // coincide con el stock del día 22 mentiría sobre un ítem que se
+            // midió contra el de hoy.
+            coincideConErp={valor === medicion.stockErp}
           />
         ))}
       </View>
+
+      {/*
+        LA CAÍDA A LA RONDA 1, DICHA CON PALABRAS. No es un detalle de
+        presentación: de esta resta sale un descuento a nómina, y "faltan 3"
+        contra el stock del día no es la misma afirmación que "faltan 3" contra
+        el del día 22. Quien lo discuta tiene derecho a saber cuál le tocó.
+      */}
+      {notaStock !== null ? <Text style={styles.notaStock}>{notaStock}</Text> : null}
 
       <Text style={[styles.nota, { color: COLOR_NOTA[nota.clase] }]}>{nota.texto}</Text>
 
@@ -216,6 +247,12 @@ const styles = StyleSheet.create({
   celdaEtiqueta: { fontSize: 9.5, letterSpacing: 0.4, textTransform: 'uppercase', color: colors.grisClaro, fontFamily: fonts.bold },
   celdaValor: { fontSize: fontSize.sm + 1, color: colors.tinta, fontFamily: fonts.semibold },
   nota: { fontSize: 12.5, fontFamily: fonts.semibold, lineHeight: 17 },
+  /**
+   * La nota del stock va en gris y más chica que `nota`: dice de dónde salió el
+   * número, no si el ítem cuadra. Con el mismo peso le robaría la lectura al
+   * veredicto, que es lo que el Auditor viene a buscar.
+   */
+  notaStock: { marginTop: -4, fontSize: 11.5, color: colors.gris, fontFamily: fonts.regular, lineHeight: 16 },
   /**
    * El cuadro. Fondo NEUTRO por default y de ATENCIÓN (`proceso`) solo cuando
    * va al personal: de los tres destinos, ese es el único que le saca plata a

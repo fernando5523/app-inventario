@@ -31,7 +31,15 @@ import { interpretarCantidad } from '../../components/ui/cantidad-numerica';
 import { cargarSeguro } from '../../lib/adaptadores/_http';
 import { repositorioAjuste, repositorioAuditoria, repositorioInventario, repositorioSesion } from '../../lib/contenedor';
 import { errorDeMotivo, faseDeCierre, puedeAjustar } from '../../lib/dominio/ajuste-final';
-import { conteoFinal, diferenciaUnidades, veredicto } from '../../lib/dominio/auditoria';
+import {
+  conteoFinal,
+  conteosConAjuste,
+  diferenciaUnidades,
+  rotuloStockDeLaMedicion,
+  stockDeLaMedicion,
+  textoStockDeLaMedicion,
+  veredicto,
+} from '../../lib/dominio/auditoria';
 import { pluralizar } from '../../lib/dominio/plural';
 import { sucursalEnFoco } from '../../lib/dominio/sucursal-en-foco';
 import type { ItemAuditoria, Sucursal } from '../../lib/dominio/tipos';
@@ -406,11 +414,21 @@ function ModalAjusteItem({ item, guardando, onGuardar, onCerrar }: ModalAjusteIt
   const faltaMotivo = errorDeMotivo(motivo);
   const puedeGuardar = cantidad.ok && faltaMotivo === null && !guardando;
 
+  // CONTRA QUÉ STOCK SE ESTÁ COMPARANDO ESTE ÍTEM. No `item.stockErp`: con stock
+  // por ronda, el de la ronda 1 es la vara de la primera pasada.
+  const medicion = stockDeLaMedicion(item);
+  const notaStock = textoStockDeLaMedicion(medicion);
+
   // La diferencia que DEJARÍA este valor. Sale de `diferenciaUnidades`, la
   // misma función del dominio que pinta la tarjeta -- no de una resta a mano
   // acá, que sería la segunda copia de la fórmula.
+  //
+  // EL AJUSTE VA EN LA RONDA QUE LE CORRESPONDE (`conteosConAjuste`) y no en un
+  // `conteos: [valor]`: eso último es un conteo de la RONDA 1, y contra un ítem
+  // resuelto en la ronda 3 lo comparaba con el stock del día 22 -- el modal
+  // prometía "con este valor el ítem cuadra" y al guardar seguía en falta.
   const previsualizacion = cantidad.ok
-    ? diferenciaUnidades({ stockErp: item.stockErp, conteos: [cantidad.valor] })
+    ? diferenciaUnidades({ ...item, conteos: conteosConAjuste(item.conteos, cantidad.valor) })
     : null;
 
   return (
@@ -450,10 +468,15 @@ function ModalAjusteItem({ item, guardando, onGuardar, onCerrar }: ModalAjusteIt
 
             <View style={styles.modalComparacion}>
               <View style={styles.modalCelda}>
-                <Text style={styles.modalCeldaEtiqueta}>Stock ERP</Text>
+                {/* EL RÓTULO LLEVA LA RONDA del stock cuando no es la del conteo
+                    ("Stock ERP 1°"): el Auditor está por fijar un valor contra
+                    este número, y tiene que saber de qué día es. */}
+                <Text style={styles.modalCeldaEtiqueta}>{rotuloStockDeLaMedicion(medicion, 'Stock ERP')}</Text>
                 {/* "—" y no 0: sin stock del ERP no hay contra qué comparar,
                     y un cero afirmaría que el ERP dice que no hay ninguno. */}
-                <Text style={styles.modalCeldaValor}>{item.stockErp === null ? '—' : formatoMiles(item.stockErp)}</Text>
+                <Text style={styles.modalCeldaValor}>
+                  {medicion.stockErp === null ? '—' : formatoMiles(medicion.stockErp)}
+                </Text>
               </View>
               <View style={styles.modalCelda}>
                 <Text style={styles.modalCeldaEtiqueta}>Último conteo</Text>
@@ -462,6 +485,10 @@ function ModalAjusteItem({ item, guardando, onGuardar, onCerrar }: ModalAjusteIt
                 </Text>
               </View>
             </View>
+
+            {/* LA CAÍDA A LA RONDA 1, DICHA CON PALABRAS: de esta resta sale un
+                descuento a nómina, y el Auditor está por firmarla. */}
+            {notaStock !== null ? <Text style={styles.modalNotaStock}>{notaStock}</Text> : null}
 
             <View style={styles.modalCampo}>
               <Text style={styles.modalEtiqueta}>Valor definitivo (unidades)</Text>
@@ -490,7 +517,7 @@ function ModalAjusteItem({ item, guardando, onGuardar, onCerrar }: ModalAjusteIt
                     : `Con este valor queda ${previsualizacion < 0 ? 'un faltante' : 'un sobrante'} de ${formatoMiles(Math.abs(previsualizacion))} ${pluralizar(Math.abs(previsualizacion), 'unidad', 'unidades')}.`}
                 </Text>
               </View>
-            ) : item.stockErp === null ? (
+            ) : medicion.stockErp === null ? (
               <View style={styles.modalResultado}>
                 <Text style={styles.modalResultadoTexto}>
                   Este ítem no tiene stock en el ERP: el valor se puede fijar igual, pero no hay contra qué compararlo.
@@ -612,6 +639,12 @@ const styles = StyleSheet.create({
     fontFamily: fonts.bold,
   },
   modalCeldaValor: { fontSize: 16, color: colors.tinta, fontFamily: fonts.bold, fontVariant: ['tabular-nums'] },
+  /**
+   * La nota del stock: gris y en peso normal. Dice de dónde salió el número, no
+   * si el ítem cuadra -- con el peso del resultado le robaría la lectura a la
+   * frase que el Auditor viene a leer.
+   */
+  modalNotaStock: { marginTop: 6, fontSize: 12, color: colors.gris, fontFamily: fonts.regular, lineHeight: 17 },
 
   modalCampo: { marginTop: 14 },
   modalEtiqueta: { marginBottom: 6, fontSize: 12, color: colors.gris, fontFamily: fonts.semibold },

@@ -90,6 +90,48 @@ export interface InventarioActivoDto {
    */
   rondaActiva: number | null;
   /**
+   * CUANDO SE BAJO EL STOCK PROPIO DE `rondaActiva`. `null` = esta ronda
+   * todavia no lo tiene.
+   *
+   * ES EL DATO QUE LE FALTABA AL PASO 1 DEL WIZARD. La pantalla del Coordinador
+   * decidia "Catalogo de Dynamics hecho" con `inventarioId !== null`, que es
+   * correcto para la ronda 1 y deja el paso en "hecho" para siempre. Desde que
+   * CADA RECONTEO BAJA SU PROPIO STOCK (decision del cliente 2026-09-29, ver
+   * `StockRonda` en schema.prisma), en un reconteo el paso 1 tiene que volver a
+   * estar PENDIENTE hasta que se descargue el stock de esa ronda -- y sin este
+   * campo la pantalla no tiene con que saberlo.
+   *
+   * LA RONDA 1 NO ES UN CASO ESPECIAL: se devuelve igual, y va a coincidir con
+   * `tomadoEn`/`items` del snapshot. Que coincida ES la señal de que la ronda 1
+   * se trata como cualquier otra; la pantalla decide sola que muestra.
+   *
+   * `null` con `rondaActiva: null` (todavia no hay hojas), por lo mismo: no hay
+   * ronda de la cual preguntar.
+   */
+  stockDeRondaTomadoEn: string | null;
+  /**
+   * CUANTOS ITEMS TRAJO esa descarga. `null` con el mismo criterio que el campo
+   * de arriba: esta ronda no bajo stock.
+   *
+   * `null` NO ES 0, y acá la distincion es la que evita trabar la pantalla: una
+   * ronda que bajo stock de 0 items tendria que devolver `0` con fecha, no
+   * `null`, o la pantalla quedaria pidiendo una descarga que ya se hizo.
+   *
+   * LO QUE LA TABLA PUEDE AFIRMAR HOY: `0` sale de que no haya ni una fila, y
+   * eso es indistinguible de "no se descargo". Se devuelve `null` en ese caso, y
+   * es correcto porque UNA RONDA DE 0 ITEMS NO SE PUEDE ABRIR -- ni el ciclo ni
+   * el Auditor abren una pasada sin nada que recontar (ver
+   * `ciclo-conteos.ts#siHayAlgoQueRecontar`: "contar de nuevo un universo vacio
+   * es mandar gente a la tienda a mirar una lista sin renglones"). O sea que
+   * toda ronda que existe tiene al menos un item, y "cero filas" solo puede
+   * significar que su stock no se bajo.
+   *
+   * Si alguna vez una ronda pudiera existir vacia, esto necesitaria una marca
+   * propia de "esta ronda se descargo" -- una fila que cuente 0 no se puede
+   * escribir en `stock_rondas`, que es una fila POR ITEM.
+   */
+  stockDeRondaItems: number | null;
+  /**
    * SI TODAVIA SE PUEDE CONTAR EN `rondaActiva`.
    *
    * `false` con `rondaActiva: 3` = la ronda 3 termino y el inventario espera
@@ -213,6 +255,39 @@ async function admiteConteo(inventarioId: number, ronda: number | null): Promise
   return sinTerminar > 0;
 }
 
+/** Lo que `activo()` devuelve de la descarga de stock de la ronda activa. */
+interface DescargaDeStockDeRonda {
+  tomadoEn: string | null;
+  items: number | null;
+}
+
+/**
+ * Si `ronda` ya tiene su stock propio del ERP, y de cuando es.
+ *
+ * UNA SOLA CONSULTA agregada y no un `findMany`: alcanza con cuantas filas hay y
+ * cuando se escribieron, y este endpoint lo consulta la pantalla todo el tiempo
+ * -- traer 8.000 filas para contar seria pagarlas en cada refresco.
+ *
+ * `_max` y no `_min` sobre `tomadoEn`: si una ronda se vuelve a descargar (la
+ * clave unica hace que la segunda descarga ACTUALICE las filas), lo que la
+ * pantalla tiene que mostrar es la ultima vez que se bajo, no la primera.
+ *
+ * Sin filas devuelve los dos en `null` -- ver el comentario de
+ * `stockDeRondaItems` para por que eso no se confunde con "bajo 0 items".
+ */
+async function descargaDeStockDeRonda(inventarioId: number, ronda: number | null): Promise<DescargaDeStockDeRonda> {
+  if (ronda === null) return { tomadoEn: null, items: null };
+
+  const { _count, _max } = await prisma.stockRonda.aggregate({
+    where: { inventarioId, numeroConteo: ronda },
+    _count: { _all: true },
+    _max: { tomadoEn: true },
+  });
+
+  if (_count._all === 0) return { tomadoEn: null, items: null };
+  return { tomadoEn: _max.tomadoEn?.toISOString() ?? null, items: _count._all };
+}
+
 export async function activo(sucursalId: number): Promise<InventarioActivoDto | null> {
   const inventario = await prisma.inventario.findFirst({
     where: { sucursalId, estado: { in: ['en_curso', 'ajuste_auditor'] } },
@@ -235,6 +310,10 @@ export async function activo(sucursalId: number): Promise<InventarioActivoDto | 
         )._max.numeroConteo
       : null;
 
+  // DESPUES de `rondaActiva` y no en el `Promise.all` de arriba: la consulta
+  // filtra por esa ronda, asi que no se puede lanzar antes de saber cual es.
+  const stockDeRonda = await descargaDeStockDeRonda(inventario.id, rondaActiva);
+
   return {
     inventarioId: inventario.id,
     admiteConteo: await admiteConteo(inventario.id, rondaActiva),
@@ -251,6 +330,8 @@ export async function activo(sucursalId: number): Promise<InventarioActivoDto | 
     tamanoHoja: inventario._count.hojas > 0 ? inventario.tamanoHoja : null,
     totalHojas: inventario._count.hojas,
     rondaActiva,
+    stockDeRondaTomadoEn: stockDeRonda.tomadoEn,
+    stockDeRondaItems: stockDeRonda.items,
   };
 }
 

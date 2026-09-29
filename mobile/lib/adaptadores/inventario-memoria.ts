@@ -35,6 +35,18 @@ function esperar(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+/**
+ * EL STOCK QUE BAJÓ CADA RONDA, en memoria. Clave: inventario + ronda.
+ *
+ * La ronda 1 NO vive acá: su stock es el del snapshot y se responde desde el
+ * inventario. Guardarlo dos veces sería tener dos verdades sobre la misma
+ * cifra -- el mismo criterio que del lado del servidor, donde la ronda 1
+ * también es la del catálogo.
+ */
+const stockPorRonda = new Map<string, { items: number; tomadoEn: string }>();
+
+const claveDeRonda = (inventarioId: number, ronda: number): string => `${inventarioId}:${ronda}`;
+
 export const inventarioMemoria: RepositorioInventario = {
   async traerSnapshot(sucursalId, opciones) {
     await simularLatencia();
@@ -95,6 +107,59 @@ export const inventarioMemoria: RepositorioInventario = {
     const tomadoEn = new Date().toISOString();
     const inventario = registrarInventario(sucursalId, TOTAL_ITEMS_SNAPSHOT, tomadoEn);
     return { inventarioId: inventario.id, items: TOTAL_ITEMS_SNAPSHOT, tomadoEn };
+  },
+
+  /**
+   * EL PASO 1 DE UN RECONTEO en el mock: marca la ronda como sincronizada.
+   *
+   * NO INVENTA STOCK NUEVO por producto: el mock no tiene un ERP detrás que se
+   * mueva entre un día y otro, y fabricar diferencias distintas en cada
+   * descarga haría que una demo mostrara faltantes que nadie contó. Lo que sí
+   * reproduce -- y es para lo que la pantalla lo necesita -- es que la ronda
+   * pasa de "sin stock del día" a "sincronizada", con su instante.
+   *
+   * Cuántos ítems: los que la ronda arrastra, o sea los productos de sus
+   * hojas. Si todavía no hay hojas (que es el caso normal, porque esto corre
+   * ANTES del paso 2), son los que no cuadraron en la ronda anterior.
+   */
+  async traerStockDeRonda(inventarioId, ronda, opciones) {
+    await simularLatencia();
+    opciones?.onAvance?.({ traidos: 0, total: null });
+
+    if (ronda <= 1) {
+      throw new ErrorSnapshot(
+        'desconocido',
+        'El stock de la ronda 1 lo trae el catálogo completo, no esta descarga.',
+      );
+    }
+
+    const inventario = await obtenerInventario(inventarioId);
+    if (!inventario) {
+      throw new ErrorSnapshot('desconocido', 'No se encontró el inventario.');
+    }
+
+    /**
+     * Cuántos ítems declara la descarga.
+     *
+     * El mock guarda las hojas de UNA ronda por vez (`crearHojas` reemplaza
+     * las previas, ver el puerto), así que cuando esto corre -- ANTES del paso
+     * 2 -- las hojas que hay son las de la ronda anterior: el universo del que
+     * sale el arrastre.
+     *
+     * NO ES EL NÚMERO EXACTO y no se lo presenta como tal: el mock no
+     * recalcula quién cuadró, así que cuenta el universo de la ronda anterior
+     * y no el subconjunto que no cuadró. Para lo que la pantalla necesita
+     * -- que la ronda pase de "sin stock del día" a "sincronizada" -- alcanza;
+     * el número fino lo da el servidor. Si algún día el mock tiene que
+     * sostener una demo con cifras, el camino es cruzar la matriz en memoria,
+     * no inventar acá una aproximación que parezca exacta.
+     */
+    const items = inventario.hojas.reduce((total, hoja) => total + hoja.productos.length, 0);
+    const tomadoEn = new Date().toISOString();
+    stockPorRonda.set(claveDeRonda(inventarioId, ronda), { items, tomadoEn });
+
+    opciones?.onAvance?.({ traidos: items, total: items });
+    return { items, tomadoEn };
   },
 
   async crearHojas(inventarioId, tamano) {
@@ -211,6 +276,8 @@ export const inventarioMemoria: RepositorioInventario = {
     // historial, en el caso del Ciclo).
     if (estado !== 'en_curso' && estado !== 'ajuste_auditor') return null;
 
+    const ronda = rondaActivaEnMemoria(inventario.id, inventario.hojas.length > 0);
+
     return {
       inventarioId: inventario.id,
       estado,
@@ -218,8 +285,18 @@ export const inventarioMemoria: RepositorioInventario = {
       tomadoEn: inventario.snapshotTomadoEn,
       tamanoHoja: inventario.tamanoHoja,
       totalHojas: inventario.hojas.length,
-      rondaActiva: rondaActivaEnMemoria(inventario.id, inventario.hojas.length > 0),
+      rondaActiva: ronda,
       ultimaRondaCerrada: ultimaRondaCerradaEnMemoria(inventario.id),
+      /**
+       * EL STOCK DE LA RONDA ACTIVA. El mock lo lleva en `stockPorRonda`, que
+       * `traerStockDeRonda` va llenando.
+       *
+       * La ronda 1 se responde con el snapshot: es la misma cifra, y tratarla
+       * como un caso especial ("todavía no sincronizó") dejaría el armado del
+       * primer conteo pidiendo una descarga que ya ocurrió.
+       */
+      stockDeRondaTomadoEn: ronda === null ? null : ronda === 1 ? inventario.snapshotTomadoEn : (stockPorRonda.get(claveDeRonda(inventario.id, ronda))?.tomadoEn ?? null),
+      stockDeRondaItems: ronda === null ? null : ronda === 1 ? inventario.snapshotItems : (stockPorRonda.get(claveDeRonda(inventario.id, ronda))?.items ?? null),
     };
   },
 };

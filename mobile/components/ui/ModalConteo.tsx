@@ -59,6 +59,22 @@ export interface ModalConteoProps {
    */
   stockErpDeReferencia?: number | null;
   /**
+   * DE QUÉ RONDA SALIÓ ESE STOCK, cuando no es la del conteo que manda. `null` o
+   * ausente = no hay nada que aclarar.
+   *
+   * Existe porque desde 2026-09-29 cada reconteo baja su propio stock del ERP
+   * (`dominio/auditoria.ts#stockDeLaMedicion`): el número de arriba puede ser el
+   * del día 22 sobre un ítem que se recontó tres días después. "Faltan 3" contra
+   * una vara y contra la otra no son la misma afirmación, y de acá sale un
+   * descuento a nómina -- quien corrige el valor tiene derecho a saber cuál está
+   * mirando.
+   *
+   * El TEXTO viene armado por el dominio y no se compone acá: es la misma frase
+   * que muestran la matriz y el ajuste final, y tres redacciones de la misma
+   * aclaración es como una de las tres termina diciendo otra cosa.
+   */
+  notaStockDeReferencia?: string | null;
+  /**
    * `motivo` llega vacío cuando `pedirMotivo` es false. Quien no lo pide
    * puede seguir recibiendo un handler de un solo parámetro -- por eso
    * `contar.tsx` no cambió ni una línea.
@@ -102,6 +118,7 @@ export function ModalConteo({
   pedirMotivo = false,
   tituloMotivo,
   stockErpDeReferencia,
+  notaStockDeReferencia,
   onGuardar,
   onCerrar,
 }: ModalConteoProps): JSX.Element | null {
@@ -286,6 +303,11 @@ export function ModalConteo({
                     {stockErpDeReferencia === null ? '—' : stockErpDeReferencia}
                   </Text>
                 </View>
+                {/* La ronda del stock ANTES de la regla: primero de qué número
+                    estamos hablando, después que no se toca. */}
+                {notaStockDeReferencia ? (
+                  <Text style={styles.referenciaNota}>{notaStockDeReferencia}</Text>
+                ) : null}
                 <Text style={styles.referenciaNota}>{STOCK_NO_SE_CORRIGE}</Text>
               </View>
             ) : null}

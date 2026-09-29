@@ -19,6 +19,11 @@ vi.mock('../../config/database', () => ({
     sucursal: { findUnique: vi.fn() },
     inventario: { findFirst: vi.fn(), create: vi.fn() },
     catalogoItem: { create: vi.fn() },
+    // La ronda 1 se escribe en `stock_rondas` en LA MISMA transaccion que el
+    // catalogo (ver guardarSnapshot): sin esto, un inventario nuevo nace sin la
+    // fila de la ronda 1 y la pantalla del Coordinador marca el paso 1 como
+    // pendiente teniendo el catalogo ya traido.
+    stockRonda: { createMany: vi.fn() },
     // El umbral de media unidad de paquete se COPIA de la config al
     // inventario al tomar el snapshot (ver crearSnapshot). Por defecto sin
     // fila: el snapshot tiene que seguir funcionando y quedarse con el
@@ -48,6 +53,96 @@ beforeEach(() => {
   vi.mocked(prisma.sucursal.findUnique).mockResolvedValue(SUCURSAL as never);
   vi.mocked(prisma.inventario.create).mockResolvedValue({ id: 99 } as never);
   vi.mocked(prisma.catalogoItem.create).mockResolvedValue({} as never);
+  vi.mocked(prisma.stockRonda.createMany).mockResolvedValue({ count: 0 } as never);
+});
+
+describe('la ronda 1 se escribe en stock_rondas, junto con el catalogo', () => {
+  /** Sin inventario en curso ni del período: el snapshot se crea de verdad. */
+  beforeEach(() => {
+    vi.mocked(prisma.inventario.findFirst).mockResolvedValue(null as never);
+  });
+
+  it('una fila por item del catalogo, con numeroConteo 1', async () => {
+    await crearSnapshot(1, 'ejemplo');
+
+    const filas = vi.mocked(prisma.stockRonda.createMany).mock.calls.flatMap(
+      (c) => (c[0]!.data as Array<{ inventarioId: number; numeroConteo: number; codigo: string }>),
+    );
+    const items = vi.mocked(prisma.catalogoItem.create).mock.calls.length;
+    expect(filas).toHaveLength(items);
+    expect(filas.every((f) => f.numeroConteo === 1)).toBe(true);
+    // El inventario recien creado (mock de `create`, id=99), no otro.
+    expect(filas.every((f) => f.inventarioId === 99)).toBe(true);
+  });
+
+  it('EN LA MISMA TRANSACCION que el catalogo, no en un await aparte', async () => {
+    await crearSnapshot(1, 'ejemplo');
+
+    // Una sola `$transaction`, y las dos escrituras adentro. Si se partieran,
+    // quedaria un inventario con catalogo y sin stock de la ronda 1 -- el estado
+    // que no deberia poder existir.
+    expect(prisma.$transaction).toHaveBeenCalledTimes(1);
+    // La forma de ARRAY de `$transaction`: una lista de operaciones que Postgres
+    // ejecuta en un solo BEGIN/COMMIT. Si alguna de las dos escrituras se hiciera
+    // con un `await` suelto, no estaria en esta lista.
+    const operaciones: unknown = vi.mocked(prisma.$transaction).mock.calls[0]![0];
+    expect(Array.isArray(operaciones)).toBe(true);
+    expect(prisma.stockRonda.createMany).toHaveBeenCalled();
+    expect(prisma.catalogoItem.create).toHaveBeenCalled();
+  });
+
+  it('el stock y el `tomadoEn` son los del snapshot, no un now() por fila', async () => {
+    const resultado = await crearSnapshot(1, 'ejemplo');
+
+    const filas = vi.mocked(prisma.stockRonda.createMany).mock.calls.flatMap(
+      (c) => (c[0]!.data as Array<{ codigo: string; stockErp: number | null; tomadoEn: Date }>),
+    );
+    // UN solo instante, y es el que devuelve el DTO (= Inventario.snapshotTomadoEn).
+    expect(new Set(filas.map((f) => f.tomadoEn.getTime())).size).toBe(1);
+    expect(filas[0]!.tomadoEn.toISOString()).toBe(resultado.tomadoEn);
+
+    // Y la cifra es EXACTAMENTE la que va a `catalogo_items.stock_erp`: son la
+    // misma cifra y de las dos manda esa (ver stockDeLaMedicion).
+    const delCatalogo = new Map(
+      vi.mocked(prisma.catalogoItem.create).mock.calls.map((c) => {
+        const d = c[0]!.data as { codigo: string; stockErp: number | null };
+        return [d.codigo, d.stockErp] as const;
+      }),
+    );
+    for (const fila of filas) expect(fila.stockErp).toBe(delCatalogo.get(fila.codigo));
+  });
+
+  it('un item que el ERP no devolvio va con null, NUNCA con 0', async () => {
+    // Se fuerza el caso sobre el catalogo de ejemplo: un `stockErp` en null en
+    // `catalogo_items` tiene que llegar en null a `stock_rondas`. Un 0 afirmaria
+    // "el ERP esperaba cero" sobre un dato que nunca existio, y eso se liquida.
+    await crearSnapshot(1, 'ejemplo');
+
+    const filas = vi.mocked(prisma.stockRonda.createMany).mock.calls.flatMap(
+      (c) => (c[0]!.data as Array<{ codigo: string; stockErp: number | null }>),
+    );
+    const delCatalogo = vi.mocked(prisma.catalogoItem.create).mock.calls.map(
+      (c) => (c[0]!.data as { codigo: string; stockErp: number | null }),
+    );
+    for (const item of delCatalogo.filter((i) => i.stockErp === null)) {
+      expect(filas.find((f) => f.codigo === item.codigo)!.stockErp).toBeNull();
+    }
+    // Y ninguna fila inventa un 0 donde el catalogo no lo tiene.
+    const ceros = filas.filter((f) => f.stockErp === 0).map((f) => f.codigo);
+    for (const codigo of ceros) {
+      expect(delCatalogo.find((i) => i.codigo === codigo)!.stockErp).toBe(0);
+    }
+  });
+
+  it('ningun createMany sale con `data` vacia: Postgres rechaza un INSERT sin filas', async () => {
+    await crearSnapshot(1, 'ejemplo');
+
+    // `enLotes` de una lista vacia da CERO lotes, no un lote vacio -- por eso el
+    // catalogo vacio no llega nunca a un `createMany({ data: [] })`.
+    for (const llamada of vi.mocked(prisma.stockRonda.createMany).mock.calls) {
+      expect((llamada[0]!.data as unknown[]).length).toBeGreaterThan(0);
+    }
+  });
 });
 
 describe('crearSnapshot: idempotencia sobre el inventario EN CURSO, no sobre "abierto"', () => {

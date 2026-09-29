@@ -62,7 +62,20 @@ export interface ItemAuditoria {
   hoja: string;
   /** null = el snapshot no trajo precio: la diferencia no se puede valorizar. */
   precioVenta: number | null;
-  /** null = el snapshot no trajo stock: este item NO se puede auditar. */
+  /**
+   * null = el snapshot no trajo stock: este item NO se puede auditar.
+   *
+   * ES EL DE LA RONDA 1 Y SIGUE SIENDO EL QUE MANDA PARA ESA RONDA. Desde que
+   * cada reconteo baja su propio stock (ver `stockPorRonda`), este campo dejo
+   * de ser LA vara del inventario y paso a ser la de la primera pasada. No se
+   * saca ni se renombra: sale de `CatalogoItem.stockErp`, que es lo que leen el
+   * sello del lacrado y los inventarios historicos.
+   *
+   * ES LA MISMA CIFRA que `stockPorRonda[0]`, y de las dos MANDA ESTA -- ver
+   * `stockDeLaMedicion`. La ronda 1 se escribe en las dos partes a proposito:
+   * que fuera el caso especial "esa esta en la otra tabla" garantiza que algun
+   * dia alguien lea una y no la otra.
+   */
   stockErp: number | null;
   /**
    * Lo contado en CADA ronda, en orden: indice 0 = ronda 1, indice 1 = ronda
@@ -80,6 +93,42 @@ export interface ItemAuditoria {
    * 2 elementos y uno con ajuste del Auditor puede traer 6.
    */
   conteos: ReadonlyArray<number | null>;
+  /**
+   * EL STOCK DEL ERP CONTRA EL QUE SE MIDIO **CADA** RONDA. Indice 0 = ronda 1.
+   *
+   * MISMA FORMA Y MISMAS REGLAS DE `null` QUE `conteos` (leer su comentario):
+   * la POSICION es la ronda, y un `null` en una posicion NO ES 0 -- significa
+   * que esa ronda no trajo stock para este item, que es distinto de "el ERP
+   * dice que no deberia haber ninguno". La lista tampoco tiene largo fijo ni
+   * tiene por que coincidir con el largo de `conteos`: un inventario viejo trae
+   * `[]`.
+   *
+   * ===========================================================================
+   * DECISION DEL CLIENTE (Gilmer, 2026-09-29): CADA RECONTEO TRAE STOCK NUEVO
+   * ===========================================================================
+   * Antes habia UNA vara para las tres rondas (`stockErp`, congelada al abrir el
+   * mes). El primer conteo se hace el dia 22 y los reconteos los dias
+   * siguientes, asi que entre una ronda y la otra el ERP se movio: ventas,
+   * transferencias y los ajustes que el cliente parcha a mano con su hoja
+   * NEGATIVO. Ahora cada reconteo baja el stock nuevo, y solo de los faltantes
+   * y sobrantes que arrastra esa ronda.
+   *
+   * LO QUE ESTO LE CAMBIA AL SIGNIFICADO DEL RECONTEO, y es lo que hay que
+   * entender antes de tocar cualquier cuenta de este archivo: CON STOCK NUEVO
+   * POR RONDA, EL RECONTEO YA NO VERIFICA AL CONTEO ANTERIOR -- pasa a ser una
+   * medicion independiente. Un item con "falta 1" el lunes puede salir cuadrado
+   * el martes SIN QUE NADIE TOQUE EL ESTANTE, solo porque se vendio una unidad.
+   * No es una inconsistencia que haya que conciliar: es lo que el cliente hace
+   * hoy en su Excel y es lo que pidio replicar.
+   *
+   * LA POSICION 0 ES REDUNDANTE CON `stockErp` a proposito, y de las dos manda
+   * `stockErp`: ver su comentario y `stockDeLaMedicion`.
+   *
+   * VACIA (`[]`) = este inventario no tiene stock por ronda -- todos los que ya
+   * estaban en la base antes del cambio. Todo cae a la ronda 1 y el inventario
+   * se comporta EXACTAMENTE como antes.
+   */
+  stockPorRonda: ReadonlyArray<number | null>;
   /**
    * true = la categoria la asume la empresa por orden de gerencia (las
    * cervezas del ejemplo, por seguimiento de robo): el faltante existe y se
@@ -175,13 +224,125 @@ export function conteoFinal(item: Pick<ItemAuditoria, 'conteos'>): number | null
   return conteoQueManda(item.conteos);
 }
 
-/** true si hay con que comparar: stock del ERP Y algun conteo. */
-export function esAuditable(item: Pick<ItemAuditoria, 'stockErp' | 'conteos'>): boolean {
-  return item.stockErp !== null && conteoFinal(item) !== null;
+/**
+ * Lo minimo para resolver contra que stock se midio un item. Se declara aparte
+ * de `ItemAuditoria` porque lo pide TAMBIEN el cierre de ronda
+ * (`rondas.service.ts#universoDeLaRonda`), que no arma items de auditoria.
+ */
+export type ItemMedible = Pick<ItemAuditoria, 'conteos' | 'stockErp' | 'stockPorRonda'>;
+
+/**
+ * DE QUE RONDA SALIO EL STOCK CON EL QUE SE MIDIO ESTE ITEM.
+ *
+ * No es un dato de diagnostico: es lo que la matriz necesita para MARCAR las
+ * filas que se midieron con una vara que no es la de su propia ronda. Sin esto
+ * la caida a la ronda 1 seria silenciosa, y un item medido contra el stock de
+ * hace tres dias se veria igual que uno medido contra el de hoy.
+ */
+export interface StockDeLaMedicion {
+  /**
+   * EL STOCK QUE SE USO. `null` = no habia ninguno con que comparar (ni el de
+   * la ronda del conteo ni el de la ronda 1): el item queda `sin_erp`.
+   */
+  stockErp: number | null;
+  /**
+   * La ronda del conteo QUE MANDA (1-based), la misma que `rondasNecesarias`.
+   * `null` = nadie conto este item en ninguna ronda.
+   */
+  rondaDelConteo: number | null;
+  /**
+   * La ronda de la que salio `stockErp` (1-based). `null` = no habia stock.
+   * Distinta de `rondaDelConteo` SOLO cuando hubo que caer a la ronda 1.
+   */
+  rondaDelStock: number | null;
+  /**
+   * `true` = la ronda del conteo NO trajo stock propio y se midio con el de la
+   * ronda 1. Pasa en dos casos, y los dos son legitimos: un inventario viejo
+   * (sin stock por ronda en absoluto) y una ronda que se abrio sin poder
+   * descargar el stock del dia.
+   *
+   * ES EL BIT QUE LA MATRIZ MUESTRA. La caida no se esconde porque cambia lo
+   * que significa el numero: "faltan 3" contra el stock del dia y "faltan 3"
+   * contra el stock de hace tres dias no son la misma afirmacion, y quien
+   * discute un descuento tiene derecho a saber cual de las dos le toco.
+   */
+  cayoALaRonda1: boolean;
 }
 
 /**
- * conteoFinal - stockErp. Negativo = faltante, positivo = sobrante.
+ * LA REGLA NUEVA, Y EL UNICO LUGAR DONDE VIVE: cada conteo se compara contra el
+ * stock DE SU PROPIA RONDA.
+ *
+ * ---------------------------------------------------------------------------
+ * POR QUE LA RONDA 1 SE RESUELVE POR `stockErp` Y NO POR `stockPorRonda[0]`
+ * ---------------------------------------------------------------------------
+ * Son la misma cifra -- se escriben juntas -- pero una de las dos tiene que
+ * mandar o el dia que difieran nadie va a saber cual creer. Manda
+ * `CatalogoItem.stockErp` (`item.stockErp`), porque es la que ya leen el sello
+ * del lacrado y los inventarios historicos: si la ronda 1 se midiera por la
+ * tabla nueva, un inventario lacrado podria recalcularse con un numero que su
+ * propio sello no hasheo.
+ *
+ * ---------------------------------------------------------------------------
+ * LA CAIDA A LA RONDA 1 ES EXPLICITA, NO UN `??` ESCONDIDO
+ * ---------------------------------------------------------------------------
+ * Una ronda sin stock propio se mide con el de la ronda 1 -- es lo unico que
+ * hace que los inventarios que ya estaban en la base sigan dando exactamente lo
+ * mismo que antes. Pero queda DICHO en `cayoALaRonda1`, porque un inventario
+ * viejo y una descarga que fallo llegan al calculo iguales y la pantalla tiene
+ * que poder distinguir "se midio con la vara del dia" de "se midio con la del
+ * dia 22".
+ *
+ * SIN NINGUN CONTEO no hay ronda que resolver, asi que se usa el de la ronda 1:
+ * es lo que mantiene el orden de `veredicto` (primero `sin_erp`, despues
+ * `sin_contar`) tal cual estaba.
+ */
+export function stockDeLaMedicion(item: ItemMedible): StockDeLaMedicion {
+  const rondaDelConteo = rondasNecesarias(item) || null;
+
+  /** El de la ronda 1, que es el que manda para esa ronda y el de la caida. */
+  const deLaRonda1: StockDeLaMedicion = {
+    stockErp: item.stockErp,
+    rondaDelConteo,
+    rondaDelStock: item.stockErp === null ? null : 1,
+    cayoALaRonda1: false,
+  };
+
+  if (rondaDelConteo === null || rondaDelConteo === 1) return deLaRonda1;
+
+  // `?? null` y no un acceso pelado: la lista puede ser mas corta que la ronda
+  // (un inventario viejo trae `[]`), y `undefined` y `null` dicen lo mismo acá
+  // -- esta ronda no trajo stock para este item.
+  const propio = item.stockPorRonda[rondaDelConteo - 1] ?? null;
+  if (propio !== null) {
+    return { stockErp: propio, rondaDelConteo, rondaDelStock: rondaDelConteo, cayoALaRonda1: false };
+  }
+
+  return { ...deLaRonda1, cayoALaRonda1: true };
+}
+
+/**
+ * true si hay con que comparar: stock del ERP Y algun conteo.
+ *
+ * EL STOCK ES EL DE LA RONDA QUE RESOLVIO EL ITEM, no el de la ronda 1 --
+ * misma vara que `diferenciaUnidades`, o un item se declararia auditable y la
+ * diferencia saldria null (o al reves).
+ */
+export function esAuditable(item: ItemMedible): boolean {
+  return stockDeLaMedicion(item).stockErp !== null && conteoFinal(item) !== null;
+}
+
+/**
+ * conteoFinal - el stock DE LA RONDA DE ESE CONTEO. Negativo = faltante,
+ * positivo = sobrante.
+ *
+ * LA VARA YA NO ES UNA SOLA (decision del cliente, 2026-09-29): el ultimo
+ * conteo no nulo se compara contra el stock que el ERP dio PARA ESA RONDA, y si
+ * esa ronda no tiene stock propio cae al de la ronda 1. Quien resuelve eso es
+ * `stockDeLaMedicion`, y esta funcion no lo repite: si la regla se escribiera
+ * dos veces, la matriz y el cierre de ronda podrian medir el mismo item con
+ * varas distintas -- exactamente el bug que la pantalla del Auditor y la
+ * planilla ya sufrieron en 2026-09-14 por la clasificacion.
  *
  * Devuelve `null` -- NO 0 -- cuando falta cualquiera de los dos lados. Un 0
  * significa "conte exactamente lo que decia el ERP", que es una afirmacion
@@ -189,10 +350,11 @@ export function esAuditable(item: Pick<ItemAuditoria, 'stockErp' | 'conteos'>): 
  * es lo unico que impide que un catalogo sin stock cargado se reporte como
  * un inventario perfecto.
  */
-export function diferenciaUnidades(item: Pick<ItemAuditoria, 'conteos' | 'stockErp'>): number | null {
+export function diferenciaUnidades(item: ItemMedible): number | null {
   const final = conteoFinal(item);
-  if (item.stockErp === null || final === null) return null;
-  return final - item.stockErp;
+  const { stockErp } = stockDeLaMedicion(item);
+  if (stockErp === null || final === null) return null;
+  return final - stockErp;
 }
 
 /**
@@ -217,9 +379,21 @@ export function diferenciaValor(item: ItemAuditoria): number | null {
  *   4. Hay diferencia y la asume gerencia -> `empresa`.
  *   5. El resto -> `falta`, sea faltante O SOBRANTE: la maqueta valida solo
  *      esos tres buckets, no hay un cuarto separado para sobrantes.
+ *
+ * "SIN STOCK DEL ERP" ES EL DE LA RONDA QUE RESOLVIO EL ITEM, no el de la ronda
+ * 1: la misma vara que `diferenciaUnidades`, o un item podria salir `cuadrado`
+ * con la diferencia en null. Sin ningun conteo la resolucion cae a la ronda 1,
+ * asi que el ORDEN de los dos primeros chequeos sigue dando lo que daba.
+ *
+ * TIENE UN CASO NUEVO, y es el que este cambio habilita: un item cuya ronda 1
+ * no trajo stock pero cuyo reconteo SI lo trajo deja de ser `sin_erp` y se
+ * audita contra el stock del reconteo. Es correcto -- ya hay con que comparar --
+ * y en la practica es raro: los `sin_dato_erp` no se arrastran a la ronda
+ * siguiente (ver `ciclo-conteos.ts#destinoTrasRonda`), asi que solo aparece si
+ * el item entro a la ronda por otra via.
  */
 export function veredicto(item: ItemAuditoria): VeredictoAuditoria {
-  if (item.stockErp === null) return 'sin_erp';
+  if (stockDeLaMedicion(item).stockErp === null) return 'sin_erp';
   if (conteoFinal(item) === null) return 'sin_contar';
   if (diferenciaUnidades(item) === 0) return 'cuadrado';
   if (item.esEmpresa) return 'empresa';
@@ -631,6 +805,14 @@ export interface FilaDiferencia {
    */
   clase: ClaseItem;
   descripcion: string;
+  /**
+   * EL STOCK DE LA RONDA QUE RESOLVIO EL ITEM, no el de la ronda 1.
+   *
+   * Es la cifra contra la que se calculo `diferencia`, y tiene que ser la misma
+   * o la fila congelada no cerraria consigo misma: `conteoFinal - stockSistema`
+   * tiene que dar `diferencia` seis meses despues, cuando nadie pueda
+   * recalcularlo. Ver `DiferenciaItem.stockSistema` en schema.prisma.
+   */
   stockSistema: number;
   conteoFinal: number;
   diferencia: number;
@@ -687,8 +869,14 @@ export function diferenciasParaPersistir(items: ItemAuditoria[]): FilaDiferencia
     // Los dos non-null estan garantizados por `diferencia !== null`, pero se
     // chequean igual: el compilador no puede seguir esa implicacion, y un
     // `!` seria una promesa que nadie vuelve a verificar.
+    //
+    // EL STOCK SALE DE `stockDeLaMedicion` Y NO DE `item.stockErp`: hay que
+    // congelar el de la ronda QUE RESOLVIO el item, que es el unico con el que
+    // `conteoFinal - stockSistema` vuelve a dar `diferencia`. Escribir el de la
+    // ronda 1 dejaria la fila contradiciendose sola.
     const final = conteoFinal(item);
-    if (item.stockErp === null || final === null) continue;
+    const medicion = stockDeLaMedicion(item);
+    if (medicion.stockErp === null || final === null) continue;
 
     filas.push({
       codigo: item.codigo,
@@ -704,7 +892,7 @@ export function diferenciasParaPersistir(items: ItemAuditoria[]): FilaDiferencia
       // Congelada, como el modelo pide: la descripcion de HOY puede cambiar
       // en Dynamics y el historico tiene que decir que se conto entonces.
       descripcion: item.descripcion,
-      stockSistema: item.stockErp,
+      stockSistema: medicion.stockErp,
       conteoFinal: final,
       diferencia,
       resueltoEnConteo: rondasNecesarias(item),
@@ -1062,7 +1250,14 @@ export interface FilaDetalleDiferencia {
   /** Los tres cuadros del panel. Lo decide `cuadroDeLaDiferencia`. */
   cuadro: CuadroDeDestino;
   tipo: 'faltante' | 'sobrante';
-  /** `CatalogoItem.stockErp`. Nunca null en una fila: sin el no hay diferencia. */
+  /**
+   * EL STOCK CONTRA EL QUE SE MIDIO -- el de la ronda que resolvio el item, no
+   * el de la ronda 1 (ver `stockDeLaMedicion`). Nunca null en una fila: sin el
+   * no hay diferencia.
+   *
+   * Tiene que ser el de la medicion o la tabla dinamica no cerraria:
+   * `conteoFinal - stockErp` es la columna `diferencia` que esta al lado.
+   */
   stockErp: number;
   /** El ultimo conteo que manda. Nunca null en una fila, por lo mismo. */
   conteoFinal: number;
@@ -1107,11 +1302,14 @@ export function detalleDeDiferencias(items: ItemAuditoria[], umbral: number): Fi
   for (const item of items) {
     const diferencia = diferenciaUnidades(item);
     const final = conteoFinal(item);
+    // EL STOCK DE LA MEDICION, no `item.stockErp`: el de la ronda que resolvio
+    // el item es el unico con el que la columna `diferencia` de al lado cierra.
+    const medicion = stockDeLaMedicion(item);
     // Los dos chequeos de mas (`stockErp`/`final`) son los MISMOS que hace
     // `diferenciaUnidades` para devolver null, y estan por el tipo: en una fila
     // con diferencia los dos lados existen siempre, y asi queda dicho en el
     // tipo en vez de con un `!` que hay que creer.
-    if (diferencia === null || diferencia === 0 || item.stockErp === null || final === null) continue;
+    if (diferencia === null || diferencia === 0 || medicion.stockErp === null || final === null) continue;
 
     const a = atribucionDelItem(item, umbral);
     filas.push({
@@ -1132,7 +1330,7 @@ export function detalleDeDiferencias(items: ItemAuditoria[], umbral: number): Fi
       empaqueEsCorregido: a.empaqueEsCorregido,
       cuadro: cuadroDeLaDiferencia(a),
       tipo: diferencia < 0 ? 'faltante' : 'sobrante',
-      stockErp: item.stockErp,
+      stockErp: medicion.stockErp,
       conteoFinal: final,
       diferencia,
       precioUnitario: item.precioVenta,

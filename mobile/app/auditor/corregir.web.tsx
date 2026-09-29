@@ -31,7 +31,13 @@ import {
   textoItemSalioDeRonda,
   textoRondaQueYaNoExiste,
 } from '../../lib/dominio/ajuste-final';
-import { diferenciaUnidades, veredicto } from '../../lib/dominio/auditoria';
+import {
+  diferenciaUnidades,
+  rotuloStockDeLaMedicion,
+  stockDeLaMedicion,
+  textoStockDeLaMedicion,
+  veredicto,
+} from '../../lib/dominio/auditoria';
 import { totalUnidades } from '../../lib/dominio/empaque';
 import { pluralizar } from '../../lib/dominio/plural';
 import { sucursalEnFoco } from '../../lib/dominio/sucursal-en-foco';
@@ -119,6 +125,31 @@ function PildoraDiferencia({ diferencia }: { diferencia: number | null }): JSX.E
         {etiqueta}
       </Text>
     </View>
+  );
+}
+
+/**
+ * EL STOCK CONTRA EL QUE SE MIDIÓ LA FILA, con la ronda de la que salió cuando no
+ * es la del conteo que manda. Ver `stockDeLaMedicion` en el dominio.
+ */
+function celdaStock(fila: FilaCorregible): JSX.Element {
+  const medicion = fila.item === null ? null : stockDeLaMedicion(fila.item);
+  if (medicion === null || medicion.stockErp === null) {
+    return (
+      <CeldaTexto numero color={colors.grisClaro}>
+        {SIN_DATO}
+      </CeldaTexto>
+    );
+  }
+  const nota = textoStockDeLaMedicion(medicion);
+  const texto =
+    nota === null || medicion.rondaDelStock === null
+      ? formatoMiles(medicion.stockErp)
+      : `${formatoMiles(medicion.stockErp)} (${medicion.rondaDelStock}°)`;
+  return (
+    <CeldaTexto numero color={colors.gris}>
+      {texto}
+    </CeldaTexto>
   );
 }
 
@@ -301,20 +332,18 @@ export default function AuditorCorregirWebScreen(): JSX.Element {
       {
         clave: 'stock',
         titulo: 'Stock',
-        ancho: 88,
+        // 108 y no 88: la celda puede llevar la ronda del stock pegada al número.
+        ancho: 108,
         alinear: 'derecha',
         // El stock, más apagado que lo contado: es referencia, no lo que se va
         // a cambiar. Corregir lo contado NO es corregir el stock.
-        celda: (f) =>
-          f.item === null || f.item.stockErp === null ? (
-            <CeldaTexto numero color={colors.grisClaro}>
-              {SIN_DATO}
-            </CeldaTexto>
-          ) : (
-            <CeldaTexto numero color={colors.gris}>
-              {formatoMiles(f.item.stockErp)}
-            </CeldaTexto>
-          ),
+        //
+        // EL DE LA MEDICIÓN, no `item.stockErp`: tiene que ser el mismo contra el
+        // que se calcula la diferencia de la columna de al lado, o la fila
+        // mostraría una resta que no cierra consigo misma. Cuando no es el de la
+        // ronda del conteo, la celda lo dice con la ronda entre paréntesis --
+        // mismo criterio que la matriz y que el empaque corregido por el auditor.
+        celda: (f) => celdaStock(f),
       },
       {
         clave: 'diferencia',
@@ -339,6 +368,12 @@ export default function AuditorCorregirWebScreen(): JSX.Element {
 
   const sePuedeCorregir = fase !== null && puedeCorregirLoContado(fase);
   const bloqueo = fase === null ? null : motivoSinCorregir(fase, 'auditor');
+  /**
+   * CONTRA QUÉ STOCK SE MIDIÓ EL ÍTEM QUE SE ESTÁ CORRIGIENDO. `null` = no hay
+   * nada abierto, o la matriz no trajo ese ítem. Ver el clon del teléfono.
+   */
+  const itemEnEdicion = enEdicion?.item ?? null;
+  const medicionEnEdicion = itemEnEdicion === null ? null : stockDeLaMedicion(itemEnEdicion);
 
   async function guardarCorreccion(fila: FilaCorregible, conteo: Conteo, motivo: string): Promise<void> {
     setGuardando(true);
@@ -586,7 +621,12 @@ export default function AuditorCorregirWebScreen(): JSX.Element {
         pedirMotivo
         tituloMotivo="Reemplaza el valor que cargó quien contó. Queda registrado con tu nombre y la hora."
         // La ÚNICA pantalla que pasa esta prop. Ver ModalConteo#stockErpDeReferencia.
-        stockErpDeReferencia={enEdicion?.item?.stockErp ?? null}
+        //
+        // EL STOCK DE LA MEDICIÓN, no `item.stockErp`: con stock por ronda, el de
+        // la ronda 1 es la vara de la primera pasada, y quien corrige un valor de
+        // la ronda 3 estaría comparándolo contra el stock del día 22 sin saberlo.
+        stockErpDeReferencia={medicionEnEdicion === null ? null : medicionEnEdicion.stockErp}
+        notaStockDeReferencia={medicionEnEdicion === null ? null : textoStockDeLaMedicion(medicionEnEdicion)}
         onGuardar={(conteo, motivo) => void guardarCorreccion(enEdicion!, conteo, motivo)}
         onCerrar={() => setEnEdicion(null)}
       />

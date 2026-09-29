@@ -270,10 +270,20 @@ console.log('\n== EL CICLO TERMINA: ronda 2 con todo bien ==');
 console.log('\n== LA AUDITORÍA VE LAS DOS RONDAS ==');
 {
   const m = await api('GET', `/api/auditoria/inventarios/${inv}/matriz?limite=50`, { token: admin.token });
-  const conDos = (m.datos?.matriz ?? []).filter((i) => i.conteo1 !== null && i.conteo2 !== null);
+  /**
+   * `conteos[]`, NO `conteo1`/`conteo2`. Esas dos columnas dejaron de existir el
+   * 2026-09-19, cuando el Auditor pudo abrir rondas extra y los tres campos
+   * sueltos pasaron a ser una lista (ver `ItemAuditoria.conteos`). Este chequeo
+   * se quedó leyéndolas: `i.conteo1 !== null` sobre un campo que ya no viaja da
+   * `undefined !== null`, o sea TRUE para los 5 ítems, y el script reportaba "5,
+   * esperaba 2" sobre un ciclo que estaba perfecto. Un chequeo que falla por
+   * mirar un campo muerto es peor que no tenerlo: se lee como un bug del sistema.
+   */
+  const contadoEn = (i, ronda) => (i.conteos ?? [])[ronda - 1] ?? null;
+  const conDos = (m.datos?.matriz ?? []).filter((i) => contadoEn(i, 1) !== null && contadoEn(i, 2) !== null);
   conDos.length === 2
-    ? ok(`la matriz muestra conteo1 y conteo2 de los 2 items recontados: ${conDos.map((i) => `${i.codigo}(${i.conteo1}→${i.conteo2})`).join(', ')}`)
-    : mal(`items con conteo1 y conteo2: ${conDos.length}, esperaba 2`);
+    ? ok(`la matriz muestra las rondas 1 y 2 de los 2 items recontados: ${conDos.map((i) => `${i.codigo}(${contadoEn(i, 1)}→${contadoEn(i, 2)})`).join(', ')}`)
+    : mal(`items con conteo en las rondas 1 y 2: ${conDos.length}, esperaba 2`);
   const cuadrados = (m.datos?.matriz ?? []).filter((i) => i.veredicto === 'cuadrado').length;
   info(`veredicto final: ${cuadrados} de ${m.datos?.matriz?.length} cuadrados`);
 }

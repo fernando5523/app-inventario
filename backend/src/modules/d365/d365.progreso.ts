@@ -152,7 +152,104 @@ export function leer(sucursalId: number): ProgresoSnapshot | null {
   return registro.get(sucursalId) ?? null;
 }
 
-/** Solo para tests: deja el registro limpio entre casos. */
+// ---------------------------------------------------------------------------
+// EL OTRO PROGRESO: LA DESCARGA DE STOCK DE UNA RONDA
+//
+// `POST /api/inventarios/:id/rondas/:n/stock` baja el stock de HOY para los
+// pocos items que arrastra un reconteo (ver d365.stock-ronda.service.ts).
+// Tarda MUCHO menos que el snapshot -- decenas o cientos de items contra
+// 11.863 -- pero tarda, y el Coordinador tiene que ver que algo pasa.
+//
+// SE REUSA LA MAQUINARIA DE ARRIBA Y NO SE DUPLICA: `avanceMonotono`,
+// `acotarAlTotal`, `ahora` y la forma `{traidos, total, fase, actualizadoEn}`
+// son las mismas, con las mismas razones (el total arranca en `null` y nunca
+// en 0; el avance no retrocede; vive en memoria porque deja de importar en
+// cuanto termina; la contra de las varias instancias detras de un balanceador
+// es la misma y esta explicada arriba).
+//
+// LO QUE **NO** ENCAJA ES EL REGISTRO, y por eso hay un segundo Map en vez de
+// una clave mas en el primero: `registro` esta indexado por `sucursalId` y
+// esto se identifica por (inventario, ronda). Metidos en el mismo Map, el
+// inventario 3 y la sucursal 3 serian la misma entrada -- un snapshot de la
+// sucursal 3 borraria el progreso de la descarga del inventario 3 y la
+// pantalla del Coordinador mostraria el avance del otro. Son dos espacios de
+// identificadores distintos que se pisan por casualidad, y el dia que se
+// pisen nadie va a mirar aca.
+// ---------------------------------------------------------------------------
+
+/** Lo que ve quien sondea la descarga de stock de una ronda. Misma forma que el snapshot. */
+export interface ProgresoStockRonda extends AvanceSnapshot {
+  fase: FaseSnapshot;
+  actualizadoEn: string;
+}
+
+const registroStockRonda = new Map<string, ProgresoStockRonda>();
+
+/**
+ * La clave del segundo registro. String y no un numero combinado (`id * 100 +
+ * ronda`): un numero compuesto se puede desarmar mal y la ronda no tiene tope
+ * (el Auditor abre una 4ta y una 5ta pasada, y `RONDA_MAXIMA_ACEPTADA` es de
+ * forma, no de negocio).
+ */
+function claveStockRonda(inventarioId: number, ronda: number): string {
+  return `${inventarioId}:${ronda}`;
+}
+
+/**
+ * Marca que arranco la descarga de stock de esa ronda. Pisa cualquier
+ * anterior: si el Coordinador toca el boton de nuevo, el progreso que importa
+ * es el de la descarga que acaba de lanzar.
+ *
+ * `total` se sabe DE ENTRADA y no se descubre paginando, al contrario que en
+ * el snapshot: los codigos que arrastra la ronda se cuentan en la base ANTES
+ * de hablar con Dynamics. Asi que la barra nace completa y no pasa por
+ * `total: null` -- se acepta igual `null` en el tipo para no tener dos formas
+ * de lo mismo.
+ */
+export function iniciarStockRonda(inventarioId: number, ronda: number, total: number | null): void {
+  registroStockRonda.set(claveStockRonda(inventarioId, ronda), {
+    traidos: 0,
+    total,
+    fase: 'bajando',
+    actualizadoEn: ahora(),
+  });
+}
+
+/** Un lote de codigos resuelto. Mismas reglas que `reportar`: no crea, no retrocede. */
+export function reportarStockRonda(inventarioId: number, ronda: number, resueltos: number, total: number | null): void {
+  const clave = claveStockRonda(inventarioId, ronda);
+  const actual = registroStockRonda.get(clave);
+  if (actual === undefined) return;
+
+  const totalFinal = total ?? actual.total;
+  registroStockRonda.set(clave, {
+    ...actual,
+    traidos: acotarAlTotal(avanceMonotono(actual.traidos, resueltos), totalFinal),
+    total: totalFinal,
+    actualizadoEn: ahora(),
+  });
+}
+
+/** Pasa a la fase de guardado: el borrado + insercion en una transaccion. */
+export function marcarGuardandoStockRonda(inventarioId: number, ronda: number): void {
+  const clave = claveStockRonda(inventarioId, ronda);
+  const actual = registroStockRonda.get(clave);
+  if (actual === undefined) return;
+  registroStockRonda.set(clave, { ...actual, fase: 'guardando', actualizadoEn: ahora() });
+}
+
+/** Siempre desde un `finally`, por lo mismo que `terminar`. */
+export function terminarStockRonda(inventarioId: number, ronda: number): void {
+  registroStockRonda.delete(claveStockRonda(inventarioId, ronda));
+}
+
+/** `null` = no hay ninguna descarga de stock en curso para esa ronda. */
+export function leerStockRonda(inventarioId: number, ronda: number): ProgresoStockRonda | null {
+  return registroStockRonda.get(claveStockRonda(inventarioId, ronda)) ?? null;
+}
+
+/** Solo para tests: deja LOS DOS registros limpios entre casos. */
 export function limpiar(): void {
   registro.clear();
+  registroStockRonda.clear();
 }

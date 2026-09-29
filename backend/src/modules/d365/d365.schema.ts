@@ -1,5 +1,7 @@
 import { z } from 'zod';
 
+import { RONDA_MAXIMA_ACEPTADA } from '../hojas/hojas.schema';
+
 export const crearSnapshotSchema = z.object({
   sucursalId: z.number().int().positive(),
   /**
@@ -44,3 +46,30 @@ export const progresoSnapshotQuerySchema = z.object({
   sucursalId: z.coerce.number().int().positive(),
 });
 export type ProgresoSnapshotQuery = z.infer<typeof progresoSnapshotQuerySchema>;
+
+/**
+ * Params de `/api/inventarios/:inventarioId/rondas/:numeroConteo/stock`.
+ *
+ * `numeroConteo` y no `ronda` como en `inventarios.schema.ts`: en ESTA ruta el
+ * numero viaja para escribir `StockRonda.numeroConteo`, y que el parametro de
+ * la URL se llame igual que la columna es lo que hace que no haya que traducir
+ * nada en el medio. Las rutas del ciclo (`/rondas/:ronda/cerrar`) siguen con su
+ * nombre; son dos routers distintos y ninguno lee los params del otro.
+ *
+ * EL TECHO NO ES 3. El Auditor puede abrir una 4ta y una 5ta pasada (decision
+ * del cliente, 2026-09-19), asi que quien decide si esa ronda existe es la
+ * BASE, no el schema: el service mira `Inventario.ultimaRondaCerrada` y
+ * responde 409 si la anterior no cerro. `RONDA_MAXIMA_ACEPTADA` se reusa de
+ * `hojas.schema.ts` -- el modulo dueno de `HojaConteo.numeroConteo` -- para no
+ * tener dos techos de forma que algun dia difieran.
+ *
+ * El minimo es 1 y no 2, aunque la ronda 1 se rechace: el rechazo tiene que
+ * salir del service con su explicacion ("el stock del primer conteo lo trae el
+ * snapshot"), no como un error de validacion que diria "tiene que ser >= 2" sin
+ * decir a donde ir.
+ */
+export const parametrosStockRondaSchema = z.object({
+  inventarioId: z.coerce.number().int().positive(),
+  numeroConteo: z.coerce.number().int().min(1).max(RONDA_MAXIMA_ACEPTADA),
+});
+export type ParametrosStockRonda = z.infer<typeof parametrosStockRondaSchema>;

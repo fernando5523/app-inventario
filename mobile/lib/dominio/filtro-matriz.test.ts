@@ -41,6 +41,11 @@ function item(over: Partial<ItemAuditoria> = {}): ItemAuditoria {
     precioVenta: 10,
     stockErp: 100,
     conteos: [100],
+    // VACÍO POR DEFECTO: es el inventario sin stock por ronda, o sea todos los
+    // que ya estaban en la base antes del 2026-09-29. Con `[]` todo cae a la
+    // ronda 1 y cada caso de abajo mide exactamente contra lo que medía antes --
+    // es lo que hace que estas expectativas sigan valiendo sin tocarlas.
+    stockPorRonda: [],
     atribucion: atribucionVacia,
     esEmpresa: false,
     ...over,

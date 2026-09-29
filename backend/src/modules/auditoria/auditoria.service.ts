@@ -22,11 +22,13 @@ import {
   filaDeCadena,
   filaDeCadenaSinInventario,
   resumir,
+  stockDeLaMedicion,
   totalizarCadena,
   veredicto,
   type AtribucionItem,
   type FilaCadena,
   type ItemAuditoria,
+  type StockDeLaMedicion,
   type TotalCadena,
   type VeredictoAuditoria,
 } from './auditoria.calculos';
@@ -54,7 +56,11 @@ import { aplicarClasificacionVigente } from '../liquidacion/liquidacion.reclasif
  *   stockErp, precioVenta, esEmpresa  -> CatalogoItem (el snapshot de
  *      Dynamics tomado al abrir el mes). NO se relee de Dynamics al
  *      auditar: el inventario se compara contra la foto del arranque, no
- *      contra lo que el ERP diga hoy.
+ *      contra lo que el ERP diga hoy. `stockErp` es el de la RONDA 1.
+ *   stockPorRonda[]                   -> StockRonda: el stock que el ERP dio
+ *      PARA CADA RONDA (decision del cliente 2026-09-29, ver
+ *      `ItemAuditoria.stockPorRonda`). La ronda 1 tambien esta ahi y es la
+ *      misma cifra que `CatalogoItem.stockErp`; de las dos manda esa.
  *   conteos[]                         -> los Conteo de las hojas
  *      FINALIZADAS de cada ronda, en orden (indice 0 = ronda 1). Una hoja a
  *      medio contar no entra en la matriz: un conteo parcial leido como
@@ -161,8 +167,47 @@ function aListaDeRondas(porRonda: Map<number, number> | undefined): Array<number
   return Array.from({ length: ultimaRonda }, (_, i) => porRonda.get(i + 1) ?? null);
 }
 
+/**
+ * El stock que el ERP dio para CADA ronda, por codigo: indice 0 = ronda 1.
+ *
+ * LA MISMA FORMA QUE `aListaDeRondas` y por la misma razon -- la POSICION es la
+ * ronda, asi que los huecos van en `null` y no se compactan. Una ronda que no
+ * bajo stock para un item deja un `null` en su posicion, y ese `null` NO ES 0
+ * (ver la cabecera de auditoria.calculos.ts).
+ *
+ * El largo llega hasta la ronda mas alta que ESTE item tenga en la tabla. Un
+ * inventario sin stock por ronda -- todos los que ya estaban en la base antes
+ * de la migracion de datos -- no aparece en el Map y su item queda con `[]`:
+ * todo cae a la ronda 1 y el calculo da exactamente lo que daba antes.
+ *
+ * SE CONSULTA APARTE Y NO CON UN `include` DEL CATALOGO porque no hay FK entre
+ * las dos tablas: el puente es el CODIGO, igual que entre rondas (ver el
+ * comentario de `StockRonda.codigo` en schema.prisma).
+ */
+export async function stockPorRondaDelInventario(
+  inventarioId: number,
+): Promise<Map<string, Array<number | null>>> {
+  const filas = await prisma.stockRonda.findMany({
+    where: { inventarioId },
+    select: { codigo: true, numeroConteo: true, stockErp: true },
+    orderBy: { numeroConteo: 'asc' },
+  });
+
+  const porCodigo = new Map<string, Array<number | null>>();
+  for (const fila of filas) {
+    const lista = porCodigo.get(fila.codigo) ?? [];
+    // Rellena los huecos con null hasta la posicion de esta ronda: una ronda 3
+    // sin ronda 2 tiene que dar `[x, null, y]` y no `[x, y]`, o la posicion
+    // dejaria de ser la ronda y el stock de la 3 se leeria como el de la 2.
+    while (lista.length < fila.numeroConteo - 1) lista.push(null);
+    lista[fila.numeroConteo - 1] = fila.stockErp;
+    porCodigo.set(fila.codigo, lista);
+  }
+  return porCodigo;
+}
+
 export async function armarMatriz(inventarioId: number): Promise<ItemAuditoria[]> {
-  const [catalogo, hojas] = await Promise.all([
+  const [catalogo, hojas, stockPorRonda] = await Promise.all([
     prisma.catalogoItem.findMany({
       where: { inventarioId },
       select: {
@@ -185,6 +230,7 @@ export async function armarMatriz(inventarioId: number): Promise<ItemAuditoria[]
       where: { inventarioId, estado: 'finalizada' },
       select: INCLUDE_HOJAS_PARA_MATRIZ.select,
     }),
+    stockPorRondaDelInventario(inventarioId),
   ]);
 
   /** codigo -> lo que dio cada ronda. */
@@ -256,6 +302,12 @@ export async function armarMatriz(inventarioId: number): Promise<ItemAuditoria[]
       // cierra. Ver el comentario de cabecera de auditoria.calculos.ts.
       precioVenta: item.precioVenta?.toNumber() ?? null,
       stockErp: item.stockErp,
+      // EL STOCK DE CADA RONDA, al lado de `conteos` y con la misma forma: el
+      // ultimo conteo se compara contra el stock de SU ronda, no contra esta
+      // unica vara (ver `ItemAuditoria.stockPorRonda`). `[]` para el inventario
+      // que no tiene stock por ronda -- ahi todo cae a `stockErp` y el
+      // resultado es identico al de antes del cambio.
+      stockPorRonda: stockPorRonda.get(item.codigo) ?? [],
       // El snapshot manda: la excepcion MANUAL del Auditor no entra acá, se
       // resuelve en vivo al liquidar (ver `claseEfectiva`). Mezclarlas haria
       // que una reclasificacion de hoy pareciera parte de lo que se conto.
@@ -294,6 +346,21 @@ export interface FilaMatrizDto extends ItemAuditoria {
    * pantalla pueda mostrarlo tal cual, sin traducir un enum a castellano.
    */
   motivoSinDato: string | null;
+  /**
+   * CONTRA QUE STOCK SE MIDIO ESTA FILA Y DE QUE RONDA SALIO.
+   *
+   * Existe porque desde 2026-09-29 la vara ya no es una sola: cada conteo se
+   * compara contra el stock que el ERP dio PARA SU RONDA, y una ronda sin stock
+   * propio cae al de la ronda 1. Esa caida NO puede ser silenciosa -- "faltan
+   * 3" contra el stock del dia y "faltan 3" contra el del dia 22 no son la
+   * misma afirmacion, y la matriz tiene que poder marcar la fila
+   * (`cayoALaRonda1`) para que quien discuta un descuento sepa cual le toco.
+   *
+   * Lo resuelve el servidor y no la pantalla, por lo mismo que `atribucion`:
+   * dos lugares que decidan con que stock se midio son dos lugares que pueden
+   * discrepar sobre el mismo item.
+   */
+  stockDeLaMedicion: StockDeLaMedicion;
   /**
    * A QUE CUADRO VA ESTE ITEM Y POR QUE, ya resuelto por el backend.
    *
@@ -359,6 +426,7 @@ export async function matriz(
         diferenciaUnidades: diferenciaUnidades(i),
         diferenciaValor: diferenciaValor(i),
         veredicto: v,
+        stockDeLaMedicion: stockDeLaMedicion(i),
         atribucion: atribucionDelItem(i, inv.umbralMediaUnidadPaquete),
         motivoSinDato:
           v === 'sin_erp'

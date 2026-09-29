@@ -2,9 +2,15 @@ import { describe, expect, it } from 'vitest';
 
 import {
   conteoFinal,
+  conteosConAjuste,
   diferenciaUnidades,
+  diferenciaValor,
+  esAuditable,
   resumirAuditoria,
   rondasNecesarias,
+  rotuloStockDeLaMedicion,
+  stockDeLaMedicion,
+  textoStockDeLaMedicion,
   veredicto,
   cuadroDelItem,
   pagaLaEmpresa,
@@ -26,6 +32,11 @@ function item(over: Partial<ItemAuditoria> = {}): ItemAuditoria {
     precioVenta: 2,
     stockErp: 10,
     conteos: [null, null, null],
+    // VACÍO POR DEFECTO: es el inventario sin stock por ronda, o sea todos los
+    // que ya estaban en la base antes del 2026-09-29. Con `[]` todo cae a la
+    // ronda 1 y cada caso de abajo mide exactamente contra lo que medía antes --
+    // es lo que hace que estas expectativas sigan valiendo sin tocarlas.
+    stockPorRonda: [],
     atribucion: atribucion(),
     esEmpresa: false,
     ...over,
@@ -324,5 +335,235 @@ describe('lo que paga la empresa de su cuadro', () => {
 
   it('un cuadro sin nada paga 0', () => {
     expect(pagaLaEmpresa({ valorFaltante: 0, valorSobrante: 0 })).toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// EL STOCK POR RONDA (decisión del cliente, Gilmer, 2026-09-29)
+// ---------------------------------------------------------------------------
+
+/**
+ * Cada reconteo baja el stock NUEVO del ERP, y solo de los faltantes y sobrantes
+ * que arrastra esa ronda. El primer conteo es el día 22 y los reconteos los días
+ * siguientes: entre uno y otro hubo ventas, así que comparar la ronda 2 contra el
+ * stock del 22 mide contra una vara que ya no existe.
+ *
+ * ESTO ES EL ESPEJO DEL SERVIDOR (`auditoria.calculos.ts#stockDeLaMedicion`).
+ * Mientras esta copia restaba contra un único `stockErp`, el teléfono y el
+ * servidor daban diferencias DISTINTAS sobre el mismo ítem en cuanto una ronda
+ * tenía stock propio, y el Auditor no tenía forma de saber cuál creer.
+ */
+describe('stockDeLaMedicion — cada conteo contra el stock de SU ronda', () => {
+  it('la ronda 2 con stock propio se mide contra ESE stock, no contra el del día 22', () => {
+    // Contó 9 en la ronda 2. Contra el stock del 22 (10) faltaba 1; contra el
+    // stock que el ERP dio para la ronda 2 (9) cuadra -- se vendió una unidad y
+    // nadie tocó el estante.
+    const it2 = item({ conteos: [8, 9], stockErp: 10, stockPorRonda: [10, 9] });
+
+    expect(stockDeLaMedicion(it2)).toEqual({
+      stockErp: 9,
+      rondaDelConteo: 2,
+      rondaDelStock: 2,
+      cayoALaRonda1: false,
+    });
+    expect(diferenciaUnidades(it2)).toBe(0);
+    expect(veredicto(it2)).toBe('cuadrado');
+  });
+
+  it('el que faltaba contra el stock viejo y cuadra contra el nuevo deja de ser un faltante', () => {
+    const conStockNuevo = item({ conteos: [8, 8], stockErp: 10, stockPorRonda: [10, 8] });
+    const mismoItemSinStockPorRonda = item({ conteos: [8, 8], stockErp: 10, stockPorRonda: [] });
+
+    expect(diferenciaUnidades(conStockNuevo)).toBe(0);
+    expect(veredicto(conStockNuevo)).toBe('cuadrado');
+    // La MISMA fila, medida contra la vara del día 22: dos unidades de faltante
+    // que en realidad se vendieron. Es lo que la app reportaba hasta hoy.
+    expect(diferenciaUnidades(mismoItemSinStockPorRonda)).toBe(-2);
+    expect(veredicto(mismoItemSinStockPorRonda)).toBe('falta');
+  });
+
+  it('la ronda 2 SIN stock propio cae a la ronda 1, y la caída queda DICHA', () => {
+    const it2 = item({ conteos: [8, 9], stockErp: 10, stockPorRonda: [10, null] });
+
+    expect(stockDeLaMedicion(it2)).toEqual({
+      stockErp: 10,
+      rondaDelConteo: 2,
+      rondaDelStock: 1,
+      // El bit que la fila muestra: "faltan 1" contra el stock del día y contra
+      // el del día 22 no son la misma afirmación, y de acá sale un descuento.
+      cayoALaRonda1: true,
+    });
+    expect(diferenciaUnidades(it2)).toBe(-1);
+  });
+
+  it('una lista más corta que la ronda es una caída, no un error: `undefined` y `null` dicen lo mismo', () => {
+    const corta = item({ conteos: [8, 9], stockErp: 10, stockPorRonda: [10] });
+    expect(stockDeLaMedicion(corta).cayoALaRonda1).toBe(true);
+    expect(diferenciaUnidades(corta)).toBe(-1);
+  });
+
+  /**
+   * EL DETALLE QUE YA HIZO TROPEZAR A OTRO AGENTE, y por eso tiene test propio:
+   * se resuelve por la ronda del CONTEO QUE MANDA, nunca por la última ronda que
+   * exista. Un ítem cuya hoja de la ronda 2 se finalizó sin que nadie lo tocara
+   * tiene `conteos: [10, null]` y se mide con el stock de la ronda 1.
+   *
+   * Mirar la última ronda EXISTENTE compararía un conteo del día 22 contra el
+   * stock de tres días después: acá diría "+3" sobre un ítem que cuadró y nadie
+   * volvió a contar, e inventaría un sobrante que no existe.
+   */
+  it('el conteo que manda es de una ronda ANTERIOR a la última que existe: manda la del conteo', () => {
+    const cuadroEnLa1 = item({ conteos: [10, null], stockErp: 10, stockPorRonda: [10, 7] });
+
+    expect(stockDeLaMedicion(cuadroEnLa1)).toEqual({
+      stockErp: 10,
+      rondaDelConteo: 1,
+      rondaDelStock: 1,
+      cayoALaRonda1: false,
+    });
+    expect(diferenciaUnidades(cuadroEnLa1)).toBe(0);
+    expect(veredicto(cuadroEnLa1)).toBe('cuadrado');
+  });
+
+  it('de la ronda 1 manda `stockErp`, no `stockPorRonda[0]`', () => {
+    // Son la misma cifra y se escriben juntas; el día que difieran manda la que
+    // ya leen el sello del lacrado y los inventarios históricos.
+    const it1 = item({ conteos: [10], stockErp: 10, stockPorRonda: [99] });
+    expect(stockDeLaMedicion(it1).stockErp).toBe(10);
+    expect(diferenciaUnidades(it1)).toBe(0);
+  });
+
+  it('sin ningún conteo no hay ronda que resolver: se usa el de la ronda 1 y el orden del veredicto no cambia', () => {
+    const sinContar = item({ conteos: [null, null], stockErp: 10, stockPorRonda: [10, 4] });
+    expect(stockDeLaMedicion(sinContar)).toEqual({
+      stockErp: 10,
+      rondaDelConteo: null,
+      rondaDelStock: 1,
+      cayoALaRonda1: false,
+    });
+    expect(veredicto(sinContar)).toBe('sin_contar');
+  });
+
+  it('`null` en una posición NO es 0: cae a la ronda 1, y un 0 REAL sí mide contra cero', () => {
+    const sinStockEnLa2 = item({ conteos: [8, 9], stockErp: 10, stockPorRonda: [10, null] });
+    const elErpDiceCero = item({ conteos: [8, 9], stockErp: 10, stockPorRonda: [10, 0] });
+
+    expect(diferenciaUnidades(sinStockEnLa2)).toBe(-1); // 9 - 10, la vara del 22
+    expect(diferenciaUnidades(elErpDiceCero)).toBe(9); // 9 - 0, sobrante entero
+    expect(stockDeLaMedicion(elErpDiceCero).cayoALaRonda1).toBe(false);
+  });
+
+  it('sin stock en ninguna ronda queda sin_erp, y la caída no promete un número que no hay', () => {
+    const nada = item({ conteos: [8, 9], stockErp: null, stockPorRonda: [null, null] });
+
+    expect(stockDeLaMedicion(nada)).toEqual({
+      stockErp: null,
+      rondaDelConteo: 2,
+      rondaDelStock: null,
+      cayoALaRonda1: true,
+    });
+    expect(diferenciaUnidades(nada)).toBeNull();
+    expect(veredicto(nada)).toBe('sin_erp');
+    expect(esAuditable(nada)).toBe(false);
+  });
+
+  /**
+   * EL CASO NUEVO que este cambio habilita: la ronda 1 no trajo stock pero el
+   * reconteo SÍ. Deja de ser `sin_erp` porque ya hay con qué comparar.
+   */
+  it('si la ronda 1 no trajo stock y el reconteo sí, el ítem se vuelve auditable', () => {
+    const it2 = item({ conteos: [8, 9], stockErp: null, stockPorRonda: [null, 9] });
+
+    expect(stockDeLaMedicion(it2).stockErp).toBe(9);
+    expect(esAuditable(it2)).toBe(true);
+    expect(veredicto(it2)).toBe('cuadrado');
+    expect(diferenciaUnidades(it2)).toBe(0);
+  });
+
+  it('un inventario sin stock por ronda se comporta EXACTAMENTE como antes', () => {
+    // Los que ya estaban en la base antes del cambio traen `[]`.
+    const viejo = item({ conteos: [88, 90, 91], stockErp: 96, stockPorRonda: [] });
+    expect(diferenciaUnidades(viejo)).toBe(-5);
+    expect(veredicto(viejo)).toBe('falta');
+    expect(diferenciaValor(viejo)).toBe(-10); // -5 × precioVenta 2
+    expect(esAuditable(viejo)).toBe(true);
+  });
+
+  it('`diferenciaValor` y el resumen valorizan la diferencia de LA MEDICIÓN', () => {
+    // 9 contra el stock de la ronda 2 (12) = -3 × S/2 = -S/6. Contra el del 22
+    // (10) habrían sido -1 y -S/2: el resumen del encabezado habría dicho un
+    // tercio del faltante real.
+    const it2 = item({ conteos: [8, 9], stockErp: 10, stockPorRonda: [10, 12] });
+    expect(diferenciaValor(it2)).toBe(-6);
+
+    const r = resumirAuditoria([it2]);
+    expect(r.conDiferencia).toBe(1);
+    expect(r.cuadrados).toBe(0);
+    expect(r.faltanteNeto).toBe(-6);
+  });
+});
+
+describe('cómo la fila dice contra qué stock se midió', () => {
+  it('con una sola ronda el rótulo queda tal cual: nombrar la única ronda que hay es ruido', () => {
+    const it1 = item({ conteos: [10], stockErp: 10, stockPorRonda: [10] });
+    expect(rotuloStockDeLaMedicion(stockDeLaMedicion(it1), 'ERP')).toBe('ERP');
+    expect(textoStockDeLaMedicion(stockDeLaMedicion(it1))).toBeNull();
+  });
+
+  it('con la caída, el rótulo del stock y el de la ronda quedan desalineados a la vista', () => {
+    // La celda del conteo dice "2°" y la del stock "ERP 1°": la resta se explica
+    // sola sin leer una palabra, que es lo que hace falta en una lista de cientos.
+    const medicion = stockDeLaMedicion(item({ conteos: [8, 9], stockErp: 10, stockPorRonda: [10, null] }));
+    expect(rotuloStockDeLaMedicion(medicion, 'ERP')).toBe('ERP 1°');
+    expect(textoStockDeLaMedicion(medicion)).toBe(
+      'El 2do conteo no trajo stock propio del ERP: se comparó contra el stock del 1er conteo.',
+    );
+  });
+
+  it('cuando el stock ES el de la ronda del conteo, se nombra la ronda y no se avisa de ninguna caída', () => {
+    const medicion = stockDeLaMedicion(item({ conteos: [8, 9], stockErp: 10, stockPorRonda: [10, 9] }));
+    expect(rotuloStockDeLaMedicion(medicion, 'Stock ERP')).toBe('Stock ERP 2°');
+    expect(textoStockDeLaMedicion(medicion)).toBe('Se comparó contra el stock que el ERP dio para el 2do conteo.');
+  });
+
+  it('sin stock no se inventa una ronda de la que habría salido', () => {
+    const medicion = stockDeLaMedicion(item({ conteos: [8, 9], stockErp: null, stockPorRonda: [] }));
+    expect(rotuloStockDeLaMedicion(medicion, 'ERP')).toBe('ERP');
+    expect(textoStockDeLaMedicion(medicion)).toBeNull();
+  });
+});
+
+/**
+ * EL MODAL DEL AJUSTE FINAL previsualiza qué diferencia dejaría un valor antes de
+ * guardarlo. Armaba el ítem sintético con `conteos: [valor]`, o sea un conteo de
+ * la RONDA 1: contra un ítem resuelto en la ronda 3 eso lo comparaba con el stock
+ * del día 22, y el modal prometía "con este valor el ítem cuadra" mientras al
+ * guardar la fila seguía en falta.
+ */
+describe('conteosConAjuste — el ajuste va en la ronda que le corresponde', () => {
+  it('pisa la última posición con dato, no agrega una ronda que nadie contó', () => {
+    expect(conteosConAjuste([88, 90, 91], 96)).toEqual([88, 90, 96]);
+    expect(conteosConAjuste([74, 80, null], 79)).toEqual([74, 79, null]);
+  });
+
+  it('sin ningún conteo entra en la primera: el Auditor puso un valor donde no había ninguno', () => {
+    expect(conteosConAjuste([null, null], 12)).toEqual([12, null]);
+    expect(conteosConAjuste([], 12)).toEqual([12]);
+  });
+
+  it('no muta la lista original: la fila de atrás no puede cambiar con el modal abierto', () => {
+    const original: Array<number | null> = [88, 90, 91];
+    conteosConAjuste(original, 96);
+    expect(original).toEqual([88, 90, 91]);
+  });
+
+  it('la previsualización mide contra el stock de la ronda del ajuste, no contra el de la ronda 1', () => {
+    const it3 = item({ conteos: [88, 90, 91], stockErp: 96, stockPorRonda: [96, 94, 92] });
+
+    // Fijar 92 CUADRA contra el stock de la ronda 3, que es donde cae el ajuste.
+    expect(diferenciaUnidades({ ...it3, conteos: conteosConAjuste(it3.conteos, 92) })).toBe(0);
+    // La forma vieja (`conteos: [92]`) lo medía contra el stock del día 22 y
+    // avisaba de un faltante de 4 que no existe.
+    expect(diferenciaUnidades({ ...it3, conteos: [92] })).toBe(-4);
   });
 });

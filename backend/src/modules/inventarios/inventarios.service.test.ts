@@ -20,6 +20,10 @@ const prismaMock = vi.hoisted(() => ({
   asistenciaInventario: { findMany: vi.fn(async () => []) },
   inventario: { findUnique: vi.fn(), findFirst: vi.fn(), update: vi.fn() },
   catalogoItem: { findMany: vi.fn() },
+  // ADITIVO (stock por ronda, 2026-09-29): `activo()` pregunta si la ronda activa
+  // ya bajo su stock del dia. Sin filas = todavia no lo bajo, que es el estado de
+  // todos los inventarios que estos tests arman.
+  stockRonda: { aggregate: vi.fn(async () => ({ _count: { _all: 0 }, _max: { tomadoEn: null } })) },
   hojaConteo: { findMany: vi.fn(), findFirst: vi.fn(), create: vi.fn(), deleteMany: vi.fn(), update: vi.fn(), aggregate: vi.fn(), count: vi.fn() },
   producto: { deleteMany: vi.fn() },
   empaque: { deleteMany: vi.fn() },

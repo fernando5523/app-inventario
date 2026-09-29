@@ -16,7 +16,7 @@
 
 import { obtenerInventario, obtenerInventarioDeSucursal, simularLatencia } from './_compartido';
 import { claseEfectiva } from '../dominio/clasificacion';
-import { conteoFinal, cuadroDelItem, diferenciaUnidades, resumirAuditoria } from '../dominio/auditoria';
+import { conteoFinal, conteosConAjuste, cuadroDelItem, diferenciaUnidades, resumirAuditoria } from '../dominio/auditoria';
 import { ajustesEnMemoria, estadoDeInventarioEnMemoria } from './ajuste-memoria';
 import { sesionMemoria } from './sesion-memoria';
 import type {
@@ -34,6 +34,21 @@ interface SemillaItem {
   stockErp: number;
   /** Un elemento por ronda, en orden. `null` = ese ítem no entró a esa ronda. */
   conteos: Array<number | null>;
+  /**
+   * EL STOCK QUE CADA RONDA BAJÓ DEL ERP (ver `ItemAuditoria.stockPorRonda`).
+   *
+   * VACÍO EN LAS TRES SEMILLAS, Y NO ES UN OLVIDO: la maqueta de la que salen
+   * estas cifras (mobile/design/auditoria.html) tiene UNA sola columna de ERP
+   * para las tres rondas, así que este dataset es literalmente un inventario
+   * cuyos reconteos no trajeron stock propio. Inventarle un stock por ronda
+   * sería fabricar el dato que el mock no tiene — el mismo error que este
+   * adaptador evita con los otros 127 ítems con diferencia de la maqueta.
+   *
+   * Con `[]` las tres filas se miden igual que siempre Y quedan MARCADAS con la
+   * caída a la ronda 1 (`cayoALaRonda1`), que es la verdad sobre este dataset:
+   * así la marca se puede ver en la demo sin que ninguna cifra cambie.
+   */
+  stockPorRonda: Array<number | null>;
   esEmpresa: boolean;
   precioVenta: number;
 }
@@ -48,11 +63,11 @@ const EMPAQUE_DEMO: Record<string, number> = { '0051': 12, '0052': 6, '0053': 24
 /** Códigos de barras de la Hoja #002 (ver _compartido.ts#BASE_PRODUCTOS). */
 const SEMILLA: SemillaItem[] = [
   // Fideos Canuto Lavaggi 500g — cuadró en el 2do conteo, no llegó a necesitar un 3ro.
-  { codigoBarras: '7750123054', stockErp: 80, conteos: [74, 80, null], esEmpresa: false, precioVenta: 3.2 },
+  { codigoBarras: '7750123054', stockErp: 80, conteos: [74, 80, null], stockPorRonda: [], esEmpresa: false, precioVenta: 3.2 },
   // Leche Evaporada Gloria Azul 400g — faltante definitivo: -5 unid × S/4.80 = -S/24.00.
-  { codigoBarras: '7750123088', stockErp: 96, conteos: [88, 90, 91], esEmpresa: false, precioVenta: 4.8 },
+  { codigoBarras: '7750123088', stockErp: 96, conteos: [88, 90, 91], stockPorRonda: [], esEmpresa: false, precioVenta: 4.8 },
   // Cerveza Cusqueña Trigo 310ml — regla de gerencia: la asume la empresa, no se descuenta a nómina.
-  { codigoBarras: '7750999015', stockErp: 54, conteos: [45, 46, 47], esEmpresa: true, precioVenta: 5.2 },
+  { codigoBarras: '7750999015', stockErp: 54, conteos: [45, 46, 47], stockPorRonda: [], esEmpresa: true, precioVenta: 5.2 },
 ];
 
 /**
@@ -63,14 +78,12 @@ const SEMILLA: SemillaItem[] = [
  * en todos los demás -- incluidos los de otras tiendas.
  */
 function conAjuste(conteos: ReadonlyArray<number | null>, ajuste: number | undefined): Array<number | null> {
-  const copia = [...conteos];
-  if (ajuste === undefined) return copia;
-  // Se pisa la ÚLTIMA posición con dato. Si el ítem no se contó en ninguna
-  // ronda, el ajuste entra en la primera: el auditor puso un valor donde no
-  // había ninguno, que es un caso real (un ítem que nadie llegó a contar).
-  const ultima = copia.reduce<number>((mejor, valor, i) => (valor !== null ? i : mejor), -1);
-  copia[ultima >= 0 ? ultima : 0] = ajuste;
-  return copia;
+  // DELEGA EN EL DOMINIO (`conteosConAjuste`), no reimplementa dónde cae el
+  // ajuste: el modal del ajuste final previsualiza con esa misma función, y dos
+  // copias de la regla harían que el mock guarde en una ronda distinta de la que
+  // el modal usó para prometerle al Auditor que el ítem iba a cuadrar.
+  if (ajuste === undefined) return [...conteos];
+  return conteosConAjuste(conteos, ajuste);
 }
 
 /**
@@ -156,8 +169,11 @@ function atribucionDemo(
 ): AtribucionItem {
   const empaque = EMPAQUE_DEMO[codigo] ?? null;
   const clase = claseEfectiva(null, semilla.esEmpresa ? 'empresa' : 'unidad', empaque);
-  const final = conteoFinal({ conteos });
-  const diferencia = final === null ? null : final - semilla.stockErp;
+  // LA DIFERENCIA SALE DEL DOMINIO, no de una resta a mano: desde que cada ronda
+  // tiene su propio stock, `final - semilla.stockErp` sería una segunda copia de
+  // `stockDeLaMedicion` y el mock podría repartir sobre una diferencia distinta
+  // de la que muestra la fila.
+  const diferencia = diferenciaUnidades({ conteos, stockErp: semilla.stockErp, stockPorRonda: semilla.stockPorRonda });
   const base: AtribucionItem = {
     clase,
     empaqueUsado: empaque,
@@ -387,6 +403,8 @@ export const auditoriaMemoria: RepositorioAuditoria = {
         hoja: hoja002.numero,
         precioVenta: semilla.precioVenta,
         stockErp: semilla.stockErp,
+        // Vacío a propósito: ver `SemillaItem.stockPorRonda`.
+        stockPorRonda: semilla.stockPorRonda,
         conteos: conteosDelItem,
         esEmpresa: semilla.esEmpresa,
         // El mock reparte con el mismo criterio que el servidor, con el umbral

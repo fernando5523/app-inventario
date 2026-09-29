@@ -507,6 +507,25 @@ export interface OpcionesTraerSnapshot {
   signal?: AbortSignal;
 }
 
+/** Ver `RepositorioInventario.traerStockDeRonda`. Sin `tipo`: el universo ya
+ *  lo fijó la ronda anterior, no se elige. */
+export interface OpcionesTraerStockDeRonda {
+  onAvance?: (avance: AvanceSnapshot) => void;
+  signal?: AbortSignal;
+}
+
+export interface ResultadoStockDeRonda {
+  /**
+   * Cuántos productos quedaron con stock de hoy. Puede ser **0** y eso NO es
+   * un fallo: significa que la ronda anterior no arrastró nada. Un 0 con
+   * `tomadoEn` es una ronda sincronizada; lo que dice "no sincronizó" es la
+   * ausencia del dato, no el cero (ver `dominio/sincronizacion-de-ronda.ts`).
+   */
+  items: number;
+  /** El instante de la descarga, que es contra lo que se mide esta ronda. */
+  tomadoEn: string;
+}
+
 /**
  * El wizard de 3 pasos (traerSnapshot/crearHojas/asignarHojas) lo usa
  * solo el Coordinador (pantalla 2). `activo` es de lectura y la puede
@@ -532,6 +551,39 @@ export interface RepositorioInventario {
    * la pantalla necesita distinguir el motivo para dar la salida correcta.
    */
   traerSnapshot(sucursalId: number, opciones?: OpcionesTraerSnapshot): Promise<ResultadoSnapshot>;
+  /**
+   * EL MISMO PASO 1, PERO DE UN RECONTEO: el stock de HOY, solo para los
+   * productos que la ronda arrastra.
+   *
+   * Confirmado con el cliente el 2026-09-29: *"cada reconteo trae el nuevo
+   * stock para los productos faltante y sobrantes"*. El primer conteo se hace
+   * el 22 y los reconteos los días siguientes; entre uno y otro hubo ventas y
+   * movimientos, así que comparar la ronda 2 contra el stock del 22 mide
+   * contra una vara que ya no existe.
+   *
+   * NO REEMPLAZA AL STOCK ANTERIOR: cada ronda conserva el suyo (decisión del
+   * usuario). Sin eso la ronda 1 dejaría de ser explicable -- se vería su
+   * conteo contra un stock que ya no es el que mandó ese ítem al reconteo.
+   *
+   * ES OTRO MÉTODO Y NO UN PARÁMETRO DE `traerSnapshot`, porque son dos cosas
+   * distintas con dos costos distintos: aquel crea el inventario y baja el
+   * catálogo entero del almacén (~11.863 ítems, minutos); este no crea nada y
+   * baja decenas o cientos. Meterlos en la misma función obligaría a explicar
+   * en cada llamada cuál de las dos se está pidiendo.
+   *
+   * Idempotente: volver a llamarlo reemplaza el stock DE ESA RONDA y actualiza
+   * el instante. El Coordinador puede reintentar una descarga que salió a
+   * medias sin quedar con media ronda medida contra un momento y media contra
+   * otro.
+   *
+   * Rechaza con `ErrorSnapshot`, igual que `traerSnapshot`: la pantalla
+   * necesita el motivo para dar la salida correcta, no un error genérico.
+   */
+  traerStockDeRonda(
+    inventarioId: number,
+    ronda: number,
+    opciones?: OpcionesTraerStockDeRonda,
+  ): Promise<ResultadoStockDeRonda>;
   /**
    * Paso 2: parte el snapshot en hojas del tamaño elegido. Reemplaza
    * cualquier hoja previa de ese inventario (y su reparto): es
@@ -634,6 +686,28 @@ export interface RepositorioInventario {
      * ventana el Coordinador todavía corrige (`puedeCorregirLoContado`).
      */
     ultimaRondaCerrada: number | null;
+    /**
+     * CUÁNDO SE BAJÓ EL STOCK DE `rondaActiva`. `null` = esta ronda todavía no
+     * lo tiene.
+     *
+     * Desde que cada reconteo trae su propio stock (confirmado con el cliente
+     * el 2026-09-29), el paso 1 del armado deja de estar hecho para siempre:
+     * vuelve a estar pendiente en cada ronda nueva. `inventarioId !== null` ya
+     * no alcanza para decidirlo -- ese dato dice que el inventario existe, no
+     * que ESTA ronda tenga contra qué compararse.
+     *
+     * Para la ronda 1 coincide con `tomadoEn` del snapshot, y eso es a
+     * propósito: la ronda 1 no es un caso especial, es la misma sincronización
+     * con otro alcance (ver `dominio/sincronizacion-de-ronda.ts`).
+     */
+    stockDeRondaTomadoEn: string | null;
+    /**
+     * Cuántos productos trajo esa descarga. `null` con el MISMO criterio que
+     * `stockDeRondaTomadoEn`, y `0` NO es `null`: una ronda que no arrastró
+     * nada y sincronizó igual trae `0` con su instante, y cuenta como hecha.
+     * Confundirlos deja la pantalla pidiendo una descarga que ya ocurrió.
+     */
+    stockDeRondaItems: number | null;
   } | null>;
 }
 

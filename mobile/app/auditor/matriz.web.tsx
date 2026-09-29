@@ -12,7 +12,14 @@ import {
   SelectorSucursal,
 } from '../../components/ui';
 import { repositorioAuditoria, repositorioInventario, repositorioSesion } from '../../lib/contenedor';
-import { cuadroDelItem, diferenciaUnidades, resumirAuditoria, veredicto } from '../../lib/dominio/auditoria';
+import {
+  cuadroDelItem,
+  diferenciaUnidades,
+  resumirAuditoria,
+  stockDeLaMedicion,
+  textoStockDeLaMedicion,
+  veredicto,
+} from '../../lib/dominio/auditoria';
 import {
   aplicarFiltroMatriz,
   categoriaDe,
@@ -101,6 +108,31 @@ const SIN_DATO = '—';
 
 function numero(valor: number | null | undefined): Celda {
   return valor === null || valor === undefined ? { texto: SIN_DATO, color: colors.grisClaro } : { texto: formatoMiles(valor) };
+}
+
+/**
+ * EL STOCK CONTRA EL QUE SE MIDIÓ ESTA FILA -- no `item.stockErp`.
+ *
+ * Desde que cada reconteo baja su propio stock (ver
+ * `dominio/auditoria.ts#stockDeLaMedicion`), el de la ronda 1 es la vara de la
+ * PRIMERA pasada. Mostrarlo al lado de un conteo de la ronda 3 dejaba la fila
+ * con una resta que no daba la diferencia que ella misma escribe dos columnas
+ * más a la derecha.
+ *
+ * CUANDO EL STOCK NO ES DE LA RONDA DEL CONTEO, LA CELDA LO DICE: la ronda entre
+ * paréntesis pegada al número, en gris, y la frase completa del dominio en la
+ * etiqueta accesible. Es el mismo criterio con el que la columna "Hoja" explica
+ * su guion, y el mismo con el que la app marca el empaque que corrigió el
+ * auditor -- el número va tal cual y al lado se dice de dónde salió.
+ */
+function celdaErp(item: ItemAuditoria): Celda {
+  const medicion = stockDeLaMedicion(item);
+  const base = numero(medicion.stockErp);
+  const nota = textoStockDeLaMedicion(medicion);
+  // `null` = no hay nada que aclarar (una sola ronda, o el stock ES el de la
+  // ronda del conteo, que es el caso normal desde el cambio).
+  if (nota === null || medicion.rondaDelStock === null) return base;
+  return { ...base, texto: `${base.texto} (${medicion.rondaDelStock}°)`, color: colors.gris, etiqueta: nota };
 }
 
 /**
@@ -274,8 +306,10 @@ export default function MatrizWebScreen(): JSX.Element {
         numerica: false,
         celda: (it) => ({ texto: categoriaDe(it) }),
       },
-      // "ERP" y no "Stock": es el nombre con el que el Auditor lo pide.
-      { clave: 'erp', titulo: 'ERP', ancho: 86, numerica: true, celda: (it) => numero(it.stockErp) },
+      // "ERP" y no "Stock": es el nombre con el que el Auditor lo pide. El ancho
+      // sube de 86 a 106 porque la celda puede llevar la ronda del stock pegada
+      // al número ("80 (1°)"): con 86 esa aclaración se cortaba.
+      { clave: 'erp', titulo: 'ERP', ancho: 106, numerica: true, celda: celdaErp },
       ...Array.from({ length: rondas }, (_, indice) => ({
         clave: `ronda-${indice}`,
         // `ordinal` es la MISMA función que nombra las rondas en el Ciclo y en

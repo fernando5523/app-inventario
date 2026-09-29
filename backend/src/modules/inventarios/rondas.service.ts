@@ -60,8 +60,13 @@ import { contadoresPresentesHoy } from './presentes';
 import { registrarAuditoria } from '../../shared/auditoria';
 import { Conflicto, NoEncontrado, Prohibido, SolicitudInvalida } from '../../shared/errores';
 import type { ColaboradorAutenticado } from '../../shared/tipos';
-import { armarMatriz } from '../auditoria/auditoria.service';
-import { diferenciasParaPersistir, embudoDeConteos, resumir as resumirAuditoria } from '../auditoria/auditoria.calculos';
+import { armarMatriz, stockPorRondaDelInventario } from '../auditoria/auditoria.service';
+import {
+  diferenciasParaPersistir,
+  embudoDeConteos,
+  resumir as resumirAuditoria,
+  stockDeLaMedicion,
+} from '../auditoria/auditoria.calculos';
 import { redondear } from '../historial/historial.calculos';
 import { ROLES_DE_TIENDA } from '../sesion/sesion.service';
 import { totalUnidades } from '../hojas/hojas.calculos';
@@ -177,9 +182,60 @@ async function contadoHastaLaRonda(inventarioId: number, hasta: number): Promise
  * la anterior. Por eso el universo sale de los `Producto` de las hojas DE ESA
  * RONDA y no del catálogo -- si saliera del catálogo, la ronda 2 volvería a
  * evaluar los 1.236 ítems y el embudo no serviría de nada.
+ *
+ * ===========================================================================
+ * EL ORDEN, QUE ES LO QUE ESTE CAMBIO NO PUEDE ROMPER
+ * ===========================================================================
+ * Desde 2026-09-29 cada reconteo baja su propio stock del ERP, y esta función
+ * es la que decide QUIÉN pasa a la ronda siguiente. Las dos cosas se cruzan y
+ * el orden importa:
+ *
+ *   EL CONJUNTO QUE ARRASTRA LA RONDA N SE DECIDE CON LA COMPARACIÓN DE LA
+ *   RONDA N−1 CONTRA EL STOCK DE LA RONDA N−1.
+ *
+ * O sea: el stock nuevo se usa para evaluar el conteo NUEVO, nunca para
+ * redefinir quién entró. Es exactamente lo que hace el cliente en su Excel:
+ * filtra los faltantes y sobrantes de la pasada anterior, y recién a ESOS les
+ * pide stock nuevo. Si esta función mirara el stock de la ronda siguiente, el
+ * universo de la ronda 2 se recalcularía con una vara que no existía cuando se
+ * armaron sus hojas -- y los ítems ya repartidos cambiarían debajo de la gente
+ * que está caminando la góndola.
+ *
+ * Eso ya sale solo de cómo se llama: `cerrar(N−1)` y `resumen(N−1)` piden el
+ * universo DE LA RONDA N−1, y `stockDeLaMedicion` resuelve el stock de la ronda
+ * DEL CONTEO que manda. No hay nada que ajustar acá siempre que nadie cambie el
+ * argumento `ronda` por `ronda + 1`.
+ *
+ * ===========================================================================
+ * POR QUE EL STOCK SE RESUELVE ACÁ Y NO EN `ciclo-conteos.ts`
+ * ===========================================================================
+ * `ItemDeRonda.stockErp` sigue siendo UN número: el stock CONTRA EL QUE SE MIDE
+ * ESTE ÍTEM, ya resuelto. Se resuelve con `auditoria.calculos.ts#stockDeLaMedicion`,
+ * la MISMA función que usa la matriz del Auditor -- no con una comparación
+ * nueva. Eso es lo que impide el bug que el comentario de `ciclo-conteos.ts#cuadro`
+ * advierte: si el cierre de ronda midiera con una vara y la matriz con otra, un
+ * ítem saldría del ciclo acá y volvería a aparecer como faltante allá.
+ *
+ * El dominio (`ciclo-conteos.ts`) NO se toca: la regla "el último conteo manda,
+ * y se compara contra el stock" no cambió. Lo que cambió es CUÁL stock, y eso lo
+ * decide quien tiene la tabla delante.
+ *
+ * ===========================================================================
+ * EXPORTADA, Y NO SOLO PARA LOS TESTS
+ * ===========================================================================
+ * La consume además `d365.stock-ronda.service.ts#codigosQueArrastraLaRonda`,
+ * que baja el stock del ERP para los ítems que arrastra un reconteo. Tiene que
+ * ser ESTA función y no una copia: el conjunto al que se le baja stock nuevo y
+ * el conjunto que este cierre manda a recontar son EL MISMO, y dos definiciones
+ * de "no cuadró" dejarían ítems con vara nueva que nadie cuenta e ítems
+ * recontados contra el stock del día 22.
+ *
+ * Ojo con el argumento: esa descarga pide el universo de la ronda N−1 para
+ * preparar la ronda N. No mira las hojas de la ronda N porque todavía no
+ * existen.
  */
-async function universoDeLaRonda(inventarioId: number, ronda: number): Promise<ItemDeRonda[]> {
-  const [productos, catalogo, contado] = await Promise.all([
+export async function universoDeLaRonda(inventarioId: number, ronda: number): Promise<ItemDeRonda[]> {
+  const [productos, catalogo, contado, stockPorRonda] = await Promise.all([
     prisma.producto.findMany({
       where: { hoja: { inventarioId, numeroConteo: ronda } },
       select: { codigo: true, descripcion: true, categoria: true },
@@ -190,16 +246,33 @@ async function universoDeLaRonda(inventarioId: number, ronda: number): Promise<I
       select: { codigo: true, stockErp: true },
     }),
     contadoHastaLaRonda(inventarioId, ronda),
+    // El stock de TODAS las rondas del inventario, no solo el de `ronda`: el
+    // conteo que manda puede ser de una pasada anterior (la hoja de esta ronda
+    // se finalizó sin tocar el ítem), y entonces la vara es la de ESA pasada.
+    // Traer solo el de `ronda` obligaría a caer a la ronda 1 en ese caso y la
+    // matriz mediría distinto sobre el mismo ítem.
+    stockPorRondaDelInventario(inventarioId),
   ]);
 
   const stockPorCodigo = new Map(catalogo.map((c) => [c.codigo, c.stockErp] as const));
   const vacio = new Array<number | null>(ronda).fill(null);
 
-  return productos.map((p) => ({
-    codigo: p.codigo,
-    stockErp: stockPorCodigo.get(p.codigo) ?? null,
-    conteos: contado.get(p.codigo) ?? vacio,
-  }));
+  return productos.map((p) => {
+    const conteos = contado.get(p.codigo) ?? vacio;
+    return {
+      codigo: p.codigo,
+      // YA RESUELTO: el stock de la ronda del conteo que manda, con la caída a
+      // la ronda 1 cuando esa ronda no bajó el suyo (un inventario viejo, o una
+      // ronda que se abrió sin poder descargar). `stockErp` del catálogo es el
+      // de la ronda 1 y sigue siendo el que manda para esa ronda.
+      stockErp: stockDeLaMedicion({
+        conteos,
+        stockErp: stockPorCodigo.get(p.codigo) ?? null,
+        stockPorRonda: stockPorRonda.get(p.codigo) ?? [],
+      }).stockErp,
+      conteos,
+    };
+  });
 }
 
 /** Las hojas de una ronda que todavía no están finalizadas. */
@@ -1207,7 +1280,8 @@ export async function sacarDeLaRondaSiguienteSiCuadro(
  * Acotado a UN codigo a proposito: `contadoHastaLaRonda` hace lo mismo para el
  * inventario entero (8.000 items) y se justifica al cerrar una ronda, donde se
  * necesitan todos. Corregir un conteo es una operacion puntual y no puede
- * costar una pasada por el catalogo completo.
+ * costar una pasada por el catalogo completo. La lectura del stock por ronda
+ * sigue el mismo criterio: filtrada por codigo, no el inventario entero.
  */
 async function itemCuadra(
   tx: Prisma.TransactionClient,
@@ -1215,7 +1289,7 @@ async function itemCuadra(
   codigo: string,
   hasta: number,
 ): Promise<boolean> {
-  const [item, productos] = await Promise.all([
+  const [item, productos, stockDeRondas] = await Promise.all([
     tx.catalogoItem.findFirst({ where: { inventarioId, codigo }, select: { stockErp: true } }),
     tx.producto.findMany({
       where: { codigo, hoja: { inventarioId, numeroConteo: { lte: hasta } } },
@@ -1224,6 +1298,15 @@ async function itemCuadra(
         empaques: { select: { nombre: true, factor: true } },
         conteos: { select: { sueltas: true, empaques: { select: { empaqueNombre: true, cantidad: true } } } },
       },
+    }),
+    // EL STOCK DE CADA RONDA, o esta funcion mediria con la vara de la ronda 1
+    // mientras la matriz mide con la de la ronda del conteo -- y entonces un
+    // item saldria de la ronda siguiente acá y volveria a aparecer como
+    // faltante en la pantalla del Auditor. Es el mismo riesgo que el comentario
+    // de `cuadro` advierte, ahora con una vara mas.
+    tx.stockRonda.findMany({
+      where: { inventarioId, codigo, numeroConteo: { lte: hasta } },
+      select: { numeroConteo: true, stockErp: true },
     }),
   ]);
 
@@ -1240,7 +1323,16 @@ async function itemCuadra(
     );
   }
 
-  return cuadro({ codigo, stockErp: item?.stockErp ?? null, conteos });
+  // Misma forma que en todo el resto: indice 0 = ronda 1, y los huecos en null
+  // -- una ronda que no bajo stock para este item NO trae un 0.
+  const stockPorRonda = new Array<number | null>(hasta).fill(null);
+  for (const fila of stockDeRondas) stockPorRonda[fila.numeroConteo - 1] = fila.stockErp;
+
+  // `stockDeLaMedicion` resuelve CONTRA QUE se compara; `cuadro` sigue
+  // decidiendo SI coincide. La segunda no se reescribe: es la regla del dominio
+  // y es la misma que usa el cierre de ronda.
+  const stockErp = stockDeLaMedicion({ conteos, stockErp: item?.stockErp ?? null, stockPorRonda }).stockErp;
+  return cuadro({ codigo, stockErp, conteos });
 }
 
 export { RONDAS_DEL_CICLO, destinoTrasRonda };

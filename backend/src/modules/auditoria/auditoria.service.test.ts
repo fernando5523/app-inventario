@@ -16,6 +16,12 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const prismaMock = vi.hoisted(() => ({
   inventario: { findUnique: vi.fn() },
   catalogoItem: { findMany: vi.fn() },
+  // ADITIVO (stock por ronda, 2026-09-29): `armarMatriz` y `universoDeLaRonda`
+  // leen `StockRonda` para saber contra que stock se midio cada ronda. VACIO por
+  // defecto = este inventario no tiene stock por ronda, que es como se comportan
+  // todos los que ya estaban en la base: todo cae al de la ronda 1 y estos tests
+  // siguen afirmando exactamente lo que afirmaban.
+  stockRonda: { findMany: vi.fn(async () => []) },
   hojaConteo: { findMany: vi.fn() },
   diferenciaItem: { findMany: vi.fn() },
   clasificacionProducto: { findMany: vi.fn() },

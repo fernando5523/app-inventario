@@ -70,6 +70,8 @@ import {
   type DesgloseSnapshot,
   type EstadoInventario,
   type OpcionesTraerSnapshot,
+  type OpcionesTraerStockDeRonda,
+  type ResultadoStockDeRonda,
   type RepositorioInventario,
   type ResumenRonda,
 } from '../puertos/repositorios';
@@ -86,6 +88,8 @@ const RUTAS = {
   asignarHojas: (inventarioId: number) => `/api/inventarios/${inventarioId}/hojas/asignar`,
   resumenRonda: (inventarioId: number, ronda: number) => `/api/inventarios/${inventarioId}/rondas/${ronda}/resumen`,
   cerrarRonda: (inventarioId: number, ronda: number) => `/api/inventarios/${inventarioId}/rondas/${ronda}/cerrar`,
+  /** El stock de HOY de lo que arrastra un reconteo -- ver el puerto. */
+  stockDeRonda: (inventarioId: number, ronda: number) => `/api/inventarios/${inventarioId}/rondas/${ronda}/stock`,
 };
 
 /**
@@ -128,6 +132,14 @@ interface InventarioActivoDto extends SnapshotDto {
    * hay ronda activa, igual que cuando la última ronda cerró.
    */
   estado: EstadoInventario;
+  /**
+   * Cuándo se bajó el stock de `rondaActiva` y cuántos ítems trajo. Pasan
+   * derecho, como `rondaActiva`. Desde que cada reconteo trae su propio stock
+   * (cliente, 2026-09-29), es lo que decide si el paso 1 del armado sigue
+   * pendiente -- ver `dominio/sincronizacion-de-ronda.ts`.
+   */
+  stockDeRondaTomadoEn: string | null;
+  stockDeRondaItems: number | null;
 }
 
 /**
@@ -347,6 +359,50 @@ export const inventarioApi: RepositorioInventario = {
         finDelPost.abort();
         await sondeo;
       }
+    } catch (error) {
+      throw comoErrorSnapshot(error);
+    }
+  },
+
+  /**
+   * EL PASO 1 DE UN RECONTEO: el stock de hoy, solo de lo que la ronda
+   * arrastra. Ver `RepositorioInventario.traerStockDeRonda` en el puerto.
+   *
+   * MISMA MECÁNICA que `traerSnapshot` y a propósito: pre-chequeo de las
+   * credenciales para poder distinguir "faltan credenciales" de un 400
+   * cualquiera, sondeo de avance en paralelo al POST, y todo lo que salga mal
+   * traducido a `ErrorSnapshot` para que la pantalla dé la salida correcta.
+   * Lo que cambia es el universo -- decenas o cientos de ítems en vez del
+   * catálogo entero -- no la forma de pedirlo.
+   *
+   * SIN `TIMEOUT_LARGO_MS`: aquel existe porque bajar ~11.863 ítems paginados
+   * por OData tarda minutos. Acá son los faltantes y sobrantes de una ronda;
+   * si esto tardara minutos, algo anda mal y conviene que corte.
+   */
+  async traerStockDeRonda(inventarioId, ronda, opciones: OpcionesTraerStockDeRonda = {}) {
+    const { onAvance, signal } = opciones;
+
+    try {
+      onAvance?.({ traidos: 0, total: null });
+
+      const estado = await pedir<{ configurado: boolean }>(RUTAS.d365Estado, { senal: signal });
+      if (!estado.configurado) {
+        throw new ErrorSnapshot(
+          'dynamics-no-configurado',
+          'Faltan las credenciales de Dynamics. Un Administrador las carga en Configuración.',
+        );
+      }
+
+      const resultado = await pedir<ResultadoStockDeRonda>(RUTAS.stockDeRonda(inventarioId, ronda), {
+        metodo: 'POST',
+        cuerpo: {},
+        senal: signal,
+      });
+
+      // El número final sale del RESULTADO, igual que en el snapshot: es el
+      // que entró a la ronda, no el que se bajó de Dynamics.
+      onAvance?.({ traidos: resultado.items, total: resultado.items });
+      return resultado;
     } catch (error) {
       throw comoErrorSnapshot(error);
     }

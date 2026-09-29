@@ -564,6 +564,9 @@ model Inventario {
 
   hojas            HojaConteo[]
   catalogo         CatalogoItem[]
+  /// El stock del ERP de CADA ronda -- ver `StockRonda`. La ronda 1 tambien
+  /// esta ahi, y es la misma cifra que `CatalogoItem.stockErp`.
+  stockPorRonda    StockRonda[]
   /// 1:1 -- un inventario se lacra UNA sola vez y no se re-lacra.
   lacrado          LacradoInventario?
   resultado        ResultadoInventario?
@@ -791,6 +794,91 @@ model EmpaqueCatalogo {
 
   @@unique([catalogoItemId, nombre])
   @@map("empaques_catalogo")
+}
+
+/// EL STOCK DEL ERP CONTRA EL QUE SE MIDIO **CADA** RONDA.
+///
+/// ===========================================================================
+/// DECISION DEL CLIENTE (Gilmer, 2026-09-29): CADA RECONTEO TRAE STOCK NUEVO
+/// ===========================================================================
+/// Hasta hoy el inventario tenia UNA sola vara -- `CatalogoItem.stockErp`,
+/// congelada al abrir el mes -- y las tres rondas se comparaban contra ella.
+/// Eso asumia que entre una ronda y la siguiente el ERP no se movia, y se
+/// mueve: el primer conteo es el dia 22 y los reconteos son los dias que
+/// siguen, con ventas, transferencias y los ajustes que el cliente hoy parcha
+/// a mano con su hoja NEGATIVO. Ahora cada reconteo baja el stock NUEVO, y
+/// solo de los faltantes y sobrantes que arrastra esa ronda.
+///
+/// LO QUE ESTO LE CAMBIA AL SIGNIFICADO DEL RECONTEO, y hay que leerlo antes
+/// de tocar cualquier calculo que use esta tabla: con stock nuevo por ronda,
+/// EL RECONTEO YA NO VERIFICA AL CONTEO ANTERIOR -- es una medicion
+/// independiente. Un item con "falta 1" el lunes puede salir cuadrado el
+/// martes SIN QUE NADIE TOQUE EL ESTANTE, solo porque se vendio una unidad.
+/// No es un bug de conciliacion: es lo que el cliente hace hoy en su Excel y
+/// es lo que se pidio replicar.
+///
+/// ===========================================================================
+/// POR QUE UNA FILA POR RONDA Y NO UNA COLUMNA QUE SE PISA
+/// ===========================================================================
+/// La otra opcion era actualizar `CatalogoItem.stockErp` en cada descarga. Se
+/// descarto: si se pisa, LA RONDA 1 DEJA DE SER EXPLICABLE. El auditor veria
+/// el conteo viejo contra un stock que ya no es el que se uso para mandar ese
+/// item al reconteo, y la pregunta "por que este item entro a la ronda 2" no
+/// tendria respuesta en la base. Con una fila por ronda, la matriz puede
+/// mostrar contra que stock se midio cada conteo -- y se ve por que un item
+/// faltaba el lunes y cuadro el martes.
+///
+/// LA RONDA 1 TAMBIEN SE ESCRIBE ACA, aunque su cifra ya viva en
+/// `CatalogoItem.stockErp`. Que la ronda 1 fuera el caso especial "esa esta en
+/// la otra tabla" garantiza que algun dia alguien lea una y no la otra.
+///
+/// SON LA MISMA CIFRA, Y MANDA `CatalogoItem.stockErp`: lo leen el sello del
+/// lacrado y los inventarios historicos, asi que la ronda 1 se resuelve
+/// SIEMPRE por ahi (ver `auditoria.calculos.ts#stockDeLaMedicion`). Esta fila
+/// es la copia legible por ronda, no la fuente de la ronda 1.
+model StockRonda {
+  id           Int        @id @default(autoincrement())
+  inventarioId Int        @map("inventario_id")
+  inventario   Inventario @relation(fields: [inventarioId], references: [id])
+
+  /// La ronda que se midio con este stock. 1 = el conteo inicial.
+  /// Mismo dominio que `HojaConteo.numeroConteo` y sin tope, por lo mismo:
+  /// el Auditor puede abrir una 4ta y una 5ta pasada.
+  numeroConteo Int @map("numero_conteo")
+
+  /// ItemNumber de Dynamics -- la identidad estable entre rondas, igual que en
+  /// `CatalogoItem` y `Producto`. NO hay FK a `catalogo_items`: el puente entre
+  /// rondas es el codigo, y una FK obligaria a resolver el id del snapshot para
+  /// escribir una descarga que el ERP identifica por codigo.
+  codigo String
+
+  /// Lo que dijo el ERP para ESTE item EN ESTA RONDA.
+  ///
+  /// NULLABLE CON EL MISMO CRITERIO QUE `CatalogoItem.stockErp`, que es el
+  /// criterio del sistema entero: NULL = el ERP no trajo stock para ese item,
+  /// y eso NO ES 0. Un 0 afirma "no deberia haber ninguno" y termina en el
+  /// descuento del sueldo de alguien; NULL dice "no se puede auditar". Ver la
+  /// cabecera de auditoria.calculos.ts.
+  stockErp Int? @map("stock_erp")
+
+  /// CUANDO se bajo este stock. No es decoracion: es lo que le permite a la
+  /// pantalla del Coordinador saber si la ronda activa ya tiene su descarga del
+  /// dia o el paso 1 vuelve a estar pendiente (ver
+  /// `inventarios.service.ts#activo`, campo `stockDeRondaTomadoEn`). Con una
+  /// sola vara congelada esa pregunta no existia.
+  tomadoEn DateTime @default(now()) @map("tomado_en")
+
+  /// UNA SOLA CIFRA POR (inventario, ronda, item). Volver a bajar el stock de
+  /// una ronda ACTUALIZA la fila, no agrega una segunda: dos cifras para la
+  /// misma ronda dejarian al calculo eligiendo, y esa eleccion no la puede
+  /// tomar un `orderBy`.
+  ///
+  /// SIRVE TAMBIEN DE INDICE de lectura -- las consultas filtran por
+  /// `[inventarioId]` o `[inventarioId, numeroConteo]`, que son prefijos de
+  /// esta clave. No se agrega un indice aparte para eso: seria el mismo arbol
+  /// escrito dos veces.
+  @@unique([inventarioId, numeroConteo, codigo])
+  @@map("stock_rondas")
 }
 
 /// tipos.ts#HojaConteo. `numeroConteo` es la ronda, y NO tiene tope: el

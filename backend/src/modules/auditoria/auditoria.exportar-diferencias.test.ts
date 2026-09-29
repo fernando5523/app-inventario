@@ -59,6 +59,11 @@ const item = (parcial: Partial<ItemAuditoria> = {}): ItemAuditoria => ({
   precioVenta: 10,
   stockErp: 100,
   conteos: [100],
+  // VACIA por defecto: este inventario no tiene stock por ronda, asi que todo
+  // se mide contra `stockErp` (el de la ronda 1) y el resultado es el mismo que
+  // antes de que existiera el stock por ronda. Los tests que SI lo prueban la
+  // pasan explicita.
+  stockPorRonda: [],
   esEmpresa: false,
   clase: 'unidad',
   claseForzada: null,
