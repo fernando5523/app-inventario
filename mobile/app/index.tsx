@@ -14,7 +14,8 @@ import {
   TecladoPin,
   type SelectOpcion,
 } from '../components/ui';
-import { esErrorApi } from '../lib/adaptadores/_http';
+import { esErrorApi, urlBase } from '../lib/adaptadores/_http';
+import { servidorALaVista } from '../lib/dominio/servidor-a-la-vista';
 import { repositorioSesion } from '../lib/contenedor';
 import { ejecutarIngreso } from '../lib/ejecutar-ingreso';
 import { mensajeDeErrorIngreso } from '../lib/mensaje-error-ingreso';
@@ -323,7 +324,13 @@ export default function LoginScreen(): JSX.Element {
           <Text style={styles.taglineTexto}>porque mereces lo mejor</Text>
           <EstrellaMarca size={13} color={colors.rojo} />
         </View>
-        <Text style={styles.version}>v{version}</Text>
+        {/* LA VERSIÓN NO ALCANZA PARA SABER CONTRA QUÉ SE ESTÁ HABLANDO.
+            La dirección se congela al compilar el APK, así que dos teléfonos
+            con la misma versión pueden estar pegando a servidores distintos y
+            verse idénticos. Ver dominio/servidor-a-la-vista.ts. */}
+        <Text style={styles.version}>
+          v{version} · {servidorALaVista(urlBase())}
+        </Text>
       </View>
 
       <TecladoPin

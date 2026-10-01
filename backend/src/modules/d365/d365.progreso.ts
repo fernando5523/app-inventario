@@ -5,8 +5,21 @@
  * ~90 segundos y la pantalla mostro "0 items traidos..." TODO ese tiempo,
  * saltando a 951 recien al final. Al lado del cartel "puede tardar varios
  * minutos, no te vayas de la pantalla", un 0 inmovil se lee como "se colgo"
- * -- y el Coordinador toca Cancelar. Con los ~8.000 items de un almacen
- * grande la espera es varias veces mayor.
+ * -- y el Coordinador toca Cancelar.
+ *
+ * ESTA FRASE DECIA OTRA COSA Y ESTABA MAL (corregido 2026-10-01). Decia: "con
+ * los ~8.000 items de un almacen grande la espera es varias veces mayor", y
+ * eso se contradice con el bloque de abajo, donde los ~8.000 son lo BAJADO en
+ * esa misma prueba de 90 segundos. No es una imprecision de redaccion: dos
+ * agentes leyeron el archivo el mismo dia y sacaron conclusiones opuestas
+ * sobre si el snapshot entra o no en el corte de 230 segundos de Azure.
+ *
+ * LO QUE SI ES CIERTO, y es lo util: el tiempo del snapshot NO depende del
+ * tamano de la tienda. `ReleasedProductsV2` se baja ENTERA -- el filtro por
+ * responsable y por stock corre despues, en memoria (ver
+ * d365-catalogo.service.ts#mapearCatalogo) -- asi que una tienda chica y una
+ * grande bajan lo mismo y tardan lo mismo; lo que cambia es cuantos items
+ * ENTRAN al final. Una tienda grande no espera mas, solo cuenta mas.
  *
  * La causa no era la pantalla: `POST /api/d365/snapshot` devuelve UNA sola
  * vez, al final, y no habia NINGUN endpoint de estado que consultar. El

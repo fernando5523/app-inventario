@@ -34,6 +34,19 @@ export interface BotonWebProps {
   cargando?: boolean;
   /** Por qué no se puede. Se muestra debajo, en gris, solo si está deshabilitado. */
   motivo?: string;
+  /**
+   * Quita el chevron de la derecha.
+   *
+   * EL CHEVRON ES UNA PROMESA: dice "esto te lleva a otro lado". En un botón
+   * que ejecuta una acción sin moverte -- abrir el selector de archivos,
+   * confirmar, descargar -- esa promesa es falsa, y quien la lee duda antes de
+   * tocar. Visto en pantalla: "Elegir archivo .xlsx" con chevron se leía como
+   * un enlace a otra pantalla cuando abre el diálogo del sistema.
+   *
+   * Por defecto el chevron SIGUE ESTANDO: la enorme mayoría de estos botones
+   * sí navegan, y cambiar el default movería todas las pantallas de una vez.
+   */
+  sinChevron?: boolean;
 }
 
 export function BotonWeb({
@@ -43,6 +56,7 @@ export function BotonWeb({
   variante = 'secundario',
   onPress,
   deshabilitado = false,
+  sinChevron = false,
   cargando = false,
   motivo,
 }: BotonWebProps): JSX.Element {
@@ -79,7 +93,7 @@ export function BotonWeb({
             </Text>
           ) : null}
         </View>
-        <ChevronRight size={16} color={principal ? colors.blanco : colors.grisClaro} />
+        {sinChevron ? null : <ChevronRight size={16} color={principal ? colors.blanco : colors.grisClaro} />}
       </Pressable>
       {deshabilitado && motivo ? <Text style={styles.motivo}>{motivo}</Text> : null}
     </View>

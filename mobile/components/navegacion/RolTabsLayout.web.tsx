@@ -1,9 +1,10 @@
 import { Redirect, Slot, usePathname, router } from 'expo-router';
 import { LogOut } from 'lucide-react-native';
-import type { JSX } from 'react';
+import { useRef, type JSX } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
 
 import { iconoDeRuta } from './iconos-ruta';
+import { destinoDesdeLaRaizDelGrupo } from './rescate-de-ruta';
 import { useNavegacion } from '../../lib/navegacion-contexto';
 import { useSesion } from '../../lib/sesion-contexto';
 import { colors, fonts, fontSize, radius, spacing } from '../../lib/theme';
@@ -54,6 +55,22 @@ export function RolTabsLayout({ rol }: RolTabsLayoutProps): JSX.Element | null {
   const ruta = usePathname();
   const angosto = width < ANCHO_ANGOSTO;
 
+  /**
+   * LA URL QUE PIDIÓ EL NAVEGADOR EN ESTA CARGA DE PÁGINA, congelada en el
+   * primer render con `useRef` porque es el único momento en que todavía
+   * existe: un commit más tarde `getPathFromState` la reescribió a la raíz del
+   * grupo. Todo el porqué —y la traza que lo mide— está en `rescate-de-ruta.ts`.
+   *
+   * `useRef` y no una constante de módulo a propósito: así muere con este
+   * layout. Si alguien cierra sesión y vuelve a entrar, el grupo se monta de
+   * nuevo y lo pedido pasa a ser `/auditor`, que es lo correcto — con una
+   * constante de módulo el segundo login aterrizaría en la pantalla profunda
+   * del primero.
+   */
+  const pedida = useRef(
+    typeof window === 'undefined' ? ruta : window.location.pathname + window.location.search,
+  ).current;
+
   if (cargando) return null;
   if (!sesion) return <Redirect href="/" />;
   if (sesion.colaborador.rol !== rol) return <Redirect href={`/${sesion.colaborador.rol}`} />;
@@ -72,10 +89,18 @@ export function RolTabsLayout({ rol }: RolTabsLayoutProps): JSX.Element | null {
    * Entrar a `/auditor` -- que es donde cae el login -- REDIRIGE al primer
    * acceso del rol. No se borra la ruta: sigue existiendo para el teléfono y
    * como destino del login, solo deja de ser una parada.
+   *
+   * Pero quedar parado en `/auditor` NO siempre significa que se pidió
+   * `/auditor`: también es donde cae una url profunda a la que el grupo llegó
+   * tarde (`rescate-de-ruta.ts`). Por eso el destino no es directamente
+   * `primero`: primero se mira qué había pedido el navegador.
    */
   const enlaces = accesos;
   const primero = accesos[0]?.ruta;
-  if (ruta === inicio && primero !== undefined) return <Redirect href={primero as never} />;
+  if (ruta === inicio) {
+    const destino = destinoDesdeLaRaizDelGrupo({ pedida, inicio, primero });
+    if (destino !== null) return <Redirect href={destino as never} />;
+  }
 
   async function salir(): Promise<void> {
     await cerrar();
@@ -103,10 +128,16 @@ export function RolTabsLayout({ rol }: RolTabsLayoutProps): JSX.Element | null {
         >
           {enlaces.map((acceso) => {
             const destino = acceso.ruta ?? inicio;
-            // `startsWith` y no igualdad: una pantalla de detalle cuelga de su
-            // ruta madre y tiene que dejarla marcada. El Inicio se compara
-            // exacto, si no queda encendido siempre.
-            const activo = destino === inicio ? ruta === inicio : ruta.startsWith(destino);
+            // No es igualdad pelada: una pantalla de detalle cuelga de su ruta
+            // madre y tiene que dejarla marcada. Pero el prefijo se corta en la
+            // BARRA, no en cualquier letra -- con `startsWith(destino)` a secas,
+            // abrir `/auditor/ajustes-negativos` encendía "Ajuste final del
+            // conteo" (`/auditor/ajuste`), que es otra pantalla. Visto en el
+            // navegador el 2026-09-30, mismo error de límite que documenta
+            // `rescate-de-ruta.ts`. El Inicio se compara exacto, si no queda
+            // encendido siempre.
+            const activo =
+              destino === inicio ? ruta === inicio : ruta === destino || ruta.startsWith(`${destino}/`);
             // El icono sale de la RUTA, no del backend: los iconos son
             // componentes y no viajan por HTTP. Ver `iconos-ruta.ts`.
             const Icono = iconoDeRuta(destino);

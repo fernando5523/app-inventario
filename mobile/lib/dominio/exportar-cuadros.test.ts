@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   estadoExportacionCuadros,
+  estadoExportacionCuadrosDe,
   nombreCuadrosDeRespaldo,
   nombreDeContentDisposition,
   notaExportacionCuadros,
@@ -135,5 +136,60 @@ describe('el nombre que mandó el servidor', () => {
     const respaldo = nombreCuadrosDeRespaldo(8060);
     expect(respaldo).toBe('inventario-cuadros-inv8060.xlsx');
     expect(respaldo).not.toContain('market');
+  });
+});
+
+/**
+ * LA LIQUIDACIÓN OFRECE LA MISMA PLANILLA SIN TENER LOS DOS DATOS A MANO: su
+ * DTO (`deSucursal`) no trae el estado del inventario ni sus ítems auditables,
+ * así que los pide aparte y puede estar esperándolos o no haberlos conseguido.
+ */
+describe('la misma regla cuando los dos datos todavía no están', () => {
+  it('con los dos datos delega en la regla de siempre, sin una segunda opinión', () => {
+    const datos = { estado: 'conteo_cerrado', itemsAuditables: 980 } as const;
+    expect(estadoExportacionCuadrosDe({ datos, error: null })).toEqual(
+      estadoExportacionCuadros(datos.estado, datos.itemsAuditables),
+    );
+  });
+
+  /** Que delegue también cuando la respuesta es NO: el motivo es el de la regla, no uno propio. */
+  it('un inventario sin ítems comparables queda bloqueado con el motivo de la regla', () => {
+    const resultado = estadoExportacionCuadrosDe({ datos: { estado: 'conteo_cerrado', itemsAuditables: 0 }, error: null });
+    expect(resultado).toEqual(estadoExportacionCuadros('conteo_cerrado', 0));
+    expect(resultado.puedeExportar).toBe(false);
+  });
+
+  /**
+   * Nunca `puedeExportar: true` sobre un dato que no llegó: eso habilita un
+   * botón que va a fallar. Y nunca sin motivo: el botón se queda a la vista.
+   */
+  it('mientras los datos no llegan no se puede, y el motivo dice que se está averiguando', () => {
+    const r = estadoExportacionCuadrosDe({ datos: null, error: null });
+    expect(r.puedeExportar).toBe(false);
+    if (r.puedeExportar) return;
+    expect(r.motivo).toContain('averiguando');
+  });
+
+  /**
+   * Esperar y fallar se destraban distinto (esperar vs reintentar), así que el
+   * motivo tiene que decir cuál de los dos es -- y repetir el del servidor.
+   */
+  it('si el pedido falló lo dice, con el motivo del servidor adentro', () => {
+    const r = estadoExportacionCuadrosDe({ datos: null, error: 'La sesión expiró.' });
+    expect(r.puedeExportar).toBe(false);
+    if (r.puedeExportar) return;
+    expect(r.motivo).toContain('La sesión expiró.');
+    expect(r.motivo).not.toContain('averiguando en qué estado quedó el conteo');
+  });
+
+  /** El error gana sobre unos datos viejos: son los de la tienda anterior. */
+  it('un error manda aunque hayan quedado datos de la tienda anterior', () => {
+    const r = estadoExportacionCuadrosDe({
+      datos: { estado: 'lacrado', itemsAuditables: 980 },
+      error: 'Se cortó la red.',
+    });
+    expect(r.puedeExportar).toBe(false);
+    if (r.puedeExportar) return;
+    expect(r.motivo).toContain('Se cortó la red.');
   });
 });

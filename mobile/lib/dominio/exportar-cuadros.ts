@@ -153,3 +153,53 @@ function sanear(nombre: string): string | null {
 export function nombreCuadrosDeRespaldo(inventarioId: number): string {
   return `inventario-cuadros-inv${inventarioId}.xlsx`;
 }
+
+/**
+ * LOS DOS DATOS QUE PIDE `estadoExportacionCuadros`, CUANDO LA PANTALLA NO LOS
+ * TIENE A MANO.
+ *
+ * El panel de auditoría los tiene los dos antes de dibujar el botón: entra
+ * pidiendo `RepositorioInventario.activo()` (que trae el estado) y
+ * `RepositorioAuditoria.resumen()` (que trae los auditables). La LIQUIDACIÓN
+ * no: su pregunta es "cómo quedó el último cierre de esta tienda"
+ * (`RepositorioLiquidacion.deSucursal`), y ese DTO no trae ninguno de los dos
+ * -- los pide aparte, así que puede estar esperándolos o no haberlos
+ * conseguido.
+ *
+ * `datos: null` con `error: null` = todavía se están averiguando.
+ */
+export interface EntradaExportacionCuadros {
+  datos: { estado: EstadoInventario; itemsAuditables: number } | null;
+  /** El motivo del servidor si el pedido falló. `null` = no falló. */
+  error: string | null;
+}
+
+/**
+ * LA MISMA REGLA, con la ignorancia contemplada.
+ *
+ * NO reimplementa nada: en cuanto los dos datos están, delega en
+ * `estadoExportacionCuadros` -- hay UNA sola regla de cuándo se puede bajar la
+ * planilla, y dos copias se desalinean el día que una cambie. Lo único que
+ * agrega son los dos casos en que la pantalla todavía no sabe, y ahí la
+ * respuesta es "no se puede, y este es el motivo": nunca `puedeExportar: true`
+ * sobre un dato que no llegó, porque eso habilita un botón que va a fallar, y
+ * nunca esconder el botón, que deja al Auditor buscando un camino que existe.
+ */
+export function estadoExportacionCuadrosDe({ datos, error }: EntradaExportacionCuadros): EstadoExportacion {
+  // El error primero, igual que `reporte-gerencia.ts#vistaReporteGerencia`: un
+  // pedido que falló y uno que no volvió todavía se destraban distinto
+  // (reintentar vs esperar), y el motivo tiene que decir cuál de los dos es.
+  if (error !== null) {
+    return {
+      puedeExportar: false,
+      motivo: `No se pudo averiguar en qué estado quedó este inventario, así que no se sabe si la planilla saldría completa: ${error}`,
+    };
+  }
+  if (datos === null) {
+    return {
+      puedeExportar: false,
+      motivo: 'Todavía se está averiguando en qué estado quedó el conteo de este inventario.',
+    };
+  }
+  return estadoExportacionCuadros(datos.estado, datos.itemsAuditables);
+}

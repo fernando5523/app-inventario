@@ -1,13 +1,14 @@
 import { File, Paths } from 'expo-file-system';
 import { router } from 'expo-router';
 import * as Sharing from 'expo-sharing';
-import { AlertTriangle, Building2, Check, FileSpreadsheet, Layers, RefreshCw, Scale, Store, Wallet } from 'lucide-react-native';
+import { AlertTriangle, Building2, Check, Download, FileSpreadsheet, Layers, RefreshCw, Scale, Store, Wallet } from 'lucide-react-native';
 import { useCallback, useEffect, useMemo, useRef, useState, type JSX } from 'react';
 import { ActivityIndicator, Modal, Pressable, ScrollView, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
 
 import { useRefrescoAlEnfocar } from '../../components/hooks/useRefrescoAlEnfocar';
 import { formatoFechaHora, formatoMiles } from '../../components/ui';
 import {
+  BotonIcono,
   BotonWeb,
   CeldaTexto,
   ChipIcono,
@@ -17,9 +18,16 @@ import {
   TarjetaWeb,
   type ColumnaTabla,
 } from '../../components/web';
-import { repositorioLiquidacion, repositorioSesion } from '../../lib/contenedor';
+import { repositorioAuditoria, repositorioHistorial, repositorioLiquidacion, repositorioSesion } from '../../lib/contenedor';
+import { descargarArchivo } from '../../lib/descargar-archivo';
 import { estadoAjustesNegativos, notaFaltanteEmpresa } from '../../lib/dominio/ajustes-formulario';
 import { multaPorInasistencia, textoDiasAsistidos } from '../../lib/dominio/asistencia';
+import {
+  estadoExportacionCuadrosDe,
+  nombreCuadrosDeRespaldo,
+  notaExportacionCuadros,
+  type EntradaExportacionCuadros,
+} from '../../lib/dominio/exportar-cuadros';
 import { pluralizar } from '../../lib/dominio/plural';
 import { asistentesConCentavoExtra, resumirAsistencia } from '../../lib/dominio/reparto-visible';
 import {
@@ -37,6 +45,7 @@ import type {
   CierreLiquidacion,
   Conciliacion,
   DetalleLiquidacion,
+  EstadoInventario,
   FilaReporteGerencia,
   Liquidacion,
   ReporteGerencia,
@@ -191,6 +200,39 @@ function bonoDeLaFila(fila: DetalleLiquidacion, liquidacion: Liquidacion): strin
   return liquidacion.bonoAsistencia > 0 ? `–${soles(liquidacion.bonoAsistencia)}` : soles(0);
 }
 
+/**
+ * LOS DOS DATOS DE LA PLANILLA DEL MES, que esta pantalla no tiene y tiene que
+ * ir a buscar: el ESTADO del inventario y sus ítems AUDITABLES. Son los dos
+ * argumentos de `estadoExportacionCuadros`, y `Liquidacion` no trae ninguno --
+ * su pregunta es "cómo quedó el último cierre de esta tienda", no "en qué
+ * tramo está este inventario".
+ *
+ * DOS PEDIDOS Y NO UNO porque ningún endpoint devuelve los dos: el estado sale
+ * del detalle del histórico y los auditables del resumen de auditoría (el mismo
+ * que alimenta el Panel). Van en paralelo: no dependen entre sí.
+ *
+ * POR QUÉ NO `RepositorioInventario.activo()`, que traería el estado de una sola
+ * llamada: porque sería el estado de OTRO inventario. Esta pantalla muestra el
+ * último cierre (`conteo_cerrado` o más adelante) y `activo()` devuelve el que
+ * está abierto -- el del mes siguiente. Con ese estado el botón diría "estás
+ * haciendo el ajuste final" sobre un inventario que no es el de la planilla que
+ * se está mirando.
+ *
+ * NUNCA LANZA: devuelve el motivo en `error`. Un fallo acá apaga un botón, no
+ * tumba la liquidación entera -- mismo criterio que el reporte a gerencia.
+ */
+async function datosDeLaPlanillaDelMes(inventarioId: number): Promise<EntradaExportacionCuadros> {
+  try {
+    const [detalle, resumen] = await Promise.all([
+      repositorioHistorial.detalle(inventarioId),
+      repositorioAuditoria.resumen(inventarioId),
+    ]);
+    return { datos: { estado: detalle.estado, itemsAuditables: resumen.auditables }, error: null };
+  } catch (e) {
+    return { datos: null, error: e instanceof Error ? e.message : 'No se pudo leer el estado del inventario.' };
+  }
+}
+
 /** El título y el detalle de un error de acción. Lo que en el teléfono es un `Alert.alert`. */
 interface AvisoDeAccion {
   titulo: string;
@@ -301,6 +343,18 @@ export default function LiquidacionWeb(): JSX.Element {
   const [reporte, setReporte] = useState<ReporteGerencia | null>(null);
   const [errorReporte, setErrorReporte] = useState<string | null>(null);
   const [exportando, setExportando] = useState(false);
+  /**
+   * LOS DOS DATOS QUE PIDE LA REGLA DE LA PLANILLA DEL MES (el .xlsx con el
+   * formato del cliente) y que `Liquidacion` NO trae: en qué estado quedó el
+   * inventario y cuántos de sus ítems se pueden auditar.
+   *
+   * `null` en los dos = todavía se están averiguando; `errorCuadros` = se pidió
+   * y falló. Los distingue `dominio/exportar-cuadros.ts#estadoExportacionCuadrosDe`,
+   * porque esperar y fallar se destraban distinto.
+   */
+  const [datosCuadros, setDatosCuadros] = useState<{ estado: EstadoInventario; itemsAuditables: number } | null>(null);
+  const [errorCuadros, setErrorCuadros] = useState<string | null>(null);
+  const [bajandoCuadros, setBajandoCuadros] = useState(false);
 
   // La sucursal COMPARTIDA (contexto), no la de la ficha: mismo criterio que
   // lacrado.web.tsx. El padrón resuelve el nombre para la banda.
@@ -334,9 +388,19 @@ export default function LiquidacionWeb(): JSX.Element {
       setLiquidacion(resultadoLiq);
       setConciliacion(resultadoConc);
 
-      // Los ajustes SÍ van encadenados: cuelgan del inventario, y el id sale de
-      // la liquidación que se acaba de traer.
-      setAjustes(resultadoLiq === null ? null : await repositorioLiquidacion.ajustes(resultadoLiq.inventarioId));
+      // Los ajustes y los dos datos de la planilla del mes SÍ van encadenados a
+      // la liquidación: cuelgan del inventario, y el id sale de la que se acaba
+      // de traer. Pero entre ELLOS van en paralelo -- no dependen uno del otro,
+      // y en serie serían dos esperas seguidas por una sola pantalla.
+      const [datosAjustes, cuadros] = await Promise.all([
+        resultadoLiq === null ? null : repositorioLiquidacion.ajustes(resultadoLiq.inventarioId),
+        resultadoLiq === null ? null : datosDeLaPlanillaDelMes(resultadoLiq.inventarioId),
+      ]);
+      setAjustes(datosAjustes);
+      // Sin ciclo cerrado no hay planilla del mes que bajar, y tampoco hay botón:
+      // todo lo de abajo vive dentro de `liquidacion !== null`.
+      setDatosCuadros(cuadros?.datos ?? null);
+      setErrorCuadros(cuadros?.error ?? null);
 
       // EL REPORTE A GERENCIA, con su propio try: si falla, su tarjeta dice por
       // qué y el resto de la liquidación se sigue viendo. Y solo con la
@@ -384,6 +448,11 @@ export default function LiquidacionWeb(): JSX.Element {
     setCerrado(null);
     setReporte(null);
     setErrorReporte(null);
+    // También los dos datos de la planilla del mes: son del inventario de la
+    // tienda ANTERIOR, y con ellos el botón juzgaría la planilla de la nueva con
+    // el estado de la vieja.
+    setDatosCuadros(null);
+    setErrorCuadros(null);
     setError(null);
     setAviso(null);
     setCargando(true);
@@ -464,6 +533,53 @@ export default function LiquidacionWeb(): JSX.Element {
       setAviso({ titulo: 'No se pudo exportar', detalle: e instanceof Error ? e.message : 'Intenta de nuevo.' });
     } finally {
       setExportando(false);
+    }
+  }
+
+  /**
+   * LA PLANILLA DEL MES: el .xlsx con el formato del cliente -- FALTANTES,
+   * SOBRANTES, EMPRESA y DESCUENTO, las cuatro hojas que Gilmer arma a mano.
+   *
+   * Lo pidió el usuario desde la web: *"la exportación del excel de acuerdo a la
+   * plantilla"*. El archivo y el cableado ya existían y el único camino para
+   * llegar era el Panel de auditoría, que es donde se REVISA el conteo. Acá se
+   * CIERRA el mes, y la hoja DESCUENTO del archivo es literalmente la tabla que
+   * esta pantalla dibuja: quien la está firmando es quien necesita bajarla.
+   *
+   * La regla de cuándo se puede es la de `dominio/exportar-cuadros.ts`, la misma
+   * que usa el Panel -- no una segunda opinión escrita acá.
+   */
+  const exportCuadros = estadoExportacionCuadrosDe({ datos: datosCuadros, error: errorCuadros });
+  const notaCuadros = datosCuadros === null ? null : notaExportacionCuadros(datosCuadros.estado);
+
+  /**
+   * BAJAR LA PLANILLA DEL MES. El nombre lo manda el servidor
+   * (`Content-Disposition`): el cliente recibe cinco de estos por correo el
+   * mismo día y los distingue por la tienda y el período que llevan adentro.
+   *
+   * `descargarArchivo` y NO `Sharing.shareAsync` como el reporte a gerencia:
+   * este archivo se abre en Excel al lado del del cliente para comparar columna
+   * por columna, y eso pasa en la PC donde se está mirando esta pantalla. En el
+   * navegador `Sharing.isAvailableAsync()` mira `navigator.share`, que en un
+   * Chrome de escritorio no existe -- la carpeta de descargas sí.
+   */
+  async function bajarPlanillaDelMes(): Promise<void> {
+    if (liquidacion === null) return;
+    setBajandoCuadros(true);
+    setAviso(null);
+    try {
+      const { bytes, nombreArchivo } = await repositorioHistorial.exportarCuadros(liquidacion.inventarioId);
+      descargarArchivo(bytes, nombreArchivo ?? nombreCuadrosDeRespaldo(liquidacion.inventarioId));
+    } catch (e) {
+      // EN PANTALLA, NO EN UN `Alert`: `react-native-web` exporta `Alert.alert`
+      // como un método vacío, así que en una PC el error no se vería en ninguna
+      // parte. Es la misma banda que usan las demás acciones de esta pantalla.
+      setAviso({
+        titulo: 'No se pudo bajar la planilla del mes',
+        detalle: e instanceof Error ? e.message : 'Intenta de nuevo.',
+      });
+    } finally {
+      setBajandoCuadros(false);
     }
   }
 
@@ -768,33 +884,68 @@ export default function LiquidacionWeb(): JSX.Element {
             filas={visibles}
             claveDe={(p) => String(p.colaboradorId)}
             tinteDeFila={(p) => (tieneFaltas(p, liquidacion) ? 'atencion' : null)}
+            /*
+              EL BOTÓN DE LA PLANILLA DEL MES VA ACÁ, en la barra de
+              herramientas de ESTA tabla y no en el encabezado de la página.
+
+              Porque la tabla ES una de las hojas del archivo: la hoja DESCUENTO
+              lleva estas mismas filas (cuota base, asistencia y total por
+              persona), así que el botón está pegado a lo que baja. Arriba, en el
+              encabezado, tendría que competir con el período y con la tienda y
+              no diría de qué habla el archivo.
+
+              OTRO ÍCONO que el reporte a gerencia (`FileSpreadsheet`, más
+              abajo): son DOS .xlsx del mismo inventario en la misma pantalla.
+              `Download` es la planilla del mes entera, `FileSpreadsheet` es el
+              reporte de los productos de la empresa. Con el mismo ícono dos
+              veces, bajar el equivocado se descubre recién al abrirlo. `Download`
+              es además el ícono que ya tiene este mismo archivo en el Panel de
+              auditoría: el mismo archivo, el mismo ícono en las dos pantallas.
+
+              APAGADO Y NO ESCONDIDO cuando no se puede: el motivo va en el
+              tooltip Y en el renglón de abajo de la tabla. Quien viene a bajar el
+              archivo tiene que encontrar el camino y leer qué falta, no un hueco.
+            */
             herramientas={
-              <View style={styles.chips}>
-                {(
-                  [
-                    { id: 'todos', etiqueta: 'Todos', cuenta: liquidacion.planilla.length },
-                    // '—' y no el número: sin asistencia registrada no se puede
-                    // afirmar quién vino completo. Las dos cuentas son de PERSONAS.
-                    { id: 'asistio', etiqueta: 'Sin faltas', cuenta: asistieron ?? '—' },
-                    { id: 'falto', etiqueta: 'Con faltas', cuenta: conFaltas ?? '—' },
-                  ] as const
-                ).map((f) => {
-                  const activo = filtro === f.id;
-                  return (
-                    <Pressable
-                      key={f.id}
-                      onPress={() => setFiltro(f.id)}
-                      style={[styles.chip, activo && styles.chipActivo]}
-                      accessibilityRole="button"
-                      accessibilityState={{ selected: activo }}
-                    >
-                      <Text style={[styles.chipTexto, activo && styles.chipTextoActivo]}>
-                        {f.etiqueta} ({f.cuenta})
-                      </Text>
-                    </Pressable>
-                  );
-                })}
-              </View>
+              <>
+                <View style={styles.chips}>
+                  {(
+                    [
+                      { id: 'todos', etiqueta: 'Todos', cuenta: liquidacion.planilla.length },
+                      // '—' y no el número: sin asistencia registrada no se puede
+                      // afirmar quién vino completo. Las dos cuentas son de PERSONAS.
+                      { id: 'asistio', etiqueta: 'Sin faltas', cuenta: asistieron ?? '—' },
+                      { id: 'falto', etiqueta: 'Con faltas', cuenta: conFaltas ?? '—' },
+                    ] as const
+                  ).map((f) => {
+                    const activo = filtro === f.id;
+                    return (
+                      <Pressable
+                        key={f.id}
+                        onPress={() => setFiltro(f.id)}
+                        style={[styles.chip, activo && styles.chipActivo]}
+                        accessibilityRole="button"
+                        accessibilityState={{ selected: activo }}
+                      >
+                        <Text style={[styles.chipTexto, activo && styles.chipTextoActivo]}>
+                          {f.etiqueta} ({f.cuenta})
+                        </Text>
+                      </Pressable>
+                    );
+                  })}
+                </View>
+                <BotonIcono
+                  icono={Download}
+                  etiqueta={
+                    exportCuadros.puedeExportar
+                      ? `Bajar la planilla del mes en Excel, con el formato del cliente: FALTANTES, SOBRANTES, EMPRESA y DESCUENTO.${notaCuadros === null ? '' : ` ${notaCuadros}`}`
+                      : `Bajar la planilla del mes en Excel: no disponible todavía. ${exportCuadros.motivo}`
+                  }
+                  onPress={() => void bajarPlanillaDelMes()}
+                  cargando={bajandoCuadros}
+                  deshabilitado={!exportCuadros.puedeExportar}
+                />
+              </>
             }
             vacio={
               <Text style={styles.parrafo}>
@@ -807,6 +958,29 @@ export default function LiquidacionWeb(): JSX.Element {
               `Mostrando ${mostradas} de ${liquidacion.planilla.length} ${pluralizar(liquidacion.planilla.length, 'colaborador', 'colaboradores')}`
             }
           />
+
+          {/*
+            QUÉ BAJA ESE ÍCONO, EN TEXTO. Un botón de ícono solo manda a pasar el
+            mouse por encima para averiguarlo, y en esta pantalla hay dos .xlsx:
+            si el Auditor baja el equivocado lo descubre recién al abrirlo. Acá
+            queda dicho cuál es cuál sin tocar nada.
+
+            Y cuando no se puede, el MOTIVO en el mismo renglón: el tooltip del
+            botón apagado no alcanza -- nadie pasa el mouse sobre algo que
+            parece muerto.
+          */}
+          <View style={styles.notaCuadros}>
+            <Text style={styles.notaCuadrosTexto}>
+              El ícono de descarga baja la planilla del mes con el formato del cliente: FALTANTES, SOBRANTES, EMPRESA y
+              DESCUENTO, las cuatro hojas que se comparan contra la que se arma a mano. No es el reporte a gerencia de
+              más abajo, que lista los productos de la empresa.
+            </Text>
+            {!exportCuadros.puedeExportar ? (
+              <Text style={styles.notaCuadrosMotivo}>{exportCuadros.motivo}</Text>
+            ) : notaCuadros !== null ? (
+              <Text style={styles.notaCuadrosMotivo}>{notaCuadros}</Text>
+            ) : null}
+          </View>
 
           <View style={[styles.fila, angosto && styles.filaApilada]}>
             {/*
@@ -1087,8 +1261,12 @@ function TarjetaReporteGerencia({
           <ListaReporteGerencia titulo="Faltantes" tipo="faltante" filas={vista.faltantes} />
           <ListaReporteGerencia titulo="Sobrantes" tipo="sobrante" filas={vista.sobrantes} />
 
+          {/* NOMBRA EL ARCHIVO, no la acción: la planilla del mes se baja desde
+              la tabla de arriba con un ícono de descarga, y "Exportar a Excel" a
+              secas valía para los dos. Cuál de los dos se bajó se descubría
+              recién al abrirlo. */}
           <BotonWeb
-            etiqueta="Exportar a Excel y compartir"
+            etiqueta="Exportar el reporte a gerencia y compartir"
             icono={FileSpreadsheet}
             onPress={onExportar}
             cargando={exportando}
@@ -1242,6 +1420,15 @@ const styles = StyleSheet.create({
   // Los chips del filtro de la planilla: viven adentro del encabezado de
   // `TablaWeb`, a la derecha del título.
   chips: { flexDirection: 'row', gap: spacing.sm, flexWrap: 'wrap' },
+
+  /**
+   * El renglón que dice qué baja el ícono de la tabla. Debajo de la tarjeta y no
+   * adentro: la tabla es de la nómina, esto es sobre el archivo.
+   */
+  notaCuadros: { width: '100%', gap: 2, marginTop: -spacing.xs },
+  notaCuadrosTexto: { fontSize: fontSize.sm, color: colors.gris, fontFamily: fonts.regular, lineHeight: 19 },
+  /** El motivo (o la salvedad): paleta `proceso` de atención, nunca el rojo de marca — el rojo es la acción. */
+  notaCuadrosMotivo: { fontSize: fontSize.sm, color: colors.proceso, fontFamily: fonts.medium, lineHeight: 19 },
   chip: {
     paddingVertical: 9,
     paddingHorizontal: 14,

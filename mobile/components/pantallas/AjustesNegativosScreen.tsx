@@ -1,5 +1,3 @@
-import * as DocumentPicker from 'expo-document-picker';
-import { File } from 'expo-file-system';
 import { router, useLocalSearchParams } from 'expo-router';
 import {
   AlertTriangle,
@@ -16,6 +14,7 @@ import { ActivityIndicator, Alert, Modal, Pressable, RefreshControl, StyleSheet,
 import { useRefrescoAlEnfocar } from '../hooks/useRefrescoAlEnfocar';
 import { ajustesNegativosApi } from '../../lib/adaptadores/ajustes-negativos-api';
 import { esErrorApi } from '../../lib/adaptadores/_http';
+import { elegirArchivoXlsx } from '../../lib/leer-archivo';
 import {
   estadoNegativos,
   textoMotivoAdvertencia,
@@ -27,7 +26,6 @@ import { colors, fonts, fontSize, radius, shadow, spacing } from '../../lib/them
 import { PantallaConTabs } from '../navegacion/PantallaConTabs';
 import { BarraApp, Badge, Button, CampoTexto, Card, formatoFechaHora, formatoMoneda } from '../ui';
 
-const TIPO_XLSX = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
 
 type AccionLinea = 'excluir' | 'incluir';
 
@@ -105,18 +103,20 @@ export function AjustesNegativosScreen(): JSX.Element {
 
   async function elegirArchivo(): Promise<void> {
     if (inventarioId === null) return;
-    const resultado = await DocumentPicker.getDocumentAsync({ type: TIPO_XLSX, copyToCacheDirectory: true });
-    if (resultado.canceled) return;
+    // Elegir Y leer, en una sola llamada y por plataforma: en el teléfono es el
+    // selector + la caché de la app, en el navegador el `File` del DOM. Antes
+    // esto llamaba a `expo-file-system` directo y en la web moría con "No se
+    // pudo leer el archivo" sobre un Excel perfectamente válido.
+    const elegido = await elegirArchivoXlsx();
+    if (elegido === null) return;
 
-    const asset = resultado.assets[0]!;
     setPreview(null);
     setArchivo(null);
     setError(null);
     setPrevisualizando(true);
     try {
-      const bytes = await new File(asset.uri).bytes();
-      setArchivo({ nombre: asset.name, bytes });
-      setPreview(await ajustesNegativosApi.previsualizar(inventarioId, bytes));
+      setArchivo(elegido);
+      setPreview(await ajustesNegativosApi.previsualizar(inventarioId, elegido.bytes));
     } catch (e) {
       setError(esErrorApi(e) ? e.message : 'No se pudo leer el archivo.');
     } finally {
