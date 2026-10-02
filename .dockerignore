@@ -40,7 +40,14 @@ AGENTS.md
 .github
 .vscode
 .idea
+# `.codegraph` NECESITA LAS TRES FORMAS, y no es paranoia: el empaquetador de
+# `az acr build` arma un tar del contexto ANTES de resolver los patrones como
+# lo haria Docker, y con `.codegraph` a secas igual intentaba meter el socket
+# del demonio y moria con "tarfile: unsupported type ./.codegraph/daemon.sock".
+# Dos builds fallaron por esto antes de encontrarlo.
 .codegraph
+.codegraph/
+.codegraph/**
 
 # Los scripts de verificacion y las siembras de demo tocan la base y no tienen
 # nada que hacer en produccion. `backend/prisma/` SI viaja entero: ahi estan

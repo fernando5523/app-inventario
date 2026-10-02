@@ -52,6 +52,7 @@
 
 import { PrismaClient } from '@prisma/client';
 import argon2 from 'argon2';
+import { SUCURSALES } from './flota';
 import { CONFIGURACIONES } from './configuraciones';
 import { sincronizarSecuenciasYAvisar } from './sincronizar-secuencias';
 
@@ -99,18 +100,6 @@ const prisma = new PrismaClient();
  * Administrador lo cambia desde la gestion de tiendas eligiendo de la lista
  * real del ERP. Esto es solo el valor inicial para poder probar.
  */
-const SUCURSALES = [
-  { id: 1, nombre: 'Market Luzuriaga', almacenId: 'MD01_LUZ', almacenNombre: 'ALMACÉN DISPONIBLE MARKET LUZURIAGA' },
-  { id: 2, nombre: 'Market Carhuaz', almacenId: 'MD03_CRH', almacenNombre: 'ALMACÉN DISPONIBLE MARKET CARHUAZ' },
-  { id: 3, nombre: 'Market Bolívar', almacenId: 'MD06_BOL', almacenNombre: 'ALMACÉN DISPONIBLE MARKET BOLIVAR' },
-  { id: 4, nombre: 'Market Sucre', almacenId: 'MD04_SUC', almacenNombre: 'ALMACÉN DISPONIBLE MARKET  SUCRE' },
-  { id: 5, nombre: 'Market Jr. Caraz', almacenId: 'MD02_JRC', almacenNombre: 'ALMACÉN DISPONIBLE MARKET JR. CARAZ' },
-  { id: 6, nombre: 'Market Caraz', almacenId: 'MD05_CRZ', almacenNombre: 'ALMACÉN DISPONIBLE MARKET CARAZ' },
-  { id: 7, nombre: 'Market Raymondi', almacenId: 'MD08_RAY', almacenNombre: 'ALMACÉN DISPONIBLE MARKET RAYMONDI' },
-  { id: 8, nombre: 'Market Raymondi 351', almacenId: 'MD09_R351', almacenNombre: 'ALMACÉN DISPONIBLE MARKET RAYMONDI 351' },
-  { id: 9, nombre: 'Market Santa Rosa', almacenId: 'MD10', almacenNombre: 'ALMACÉN DISPONIBLE MARKET SANTA ROSA' },
-  { id: 10, nombre: 'Market Centenario', almacenId: 'MD11_CENT', almacenNombre: 'ALMACÉN DISPONIBLE MARKET CENTENARIO' },
-] as const;
 
 const COLABORADORES = {
   1: [
