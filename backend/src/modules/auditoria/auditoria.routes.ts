@@ -3,7 +3,13 @@ import { requiereSesion } from '../../middleware/auth.middleware';
 import { requiereRol } from '../../middleware/autorizacion.middleware';
 import { validar } from '../../middleware/validation.middleware';
 import * as controller from './auditoria.controller';
-import { cadenaQuerySchema, listarAuditablesQuerySchema, matrizQuerySchema, parametrosInventarioSchema } from './auditoria.schema';
+import {
+  cadenaQuerySchema,
+  conteosDeCadenaQuerySchema,
+  listarAuditablesQuerySchema,
+  matrizQuerySchema,
+  parametrosInventarioSchema,
+} from './auditoria.schema';
 
 /**
  * La matriz de auditoria: ERP contra los 3 conteos.
@@ -55,6 +61,27 @@ auditoriaRouter.get(
   '/cadena/diferencias/exportar',
   validar(cadenaQuerySchema, 'query'),
   controller.exportarDiferenciasDeLaCadena,
+);
+
+/**
+ * LOS CONTEOS DE LA CADENA: una fila por producto de todas las tiendas del
+ * periodo, para "Corregir lo contado". Reemplaza los 39 pedidos que esa
+ * pantalla hacia al entrar -- ver auditoria.service.ts#conteosDeLaCadena.
+ *
+ * MISMO PERMISO que `/cadena` (`validarAccesoALaCadena`, dentro del service):
+ * es la misma cadena vista por producto en vez de por tienda. Al `coordinador`
+ * se le corta ahi y no con un `requiereRol` propio acá, por lo mismo que al
+ * resto del modulo.
+ *
+ * VA ANTES DE CUALQUIER `/cadena/:algo`, igual que la ruta de arriba: hoy
+ * ninguna ruta bajo `/cadena` tiene parametro, pero un `/cadena/:sucursalId`
+ * declarado primero se comeria esta y devolveria 400 por un "sucursalId" que es
+ * la palabra "conteos".
+ */
+auditoriaRouter.get(
+  '/cadena/conteos',
+  validar(conteosDeCadenaQuerySchema, 'query'),
+  controller.conteosDeLaCadena,
 );
 
 auditoriaRouter.get(

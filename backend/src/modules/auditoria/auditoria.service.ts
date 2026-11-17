@@ -12,6 +12,7 @@ import type { ColaboradorAutenticado } from '../../shared/tipos';
 import { totalUnidades } from '../hojas/hojas.calculos';
 import type { EstadoInventario } from '../historial/historial.permisos';
 import {
+  agruparRondasPorInventario,
   aplicarFiltro,
   atribucionDelItem,
   conteoFinal,
@@ -24,10 +25,15 @@ import {
   resumir,
   stockDeLaMedicion,
   totalizarCadena,
+  filaDeConteoDeCadena,
   veredicto,
   type AtribucionItem,
+  type ConteoUbicado,
+  type FichaDeCatalogo,
   type FilaCadena,
+  type FilaConteoDeCadena,
   type ItemAuditoria,
+  type RondasDelInventario,
   type StockDeLaMedicion,
   type TotalCadena,
   type VeredictoAuditoria,
@@ -43,7 +49,7 @@ import {
   validarAccesoALaMatriz,
   validarSucursal,
 } from './auditoria.permisos';
-import type { CadenaQuery, ListarAuditablesQuery, MatrizQuery } from './auditoria.schema';
+import type { CadenaQuery, ConteosDeCadenaQuery, ListarAuditablesQuery, MatrizQuery } from './auditoria.schema';
 import { aplicarClasificacionVigente } from '../liquidacion/liquidacion.reclasificacion';
 
 // ---------------------------------------------------------------------------
@@ -83,6 +89,10 @@ const INCLUDE_HOJAS_PARA_MATRIZ = {
   // Solo hojas finalizadas: ver el comentario de arriba.
   where: { estado: 'finalizada' as const },
   select: {
+    // EL ID DE LA HOJA, que la matriz no usa: lo necesita la fila de "corregir
+    // lo contado" para apuntar el boton a la hoja donde el conteo se cargo
+    // (ver `ConteoUbicado`). Sale del mismo `findMany`, asi que no cuesta nada.
+    id: true,
     numeroConteo: true,
     zona: true,
     // El rotulo de la hoja ("003"), para mostrar y filtrar en la matriz. Sale
@@ -206,7 +216,39 @@ export async function stockPorRondaDelInventario(
   return porCodigo;
 }
 
-export async function armarMatriz(inventarioId: number): Promise<ItemAuditoria[]> {
+/**
+ * La matriz MAS lo que hace falta para corregir sus conteos. Ver
+ * `armarMatrizDetallada`.
+ */
+export interface MatrizDetallada {
+  items: ItemAuditoria[];
+  /** codigo -> codigo de barras y categoria real del catalogo. */
+  fichaPorCodigo: Map<string, FichaDeCatalogo>;
+  /**
+   * codigo -> ronda -> donde se cargo ese conteo.
+   *
+   * ES LO QUE LA MATRIZ TIRA. `armarMatriz` agrupa por codigo y se queda con la
+   * hoja de la ronda 1, que es lo correcto para mostrar y lo inservible para
+   * corregir un conteo de la ronda 4. Acá queda la ubicacion de CADA ronda, y
+   * quien la use elige la que manda (ver `filaDeConteoDeCadena`).
+   */
+  ubicacionPorCodigo: Map<string, Map<number, ConteoUbicado>>;
+}
+
+/**
+ * EL CONSTRUCTOR COMPARTIDO: la matriz y la ubicacion de cada conteo, de las
+ * MISMAS consultas y con el MISMO agrupado.
+ *
+ * Existe para que no haya dos versiones del cruce catalogo x rondas. La
+ * tentacion era escribir un armador aparte para "corregir lo contado", y eso
+ * habria dejado dos copias de la regla de que un conteo se cruza por CODIGO y
+ * no por id de producto -- el dia que una cambie, un endpoint diria que faltan
+ * 3 unidades y el otro que faltan 0, sobre el mismo item.
+ *
+ * `armarMatriz` es una vista de esto: quien solo quiere los items no paga nada
+ * por la ubicacion, porque sale de las filas que ya se trajeron.
+ */
+export async function armarMatrizDetallada(inventarioId: number): Promise<MatrizDetallada> {
   const [catalogo, hojas, stockPorRonda] = await Promise.all([
     prisma.catalogoItem.findMany({
       where: { inventarioId },
@@ -223,6 +265,11 @@ export async function armarMatriz(inventarioId: number): Promise<ItemAuditoria[]
         clase: true,
         empaqueCompra: true,
         empaqueCompraSimbolo: true,
+        // PARA LA FILA DE "CORREGIR LO CONTADO", no para la matriz. Dos columnas
+        // mas del mismo `findMany`: el codigo de barras y la CATEGORIA REAL del
+        // producto, que no es la `zona` de la hoja (ver `FichaDeCatalogo`).
+        codigoBarras: true,
+        categoria: true,
       },
       orderBy: { codigo: 'asc' },
     }),
@@ -238,6 +285,9 @@ export async function armarMatriz(inventarioId: number): Promise<ItemAuditoria[]
     string,
     { productoId: number; zona: string; hoja: string; descripcion: string; conteos: Map<number, number> }
   >();
+
+  /** codigo -> ronda -> la hoja y el producto de ESE conteo. Ver `MatrizDetallada`. */
+  const ubicacionPorCodigo = new Map<string, Map<number, ConteoUbicado>>();
 
   for (const hoja of hojas) {
     for (const producto of hoja.productos) {
@@ -271,10 +321,31 @@ export async function armarMatriz(inventarioId: number): Promise<ItemAuditoria[]
       }
       entrada.conteos.set(hoja.numeroConteo, unidades);
       porCodigo.set(producto.codigo, entrada);
+
+      // EN LA MISMA ITERACION QUE EL CONTEO, y eso no es comodidad: si dos
+      // hojas de la MISMA ronda trajeran el mismo codigo (el `@@unique` es
+      // `[hojaId, codigo]`, asi que la base lo permite aunque la ronda 1
+      // reparta el catalogo sin repetir), las dos lineas pisan al unisono y la
+      // fila queda apuntando a la hoja del conteo que efectivamente muestra.
+      // Separarlas es como se obtiene un conteo de una hoja y un `hojaId` de
+      // otra.
+      const porRonda = ubicacionPorCodigo.get(producto.codigo) ?? new Map<number, ConteoUbicado>();
+      porRonda.set(hoja.numeroConteo, {
+        numeroConteo: hoja.numeroConteo,
+        hojaId: hoja.id,
+        hojaNumero: hoja.numero,
+        productoId: producto.id,
+        empaques: producto.empaques,
+      });
+      ubicacionPorCodigo.set(producto.codigo, porRonda);
     }
   }
 
-  return catalogo.map((item) => {
+  const fichaPorCodigo = new Map<string, FichaDeCatalogo>(
+    catalogo.map((item) => [item.codigo, { codigoBarras: item.codigoBarras, categoria: item.categoria }] as const),
+  );
+
+  const items = catalogo.map((item): ItemAuditoria => {
     const contado = porCodigo.get(item.codigo);
     return {
       // 0 = el item esta en el catalogo del ERP pero ninguna hoja
@@ -326,6 +397,17 @@ export async function armarMatriz(inventarioId: number): Promise<ItemAuditoria[]
       esEmpresa: item.esEmpresa,
     };
   });
+
+  return { items, fichaPorCodigo, ubicacionPorCodigo };
+}
+
+/**
+ * LA MATRIZ A SECAS -- la vista de `armarMatrizDetallada` que usan los ocho
+ * llamadores de siempre (la matriz, el cierre de ronda, el historial). Su firma
+ * y su resultado no cambiaron.
+ */
+export async function armarMatriz(inventarioId: number): Promise<ItemAuditoria[]> {
+  return (await armarMatrizDetallada(inventarioId)).items;
 }
 
 // ---------------------------------------------------------------------------
@@ -543,6 +625,55 @@ interface InventarioDeLaCadena {
    * cuesta lo mismo que antes.
    */
   montoNegativos: number | null;
+  /** La ultima ronda que existe, y cuantas lleva. Ver `FilaCadena.rondaActiva`. */
+  rondaActiva: number | null;
+  rondas: number;
+}
+
+/**
+ * EN QUE RONDA VA CADA INVENTARIO, PARA TODAS LAS TIENDAS DE UNA VEZ.
+ *
+ * ---------------------------------------------------------------------------
+ * UNA CONSULTA, NO UNA POR TIENDA
+ * ---------------------------------------------------------------------------
+ * Este endpoint existe para ahorrarle al navegador las once llamadas, y esta
+ * medido en 18 ms: resolverlo con el `aggregate` por inventario que usa
+ * `inventarios.service.ts#activo` lo habria vuelto N+1 justo aca. Es UN
+ * `groupBy` con `inventarioId IN (...)`, asi que su costo no depende de cuantas
+ * tiendas haya.
+ *
+ * Y es casi gratis: `HojaConteo` tiene `@@unique([inventarioId, numeroConteo,
+ * numero])`, cuyas dos primeras columnas son exactamente las que se agrupan, asi
+ * que el motor lo resuelve sobre el indice. Devuelve una fila por par
+ * (inventario, ronda), no una por hoja. MEDIDO contra la base local el
+ * 2026-10-13, periodo 2026-09: 15 pares para los 11 inventarios del mes, en
+ * 1,6 ms. Las hojas que hay detras son dos ordenes de magnitud mas.
+ *
+ * ---------------------------------------------------------------------------
+ * POR QUE `groupBy` POR PAR Y NO UN `_max`
+ * ---------------------------------------------------------------------------
+ * Un `_max: { numeroConteo: true }` agrupado por inventario daria `rondaActiva`
+ * en una sola fila por tienda, pero NO `rondas`: contar `numeroConteo`
+ * distintos necesita verlos. Agrupando por el par salen los dos del mismo
+ * resultado, y `rondas` queda MEDIDO en vez de deducido del maximo (ver
+ * `FilaCadena.rondas`).
+ *
+ * Con la lista de ids vacia no se consulta nada: un `IN ()` es una ida a la
+ * base para preguntar por el conjunto vacio.
+ *
+ * LA REGLA NO ESTA ACA: esta funcion hace la consulta y nada mas. Ordenar los
+ * pares es `agruparRondasPorInventario`, que vive en `auditoria.calculos.ts`
+ * para poder probarse sin base.
+ */
+async function rondasDeLosInventarios(inventarioIds: readonly number[]): Promise<Map<number, RondasDelInventario>> {
+  if (inventarioIds.length === 0) return new Map();
+
+  const pares = await prisma.hojaConteo.groupBy({
+    by: ['inventarioId', 'numeroConteo'],
+    where: { inventarioId: { in: [...inventarioIds] } },
+  });
+
+  return agruparRondasPorInventario(pares);
 }
 
 interface PeriodoDeLaCadena {
@@ -602,6 +733,16 @@ async function inventariosDelPeriodo(query: CadenaQuery): Promise<PeriodoDeLaCad
     orderBy: { id: 'asc' },
   });
 
+  // DESPUES del `findMany` y no en un `Promise.all` con el: filtra por los ids
+  // que ese devuelve, asi que no se puede lanzar antes de tenerlos. Es UNA
+  // consulta para todas las tiendas -- ver `rondasDeLosInventarios`.
+  //
+  // Se piden las rondas de TODOS los inventarios del periodo, no solo de los que
+  // sobreviven al desempate mensual/anual de abajo: son los mismos ids que ya
+  // trajo la consulta anterior y el `groupBy` cuesta lo mismo, mientras filtrar
+  // antes obligaria a recorrer dos veces la lista para un ahorro de cero.
+  const rondasPorInventario = await rondasDeLosInventarios(inventarios.map((inv) => inv.id));
+
   const porSucursal = new Map<number, InventarioDeLaCadena>();
   for (const inv of inventarios) {
     const previo = porSucursal.get(inv.sucursalId);
@@ -621,6 +762,12 @@ async function inventariosDelPeriodo(query: CadenaQuery): Promise<PeriodoDeLaCad
         // necesita distinguirlos -- la guarda de `liquidar()` -- lee la columna
         // directo, no esta tabla.
         montoNegativos: inv.resultado?.montoNegativos?.toNumber() ?? null,
+        // Sin entrada en el mapa = este inventario no tiene NI UNA hoja: el
+        // Coordinador todavia esta en el paso 1 del armado. No es un dato que
+        // falte, es una ronda que no existe -- de ahi el `null` y el 0, con la
+        // distincion que explica `filaDeCadenaSinInventario`.
+        rondaActiva: rondasPorInventario.get(inv.id)?.rondaActiva ?? null,
+        rondas: rondasPorInventario.get(inv.id)?.rondas ?? 0,
       });
     }
   }
@@ -707,7 +854,14 @@ export async function cadena(actor: ColaboradorAutenticado, query: CadenaQuery):
     const completa = await aplicarClasificacionVigente(inv.id, inv.estado, await armarMatriz(inv.id));
     filas.push(
       filaDeCadena(
-        { sucursalId: suc.id, sucursal: suc.nombre, inventarioId: inv.id, estado: inv.estado },
+        {
+          sucursalId: suc.id,
+          sucursal: suc.nombre,
+          inventarioId: inv.id,
+          estado: inv.estado,
+          rondaActiva: inv.rondaActiva,
+          rondas: inv.rondas,
+        },
         resumir(completa, inv.umbral),
         // Los ajustes del mes de ESTA tienda. Con esto, el total a descontar de
         // la fila es identico al que Liquidacion va a mostrar para el mismo
@@ -719,6 +873,192 @@ export async function cadena(actor: ColaboradorAutenticado, query: CadenaQuery):
   }
 
   return { periodo: { anio: periodo.anio, mes: periodo.mes }, total: totalizarCadena(filas), tiendas: filas };
+}
+
+// ---------------------------------------------------------------------------
+// LOS CONTEOS DE LA CADENA: una fila por producto, de todas las tiendas
+// ---------------------------------------------------------------------------
+
+/**
+ * LA COBERTURA DEL PERIODO. Describe el PERIODO, no el filtro: con
+ * `?sucursalId=2` estos tres numeros siguen siendo los de la cadena entera.
+ *
+ * EXISTE PORQUE LAS TIENDAS SIN INVENTARIO NO APORTAN FILAS. En `/cadena` la
+ * unidad es la TIENDA, asi que una sin inventario viaja igual con todo en cero
+ * -- esconderla haria que una cadena de once se leyera como una de nueve. Acá
+ * la unidad es el PRODUCTO, y una tienda sin inventario no tiene ni uno:
+ * inventarle una fila seria inventar un producto. Entonces se omite de las
+ * filas y se cuenta acá, que es donde ese hecho se puede decir sin mentir.
+ */
+export interface CoberturaDelPeriodo {
+  /** Tiendas activas. El denominador. */
+  tiendas: number;
+  /** De esas, cuantas arrancaron el periodo y por lo tanto aportan filas. */
+  conInventario: number;
+  /** Las que no arrancaron: cero filas en esta respuesta. */
+  sinInventario: number;
+}
+
+export interface ConteosDeCadenaDto {
+  periodo: { anio: number; mes: number };
+  cobertura: CoberturaDelPeriodo;
+  /**
+   * Las filas que pasan el filtro en TODA la cadena, no las de esta pagina. Es
+   * el mismo criterio que `/matriz`: un total que cambia al pasar de pagina no
+   * es un total.
+   */
+  total: number;
+  limite: number;
+  desplazamiento: number;
+  conteos: FilaConteoDeCadena[];
+}
+
+/**
+ * ===========================================================================
+ * `GET /api/auditoria/cadena/conteos`
+ * ===========================================================================
+ * Una fila por producto de cada tienda del periodo, con el conteo QUE MANDA y
+ * la hoja donde corregirlo.
+ *
+ * ---------------------------------------------------------------------------
+ * QUE REEMPLAZA
+ * ---------------------------------------------------------------------------
+ * La pantalla "Corregir lo contado" de la cadena hacia 39 pedidos al entrar
+ * (1 de sucursales + 11 de inventario activo + 15 de hojas + 12 de matriz) para
+ * pintar 1.470 filas, y crecia con cada tienda nueva. Peor que el costo: con
+ * una sola de las once tiendas fallando habia que elegir entre una tabla
+ * incompleta o ninguna, y las dos respuestas son malas. Acá es un pedido y una
+ * respuesta.
+ *
+ * ---------------------------------------------------------------------------
+ * POR QUE ES UNA RUTA NUEVA Y NO UN MODO DE `/matriz`
+ * ---------------------------------------------------------------------------
+ * `/matriz` responde "como va ESTE inventario contra el ERP": su DTO lleva
+ * `resumen` y `embudo`, que son del inventario entero. Hacerle aceptar un
+ * periodo dejaria `inventarioId` opcional y esos dos campos sin dueño --
+ * ¿resumen de cual de las once tiendas? Terminaria siendo dos endpoints
+ * viviendo en una firma, con la mitad de los campos en null segun el modo.
+ *
+ * Esta pregunta es otra ("que hay para corregir en la cadena") y va a la
+ * FAMILIA de la cadena, que ya existe: `/cadena` (la tabla por tienda) y
+ * `/cadena/diferencias/exportar` (su respaldo). Comparte con ellas el permiso
+ * (`validarAccesoALaCadena`) y la resolucion del periodo
+ * (`inventariosDelPeriodo`), sin copiar ninguna de las dos. Y `/matriz` y
+ * `/cadena` no se tocan: solo se agrega.
+ *
+ * ---------------------------------------------------------------------------
+ * EL COSTO EN CONSULTAS
+ * ---------------------------------------------------------------------------
+ * 2 fijas (las tiendas activas y los inventarios del periodo, en paralelo) +
+ * 3 por tienda CON inventario, que son las de `armarMatrizDetallada`
+ * (catalogo, hojas finalizadas con sus productos y conteos, y el stock por
+ * ronda). Con once tiendas: 35 consultas a la base para reemplazar 39 viajes
+ * HTTP -- y la diferencia que importa no es 35 contra 39, es que son consultas
+ * locales en una sola conexion contra 39 idas y vueltas por la red, cada una
+ * con su chance de fallar sola.
+ *
+ * NO HAY UNA CONSULTA POR FILA ni por producto: el cruce catalogo x rondas se
+ * hace en memoria sobre lo que ya se trajo, que es exactamente lo que hace
+ * `/cadena` (medido en 18 ms para once tiendas) y la vara que pidio el
+ * orquestador.
+ *
+ * NO SE LLAMA A `aplicarClasificacionVigente`, y es una consulta menos por
+ * tienda a proposito: eso reescribe `clase`/`esEmpresa` con la excepcion del
+ * Auditor, y esta fila no expone ninguno de los dos. La diferencia no depende
+ * de la clase (ver `diferenciaUnidades`), asi que pedirla seria pagar por un
+ * dato que no viaja. `/cadena` si la necesita, porque reparte plata por cuadro.
+ *
+ * SU TECHO, dicho porque en produccion se va a notar: las filas se arman todas
+ * en memoria y despues se paginan, igual que `/matriz` y `/cadena`. Con el
+ * catalogo real (~11.800 items por tienda) son ~130.000 filas por pedido antes
+ * de recortar. Mientras la pantalla mire una tienda a la vez (`?sucursalId=`)
+ * el techo es ~11.800 y no hay problema; el dia que haga falta paginar la
+ * cadena entera sin armarla, hay que bajar el recorte a SQL -- y eso obliga a
+ * mover `totalUnidades` a la base, que es justo lo que este repo no hace
+ * (la cuenta que se audita no puede tener dos versiones).
+ *
+ * ---------------------------------------------------------------------------
+ * EL ORDEN ES ESTABLE, Y SIN ESO LA PAGINACION MIENTE
+ * ---------------------------------------------------------------------------
+ * Tienda por id ascendente (el `orderBy` de `sucursal.findMany`) y, adentro de
+ * cada una, producto por codigo ascendente (el de `catalogoItem.findMany`). Dos
+ * pedidos consecutivos devuelven las filas en el mismo orden, asi que la pagina
+ * 2 no repite ni se saltea lo que ya mostro la 1.
+ */
+export async function conteosDeLaCadena(
+  actor: ColaboradorAutenticado,
+  query: ConteosDeCadenaQuery,
+): Promise<ConteosDeCadenaDto> {
+  validarAccesoALaCadena(actor);
+
+  const [sucursales, periodo] = await Promise.all([
+    prisma.sucursal.findMany({ where: { activa: true }, select: { id: true, nombre: true }, orderBy: { id: 'asc' } }),
+    inventariosDelPeriodo(query),
+  ]);
+
+  // LA COBERTURA SE CUENTA ANTES DE FILTRAR y sin armar ninguna matriz: son los
+  // dos conjuntos que ya estan en la mano. Ver `CoberturaDelPeriodo`.
+  const conInventario = sucursales.filter((suc) => periodo.porSucursal.has(suc.id)).length;
+  const cobertura: CoberturaDelPeriodo = {
+    tiendas: sucursales.length,
+    conInventario,
+    sinInventario: sucursales.length - conInventario,
+  };
+
+  const aguja = query.busqueda?.toLowerCase();
+
+  const filas: FilaConteoDeCadena[] = [];
+  for (const suc of sucursales) {
+    // El filtro por tienda se aplica ACA y no sobre las filas ya armadas: asi
+    // mirar una tienda cuesta una tienda, no las once.
+    if (query.sucursalId !== undefined && suc.id !== query.sucursalId) continue;
+
+    const inv = periodo.porSucursal.get(suc.id);
+    // Sin inventario no hay productos que corregir. No aporta filas, y eso ya
+    // lo dice `cobertura` -- ver su comentario para por que acá se omite y en
+    // `/cadena` no.
+    if (inv === undefined) continue;
+
+    /**
+     * SECUENCIAL, como `/cadena` y por lo mismo: con once matrices en paralelo
+     * hay once catalogos completos vivos a la vez en vez de uno.
+     */
+    const detalle = await armarMatrizDetallada(inv.id);
+    const tienda = { sucursalId: suc.id, sucursal: suc.nombre, inventarioId: inv.id, estado: inv.estado };
+
+    for (const item of detalle.items) {
+      // La ficha siempre existe: los items se construyen MAPEANDO el catalogo,
+      // asi que todo codigo de un item es un codigo del catalogo. El `??` es el
+      // piso del tipo, no una rama de negocio.
+      const ficha = detalle.fichaPorCodigo.get(item.codigo) ?? { codigoBarras: '', categoria: null };
+      if (query.categoria !== undefined && ficha.categoria !== query.categoria) continue;
+      if (
+        aguja !== undefined &&
+        !item.codigo.toLowerCase().includes(aguja) &&
+        !item.descripcion.toLowerCase().includes(aguja) &&
+        !ficha.codigoBarras.toLowerCase().includes(aguja)
+      ) {
+        continue;
+      }
+      filas.push(
+        filaDeConteoDeCadena(
+          tienda,
+          item,
+          ficha,
+          detalle.ubicacionPorCodigo.get(item.codigo) ?? new Map(),
+        ),
+      );
+    }
+  }
+
+  return {
+    periodo: { anio: periodo.anio, mes: periodo.mes },
+    cobertura,
+    total: filas.length,
+    limite: query.limite,
+    desplazamiento: query.desplazamiento,
+    conteos: filas.slice(query.desplazamiento, query.desplazamiento + query.limite),
+  };
 }
 
 /**

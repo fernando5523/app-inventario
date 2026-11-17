@@ -47,3 +47,32 @@ export const cadenaQuerySchema = z.object({
   mes: z.coerce.number().int().min(1).max(12).optional(),
 });
 export type CadenaQuery = z.infer<typeof cadenaQuerySchema>;
+
+/**
+ * LOS CONTEOS DE LA CADENA: una fila por producto de todas las tiendas del
+ * periodo, para la pantalla "Corregir lo contado".
+ *
+ * EXTIENDE `cadenaQuerySchema` y no repite `anio`/`mes`: es el MISMO periodo con
+ * las mismas reglas (los dos opcionales, el mes 1..12, el anio con piso 2000).
+ * Copiarlos seria dos definiciones del mismo parametro, y la que alguien
+ * actualice sin mirar la otra es la que va a aceptar un `?mes=13`.
+ *
+ * `limite` tiene el MISMO techo de 500 que la matriz, y por la misma razon: son
+ * 1.470 filas hoy y ~11.800 por tienda con el catalogo real de produccion.
+ * Devolverlas enteras en un JSON es como se cuelga la pantalla.
+ *
+ * `sucursalId` NO es un filtro cosmetico: acota el trabajo del servidor a una
+ * tienda en vez de armar las once matrices y descartar diez (ver
+ * `conteosDeLaCadena`). Es la diferencia entre mirar una tienda y pagar por la
+ * cadena entera.
+ */
+export const conteosDeCadenaQuerySchema = cadenaQuerySchema.extend({
+  sucursalId: z.coerce.number().int().positive().optional(),
+  /** Busca por codigo, codigo de barras o descripcion, sin distinguir mayusculas. */
+  busqueda: z.string().trim().min(1).max(120).optional(),
+  /** La categoria REAL del producto (`CatalogoItem.categoria`), coincidencia exacta. */
+  categoria: z.string().trim().min(1).max(120).optional(),
+  limite: z.coerce.number().int().min(1).max(500).default(100),
+  desplazamiento: z.coerce.number().int().min(0).default(0),
+});
+export type ConteosDeCadenaQuery = z.infer<typeof conteosDeCadenaQuerySchema>;

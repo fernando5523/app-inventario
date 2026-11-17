@@ -37,7 +37,10 @@ const prismaMock = vi.hoisted(() => ({
   // todos los que ya estaban en la base: todo cae al de la ronda 1 y estos tests
   // siguen afirmando exactamente lo que afirmaban.
   stockRonda: { findMany: vi.fn(async () => []) },
-  hojaConteo: { findMany: vi.fn() },
+  // `groupBy` ADEMAS de `findMany`: la cadena pregunta en que ronda va cada
+  // tienda con UN groupBy por los pares (inventario, ronda) -- ver
+  // `auditoria.service.ts#rondasDeLosInventarios`.
+  hojaConteo: { findMany: vi.fn(), groupBy: vi.fn() },
   clasificacionProducto: { findMany: vi.fn() },
   diferenciaItem: { findMany: vi.fn() },
 }));
@@ -114,6 +117,19 @@ function sembrar(
   );
   prismaMock.hojaConteo.findMany.mockImplementation(
     async ({ where }: { where: { inventarioId: number } }) => porInventario[where.inventarioId]?.hojas ?? [],
+  );
+  // LAS RONDAS SE DERIVAN DE LAS HOJAS SEMBRADAS, no de una constante: asi el
+  // mock no puede afirmar una ronda que los datos del escenario contradicen.
+  // `hoja()` crea todo en la ronda 1, asi que estos escenarios dan `rondaActiva:
+  // 1`; el dia que un escenario siembre un reconteo, esto lo sigue solo.
+  prismaMock.hojaConteo.groupBy.mockImplementation(
+    async ({ where }: { where: { inventarioId: { in: number[] } } }) =>
+      where.inventarioId.in.flatMap((id) =>
+        [...new Set((porInventario[id]?.hojas ?? []).map((h) => h.numeroConteo))].map((numeroConteo) => ({
+          inventarioId: id,
+          numeroConteo,
+        })),
+      ),
   );
 }
 

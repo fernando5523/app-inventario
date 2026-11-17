@@ -66,9 +66,14 @@ function item(parcial: Partial<ItemAuditoria> & { codigo: string }): ItemAuditor
   };
 }
 
+/**
+ * `rondaActiva`/`rondas` fijas en el ciclo completo: este archivo mide PLATA y
+ * las rondas no entran en ninguna de sus cuentas. Quien las prueba es
+ * auditoria.cadena.test.ts.
+ */
 function fila(items: ItemAuditoria[], montoNegativos: number | null = null): FilaCadena {
   return filaDeCadena(
-    { sucursalId: 1, sucursal: 'Market Luzuriaga', inventarioId: 8078, estado: 'ajuste_auditor' },
+    { sucursalId: 1, sucursal: 'Market Luzuriaga', inventarioId: 8078, estado: 'ajuste_auditor', rondaActiva: 3, rondas: 3 },
     resumir(items, UMBRAL),
     montoNegativos,
   );
@@ -214,12 +219,12 @@ describe('las tiendas y los inventarios sin dato', () => {
 
 describe('el total de la cadena es la suma de las filas', () => {
   const luzuriaga = filaDeCadena(
-    { sucursalId: 1, sucursal: 'Market Luzuriaga', inventarioId: 8078, estado: 'ajuste_auditor' },
+    { sucursalId: 1, sucursal: 'Market Luzuriaga', inventarioId: 8078, estado: 'ajuste_auditor', rondaActiva: 3, rondas: 3 },
     resumir([item({ codigo: 'A1', stockErp: 10, conteos: [7], precioVenta: 1.5 })], UMBRAL),
     null,
   );
   const carhuaz = filaDeCadena(
-    { sucursalId: 2, sucursal: 'Market Carhuaz', inventarioId: 8079, estado: 'liquidado' },
+    { sucursalId: 2, sucursal: 'Market Carhuaz', inventarioId: 8079, estado: 'liquidado', rondaActiva: 3, rondas: 3 },
     resumir([item({ codigo: 'B1', stockErp: 20, conteos: [25], precioVenta: 2.5 })], UMBRAL),
     3.2, // esta tienda si cargo sus ajustes del mes
   );
@@ -250,12 +255,12 @@ describe('el total de la cadena es la suma de las filas', () => {
 
   it('no arrastra la cola del punto flotante al sumar', () => {
     const a = filaDeCadena(
-      { sucursalId: 1, sucursal: 'A', inventarioId: 1, estado: 'ajuste_auditor' },
+      { sucursalId: 1, sucursal: 'A', inventarioId: 1, estado: 'ajuste_auditor', rondaActiva: 3, rondas: 3 },
       resumir([item({ codigo: 'X', stockErp: 100, conteos: [43], precioVenta: 2.79 })], UMBRAL),
       null,
     );
     const b = filaDeCadena(
-      { sucursalId: 2, sucursal: 'B', inventarioId: 2, estado: 'ajuste_auditor' },
+      { sucursalId: 2, sucursal: 'B', inventarioId: 2, estado: 'ajuste_auditor', rondaActiva: 3, rondas: 3 },
       resumir([item({ codigo: 'Y', stockErp: 100, conteos: [89], precioVenta: 1.61 })], UMBRAL),
       null,
     );
@@ -312,7 +317,7 @@ describe('la equivalencia con la liquidacion, sobre la misma matriz', () => {
 
   it('sin ajustes del mes, las dos vias dan el mismo centavo', () => {
     const porLaTabla = filaDeCadena(
-      { sucursalId: 1, sucursal: 'Market Luzuriaga', inventarioId: 8078, estado: 'ajuste_auditor' },
+      { sucursalId: 1, sucursal: 'Market Luzuriaga', inventarioId: 8078, estado: 'ajuste_auditor', rondaActiva: 3, rondas: 3 },
       resumen,
       null,
     );
@@ -329,7 +334,7 @@ describe('la equivalencia con la liquidacion, sobre la misma matriz', () => {
   it('con ajustes del mes tambien: los dos restan el mismo monto', () => {
     const negativos = 1.75;
     const porLaTabla = filaDeCadena(
-      { sucursalId: 1, sucursal: 'Market Luzuriaga', inventarioId: 8078, estado: 'liquidado' },
+      { sucursalId: 1, sucursal: 'Market Luzuriaga', inventarioId: 8078, estado: 'liquidado', rondaActiva: 3, rondas: 3 },
       resumen,
       negativos,
     );

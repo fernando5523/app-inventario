@@ -15,6 +15,9 @@
  *   4. UN ITEM SIN STOCK DEL ERP NO CUENTA COMO CUADRADO. La regla de siempre,
  *      verificada por esta via tambien: es el error que ya reporto "100%
  *      cuadrado" sobre 11.835 productos sin stock cargado.
+ *   5. CADA FILA DICE EN QUE RONDA VA SU TIENDA. Pedido del usuario: *"quiero
+ *      ver el conteo 1, 2 o 3 y asi sucesivamente"*. Sin eso, once tiendas
+ *      decian todas "Conteo en curso" y no habia con que seguir el avance.
  *
  * 1, 2 y 4 se prueban SIN BASE: las cifras de cada fila salen de `resumir`, que
  * es puro, y el recorte y la suma tambien. 3 se prueba por HTTP contra el router
@@ -27,6 +30,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { Prohibido } from '../../shared/errores';
 import type { ColaboradorAutenticado } from '../../shared/tipos';
 import {
+  agruparRondasPorInventario,
   filaDeCadena,
   filaDeCadenaSinInventario,
   porClaseVacia,
@@ -64,9 +68,20 @@ function item(parcial: Partial<ItemAuditoria> & { codigo: string }): ItemAuditor
   };
 }
 
-function fila(sucursalId: number, nombre: string, items: ItemAuditoria[]): FilaCadena {
+/**
+ * `rondaActiva`/`rondas` con default al ciclo completo (3 pasadas), que es el
+ * caso normal de una tienda en `ajuste_auditor`. Los tests que SI las prueban
+ * las pasan explicitas -- mismo criterio que `stockPorRonda` en `item()`.
+ */
+function fila(
+  sucursalId: number,
+  nombre: string,
+  items: ItemAuditoria[],
+  rondaActiva: number | null = 3,
+  rondas = 3,
+): FilaCadena {
   return filaDeCadena(
-    { sucursalId, sucursal: nombre, inventarioId: 8000 + sucursalId, estado: 'ajuste_auditor' },
+    { sucursalId, sucursal: nombre, inventarioId: 8000 + sucursalId, estado: 'ajuste_auditor', rondaActiva, rondas },
     resumir(items, UMBRAL),
     // Sin ajustes del mes: en `ajuste_auditor` el inventario todavia no tiene
     // `ResultadoInventario`, asi que `null` es el caso normal de esta tabla. Lo
@@ -152,6 +167,14 @@ describe('una tienda que no arranco el periodo', () => {
     expect(sinInventario.estado).toBeNull();
   });
 
+  it('sin ronda de la cual decir el numero, y con cero pasadas llevadas', () => {
+    // `null` y `0` NO son lo mismo y la distincion es el punto: no se sabe en
+    // que ronda va porque no hay ninguna, y lo que SI se sabe es que no llevo
+    // ninguna pasada.
+    expect(sinInventario.rondaActiva).toBeNull();
+    expect(sinInventario.rondas).toBe(0);
+  });
+
   it('y todo en cero, cuadros incluidos', () => {
     expect(sinInventario.items).toBe(0);
     expect(sinInventario.auditables).toBe(0);
@@ -201,6 +224,127 @@ describe('un item sin stock del ERP no cuenta como cuadrado', () => {
     expect(total.cuadrados).toBe(1);
     // Lo que NO puede pasar: que cuadrados iguale items y la tabla diga 100%.
     expect(total.cuadrados).not.toBe(total.items);
+  });
+});
+
+/**
+ * EN QUE RONDA VA CADA TIENDA. Pedido del usuario mirando el Panel: *"quiero ver
+ * el conteo 1, 2 o 3 y asi sucesivamente"*.
+ */
+describe('la ronda de cada tienda viaja en su fila', () => {
+  it('la fila trae la ronda y cuantas pasadas lleva, tal cual se las paso', () => {
+    const carhuaz = fila(2, 'Market Carhuaz', [item({ codigo: 'B1', stockErp: 20, conteos: [20] })], 2, 2);
+    expect(carhuaz.rondaActiva).toBe(2);
+    expect(carhuaz.rondas).toBe(2);
+  });
+
+  /**
+   * EL CASO QUE DISTINGUE UNA RESPUESTA CORRECTA DE UNA QUE SE QUEDO EN LA RONDA
+   * 1: Market Carhuaz (inventario 8088) tiene la ronda 1 cerrada y la 2 abierta.
+   * Una tabla que informara la 1 ahi estaria diciendo que la tienda no avanzo.
+   */
+  it('con la ronda 1 cerrada y la 2 abierta dice 2, no 1', () => {
+    const pares = [
+      { inventarioId: 8088, numeroConteo: 1 },
+      { inventarioId: 8088, numeroConteo: 2 },
+    ];
+    expect(agruparRondasPorInventario(pares).get(8088)).toEqual({ rondaActiva: 2, rondas: 2 });
+  });
+
+  /**
+   * LA DECISION SOBRE LAS TIENDAS QUE YA NO CUENTAN, fijada acá para que no se
+   * revierta por buena fe: una tienda en ajuste final o cerrada CONSERVA el
+   * numero de su ultima ronda. Ponerlo en null perderia el dato justo cuando
+   * sirve ("llego hasta la 3ra") y chocaria con el otro significado de null
+   * ("todavia no hay hojas"). Quien dice si se esta contando es `estado`.
+   */
+  it('una tienda que ya no cuenta conserva el numero de su ultima ronda', () => {
+    const enAjuste = filaDeCadena(
+      { sucursalId: 1, sucursal: 'Market Luzuriaga', inventarioId: 8078, estado: 'ajuste_auditor', rondaActiva: 3, rondas: 3 },
+      resumir([item({ codigo: 'A1', stockErp: 10, conteos: [10] })], UMBRAL),
+      null,
+    );
+    expect(enAjuste.rondaActiva).toBe(3);
+    expect(enAjuste.estado).toBe('ajuste_auditor');
+
+    const cerrada = filaDeCadena(
+      { sucursalId: 2, sucursal: 'Market Carhuaz', inventarioId: 8079, estado: 'conteo_cerrado', rondaActiva: 4, rondas: 4 },
+      resumir([item({ codigo: 'B1', stockErp: 10, conteos: [10] })], UMBRAL),
+      null,
+    );
+    expect(cerrada.rondaActiva).toBe(4);
+  });
+
+  /** Un inventario con hojas de una sola ronda: la 1, y una sola pasada. */
+  it('la primera ronda da 1 y 1', () => {
+    expect(agruparRondasPorInventario([{ inventarioId: 7, numeroConteo: 1 }]).get(7)).toEqual({
+      rondaActiva: 1,
+      rondas: 1,
+    });
+  });
+
+  /**
+   * NO SE APOYA EN EL ORDEN EN QUE LLEGAN LOS PARES. Un `groupBy` no lo promete,
+   * y tomar "el ultimo que llego" es como la tabla termina mostrando la ronda 1
+   * de un inventario que va por la 3ra.
+   */
+  it('toma el maximo aunque los pares lleguen desordenados', () => {
+    const desordenados = [
+      { inventarioId: 9, numeroConteo: 3 },
+      { inventarioId: 9, numeroConteo: 1 },
+      { inventarioId: 9, numeroConteo: 2 },
+    ];
+    expect(agruparRondasPorInventario(desordenados).get(9)).toEqual({ rondaActiva: 3, rondas: 3 });
+  });
+
+  /**
+   * `rondas` SE CUENTA, NO SE DEDUCE DEL MAXIMO. Con un hueco los dos numeros
+   * dejan de coincidir, y el que miente seria el deducido: diria que hubo tres
+   * pasadas cuando hubo dos.
+   */
+  it('con una ronda salteada, cuenta las que existen y no las que el maximo sugiere', () => {
+    const conHueco = [
+      { inventarioId: 5, numeroConteo: 1 },
+      { inventarioId: 5, numeroConteo: 3 },
+    ];
+    expect(agruparRondasPorInventario(conHueco).get(5)).toEqual({ rondaActiva: 3, rondas: 2 });
+  });
+
+  it('separa las tiendas: cada inventario lleva su propia cuenta', () => {
+    const mezclados = [
+      { inventarioId: 8088, numeroConteo: 1 },
+      { inventarioId: 8078, numeroConteo: 1 },
+      { inventarioId: 8088, numeroConteo: 2 },
+      { inventarioId: 8078, numeroConteo: 2 },
+      { inventarioId: 8078, numeroConteo: 3 },
+    ];
+    const porInventario = agruparRondasPorInventario(mezclados);
+    expect(porInventario.get(8088)).toEqual({ rondaActiva: 2, rondas: 2 });
+    expect(porInventario.get(8078)).toEqual({ rondaActiva: 3, rondas: 3 });
+  });
+
+  /**
+   * UN INVENTARIO SIN HOJAS NO APARECE EN EL MAPA, y no es un dato que falte: el
+   * Coordinador esta en el paso 1 del armado y esa ronda no existe. El service lo
+   * traduce a `null`/`0` -- ver `inventariosDelPeriodo`.
+   */
+  it('un inventario sin hojas no entra en el mapa', () => {
+    expect(agruparRondasPorInventario([]).size).toBe(0);
+    expect(agruparRondasPorInventario([{ inventarioId: 1, numeroConteo: 1 }]).get(999)).toBeUndefined();
+  });
+
+  /**
+   * EL TOTAL DE LA CADENA NO TIENE RONDA, y es correcto que no la tenga: once
+   * tiendas en rondas distintas no tienen una ronda en comun, y cualquier numero
+   * que se pusiera ahi seria una afirmacion sobre un conteo que no existe.
+   */
+  it('el total de la cadena no inventa una ronda para toda la cadena', () => {
+    const total = totalizarCadena([
+      fila(1, 'Market Luzuriaga', [item({ codigo: 'A1', stockErp: 10, conteos: [10] })], 3, 3),
+      fila(2, 'Market Carhuaz', [item({ codigo: 'B1', stockErp: 10, conteos: [10] })], 2, 2),
+    ]);
+    expect(total).not.toHaveProperty('rondaActiva');
+    expect(total).not.toHaveProperty('rondas');
   });
 });
 

@@ -2,7 +2,13 @@ import type { Response } from 'express';
 import { asyncHandler } from '../../shared/asyncHandler';
 import type { RequestAutenticado } from '../../shared/tipos';
 import * as service from './auditoria.service';
-import type { CadenaQuery, ListarAuditablesQuery, MatrizQuery, ParametrosInventario } from './auditoria.schema';
+import type {
+  CadenaQuery,
+  ConteosDeCadenaQuery,
+  ListarAuditablesQuery,
+  MatrizQuery,
+  ParametrosInventario,
+} from './auditoria.schema';
 
 /**
  * Traduce req/res y nada mas -- ni Prisma ni logica de negocio (regla de
@@ -26,6 +32,14 @@ export const resumen = asyncHandler(async (req: RequestAutenticado, res: Respons
 
 export const cadena = asyncHandler(async (req: RequestAutenticado, res: Response) => {
   res.json(await service.cadena(req.colaborador!, req.query as unknown as CadenaQuery));
+});
+
+/**
+ * Los conteos de toda la cadena, para "Corregir lo contado" -- ver
+ * auditoria.service.ts#conteosDeLaCadena.
+ */
+export const conteosDeLaCadena = asyncHandler(async (req: RequestAutenticado, res: Response) => {
+  res.json(await service.conteosDeLaCadena(req.colaborador!, req.query as unknown as ConteosDeCadenaQuery));
 });
 
 /**

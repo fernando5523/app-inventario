@@ -1367,6 +1367,78 @@ export interface FilaCadena {
   inventarioId: number | null;
   /** null junto con `inventarioId`: sin inventario no hay estado que declarar. */
   estado: EstadoInventario | null;
+  /**
+   * LA ULTIMA RONDA QUE EXISTE en este inventario -- `MAX(numeroConteo)` de sus
+   * hojas. `null` = no hay hojas todavia (el Coordinador esta en el paso 1 del
+   * armado), o la tienda no arranco el periodo.
+   *
+   * Pedido del usuario mirando esta tabla: *"quiero ver el conteo 1, 2 o 3 y
+   * asi sucesivamente"*. Sin este campo las once tiendas decian todas "Conteo
+   * en curso" y no habia con que saber cual iba por la primera pasada y cual
+   * por la tercera.
+   *
+   * ---------------------------------------------------------------------
+   * ES EL MISMO `rondaActiva` DE `InventarioActivoDto`, no un primo
+   * ---------------------------------------------------------------------
+   * Mismo nombre y misma cuenta a proposito: una cifra que no es la misma que
+   * otra no puede llevar el mismo rotulo, y al reves -- dos nombres para el
+   * mismo numero obligan a adivinar cual creer. Ver el comentario largo de
+   * `InventarioActivoDto.rondaActiva` en `inventarios.service.ts`, que es la
+   * definicion que manda.
+   *
+   * ---------------------------------------------------------------------
+   * NO SE PONE EN NULL CUANDO LA TIENDA DEJO DE CONTAR
+   * ---------------------------------------------------------------------
+   * Un inventario en `ajuste_auditor`, `conteo_cerrado`, `liquidado` o
+   * `lacrado` NO esta contando, y aun asi este campo sigue trayendo el numero
+   * de su ultima ronda. Es deliberado y por dos razones:
+   *
+   *  1. `null` YA SIGNIFICA OTRA COSA -- "no hay hojas todavia". Usarlo
+   *     tambien para "ya no se cuenta" junta dos situaciones opuestas (nada
+   *     empezo contra todo termino) en un mismo valor.
+   *  2. SE PERDERIA EL NUMERO justo cuando mas sirve. De una tienda en ajuste
+   *     final, lo util de mostrar es "llego hasta la 3ra"; con el campo en
+   *     null la pantalla no tendria con que escribir ese 3.
+   *
+   * QUIEN DICE SI SE ESTA CONTANDO ES `estado`, que ya viaja en esta misma
+   * fila. Los dos juntos no dejan ningun caso ambiguo:
+   *
+   *     estado            rondaActiva   que esta pasando
+   *     null              null          la tienda no arranco el periodo
+   *     en_curso          null          hay inventario, todavia sin hojas
+   *     en_curso          2             la tienda va por el 2do conteo
+   *     ajuste_auditor    3             conto hasta la 3ra; ahora ajusta el Auditor
+   *     conteo_cerrado    3             cerro en la 3ra
+   *
+   * LO QUE ESTA FILA NO PUEDE AFIRMAR, dicho para que nadie lo deduzca mal:
+   * con `en_curso` y `rondaActiva: 2` no se sabe si esa ronda 2 sigue abierta o
+   * si ya cerro y el inventario espera al Auditor -- eso lo distingue
+   * `admiteConteo`, que es una consulta por inventario y no esta en esta tabla
+   * (ver `InventarioActivoDto.admiteConteo`). Para el rotulo da igual: la
+   * tienda va por el 2do conteo en los dos casos.
+   */
+  rondaActiva: number | null;
+  /**
+   * CUANTAS PASADAS LLEVA el inventario: cuantos `numeroConteo` distintos
+   * tienen hojas. `0` cuando no hay ninguna, y en la tienda sin inventario.
+   *
+   * NO se deriva de `rondaActiva`. En la practica coinciden -- las rondas se
+   * numeran 1, 2, 3... sin saltos -- pero contarlas de verdad en vez de asumir
+   * que el maximo es la cantidad evita que un hueco se convierta en una pasada
+   * inventada. Es la diferencia entre medir y suponer, y aca sale de la misma
+   * consulta, asi que no se paga nada por medir.
+   *
+   * CUENTA RONDAS QUE EXISTEN, NO RONDAS CONTADAS. Una ronda recien abierta
+   * cuyas hojas todavia estan vacias ya suma: existe, tiene hojas y le toca a
+   * alguien. Lo que mide cuantas rondas tienen conteos cargados es
+   * `embudoDeConteos().itemsPorRonda`, que es otra pregunta.
+   *
+   * NO SE LLAMA `totalRondas`: ese nombre ya existe en
+   * `dominio/ciclo-conteos.ts` y significa otra cosa -- el techo del ciclo
+   * automatico (`RONDAS_DEL_CICLO`, 3), no las que este inventario llevo. Un
+   * inventario puede terminar con 6 rondas y ese valor seguir en 3.
+   */
+  rondas: number;
   items: number;
   auditables: number;
   cuadrados: number;
@@ -1432,6 +1504,261 @@ export interface TotalCadena {
    * lo que falto, el total lo dice.
    */
   valorADescontar: number;
+}
+
+// ---------------------------------------------------------------------------
+// Los conteos de la cadena: una fila por producto, lista para corregir
+// ---------------------------------------------------------------------------
+
+/**
+ * DONDE SE CARGO UN CONTEO: la hoja, y el `Producto` DE ESA HOJA.
+ *
+ * Son dos ids y no uno porque el endpoint de correccion los pide los dos
+ * (`PATCH /api/hojas/:hojaId/conteos/:productoId/corregir`) y exige que el
+ * producto sea de esa hoja -- `hojas.service.ts#corregirConteo` hace
+ * `findFirst({ where: { id: productoId, hojaId } })`. Con el id de otra ronda
+ * devuelve 404.
+ *
+ * Y LOS EMPAQUES TAMBIEN SON DE ESA HOJA: el cuerpo de la correccion manda
+ * `empaqueNombre`, y el servidor lo resuelve contra los empaques de ESE
+ * producto. El mismo articulo se materializa como un `Producto` distinto en
+ * cada hoja de cada ronda, asi que mandar los empaques de la ronda 1 para
+ * corregir un conteo de la ronda 4 es como se rechaza un empaque que existe.
+ */
+export interface ConteoUbicado {
+  /** La ronda de esta hoja (1-based). */
+  numeroConteo: number;
+  hojaId: number;
+  /** El rotulo de la hoja ("003"), para mostrar. */
+  hojaNumero: string;
+  productoId: number;
+  empaques: Array<{ nombre: string; factor: number }>;
+}
+
+/**
+ * Lo del catalogo que la fila necesita y `ItemAuditoria` no trae: el codigo de
+ * barras y la CATEGORIA REAL.
+ *
+ * LA CATEGORIA ES LA DEL PRODUCTO, NO LA `zona` DE LA HOJA. `ItemAuditoria`
+ * trae `zona`, que es el rotulo con el que se agrupo la hoja y ya causo un bug
+ * -- es un dato sintetico de la hoja, no del articulo. La de verdad vive en
+ * `CatalogoItem.categoria` (la de "Catalogo Ventas" de Dynamics) y es la que
+ * sirve para filtrar una tabla de 11.800 renglones.
+ */
+export interface FichaDeCatalogo {
+  codigoBarras: string;
+  /** `null` = el ERP no le asigno categoria. No se inventa una. */
+  categoria: string | null;
+}
+
+/** La tienda y su inventario, para el encabezado de cada fila. */
+export interface TiendaDelConteo {
+  sucursalId: number;
+  sucursal: string;
+  inventarioId: number;
+  estado: EstadoInventario;
+}
+
+/**
+ * UNA FILA DE "CORREGIR LO CONTADO" DE TODA LA CADENA: un producto, con el
+ * conteo QUE MANDA y donde corregirlo.
+ *
+ * ---------------------------------------------------------------------------
+ * POR QUE NO ALCANZABA CON `/matriz` NI CON `/hojas`
+ * ---------------------------------------------------------------------------
+ * Medido en Luzuriaga (inventario 8078): la ronda 1 tiene 20 hojas y los 985
+ * productos del catalogo; la 2 tiene 16, la 3 tiene 8 y la 4 tiene 6. Las
+ * rondas siguientes son recuentos de lo que no cuadro.
+ *
+ *   - Pedir la RONDA VIGENTE da 6 filas, no 985.
+ *   - Pedir la RONDA 1 da los 985 con su hoja, pero muestra el conteo de la
+ *     ronda 1 mientras la diferencia sale del conteo FINAL -- que para esos 6
+ *     items es el de la ronda 4. La fila mostraria una resta que no cierra
+ *     consigo misma.
+ *   - `/matriz` trae los 985 con el conteo final, pero SIN `hojaId`: agrupa por
+ *     codigo y se queda con la hoja de la ronda 1 (ver `armarMatriz`), que es lo
+ *     correcto para mostrar y lo inservible para corregir.
+ *
+ * Por eso esta fila resuelve POR PRODUCTO la ultima ronda en la que aparece y
+ * toma de ahi el conteo, la hoja, el producto y los empaques. Asi la resta
+ * `conteo - stockErp` da `diferencia` en la propia fila, y el boton de corregir
+ * apunta a la hoja donde ese numero se cargo de verdad.
+ */
+export interface FilaConteoDeCadena {
+  sucursalId: number;
+  sucursal: string;
+  inventarioId: number;
+  /**
+   * El estado del inventario. Viaja para que el cliente pueda DECIR por que una
+   * fila no se puede corregir, no para que redescubra la regla: eso ya lo
+   * resuelve `sePuedeCorregir`.
+   */
+  estado: EstadoInventario;
+
+  /**
+   * LA HOJA DEL CONTEO QUE MANDA -- la de la ULTIMA ronda en la que este
+   * producto aparece, no la de la ronda 1.
+   *
+   * `null` = ninguna hoja finalizada lo incluye todavia: no hay conteo que
+   * corregir. No es un dato que falte, es un conteo que no existe -- y por eso
+   * la fila viaja igual, con `conteo: null`. Un catalogo de 985 items al que se
+   * le esconden los 12 sin contar se lee como un catalogo de 973.
+   */
+  hojaId: number | null;
+  /** El rotulo de esa hoja ("003"). `null` junto con `hojaId`. */
+  hoja: string | null;
+  /** La ronda de ese conteo (1-based). `null` junto con `hojaId`. */
+  numeroConteo: number | null;
+  /**
+   * El `Producto` DE ESA HOJA, que es el que pide la ruta de correccion. `null`
+   * junto con `hojaId`.
+   *
+   * NO ES `ItemAuditoria.productoId`: ese es el de la ronda 1 (ver
+   * `armarMatriz`), y usarlo para corregir un conteo de la ronda 4 da 404.
+   */
+  productoId: number | null;
+  /**
+   * SI EL SERVIDOR VA A ACEPTAR LA CORRECCION DE ESTA FILA.
+   *
+   * Son las DOS condiciones que el servidor exige, y se resuelven aca para que
+   * el cliente no tenga media copia de la regla:
+   *
+   *   1. que haya un conteo que corregir (`hojaId !== null`);
+   *   2. que el inventario este `en_curso` -- la ventana de
+   *      `ajuste.permisos.ts#validarCorreccion`, que se cierra en
+   *      `ajuste_auditor` (de ahi en adelante los valores los cambia el Auditor
+   *      en SU pantalla) y en todo lo que viene despues (conteo cerrado: los
+   *      valores quedaron firmes).
+   *
+   * Los dos hechos que la sostienen -- `hojaId` y `estado` -- van en la fila,
+   * asi que el cliente puede decir CUAL de las dos falta sin adivinar.
+   *
+   * LO QUE ESTO NO MIRA es el rol ni la sucursal de quien pregunta: eso no es
+   * de la fila. A este endpoint solo entran el Auditor y el Administrador (ver
+   * `validarAccesoALaCadena`), y para los dos `validarSucursal` pasa en
+   * cualquier tienda, asi que para quien puede leer esta tabla el estado es la
+   * unica puerta que queda.
+   */
+  sePuedeCorregir: boolean;
+
+  codigo: string;
+  codigoBarras: string;
+  /** La del PRODUCTO, no la `zona` de la hoja. Ver `FichaDeCatalogo`. */
+  categoria: string | null;
+  descripcion: string;
+  /** Los empaques del producto DE LA HOJA QUE MANDA. Vacio si no hay conteo. */
+  empaques: Array<{ nombre: string; factor: number }>;
+
+  /** Lo contado en la ronda que manda, en unidades. `null` = nadie lo conto. */
+  conteo: number | null;
+  /**
+   * EL STOCK CONTRA EL QUE SE MIDIO ESE CONTEO, no el de la ronda 1: desde que
+   * cada reconteo baja su propio stock, son numeros distintos. Es lo que hace
+   * que `conteo - stockErp === diferencia` cierre en la propia fila.
+   */
+  stockErp: number | null;
+  /** `conteo - stockErp`. Negativo = faltante. `null` si falta cualquiera de los dos. */
+  diferencia: number | null;
+  /** La ronda de la que salio el stock. Distinta de `numeroConteo` solo si cayo a la 1. */
+  rondaDelStock: number | null;
+  /**
+   * `true` = la ronda del conteo no trajo stock propio y se midio con el de la
+   * ronda 1. Se dice y no se esconde: "faltan 3" contra el stock de hoy y
+   * contra el de hace tres dias no son la misma afirmacion.
+   */
+  cayoALaRonda1: boolean;
+}
+
+/**
+ * ARMA UNA FILA, Y RESUELVE LA RONDA QUE MANDA. Esto es el centro del
+ * endpoint: todo lo demas es traer datos y paginar.
+ *
+ * La ronda sale de `stockDeLaMedicion`, que es la MISMA funcion que usa la
+ * matriz para decidir contra que stock se midio el item -- no una segunda
+ * copia de "cual es el ultimo conteo". De ahi salen juntos la ronda, el stock
+ * que le corresponde y si hubo que caer a la ronda 1; calcularlos aparte seria
+ * como la fila termina mostrando una resta que no da su propia diferencia.
+ */
+export function filaDeConteoDeCadena(
+  tienda: TiendaDelConteo,
+  item: ItemAuditoria,
+  ficha: FichaDeCatalogo,
+  /** ronda -> donde se cargo el conteo de ESTE producto. */
+  ubicacionPorRonda: ReadonlyMap<number, ConteoUbicado>,
+): FilaConteoDeCadena {
+  const medicion = stockDeLaMedicion(item);
+  // `rondaDelConteo` es la posicion 1-based del ULTIMO conteo no nulo, o `null`
+  // si nadie lo conto. Es exactamente "la ultima ronda en la que aparece".
+  const ubicacion = medicion.rondaDelConteo === null ? null : ubicacionPorRonda.get(medicion.rondaDelConteo) ?? null;
+
+  return {
+    ...tienda,
+    hojaId: ubicacion?.hojaId ?? null,
+    hoja: ubicacion?.hojaNumero ?? null,
+    numeroConteo: ubicacion?.numeroConteo ?? null,
+    productoId: ubicacion?.productoId ?? null,
+    // El estado se compara con el literal y no con una lista: la ventana de
+    // `validarCorreccion` es exactamente `en_curso`, ni un estado mas.
+    sePuedeCorregir: ubicacion !== null && tienda.estado === 'en_curso',
+
+    codigo: item.codigo,
+    codigoBarras: ficha.codigoBarras,
+    categoria: ficha.categoria,
+    descripcion: item.descripcion,
+    empaques: ubicacion?.empaques ?? [],
+
+    conteo: conteoFinal(item),
+    stockErp: medicion.stockErp,
+    diferencia: diferenciaUnidades(item),
+    rondaDelStock: medicion.rondaDelStock,
+    cayoALaRonda1: medicion.cayoALaRonda1,
+  };
+}
+
+/** Lo que una tienda lleva de rondas. Ver `FilaCadena.rondaActiva` y `.rondas`. */
+export interface RondasDelInventario {
+  rondaActiva: number | null;
+  rondas: number;
+}
+
+/**
+ * De los pares (inventario, ronda) que trae la base al "en que ronda va cada
+ * tienda", listo para armar la fila de la cadena.
+ *
+ * VIVE ACA Y NO EN EL SERVICE por lo mismo que el resto de este archivo: es la
+ * regla, no la consulta, y acá se puede probar sin base. La consulta la hace
+ * `auditoria.service.ts#rondasDeLosInventarios` con UN `groupBy` para todas las
+ * tiendas; esto solo ordena su resultado.
+ *
+ * DOS REGLAS QUE PARECEN DETALLES Y NO LO SON:
+ *
+ *  - `rondaActiva` sale de un `Math.max`, NO del ultimo par que llego. Un
+ *    `groupBy` no promete orden, y apoyarse en el que venga de hecho es como una
+ *    pantalla termina mostrando la ronda 1 de un inventario que va por la 2da.
+ *  - `rondas` se CUENTA, no se deduce de `rondaActiva`. En la practica coinciden
+ *    (las rondas se numeran 1, 2, 3... sin saltos), pero contarlas de verdad
+ *    evita que un hueco se convierta en una pasada inventada. Medir sale gratis
+ *    porque los pares ya estan en la mano.
+ *
+ * Un inventario SIN HOJAS no aparece en el mapa: no es un dato que falte, es una
+ * ronda que no existe. Quien llama lo traduce a `null`/`0`.
+ */
+export function agruparRondasPorInventario(
+  pares: readonly { inventarioId: number; numeroConteo: number }[],
+): Map<number, RondasDelInventario> {
+  const porInventario = new Map<number, RondasDelInventario>();
+
+  for (const par of pares) {
+    const previo = porInventario.get(par.inventarioId);
+    if (previo === undefined) {
+      porInventario.set(par.inventarioId, { rondaActiva: par.numeroConteo, rondas: 1 });
+      continue;
+    }
+    previo.rondas += 1;
+    previo.rondaActiva = Math.max(previo.rondaActiva ?? 0, par.numeroConteo);
+  }
+
+  return porInventario;
 }
 
 /** Los tres cuadros en cero, para una tienda sin inventario y para arrancar a sumar. */
@@ -1502,7 +1829,22 @@ export function totalizarCadena(filas: readonly FilaCadena[]): TotalCadena {
  * es elegir campos, y eso es exactamente lo que no puede equivocarse.
  */
 export function filaDeCadena(
-  tienda: { sucursalId: number; sucursal: string; inventarioId: number; estado: EstadoInventario },
+  /**
+   * `rondaActiva` y `rondas` van OBLIGATORIOS y sin default, igual que
+   * `montoNegativos` de mas abajo: un `?? null` silencioso dejaria compilando a
+   * un llamador que no se entero, y la columna mostraria "—" sobre una tienda
+   * que si esta en su 2do conteo. El unico llamador de produccion es
+   * `auditoria.service.ts#cadena`; que el tipo lo exija es lo que garantiza que
+   * siga pasandolos el dia que alguien agregue otro.
+   */
+  tienda: {
+    sucursalId: number;
+    sucursal: string;
+    inventarioId: number;
+    estado: EstadoInventario;
+    rondaActiva: number | null;
+    rondas: number;
+  },
   resumen: ResumenAuditoria,
   /**
    * `ResultadoInventario.montoNegativos` de ESTE inventario: los ajustes del
@@ -1563,6 +1905,11 @@ export function filaDeCadenaSinInventario(sucursalId: number, sucursal: string):
     sucursal,
     inventarioId: null,
     estado: null,
+    // `null` y `0`, y la diferencia entre los dos no es un descuido: no hay
+    // ninguna ronda de la cual decir el numero (no se sabe, no es "la cero"),
+    // y la cantidad de pasadas que llevo SI se sabe y es ninguna.
+    rondaActiva: null,
+    rondas: 0,
     items: 0,
     auditables: 0,
     cuadrados: 0,
