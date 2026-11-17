@@ -9,6 +9,7 @@ import { auditoriaRouter } from '../modules/auditoria';
 import { clasificacionRouter } from '../modules/clasificacion';
 import { configRouter } from '../modules/config';
 import { configDynamicsRouter } from '../modules/config-dynamics';
+import { correccionesRouter } from '../modules/correcciones';
 import { consumoInternoRouter } from '../modules/consumo-interno';
 import { hojasRouter } from '../modules/hojas';
 import { d365Router, stockRondaRouter } from '../modules/d365';
@@ -158,6 +159,10 @@ export function crearApp(opciones: OpcionesApp = {}): Express {
   app.use('/api/liquidacion', liquidacionRouter);
   app.use('/api/liquidacion', reporteGerenciaRouter);
   app.use('/api/config-dynamics', configDynamicsRouter);
+  // La correccion masiva por Excel. Router propio y no dentro de /api/hojas
+  // porque el lote CRUZA inventarios: un archivo trae las once tiendas del
+  // periodo, asi que no cuelga de ninguna hoja ni de ningun inventario.
+  app.use('/api/correcciones', correccionesRouter);
   // Aprobacion de consumo interno: entra con Entra ID, no con PIN. Ver el modulo.
   app.use('/api/consumo-interno', consumoInternoRouter);
 
