@@ -22,8 +22,7 @@ import { colors, fonts, fontSize, radius, shadow, spacing } from '../../lib/them
  * ---------------------------------------------------------------------------
  * Metro elige este archivo en vez de `lacrado.tsx` cuando el bundle es de web.
  * El del teléfono NO se toca: es un CLON, no una variante con `Platform.OS`
- * adentro — mismo criterio que `auditoria.web.tsx`, `matriz.web.tsx` y
- * `RolTabsLayout.web.tsx`.
+ * adentro — mismo criterio que `auditoria.web.tsx` y `RolTabsLayout.web.tsx`.
  *
  * LA FUNCIONALIDAD ES LA MISMA, hasta el último texto: los tres repositorios,
  * las mismas condiciones para aprobar y lacrar, el mismo modal de

@@ -60,8 +60,8 @@ import { colors, fonts, fontSize, radius, shadow, spacing } from '../../lib/them
  * ---------------------------------------------------------------------------
  * Metro elige este archivo en vez de `liquidacion.tsx` cuando el bundle es de
  * web. El del teléfono NO se toca: es un CLON, no una variante con
- * `Platform.OS` adentro — mismo criterio que `auditoria.web.tsx`,
- * `matriz.web.tsx` y `RolTabsLayout.web.tsx`.
+ * `Platform.OS` adentro — mismo criterio que `auditoria.web.tsx` y
+ * `RolTabsLayout.web.tsx`.
  *
  * POR QUÉ CAMBIA LA FORMA: en el teléfono cada colaborador es una tarjeta con
  * su monto a la derecha y una línea en prosa que explica de dónde sale ("Faltó

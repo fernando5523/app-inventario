@@ -116,11 +116,11 @@ export default function AuditoriaScreen(): JSX.Element {
       setEnFoco({ id: activo.inventarioId, estado: activo.estado });
       /**
        * SOLO EL RESUMEN. El panel PEDÍA TAMBIÉN LA MATRIZ y la recorría en el
-       * teléfono para sacar los contadores del encabezado. Desde que la matriz
-       * se mudó a `/auditor/matriz` (2026-09-22) eso serían hasta 16 páginas
-       * de API -- 8.000 ítems con sus conteos y su atribución -- para pintar
-       * una línea de texto que el servidor ya sabe calcular. Todos los números
-       * de esta pantalla vienen ahora de `resumen()`.
+       * teléfono para sacar los contadores del encabezado. Desde que la lista
+       * ítem por ítem salió de esta pantalla (2026-09-22) eso serían hasta 16
+       * páginas de API -- 8.000 ítems con sus conteos y su atribución -- para
+       * pintar una línea de texto que el servidor ya sabe calcular. Todos los
+       * números de esta pantalla vienen ahora de `resumen()`.
        */
       setResumenServidor(await repositorioAuditoria.resumen(activo.inventarioId));
     } catch (e) {
@@ -237,8 +237,8 @@ export default function AuditoriaScreen(): JSX.Element {
    * TODAS LAS CIFRAS SALEN DEL SERVIDOR, no de recorrer la matriz acá.
    *
    * Antes esta pantalla llamaba a `resumirAuditoria(items)` sobre la matriz
-   * completa. Al mudarse la matriz a `/auditor/matriz` el panel dejó de
-   * pedirla, así que los contadores tenían que venir con el resumen o dejar de
+   * completa. Al salir de acá la lista ítem por ítem el panel dejó de pedirla,
+   * así que los contadores tenían que venir con el resumen o dejar de
    * existir -- `contados` se agregó al DTO para esto (ver `ResumenAuditoria`
    * en el backend). Mientras no llegó, `undefined`: se muestra "—" y nunca un
    * 0, que diría "no falta nada" sobre un dato que todavía no se sabe.
@@ -325,8 +325,8 @@ export default function AuditoriaScreen(): JSX.Element {
           subtitle="No hay un inventario en curso para esta sucursal, o el ciclo de conteos no cerró ningún ítem todavía."
         />
       ) : (
-        // CONTENIDO NORMAL, ya no una FlatList. La lista se mudó a
-        // `/auditor/matriz` (2026-09-22) y con ella se fue la única razón para
+        // CONTENIDO NORMAL, ya no una FlatList. La lista ítem por ítem salió
+        // de esta pantalla (2026-09-22) y con ella se fue la única razón para
         // que esta pantalla no usara el scroll de `PantallaConTabs`: una lista
         // virtualizada adentro de otra que también scrollea no virtualiza nada.
         // Sin lista, `scrollable` vuelve y el contenido scrollea solo -- son
@@ -532,37 +532,6 @@ export default function AuditoriaScreen(): JSX.Element {
             <Text style={styles.accionTexto}>Ir a aprobación y lacrado</Text>
           </Pressable>
 
-          {/*
-                EL ACCESO A LA MATRIZ, donde antes empezaba la lista.
-                Mismo estilo que "Corregir lo contado" -- neutro con borde, no
-                el rojo, que sigue siendo del lacrado -- y con las dos cifras
-                que dicen si vale la pena entrar: cuántos ítems hay y cuántos
-                tienen diferencia. Un acceso que solo dijera "Matriz
-                comparativa" obligaría a entrar para saber si hay algo.
-              */}
-          <Pressable
-            style={styles.irACorregir}
-            onPress={() => router.push('/auditor/matriz')}
-            accessibilityRole="button"
-            accessibilityLabel={
-              totalItems === undefined
-                ? 'Ver la matriz comparativa ítem por ítem'
-                : `Ver la matriz comparativa: ${totalItems} ítems, ${conDiferencia} con diferencia`
-            }
-          >
-            <BarChart3 size={16} color={colors.tinta} />
-            <Text style={styles.irACorregirTexto}>
-              Revisar ítem por ítem
-              {totalItems === undefined ? null : (
-                <Text style={styles.irAMatrizCifras}>
-                  {'\n'}
-                  {totalItems} {pluralizar(totalItems, 'ítem', 'ítems')} · {conDiferencia}{' '}
-                  {pluralizar(conDiferencia, 'con diferencia', 'con diferencia')}
-                </Text>
-              )}
-            </Text>
-            <ChevronRight size={16} color={colors.gris} />
-          </Pressable>
         </>
       )}
     </PantallaConTabs>
@@ -630,12 +599,6 @@ const styles = StyleSheet.create({
     lineHeight: 17,
     color: colors.tinta,
     fontFamily: fonts.semibold,
-  },
-  /** La segunda línea del acceso a la matriz: dato, no acción — gris y sin peso. */
-  irAMatrizCifras: {
-    fontSize: 11.5,
-    color: colors.gris,
-    fontFamily: fonts.regular,
   },
   resumenFilaDestacada: {
     paddingTop: 7,

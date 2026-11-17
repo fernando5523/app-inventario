@@ -123,16 +123,25 @@ export const ACCESOS_CATALOGO: Record<Rol, AccesoCatalogo[]> = {
   ],
   auditor: [
     { ruta: '/auditor/auditoria', titulo: 'Panel de auditoría', sub: 'Comparar los conteos contra el ERP' },
-    {
-      ruta: '/auditor/matriz',
-      titulo: 'Matriz comparativa',
-      sub: 'Revisar ítem por ítem contra el ERP',
-      nota:
-        'JUSTO DESPUES del panel, y salio de adentro de el (2026-09-22). El panel mezclaba DECIDIR ' +
-        '(resumen, cuadros, planilla, lacrado) con REVISAR item por item: con los 980 items reales de ' +
-        'Luzuriaga los botones del cierre quedaban al final de la lista, o sea que no existian. Son dos ' +
-        'tareas distintas y ahora son dos pantallas; el panel deja un acceso a esta.',
-    },
+    // "Matriz comparativa" SE QUITO el 2026-10-13, por decision del usuario:
+    // no es parte del requerimiento, ni en la app ni en el portal web. Habia
+    // nacido el 2026-09-22 separada del panel, pero el cliente nunca la pidio.
+    //
+    // La entrada TIENE que salir de aca y no solo de `mobile`: `/api/navegacion/mia`
+    // arma el menu desde ESTE catalogo, asi que mientras la linea exista la app
+    // con senal sigue ofreciendo una pantalla que ya no existe. Y hay un test
+    // espejo (`navegacion.espejo.test.ts`) que compara este archivo contra
+    // `mobile/components/navegacion/accesos.ts`: sacarla de un lado solo lo
+    // deja en rojo.
+    //
+    // Las filas de `ConfiguracionNavegacion` que todavia nombren esta ruta NO
+    // necesitan migracion: `navegacion.service.ts#resolver` ignora en silencio
+    // una fila sin elemento en el catalogo, y el orden manual se guarda por
+    // clave y no por posicion.
+    //
+    // El ENDPOINT `/api/auditoria/inventarios/:id/matriz` NO se toca: lo usa
+    // "Corregir lo contado" del portal para el stock de la medicion y la
+    // diferencia de cada item. Se fue la pantalla, no el dato.
     { ruta: '/auditor/ciclo', titulo: 'Ciclo de conteos', sub: 'Embudo de discrepancias, y abrir otro conteo' },
     {
       ruta: '/auditor/corregir',

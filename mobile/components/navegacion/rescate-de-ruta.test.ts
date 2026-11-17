@@ -91,7 +91,7 @@ describe('destinoDesdeLaRaizDelGrupo', () => {
       ['administrador', '/administrador/comparativo'],
       ['coordinador', '/coordinador/asistencia'],
       ['conteo', '/conteo/mis-hojas'],
-      ['auditor', '/auditor/matriz'],
+      ['auditor', '/auditor/lacrado'],
     ];
     for (const [rol, pedida] of casos) {
       expect(

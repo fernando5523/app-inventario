@@ -12,7 +12,6 @@ import {
   Settings,
   ShieldCheck,
   Store,
-  Table2,
   Tags,
   UserCheck,
   UserRound,
@@ -47,7 +46,6 @@ import {
 const POR_SEGMENTO: Record<string, LucideIcon> = {
   index: Home,
   auditoria: BarChart3,
-  matriz: Table2,
   ciclo: CalendarClock,
   corregir: PencilLine,
   ajuste: Scale,

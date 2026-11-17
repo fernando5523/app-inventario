@@ -19,26 +19,6 @@ export interface ScreenContainerProps extends PropsWithChildren {
   contentStyle?: StyleProp<ViewStyle>;
   /** Solo tiene efecto con `scrollable` -- "tirar para refrescar" (`<RefreshControl />`), pasado directo al `ScrollView`. */
   refreshControl?: ScrollViewProps['refreshControl'];
-  /**
-   * `true` = esta pantalla usa TODO el ancho de la ventana en web, sin el tope
-   * de lectura de abajo. En Android e iOS no cambia nada (ahí no hay tope).
-   *
-   * OPT-IN, Y EL DEFAULT `false` ES EL COMPORTAMIENTO DE SIEMPRE: por acá pasa
-   * toda pantalla de la app (`ScreenContainer` -> `PantallaConTabs`), así que
-   * soltarle el tope a todas desde acá sería cambiarle el ancho a treinta
-   * pantallas que nadie pidió tocar (misma regla que el select buscable
-   * compartido y que `recuperarAlDespausar`, ver trujillo-ui). Lo prende la
-   * pantalla que lo necesita.
-   *
-   * QUIEN LO NECESITA, y por qué no alcanza con subir la constante: la matriz
-   * del Auditor en web (`app/auditor/matriz.web.tsx`) es una TABLA de hasta
-   * diez columnas -- código, descripción, hoja, categoría, ERP, una por ronda,
-   * diferencia y cuadro. A 1120px las columnas se estrujan; y el tope existe
-   * justamente para lo contrario (que un renglón de texto no se estire a lo
-   * ancho de un monitor), que no es lo que hace una tabla: ahí el ancho de más
-   * son columnas enteras, no aire entre una etiqueta y su número.
-   */
-  anchoCompleto?: boolean;
 }
 
 export function ScreenContainer({
@@ -47,23 +27,21 @@ export function ScreenContainer({
   style,
   contentStyle,
   refreshControl,
-  anchoCompleto = false,
 }: ScreenContainerProps): JSX.Element {
-  const anchoDeLectura = anchoCompleto ? null : TOPE_DE_LECTURA;
   return (
     <SafeAreaView edges={['top', 'left', 'right']} style={[styles.root, style]}>
       <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={styles.flex}>
         {scrollable ? (
           <ScrollView
             style={styles.flex}
-            contentContainerStyle={[styles.content, anchoDeLectura, contentStyle]}
+            contentContainerStyle={[styles.content, TOPE_DE_LECTURA, contentStyle]}
             showsVerticalScrollIndicator={false}
             refreshControl={refreshControl}
           >
             {children}
           </ScrollView>
         ) : (
-          <View style={[styles.flex, styles.content, anchoDeLectura, contentStyle]}>{children}</View>
+          <View style={[styles.flex, styles.content, TOPE_DE_LECTURA, contentStyle]}>{children}</View>
         )}
       </KeyboardAvoidingView>
     </SafeAreaView>
@@ -88,10 +66,12 @@ export function ScreenContainer({
  * que cambiar se cambia una vez y no en treinta archivos. En Android e iOS el
  * objeto queda vacío y no toca nada.
  *
- * LA EXCEPCIÓN ES UNA TABLA, y se pide con `anchoCompleto` (ver la prop): el
- * tope protege un renglón de TEXTO de estirarse a lo ancho de un monitor, y en
- * una tabla el ancho de más no es aire entre la etiqueta y el número -- son
- * columnas. La constante no se sube: subirla les mueve el piso a las demás.
+ * HUBO UNA EXCEPCIÓN y ya no hay ninguna: la matriz comparativa en web pedía
+ * soltar el tope con una prop `anchoCompleto`, porque una tabla de diez
+ * columnas se estruja a 1120px. Esa pantalla se quitó (no era parte del
+ * requerimiento), y con ella se fue el único llamador de la prop. Si vuelve a
+ * hacer falta para otra tabla, se agrega de nuevo: lo que NO se hace es subir
+ * la constante, porque eso les mueve el piso a las otras treinta pantallas.
  */
 const ANCHO_MAX_WEB = 1120;
 

@@ -3,7 +3,6 @@ import {
   BarChart3,
   Boxes,
   CheckCircle2,
-  ClipboardList,
   Download,
   FileSpreadsheet,
   Lock,
@@ -772,12 +771,6 @@ export default function PanelAuditoriaWeb(): JSX.Element {
                 icono={Lock}
                 variante="principal"
                 onPress={() => router.push('/auditor/lacrado')}
-              />
-              <BotonWeb
-                etiqueta="Revisar ítem por ítem"
-                sub={`${resumen.items} ítems · ${conDiferencia} con diferencia`}
-                icono={ClipboardList}
-                onPress={() => router.push('/auditor/matriz')}
               />
             </TarjetaWeb>
             </View>

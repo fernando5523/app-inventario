@@ -56,8 +56,6 @@ export { SelectBuscable } from './SelectBuscable';
 export type { SelectBuscableProps } from './SelectBuscable';
 export { SelectorSucursal } from './SelectorSucursal';
 export type { SelectorSucursalProps } from './SelectorSucursal';
-export { ModalFiltrosMatriz } from './ModalFiltrosMatriz';
-export type { ModalFiltrosMatrizProps } from './ModalFiltrosMatriz';
 export { ModalFiltrosProductos } from './ModalFiltrosProductos';
 export type { ModalFiltrosProductosProps } from './ModalFiltrosProductos';
 export { ModalFiltrosHojas } from './ModalFiltrosHojas';

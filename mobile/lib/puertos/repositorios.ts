@@ -168,8 +168,8 @@ export interface ResumenAuditoriaServidor {
    * NO es `items - sinContar`: `sinContar` solo cuenta los que SÍ tienen stock
    * del ERP, así que restarlo daría por contado a un ítem sin ERP que nadie
    * contó. Lo manda el servidor (`auditoria.calculos.ts#resumir`) porque el
-   * Panel de auditoría lo muestra en su encabezado y ya no pide la matriz —
-   * esa se mudó a `/auditor/matriz`.
+   * Panel de auditoría lo muestra en su encabezado y ya no pide la matriz
+   * entera para contarlos.
    */
   contados: number;
   /**
