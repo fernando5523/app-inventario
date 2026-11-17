@@ -1,7 +1,21 @@
 import { z } from 'zod';
 
-/** Los 5 estados de prisma/schema.prisma#EstadoInventario. */
-export const ESTADOS_INVENTARIO = ['en_curso', 'conteo_cerrado', 'liquidado', 'lacrado', 'anulado'] as const;
+/**
+ * Los 6 estados de prisma/schema.prisma#EstadoInventario.
+ *
+ * `ajuste_auditor` FALTABA: esta lista quedo escrita antes de que ese estado
+ * existiera, asi que `?estado=ajuste_auditor` respondia 400 aunque el listado
+ * SI devuelve inventarios en ese estado. El chip "Ajuste del auditor" del
+ * Historial del telefono manda justo ese valor, o sea que tocarlo fallaba.
+ */
+export const ESTADOS_INVENTARIO = [
+  'en_curso',
+  'ajuste_auditor',
+  'conteo_cerrado',
+  'liquidado',
+  'lacrado',
+  'anulado',
+] as const;
 
 export const parametrosInventarioSchema = z.object({
   id: z.coerce.number().int().positive(),

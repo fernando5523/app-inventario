@@ -127,7 +127,13 @@ export function crearApp(opciones: OpcionesApp = {}): Express {
   const hayWeb = existsSync(indexWeb);
 
   app.use(helmet(hayWeb ? OPCIONES_HELMET_CON_WEB : undefined));
-  app.use(cors());
+  // `exposedHeaders` NO es decorativo: sin el, el navegador recibe
+  // `Content-Disposition` pero no deja leerlo desde otro origen, y las
+  // descargas pierden el nombre que puso el servidor. En produccion el
+  // backend sirve la web y es el mismo origen, pero en desarrollo (portal
+  // en :5181, API en :3000) cinco exportaciones del mismo dia se llamaban
+  // todas igual.
+  app.use(cors({ exposedHeaders: ['Content-Disposition'] }));
   app.use(express.json());
 
   app.get('/salud', (_req, res) => res.json({ ok: true }));
