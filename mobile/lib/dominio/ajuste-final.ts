@@ -362,3 +362,75 @@ export function textoItemSalioDeRonda(salida: {
 export function textoRondaQueYaNoExiste(rondaIda: number, rondaAhora: number): string {
   return `El ${ordinal(rondaIda)} conteo ya no existe: se corrigieron todos sus ítems. Te llevamos al ${ordinal(rondaAhora)} conteo.`;
 }
+
+// ---------------------------------------------------------------------------
+// Qué producto acepta el ajuste final
+// ---------------------------------------------------------------------------
+
+/**
+ * ---------------------------------------------------------------------------
+ * EL `productoId` DEL AJUSTE NO ES EL DE LA MATRIZ, Y ESO ERA UN BUG
+ * ---------------------------------------------------------------------------
+ * El mismo artículo se materializa como un `Producto` DISTINTO en cada hoja de
+ * cada ronda; lo único que lo identifica de punta a punta es el CÓDIGO. La
+ * matriz devuelve el `productoId` DE LA RONDA 1 (`auditoria.service.ts`: "la
+ * ronda 1 manda para productoId/zona/hoja") y `ajustarConteo` exige el de la
+ * ÚLTIMA, porque el ajuste corrige el último conteo.
+ *
+ * Las dos pantallas mandaban el de la matriz y el servidor respondía 404 "Ese
+ * producto no pertenece a la última ronda": el ajuste final NUNCA pudo guardar
+ * en un inventario con más de una ronda, que son todos los reales. Medido en
+ * el inventario 8078: el código 100150 es el producto 7045 en la ronda 1, 8030
+ * en la 2, 8046 en la 3 y 8054 en la 4.
+ *
+ * ESTAS DOS FUNCIONES SON EL ARREGLO Y SON PURAS a propósito: sin pantallas de
+ * por medio, el test puede afirmar lo único que importa -- que el id sale de
+ * las hojas de la última ronda y NO del ítem.
+ */
+
+/** Código -> `productoId`, armado con las hojas de UNA ronda (la última, para ajustar). */
+export function productoIdPorCodigo(
+  hojas: readonly { productos: readonly { id: number; codigo: string }[] }[],
+): Map<string, number> {
+  const porCodigo = new Map<string, number>();
+  for (const hoja of hojas) {
+    for (const producto of hoja.productos) porCodigo.set(producto.codigo, producto.id);
+  }
+  return porCodigo;
+}
+
+/**
+ * El `productoId` con el que se puede ajustar ESTE ítem de la matriz.
+ *
+ * `null` = su código no entró en las hojas de la última ronda. No es una falla
+ * ni un permiso: es el dominio -- un ítem que cuadró en la primera pasada no
+ * tiene último conteo que corregir. La pantalla lo dice con palabras en vez de
+ * dejar que falle al guardar.
+ *
+ * RECIBE EL ÍTEM ENTERO, no solo su código, y eso es deliberado: deja escrito
+ * en la firma que `item.productoId` se IGNORA. Volver a usarlo es exactamente
+ * el bug que esta función vino a cerrar.
+ */
+export function productoIdParaAjustar(
+  item: { codigo: string; productoId: number },
+  deLaUltimaRonda: ReadonlyMap<string, number>,
+): number | null {
+  return deLaUltimaRonda.get(item.codigo) ?? null;
+}
+
+/**
+ * QUÉ DECIR CUANDO EL ÍTEM NO ENTRÓ EN LA ÚLTIMA RONDA.
+ *
+ * Vive acá y no dentro de una pantalla porque lo dicen DOS -- el modal del
+ * teléfono y el del navegador --, y dos redacciones de la misma regla es como
+ * una de las dos termina sonando a falla del sistema. No lo es: el ajuste
+ * corrige el ÚLTIMO conteo, y quien cuadró antes no tiene último conteo que
+ * corregir. Por eso la frase también dice por dónde sí se cambia.
+ */
+export function textoItemFueraDelAjuste(ultimaRonda: number | null): string {
+  const donde = ultimaRonda === null ? 'la última ronda' : `el ${ordinal(ultimaRonda)} conteo`;
+  return (
+    `Este ítem no entró en ${donde}, que es sobre el que escribe el ajuste final: ` +
+    'acá no hay valor que fijarle. Si hay que cambiarlo, se corrige la hoja de la ronda en la que se contó.'
+  );
+}

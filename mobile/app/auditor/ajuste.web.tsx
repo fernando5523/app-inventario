@@ -27,8 +27,15 @@ import {
   type TinteFila,
 } from '../../components/web';
 import { cargarSeguro } from '../../lib/adaptadores/_http';
-import { repositorioAjuste, repositorioAuditoria, repositorioInventario, repositorioSesion } from '../../lib/contenedor';
-import { errorDeMotivo, faseDeCierre, puedeAjustar } from '../../lib/dominio/ajuste-final';
+import { repositorioAjuste, repositorioAuditoria, repositorioHojas, repositorioInventario, repositorioSesion } from '../../lib/contenedor';
+import {
+  errorDeMotivo,
+  faseDeCierre,
+  productoIdParaAjustar,
+  productoIdPorCodigo,
+  puedeAjustar,
+  textoItemFueraDelAjuste,
+} from '../../lib/dominio/ajuste-final';
 import {
   conteoFinal,
   conteosConAjuste,
@@ -110,11 +117,12 @@ function celdaNumero(valor: number | null | undefined): JSX.Element {
 }
 
 /**
- * EL STOCK CONTRA EL QUE SE MIDIÓ LA FILA -- no `item.stockErp`. Misma regla y
- * misma marca que la matriz (ver `celdaErp` en matriz.web.tsx): desde que cada
- * reconteo baja su propio stock, el de la ronda 1 es la vara de la PRIMERA
- * pasada, y ponerlo al lado de un conteo de la ronda 3 dejaba la columna
- * "Diferencia" contradiciendo a la de al lado.
+ * EL STOCK CONTRA EL QUE SE MIDIÓ LA FILA -- no `item.stockErp`. La regla vive
+ * en `dominio/auditoria.ts#stockDeLaMedicion` y la marca es la misma en las
+ * pantallas que la muestran: desde que cada reconteo baja su propio stock, el
+ * de la ronda 1 es la vara de la PRIMERA pasada, y ponerlo al lado de un
+ * conteo de la ronda 3 dejaba la columna "Diferencia" contradiciendo a la de
+ * al lado.
  */
 function celdaErp(item: ItemAuditoria): JSX.Element {
   const medicion = stockDeLaMedicion(item);
@@ -182,6 +190,14 @@ export default function AjusteWebScreen(): JSX.Element {
   const [inventarioId, setInventarioId] = useState<number | null>(null);
   const [fase, setFase] = useState<ReturnType<typeof faseDeCierre> | null>(null);
   const [items, setItems] = useState<ItemAuditoria[]>([]);
+  /**
+   * Código -> `productoId` de la ÚLTIMA ronda, que es el único que el ajuste
+   * acepta. Ver `productoIdParaAjustar` en el dominio: el de la matriz es el
+   * de la ronda 1 y daba 404.
+   */
+  const [ajustables, setAjustables] = useState<Map<string, number>>(new Map());
+  /** La ronda sobre la que escribe el ajuste: la última. Solo para nombrarla. */
+  const [rondaDelAjuste, setRondaDelAjuste] = useState<number | null>(null);
   const [filtro, setFiltro] = useState<Filtro>('sin-cuadrar');
   const [enEdicion, setEnEdicion] = useState<ItemAuditoria | null>(null);
   const [guardando, setGuardando] = useState(false);
@@ -206,6 +222,7 @@ export default function AjusteWebScreen(): JSX.Element {
     if (!sesion) return;
     if (sucursalId === null) {
       setItems([]);
+      setAjustables(new Map());
       setInventarioId(null);
       setFase(null);
       setCargando(false);
@@ -216,7 +233,36 @@ export default function AjusteWebScreen(): JSX.Element {
       const activo = await repositorioInventario.activo(sucursalId);
       setInventarioId(activo?.inventarioId ?? null);
       setFase(activo ? faseDeCierre(activo.estado, activo.rondaActiva, activo.totalHojas, activo.ultimaRondaCerrada) : null);
-      setItems(activo ? await repositorioAuditoria.matriz(activo.inventarioId) : []);
+      /**
+       * LA RONDA SOBRE LA QUE ESCRIBE EL AJUSTE -- `ultimaRondaCerrada`, no
+       * `rondaActiva`, y el orden importa. Contra el backend las dos valen lo
+       * mismo acá (medido en el 8078: 4 y 4), pero EN EL MOCK `rondaActiva`
+       * devuelve `null` en cuanto el inventario deja de estar `en_curso`, que
+       * es justo durante el ajuste -- la misma divergencia que ajuste-memoria.ts
+       * ya tiene documentada. Con `rondaActiva` sola, en modo demo no habría
+       * ningún ítem ajustable.
+       */
+      const ultimaRonda = activo?.ultimaRondaCerrada ?? activo?.rondaActiva ?? null;
+      setRondaDelAjuste(ultimaRonda);
+      if (activo === null) {
+        setItems([]);
+        setAjustables(new Map());
+        return;
+      }
+      /**
+       * LAS DOS LECTURAS, EN PARALELO: no dependen entre sí.
+       *  - la matriz da el stock del ERP, el conteo de cada ronda y el veredicto;
+       *  - las hojas de la ÚLTIMA ronda dan el `productoId` que el ajuste acepta.
+       * La matriz sola NO alcanza: su `productoId` es el de la ronda 1 y el
+       * servidor responde 404. Las hojas de la última ronda son pocas -- solo
+       * los ítems que llegaron hasta ahí --, no el catálogo entero.
+       */
+      const [matriz, hojas] = await Promise.all([
+        repositorioAuditoria.matriz(activo.inventarioId),
+        ultimaRonda === null ? Promise.resolve([]) : repositorioHojas.todas(activo.inventarioId, ultimaRonda),
+      ]);
+      setItems(matriz);
+      setAjustables(productoIdPorCodigo(hojas));
     });
     setCargando(false);
     if (falla) setError(falla.message);
@@ -236,6 +282,7 @@ export default function AjusteWebScreen(): JSX.Element {
       return;
     }
     setItems([]);
+    setAjustables(new Map());
     setCargando(true);
     void cargar();
   }, [cargar]);
@@ -300,9 +347,13 @@ export default function AjusteWebScreen(): JSX.Element {
     if (inventarioId === null) return;
     setGuardando(true);
     try {
+      // EL `productoId` DE LA ÚLTIMA RONDA, no el de la matriz: ese es el de
+      // la ronda 1 y el servidor responde 404 (ver `productoIdParaAjustar`).
+      const productoId = productoIdParaAjustar(item, ajustables);
+      if (productoId === null) return;
       // `empaques: []` + las unidades como sueltas: el valor que el Auditor
       // fija ya está en la unidad del ERP (ver la cabecera de ajuste.tsx).
-      await repositorioAjuste.ajustarItem(inventarioId, item.productoId, { empaques: [], sueltas: unidades, motivo });
+      await repositorioAjuste.ajustarItem(inventarioId, productoId, { empaques: [], sueltas: unidades, motivo });
       setEnEdicion(null);
       setAviso(null);
       // Se vuelve a pedir la matriz entera: el ajuste puede cambiar el
@@ -450,7 +501,9 @@ export default function AjusteWebScreen(): JSX.Element {
               tono="atencion"
               columnas={columnas}
               filas={visibles}
-              claveDe={(it) => String(it.productoId)}
+              // POR CÓDIGO, no por `productoId`: el de un ítem que ninguna hoja
+              // finalizada incluye vale 0, y dos ceros son la misma clave.
+              claveDe={(it) => it.codigo}
               onAbrirFila={setEnEdicion}
               tinteDeFila={tinteDeItem}
               alto={altoTabla}
@@ -523,6 +576,8 @@ export default function AjusteWebScreen(): JSX.Element {
           se desplaza con el contenido. */}
       <ModalAjusteItemWeb
         item={enEdicion}
+        ajustable={enEdicion !== null && productoIdParaAjustar(enEdicion, ajustables) !== null}
+        ultimaRonda={rondaDelAjuste}
         guardando={guardando}
         onGuardar={(unidades, motivo) => void guardarAjuste(enEdicion!, unidades, motivo)}
         onCerrar={() => setEnEdicion(null)}
@@ -597,6 +652,16 @@ function DialogoConfirmar({
 interface ModalAjusteItemWebProps {
   /** null = cerrado. */
   item: ItemAuditoria | null;
+  /**
+   * `false` = el código de este ítem no está en las hojas de la última ronda,
+   * así que el ajuste no lo alcanza. No es un permiso ni un estado de carga:
+   * es el dominio (ver `productoIdParaAjustar`). El modal se abre igual -- con
+   * el conteo y el stock, que siguen sirviendo para leerlo -- y lo que falta
+   * es el campo.
+   */
+  ajustable: boolean;
+  /** La última ronda del inventario, para nombrarla en esa explicación. */
+  ultimaRonda: number | null;
   guardando: boolean;
   onGuardar: (unidades: number, motivo: string) => void;
   onCerrar: () => void;
@@ -617,7 +682,14 @@ interface ModalAjusteItemWebProps {
  *  - El `Alert` de "Descartar el ajuste": no hace nada en web. Se reemplaza
  *    por el mismo diálogo `DialogoConfirmar`, con las mismas palabras.
  */
-function ModalAjusteItemWeb({ item, guardando, onGuardar, onCerrar }: ModalAjusteItemWebProps): JSX.Element | null {
+function ModalAjusteItemWeb({
+  item,
+  ajustable,
+  ultimaRonda,
+  guardando,
+  onGuardar,
+  onCerrar,
+}: ModalAjusteItemWebProps): JSX.Element | null {
   const [texto, setTexto] = useState('');
   const [motivo, setMotivo] = useState('');
   const [confirmarDescarte, setConfirmarDescarte] = useState(false);
@@ -637,7 +709,7 @@ function ModalAjusteItemWeb({ item, guardando, onGuardar, onCerrar }: ModalAjust
 
   const cantidad = interpretarCantidad(texto);
   const faltaMotivo = errorDeMotivo(motivo);
-  const puedeGuardar = cantidad.ok && faltaMotivo === null && !guardando;
+  const puedeGuardar = ajustable && cantidad.ok && faltaMotivo === null && !guardando;
 
   /**
    * NO DESCARTA EN SILENCIO. Se pregunta solo si hay algo distinto de lo que
@@ -715,67 +787,81 @@ function ModalAjusteItemWeb({ item, guardando, onGuardar, onCerrar }: ModalAjust
                   descuento a nómina, y el Auditor está por firmarla. */}
               {notaStock !== null ? <Text style={styles.modalNotaStock}>{notaStock}</Text> : null}
 
-              <View style={styles.modalCampo}>
-                <Text style={styles.modalEtiqueta}>Valor definitivo (unidades)</Text>
-                <TextInput
-                  style={[styles.modalInput, !cantidad.ok && texto.length > 0 ? styles.modalInputError : null]}
-                  inputMode="numeric"
-                  value={texto}
-                  placeholder={SIN_DATO}
-                  placeholderTextColor={colors.grisClaro}
-                  onChangeText={setTexto}
-                  selectTextOnFocus
-                  accessibilityLabel="Valor definitivo en unidades"
-                />
-                {!cantidad.ok && texto.length > 0 ? <Text style={styles.modalError}>{cantidad.mensaje}</Text> : null}
-              </View>
-
-              {/* EL RESULTADO, antes de guardar. Es para lo que el Auditor abrió
-                  este modal: saber si con este número el ítem cuadra. */}
-              {previsualizacion !== null ? (
-                <View style={[styles.modalResultado, previsualizacion === 0 && styles.modalResultadoOk]}>
-                  <Text style={[styles.modalResultadoTexto, previsualizacion === 0 && styles.modalResultadoTextoOk]}>
-                    {previsualizacion === 0
-                      ? 'Con este valor el ítem cuadra contra el ERP.'
-                      : `Con este valor queda ${previsualizacion < 0 ? 'un faltante' : 'un sobrante'} de ${formatoMiles(Math.abs(previsualizacion))} ${pluralizar(Math.abs(previsualizacion), 'unidad', 'unidades')}.`}
-                  </Text>
-                </View>
-              ) : medicion.stockErp === null ? (
+              {/*
+                EL ÍTEM QUE NO LLEGÓ A LA ÚLTIMA RONDA, dicho con palabras en vez
+                de un 404 al guardar. Lo de arriba -- stock, último conteo -- sigue
+                sirviendo para leerlo; lo que no va es el campo, y tampoco un botón
+                de guardar deshabilitado: uno así promete que algo lo va a habilitar.
+              */}
+              {!ajustable ? (
                 <View style={styles.modalResultado}>
-                  <Text style={styles.modalResultadoTexto}>
-                    Este ítem no tiene stock en el ERP: el valor se puede fijar igual, pero no hay contra qué compararlo.
-                  </Text>
+                  <Text style={styles.modalResultadoTexto}>{textoItemFueraDelAjuste(ultimaRonda)}</Text>
                 </View>
-              ) : null}
+              ) : (
+                <>
+                <View style={styles.modalCampo}>
+                  <Text style={styles.modalEtiqueta}>Valor definitivo (unidades)</Text>
+                  <TextInput
+                    style={[styles.modalInput, !cantidad.ok && texto.length > 0 ? styles.modalInputError : null]}
+                    inputMode="numeric"
+                    value={texto}
+                    placeholder={SIN_DATO}
+                    placeholderTextColor={colors.grisClaro}
+                    onChangeText={setTexto}
+                    selectTextOnFocus
+                    accessibilityLabel="Valor definitivo en unidades"
+                  />
+                  {!cantidad.ok && texto.length > 0 ? <Text style={styles.modalError}>{cantidad.mensaje}</Text> : null}
+                </View>
 
-              <View style={styles.modalCampo}>
-                <Text style={styles.modalEtiqueta}>Motivo del cambio</Text>
-                <TextInput
-                  style={[styles.modalInput, styles.modalInputMotivo]}
-                  multiline
-                  numberOfLines={2}
-                  value={motivo}
-                  placeholder="Por qué fijas este valor"
-                  placeholderTextColor={colors.grisClaro}
-                  onChangeText={setMotivo}
-                  accessibilityLabel="Motivo del ajuste"
+                {/* EL RESULTADO, antes de guardar. Es para lo que el Auditor abrió
+                    este modal: saber si con este número el ítem cuadra. */}
+                {previsualizacion !== null ? (
+                  <View style={[styles.modalResultado, previsualizacion === 0 && styles.modalResultadoOk]}>
+                    <Text style={[styles.modalResultadoTexto, previsualizacion === 0 && styles.modalResultadoTextoOk]}>
+                      {previsualizacion === 0
+                        ? 'Con este valor el ítem cuadra contra el ERP.'
+                        : `Con este valor queda ${previsualizacion < 0 ? 'un faltante' : 'un sobrante'} de ${formatoMiles(Math.abs(previsualizacion))} ${pluralizar(Math.abs(previsualizacion), 'unidad', 'unidades')}.`}
+                    </Text>
+                  </View>
+                ) : medicion.stockErp === null ? (
+                  <View style={styles.modalResultado}>
+                    <Text style={styles.modalResultadoTexto}>
+                      Este ítem no tiene stock en el ERP: el valor se puede fijar igual, pero no hay contra qué compararlo.
+                    </Text>
+                  </View>
+                ) : null}
+
+                <View style={styles.modalCampo}>
+                  <Text style={styles.modalEtiqueta}>Motivo del cambio</Text>
+                  <TextInput
+                    style={[styles.modalInput, styles.modalInputMotivo]}
+                    multiline
+                    numberOfLines={2}
+                    value={motivo}
+                    placeholder="Por qué fijas este valor"
+                    placeholderTextColor={colors.grisClaro}
+                    onChangeText={setMotivo}
+                    accessibilityLabel="Motivo del ajuste"
+                  />
+                </View>
+
+                <BotonWeb
+                  etiqueta={guardando ? 'Guardando…' : 'Guardar el ajuste'}
+                  icono={Check}
+                  variante="principal"
+                  onPress={() => onGuardar(cantidad.ok ? cantidad.valor : 0, motivo.trim())}
+                  deshabilitado={!puedeGuardar}
+                  cargando={guardando}
+                  // QUÉ falta, no "no se puede".
+                  {...(!cantidad.ok
+                    ? { motivo: 'Escribe el valor definitivo en unidades.' }
+                    : faltaMotivo !== null
+                      ? { motivo: faltaMotivo }
+                      : {})}
                 />
-              </View>
-
-              <BotonWeb
-                etiqueta={guardando ? 'Guardando…' : 'Guardar el ajuste'}
-                icono={Check}
-                variante="principal"
-                onPress={() => onGuardar(cantidad.ok ? cantidad.valor : 0, motivo.trim())}
-                deshabilitado={!puedeGuardar}
-                cargando={guardando}
-                // QUÉ falta, no "no se puede".
-                {...(!cantidad.ok
-                  ? { motivo: 'Escribe el valor definitivo en unidades.' }
-                  : faltaMotivo !== null
-                    ? { motivo: faltaMotivo }
-                    : {})}
-              />
+                </>
+              )}
             </ScrollView>
           </View>
         </View>

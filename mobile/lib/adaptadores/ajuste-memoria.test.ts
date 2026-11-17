@@ -20,7 +20,10 @@ import {
   estadoDeInventarioEnMemoria,
   limpiarAjusteMemoria,
   rondaActivaEnMemoria,
+  ultimaRondaCerradaEnMemoria,
 } from './ajuste-memoria';
+import { productoIdParaAjustar, productoIdPorCodigo } from '../dominio/ajuste-final';
+import { hojasMemoria } from './hojas-memoria';
 import { sesionMemoria } from './sesion-memoria';
 
 /** Padrón de Market Bolívar (sucursal 3), ver sesion-memoria.ts. */
@@ -306,5 +309,45 @@ describe('ajusteMemoria — las tres del auditor', () => {
     await sesionMemoria.ingresar(NILDA, PIN);
 
     await expect(ajusteMemoria.iniciarAjuste(id)).rejects.toThrow(/sucursal del inventario/i);
+  });
+});
+
+/**
+ * ---------------------------------------------------------------------------
+ * EL CAMINO QUE USAN LAS PANTALLAS, TAMBIÉN EN MODO DEMO
+ * ---------------------------------------------------------------------------
+ * El ajuste final resuelve el `productoId` con las hojas de la última ronda
+ * porque el de la matriz es el de la ronda 1 y el backend responde 404. Acá se
+ * fija que ese camino siga funcionando contra el mock, que es donde corre la
+ * demo: si `ultimaRondaCerrada` dejara de dar la ronda sembrada, no habría ni
+ * un ítem ajustable y la pantalla quedaría muda sin que nadie se entere.
+ */
+describe('resolver el producto del ajuste contra el mock', () => {
+  it('las hojas de la última ronda cerrada dan ids que el ajuste acepta', async () => {
+    const id = inventarioConHojas();
+    // El mock crea las hojas vacías: el catálogo se carga aparte.
+    (await obtenerInventario(id))!.hojas[0].productos = [
+      { id: 9020, codigo: '0020', codigoBarras: '7750000020', descripcion: 'Aceite', empaques: [] },
+    ];
+    cerrarRondaEnMemoria(id);
+    await comoAuditor();
+    await ajusteMemoria.iniciarAjuste(id);
+
+    // La ronda que la pantalla le pide al mock. `rondaActivaEnMemoria` acá ya
+    // es null -- el inventario no está `en_curso` --, y por eso NO se usa.
+    const ronda = ultimaRondaCerradaEnMemoria(id);
+    expect(ronda).not.toBeNull();
+
+    const hojas = await hojasMemoria.todas(id, ronda!);
+    const ajustables = productoIdPorCodigo(hojas);
+    expect(ajustables.size).toBeGreaterThan(0);
+
+    const unProducto = hojas.flatMap((h) => h.productos)[0];
+    const productoId = productoIdParaAjustar({ codigo: unProducto.codigo, productoId: -1 }, ajustables);
+    expect(productoId).toBe(unProducto.id);
+
+    // Y el mock lo acepta: es el mismo id con el que la pantalla va a guardar.
+    await ajusteMemoria.ajustarItem(id, productoId!, { empaques: [], sueltas: 7, motivo: MOTIVO });
+    expect(ajustesEnMemoria(id).get(productoId!)).toBe(7);
   });
 });

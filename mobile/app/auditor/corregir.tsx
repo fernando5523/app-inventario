@@ -38,11 +38,11 @@ import {
   textoStockDeLaMedicion,
   veredicto,
 } from '../../lib/dominio/auditoria';
-import { totalUnidades } from '../../lib/dominio/empaque';
+import { armarFilasCorregibles, type FilaCorregible } from '../../lib/dominio/corregir-filas';
 import { pluralizar } from '../../lib/dominio/plural';
 import { sucursalEnFoco } from '../../lib/dominio/sucursal-en-foco';
 import { ORDINAL } from '../../lib/dominio/texto-cierre-ronda';
-import type { Conteo, ItemAuditoria, Producto, Sucursal } from '../../lib/dominio/tipos';
+import type { Conteo, Sucursal } from '../../lib/dominio/tipos';
 import { useSesion } from '../../lib/sesion-contexto';
 import { useSucursalAuditada } from '../../lib/sucursal-auditada-contexto';
 import { colors, fonts, radius, spacing } from '../../lib/theme';
@@ -50,19 +50,6 @@ import { colors, fonts, radius, spacing } from '../../lib/theme';
 type Filtro = 'sin-cuadrar' | 'todos';
 
 /** Un ítem de la ronda, con todo lo que hace falta para corregirlo y para decidir si vale la pena. */
-interface FilaCorregible {
-  /** A qué hoja pertenece: es lo que pide el endpoint de corrección. */
-  hojaId: number;
-  numeroHoja: string;
-  producto: Producto;
-  /** Lo que se cargó, o `null` si nadie lo contó en esta ronda. */
-  conteo: Conteo | null;
-  /** Unidades contadas, por `totalUnidades`. `null` si no hay conteo. */
-  contado: number | null;
-  /** El ítem en la matriz de auditoría, para el stock y el veredicto. `null` si la matriz no lo trajo. */
-  item: ItemAuditoria | null;
-}
-
 /**
  * CORREGIR LO CONTADO — pantalla del AUDITOR.
  *
@@ -188,26 +175,10 @@ export default function AuditorCorregirScreen(): JSX.Element {
         repositorioHojas.todas(activo.inventarioId, pedida),
         repositorioAuditoria.matriz(activo.inventarioId),
       ]);
-      const porProducto = new Map(matriz.map((i) => [i.productoId, i] as const));
-
-      setFilas(
-        hojas.flatMap((hoja) =>
-          hoja.productos.map((producto) => {
-            const conteo = hoja.conteos.find((c) => c.productoId === producto.id) ?? null;
-            return {
-              hojaId: hoja.id,
-              numeroHoja: hoja.numero,
-              producto,
-              conteo,
-              // `totalUnidades` y nunca una suma a mano: es la MISMA función
-              // que usa el Contador para su total, así que lo que el Auditor
-              // ve acá es exactamente lo que se guardó.
-              contado: conteo ? totalUnidades(conteo, producto.empaques) : null,
-              item: porProducto.get(producto.id) ?? null,
-            };
-          }),
-        ),
-      );
+      // El cruce vive en el dominio, no acá: es la MISMA regla en las dos
+      // pantallas y va POR CÓDIGO -- con `productoId` queda vacío de la ronda
+      // 2 en adelante (ver la cabecera de corregir-filas.ts).
+      setFilas(armarFilasCorregibles(hojas, matriz));
     });
     setCargando(false);
     if (falla) setError(falla.message);

@@ -17,7 +17,10 @@ import {
   puedeAbrirRondaExtra,
   puedeAjustar,
   puedeCorregirLoContado,
+  productoIdParaAjustar,
+  productoIdPorCodigo,
   puedeIniciarAjuste,
+  textoItemFueraDelAjuste,
   STOCK_NO_SE_CORRIGE,
   type FaseDeCierre,
   textoItemSalioDeRonda,
@@ -353,5 +356,70 @@ describe('textoRondaQueYaNoExiste', () => {
     expect(t).toContain('2do conteo');
     expect(t).toContain('1er conteo');
     expect(t).toContain('se corrigieron todos sus ítems');
+  });
+});
+
+/**
+ * ---------------------------------------------------------------------------
+ * EL `productoId` DEL AJUSTE: LA REGRESIÓN DEL 404
+ * ---------------------------------------------------------------------------
+ * Los números son los del inventario 8078 medidos contra la base: el código
+ * 100150 es el producto 7045 en la ronda 1, 8030 en la 2, 8046 en la 3 y 8054
+ * en la 4. La matriz entrega el 7045 y el servidor solo acepta el 8054.
+ *
+ * Mientras las pantallas mandaban `item.productoId`, el ajuste final no pudo
+ * guardar en ningún inventario con más de una ronda. Estos casos fallan si
+ * alguien vuelve a tomar el id del ítem.
+ */
+describe('el productoId que acepta el ajuste final', () => {
+  const hojasDeLaRonda4 = [
+    { productos: [{ id: 8054, codigo: '100150' }] },
+    { productos: [{ id: 8055, codigo: '113967' }, { id: 8056, codigo: '100936' }] },
+  ];
+
+  const enLaMatriz = { codigo: '100150', productoId: 7045 };
+
+  it('sale de las hojas de la última ronda y NO del ítem de la matriz', () => {
+    const id = productoIdParaAjustar(enLaMatriz, productoIdPorCodigo(hojasDeLaRonda4));
+
+    expect(id).toBe(8054);
+    // Explícito: el 7045 es el de la ronda 1, el que daba 404.
+    expect(id).not.toBe(enLaMatriz.productoId);
+  });
+
+  it('el ítem que no entró en la última ronda no es ajustable', () => {
+    // 106230 cuadró antes y no volvió a contarse: no está en esas hojas.
+    const id = productoIdParaAjustar({ codigo: '106230', productoId: 7101 }, productoIdPorCodigo(hojasDeLaRonda4));
+
+    // `null` y nunca el id del ítem: con un fallback así volvería el 404.
+    expect(id).toBeNull();
+  });
+
+  it('el mapa toma todos los productos de todas las hojas de la ronda', () => {
+    const mapa = productoIdPorCodigo(hojasDeLaRonda4);
+
+    expect(mapa.get('113967')).toBe(8055);
+    expect(mapa.get('100936')).toBe(8056);
+    expect(mapa.size).toBe(3);
+  });
+
+  it('sin hojas no hay nada ajustable, y no explota', () => {
+    expect(productoIdParaAjustar(enLaMatriz, productoIdPorCodigo([]))).toBeNull();
+  });
+});
+
+describe('qué se le dice al ítem que quedó fuera del ajuste', () => {
+  it('nombra la ronda y dice por dónde sí se cambia', () => {
+    const t = textoItemFueraDelAjuste(4);
+
+    expect(t).toContain('4to conteo');
+    expect(t).toContain('se corrige la hoja de la ronda en la que se contó');
+  });
+
+  it('sin número de ronda no inventa uno', () => {
+    const t = textoItemFueraDelAjuste(null);
+
+    expect(t).toContain('la última ronda');
+    expect(t).not.toMatch(/\d/);
   });
 });
