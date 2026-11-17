@@ -172,6 +172,27 @@ Para demostrar la app sin levantar nada, `EXPO_PUBLIC_PUERTOS_MEMORIA`
 dice `contenedor.ts`, que hoy es el backend real para sesion, usuarios,
 tiendas y config.
 
+## Aprobación de consumo interno (`app/aprobador`)
+
+Otra puerta de la misma app: la aprobadora entra con su cuenta de la empresa
+(Entra ID), no con PIN, y decide producto por producto. El backend es el
+módulo `consumo-interno` (ver `backend/env.example`).
+
+Variables que Metro inlinea al compilar:
+
+| Variable | Qué es |
+|---|---|
+| `EXPO_PUBLIC_ENTRA_TENANT_ID` | tenant de la empresa |
+| `EXPO_PUBLIC_ENTRA_CLIENT_ID` | app móvil registrada en Entra (cliente público, redirect `inventario://aprobador/auth`) |
+| `EXPO_PUBLIC_ENTRA_API_SCOPE` | scope de la API, ej. `api://<id-api>/Consumo.Aprobar` |
+| `EXPO_PUBLIC_CONSUMO_INGRESO_DEV` | `1` dibuja el botón de ingreso de prueba. El servidor lo exige por su lado (doble candado) |
+
+Sin las tres de Entra, la pantalla avisa que el ingreso no está activado.
+
+En el emulador, una build de depuración busca Metro en `10.0.2.2:8081` (no
+usa `adb reverse`). Para usar otro Metro, cambiar `debug_http_host` en el menú
+de desarrollo o en las preferencias de la app.
+
 ## Generar el APK (Gradle local)
 
 Esta maquina tiene el Android SDK completo y el JDK 21 del JBR de Android Studio,

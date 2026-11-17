@@ -367,6 +367,13 @@ export interface OpcionesPedido {
    * está en el login es un bucle.
    */
   sinSesion?: boolean;
+  /**
+   * Token propio de quien llama, en lugar del de la sesión con PIN. Lo usa la
+   * aprobación de consumo interno (lib/aprobacion), que entra con Entra ID:
+   * es otra persona con otra sesión, y no puede pisar ni leer la del PIN.
+   * OPT-IN: sin esta opción el pedido usa la sesión de siempre.
+   */
+  token?: string;
   /** Para cancelar desde la pantalla (ej. al desmontarse). */
   senal?: AbortSignal;
   /** Timeout de CADA intento. */
@@ -449,6 +456,7 @@ async function intentarUnaVez<T>(
     cuerpoBinario,
     tipoCuerpo,
     sinSesion = false,
+    token: tokenPropio,
     senal,
     binario = false,
     conNombreDeArchivo = false,
@@ -461,7 +469,9 @@ async function intentarUnaVez<T>(
     encabezados['Content-Type'] = 'application/json';
   }
 
-  if (!sinSesion) {
+  if (!sinSesion && tokenPropio !== undefined) {
+    encabezados.Authorization = `Bearer ${tokenPropio}`;
+  } else if (!sinSesion) {
     // `tokenActual()` puede tocar SQLite (lector persistido de sesion-api.ts)
     // y SQLite puede fallar: base bloqueada, disco lleno, archivo corrupto.
     // Sin este catch, ese error saldría CRUDO hacia la pantalla y rompería

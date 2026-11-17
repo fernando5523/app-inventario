@@ -316,6 +316,12 @@ export default function LoginScreen(): JSX.Element {
           loading={ingresando}
           onPress={manejarIngreso}
         />
+        {/* La aprobación de consumo interno es OTRA puerta: la aprobadora es
+            de oficina, no está en el padrón de ninguna tienda y entra con su
+            cuenta de la empresa (Entra ID), no con PIN. Ver app/aprobador. */}
+        <Pressable onPress={() => router.push('/aprobador')} accessibilityRole="button" style={styles.enlaceAprobador}>
+          <Text style={[styles.olvide, styles.enlaceAprobadorTexto]}>¿Apruebas consumos internos? Ingresa con tu cuenta de la empresa</Text>
+        </Pressable>
       </View>
 
       <View style={styles.pie}>
@@ -346,6 +352,8 @@ export default function LoginScreen(): JSX.Element {
 }
 
 const styles = StyleSheet.create({
+  enlaceAprobador: { marginTop: spacing.md, alignSelf: 'center' },
+  enlaceAprobadorTexto: { textAlign: 'center' },
   contenido: {
     flexGrow: 1,
     justifyContent: 'space-between',

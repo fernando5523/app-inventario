@@ -9,6 +9,7 @@ import { auditoriaRouter } from '../modules/auditoria';
 import { clasificacionRouter } from '../modules/clasificacion';
 import { configRouter } from '../modules/config';
 import { configDynamicsRouter } from '../modules/config-dynamics';
+import { consumoInternoRouter } from '../modules/consumo-interno';
 import { hojasRouter } from '../modules/hojas';
 import { d365Router, stockRondaRouter } from '../modules/d365';
 import { historialRouter } from '../modules/historial';
@@ -157,6 +158,8 @@ export function crearApp(opciones: OpcionesApp = {}): Express {
   app.use('/api/liquidacion', liquidacionRouter);
   app.use('/api/liquidacion', reporteGerenciaRouter);
   app.use('/api/config-dynamics', configDynamicsRouter);
+  // Aprobacion de consumo interno: entra con Entra ID, no con PIN. Ver el modulo.
+  app.use('/api/consumo-interno', consumoInternoRouter);
 
   /**
    * UNA RUTA DE API QUE NO EXISTE RESPONDE JSON, NUNCA HTML.

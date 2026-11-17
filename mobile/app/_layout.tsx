@@ -67,6 +67,7 @@ export default function RootLayout() {
           <Stack.Screen name="coordinador" />
           <Stack.Screen name="conteo" />
           <Stack.Screen name="auditor" />
+          <Stack.Screen name="aprobador" />
         </Stack>
       </View>
       </NavegacionProvider>
