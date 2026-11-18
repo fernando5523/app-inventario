@@ -598,6 +598,13 @@ async function guardarEstructuraDeHoja(db: DbSqlite, hoja: HojaConteo, ronda: nu
  *      `cola_sync` ya está vacía, la guarda pasa, y se pisan los conteos
  *      locales con esa foto vieja.
  *
+ * Por eso se marca la hoja en los DOS movimientos: cuando se escribe local
+ * (guardar, finalizar) y cuando un envío sale de la cola porque el servidor
+ * lo aceptó. La primera versión de este arreglo marcaba solo la escritura y
+ * no alcanzó: en la pantalla real el orden es guardar, DESPUÉS arrancar la
+ * descarga, y recién entonces terminar la subida -- la escritura queda antes
+ * de la descarga y lo único posterior es la salida de la cola.
+ *
  * El dato no se perdía -- el servidor lo tenía --, pero la persona veía su
  * conteo desaparecer de la pantalla al guardarlo, y "0 / 50" no avanzaba
  * hasta salir y volver a entrar. Con buena red pasaba en CADA conteo.
@@ -1437,6 +1444,11 @@ export async function procesarColaDeSincronizacion(enviar: EnviarItemCola): Prom
       const siguiente = aplicarResultadoEnvio(item, resultado);
       if (siguiente === null) {
         await db.runAsync('DELETE FROM cola_sync WHERE id = ?', [item.id]);
+        // Salir de la cola TAMBIÉN cuenta como movimiento de la hoja: una
+        // descarga que salió antes de que el servidor tuviera este dato trae
+        // una foto vieja, y sin esta marca la encontraría con la cola vacía y
+        // la aplicaría. Ver `ultimaEscrituraLocal`.
+        marcarEscrituraLocal(item.hojaId);
       } else {
         await db.runAsync('UPDATE cola_sync SET estado = ?, intentos = ?, razon = ? WHERE id = ?', [
           siguiente.estado,

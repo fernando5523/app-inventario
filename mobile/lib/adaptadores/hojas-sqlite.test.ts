@@ -2444,6 +2444,36 @@ describe('ARREGLADO (2026-11-18): una descarga que salió antes de guardar no pi
     expect(despues!.conteos.map((c) => c.productoId)).toEqual([productoId]);
   });
 
+  it('el orden que se vio en el teléfono: se guarda, DESPUÉS sale la descarga, y la subida termina mientras viaja', async () => {
+    const INV = 555303;
+    const HOJA = 5553003;
+    const productoId = 995;
+    vi.mocked(hojasApi.mias).mockResolvedValueOnce([hojaDe(INV, HOJA, productoId)]);
+    await hojasSqlite.mias(INV, 1);
+
+    // 1. Se guarda: el conteo queda local y en la cola.
+    await hojasSqlite.guardarConteo(HOJA, conteoDe(productoId));
+
+    // 2. La pantalla relee: la descarga sale y su respuesta queda en vuelo.
+    let soltar: (hojas: ReturnType<typeof hojaDe>[]) => void = () => {};
+    vi.mocked(hojasApi.mias).mockImplementationOnce(
+      () =>
+        new Promise((resolver) => {
+          soltar = resolver;
+        }),
+    );
+    const relectura = hojasSqlite.mias(INV, 1);
+
+    // 3. La subida termina mientras la descarga viaja: el conteo sale de la cola.
+    await procesarColaDeSincronizacion(async () => ({ ok: true }));
+
+    // 4. Llega la foto que el servidor armó antes de recibir el conteo.
+    soltar([hojaDe(INV, HOJA, productoId)]);
+    const [despues] = await relectura;
+
+    expect(despues!.conteos.map((c) => c.productoId)).toEqual([productoId]);
+  });
+
   it('sin una escritura local en el medio, la descarga SÍ pone al día la hoja con lo que tiene el servidor', async () => {
     const INV = 555302;
     const HOJA = 5553002;
