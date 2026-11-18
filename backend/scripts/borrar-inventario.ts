@@ -47,14 +47,23 @@ async function main(): Promise<number> {
   // El orden importa: los hijos primero, Postgres no borra en cascada acá.
   //
   // La asistencia y las justificaciones van en esta lista aunque el script ya
-  // se haya negado si hay conteos, y son las unicas dos de las diez FK hacia
+  // se haya negado si hay conteos, y son dos de las once FK hacia
   // `inventarios` para las que eso no alcanza: las marcas las carga el
   // Coordinador cuando la gente LLEGA y el perdon lo firma el Auditor cuando
   // quiera, asi que un inventario de prueba con 0 conteos puede tener las dos
   // cosas, y el DELETE moria con
   //   violates RESTRICT setting of foreign key constraint
   //   "asistencia_inventario_inventario_id_fkey"
-  // (ver 20260918160000_asistencia_claves_foraneas). De las otras, hojas
+  // (ver 20260918160000_asistencia_claves_foraneas).
+  //
+  // `stock_rondas` es el mismo caso y entro despues (el stock que se baja al
+  // abrir cada reconteo): nace DURANTE el conteo, no en el cierre, asi que un
+  // inventario de prueba que llego a la ronda 2 la tiene aunque no tenga un
+  // solo conteo. Faltaba aca y el DELETE moria con
+  //   Foreign key constraint violated: `stock_rondas_inventario_id_fkey`
+  // (2026-11-17, al borrar el inventario de prueba de Luzuriaga).
+  //
+  // De las otras, hojas
   // y catalogo ya estaban en esta lista; resultado, diferencias,
   // liquidaciones, aprobaciones, lacrado e importaciones de ajustes recien
   // aparecen DESPUES del cierre del conteo, y un inventario cerrado no es lo
@@ -69,6 +78,7 @@ async function main(): Promise<number> {
     prisma.catalogoItem.deleteMany({ where: { inventarioId: id } }),
     prisma.asistenciaInventario.deleteMany({ where: { inventarioId: id } }),
     prisma.justificacionAsistencia.deleteMany({ where: { inventarioId: id } }),
+    prisma.stockRonda.deleteMany({ where: { inventarioId: id } }),
     prisma.inventario.delete({ where: { id } }),
   ]);
 
