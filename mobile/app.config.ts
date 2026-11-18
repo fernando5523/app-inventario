@@ -15,6 +15,11 @@ const config: ExpoConfig = {
   android: {
     package: 'com.market.inventario',
     versionCode: 33,
+    // Sin respaldos: la app guarda la sesión, los conteos sin subir y el
+    // catálogo de la tienda, y nada de eso tiene que salir del teléfono en
+    // un respaldo de Google ni en una transferencia a otro equipo. Lo que
+    // importa ya está en el servidor una vez sincronizado.
+    allowBackup: false,
   },
   plugins: [
     'expo-router',

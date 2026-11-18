@@ -29,6 +29,11 @@ vi.stubGlobal('__DEV__', false);
 vi.mock('react-native', () => ({ Platform: { OS: 'android' } }));
 vi.mock('expo-constants', () => ({ default: { expoConfig: { extra: {} } } }));
 vi.mock('expo-sqlite', () => ({ openDatabaseAsync: async () => ({}) }));
+vi.mock('expo-secure-store', () => ({
+  getItemAsync: async () => null,
+  setItemAsync: async () => {},
+  deleteItemAsync: async () => {},
+}));
 vi.mock('expo-network', () => ({
   getNetworkStateAsync: async () => ({ isConnected: true, isInternetReachable: true }),
   addNetworkStateListener: () => ({ remove: () => {} }),

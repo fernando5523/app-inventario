@@ -34,6 +34,7 @@ const { obtenerDbDeTest } = vi.hoisted(() => {
     execAsync(source: string): Promise<void>;
     runAsync(source: string, params?: unknown[]): Promise<void>;
     getFirstAsync<T>(source: string, params?: unknown[]): Promise<T | null>;
+    closeAsync(): Promise<void>;
   }
 
   let conexionActual: DbDeTest | null = null;
@@ -64,6 +65,7 @@ const { obtenerDbDeTest } = vi.hoisted(() => {
           async getFirstAsync<T>(source: string, params: unknown[] = []) {
             return (raw.prepare(source).get(...(params as never[])) ?? null) as T | null;
           },
+          async closeAsync() {},
         };
       }
       return conexionActual;
@@ -73,6 +75,22 @@ const { obtenerDbDeTest } = vi.hoisted(() => {
 
 vi.mock('expo-sqlite', () => ({
   openDatabaseAsync: () => obtenerDbDeTest(),
+  deleteDatabaseAsync: async () => {},
+}));
+
+/**
+ * La sesión vive en el almacén seguro desde el 2026-11-17 (`sesion-local.ts`):
+ * SQLite solo se abre para migrar la de la versión anterior.
+ */
+const almacenSeguro = vi.hoisted(() => new Map<string, string>());
+vi.mock('expo-secure-store', () => ({
+  getItemAsync: async (clave: string) => almacenSeguro.get(clave) ?? null,
+  setItemAsync: async (clave: string, valor: string) => {
+    almacenSeguro.set(clave, valor);
+  },
+  deleteItemAsync: async (clave: string) => {
+    almacenSeguro.delete(clave);
+  },
 }));
 
 import { recordarToken } from './_http';
