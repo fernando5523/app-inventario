@@ -36,6 +36,23 @@ export function obtenerDb(): Promise<SQLite.SQLiteDatabase> {
     dbPromise = SQLite.openDatabaseAsync(NOMBRE_BASE).then(async (db) => {
       await db.execAsync('PRAGMA journal_mode = WAL;');
       await migrarSqlite(db);
+      // UN ENVÍO A MEDIAS DE LA VEZ ANTERIOR SE VUELVE A INTENTAR.
+      //
+      // La cola marca un item `enviando` antes de mandarlo y lo resuelve al
+      // volver la respuesta. Si la app se cierra en el medio -- Android la
+      // mata, se actualiza, se acaba la batería --, el item queda `enviando`
+      // para siempre: la pasada de la cola los saltea (para no mandar dos
+      // veces lo que está en vuelo), así que nunca se reintenta, la banda
+      // dice "Subiendo 1 conteo" sin fin, y el `finalizar` de esa hoja no
+      // sale porque espera a ese conteo. Visto el 2026-11-18 en un teléfono
+      // real, después de reinstalar la app.
+      //
+      // Acá es el único lugar seguro para soltarlos: la base se abre una vez
+      // por arranque, antes de cualquier pasada de la cola, así que en este
+      // momento no hay NADA en vuelo y todo `enviando` es de un proceso que
+      // ya no existe. Mandarlo de nuevo no duplica: el conteo es un PUT por
+      // producto y finalizar es idempotente en el servidor.
+      await db.runAsync("UPDATE cola_sync SET estado = 'pendiente' WHERE estado = 'enviando'");
       return db;
     });
   }
