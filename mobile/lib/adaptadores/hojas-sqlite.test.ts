@@ -35,7 +35,7 @@ vi.mock('expo-constants', () => ({ default: { expoConfig: { extra: {} } } }));
 import { FILTRO_HOJAS_MODAL_VACIO, numerosDeHojas, opcionesEnCascada, personasDeHojas } from '../dominio/filtro-hojas';
 import { categoriasDeHoja, codigosDeHoja, nombresDeHoja } from '../dominio/filtro-productos';
 import { avance } from '../dominio/hoja';
-import type { Sesion } from '../dominio/tipos';
+import type { Conteo, Sesion } from '../dominio/tipos';
 import { migrarSqlite, MIGRACIONES_SQLITE } from './sqlite-esquema';
 
 // ---------------------------------------------------------------------------
@@ -2375,5 +2375,87 @@ describe('RECONCILIACIÓN: si el pedido falla, la copia local queda INTACTA', ()
     expect(filas).toHaveLength(1);
     const conteos = await db.getAllAsync('SELECT sueltas FROM conteos WHERE hoja_id = ?', [hoja!.id]);
     expect(conteos).toEqual([{ sueltas: 7 }]);
+  });
+});
+
+describe('ARREGLADO (2026-11-18): una descarga que salió antes de guardar no pisa el conteo recién guardado', () => {
+  /**
+   * Visto en el teléfono contando Market Raymondi: la persona guardaba un
+   * conteo y la pantalla seguía en "0 / 50". La relectura bajaba las hojas
+   * del servidor; mientras esa descarga viajaba, el conteo se subía y salía
+   * de `cola_sync`, y la respuesta -- tomada ANTES de la subida -- llegaba,
+   * encontraba la cola vacía y pisaba el conteo local. Ver
+   * `ultimaEscrituraLocal` en hojas-sqlite.ts.
+   */
+  function hojaDe(inventarioId: number, id: number, productoId: number, conteos: Conteo[] = []) {
+    return {
+      id,
+      inventarioId,
+      numero: '001',
+      zona: 'Zona C',
+      gondola: 'C1',
+      tamano: 50,
+      estado: 'pendiente' as const,
+      sync: 'sincronizado' as const,
+      asignados: ['María Rojas'],
+      asignadoAId: 501,
+      asignadoA2Id: null,
+      productos: [
+        {
+          id: productoId,
+          codigo: String(productoId).padStart(4, '0'),
+          codigoBarras: `775000000${productoId}`,
+          descripcion: `Producto ${productoId}`,
+          empaques: [{ nombre: 'Emp.4', factor: 4 }],
+        },
+      ],
+      conteos,
+    };
+  }
+
+  function conteoDe(productoId: number): Conteo {
+    return { productoId, empaques: [{ empaqueNombre: 'Emp.4', cantidad: 1 }], sueltas: 0, confirmadoPorEscaner: false, contadoEn: 't-carrera' };
+  }
+
+  it('el conteo se sube mientras la descarga viaja: al llegar la foto vieja, el conteo sigue en el teléfono', async () => {
+    const INV = 555301;
+    const HOJA = 5553001;
+    const productoId = 993;
+    vi.mocked(hojasApi.mias).mockResolvedValueOnce([hojaDe(INV, HOJA, productoId)]);
+    await hojasSqlite.mias(INV, 1);
+
+    // La relectura arranca y su respuesta queda en vuelo: es la foto de ANTES.
+    let soltar: (hojas: ReturnType<typeof hojaDe>[]) => void = () => {};
+    vi.mocked(hojasApi.mias).mockImplementationOnce(
+      () =>
+        new Promise((resolver) => {
+          soltar = resolver;
+        }),
+    );
+    const relectura = hojasSqlite.mias(INV, 1);
+
+    // En el medio: se guarda el conteo y el sincronizador lo sube.
+    await hojasSqlite.guardarConteo(HOJA, conteoDe(productoId));
+    await procesarColaDeSincronizacion(async () => ({ ok: true }));
+
+    soltar([hojaDe(INV, HOJA, productoId)]);
+    const [despues] = await relectura;
+
+    expect(despues!.conteos.map((c) => c.productoId)).toEqual([productoId]);
+  });
+
+  it('sin una escritura local en el medio, la descarga SÍ pone al día la hoja con lo que tiene el servidor', async () => {
+    const INV = 555302;
+    const HOJA = 5553002;
+    const productoId = 994;
+    vi.mocked(hojasApi.mias).mockResolvedValueOnce([hojaDe(INV, HOJA, productoId)]);
+    const [antes] = await hojasSqlite.mias(INV, 1);
+    expect(antes!.conteos).toEqual([]);
+
+    // El servidor ya tiene un conteo que este teléfono no cargó: tiene que aparecer.
+    vi.mocked(hojasApi.mias).mockResolvedValueOnce([hojaDe(INV, HOJA, productoId, [conteoDe(productoId)])]);
+    const [despues] = await hojasSqlite.mias(INV, 1);
+
+    expect(despues!.conteos.map((c) => c.productoId)).toEqual([productoId]);
   });
 });

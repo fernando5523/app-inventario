@@ -582,9 +582,45 @@ async function guardarEstructuraDeHoja(db: DbSqlite, hoja: HojaConteo, ronda: nu
  * roles) de que la persona que mira `todas()` sea TAMBIÉN quien está
  * contando esa hoja sin haber podido subirla todavía.
  */
-async function refrescarEstadoDesdeServidor(db: DbSqlite, hoja: HojaConteo): Promise<void> {
+/**
+ * ESCRITURAS LOCALES, NUMERADAS: cuándo tocó este teléfono cada hoja por
+ * última vez, en una secuencia que solo crece.
+ *
+ * Cierra una carrera real (2026-11-18, probando Market Raymondi en un
+ * teléfono por wifi). La guarda de `cola_sync` de abajo mira si hay algo
+ * pendiente EN EL MOMENTO DE PISAR, y eso no alcanza:
+ *
+ *   1. La persona guarda un conteo: queda en `conteos` y en `cola_sync`.
+ *   2. La pantalla relee y arranca una descarga de hojas.
+ *   3. MIENTRAS la descarga viaja, el sincronizador sube el conteo y lo saca
+ *      de `cola_sync`.
+ *   4. Llega la respuesta, tomada ANTES de la subida, sin el conteo nuevo.
+ *      `cola_sync` ya está vacía, la guarda pasa, y se pisan los conteos
+ *      locales con esa foto vieja.
+ *
+ * El dato no se perdía -- el servidor lo tenía --, pero la persona veía su
+ * conteo desaparecer de la pantalla al guardarlo, y "0 / 50" no avanzaba
+ * hasta salir y volver a entrar. Con buena red pasaba en CADA conteo.
+ *
+ * La regla que falta: una respuesta del servidor que salió antes de la
+ * última escritura local de esa hoja está vieja PARA ESA HOJA, y no se
+ * aplica. Una secuencia y no la hora: no depende del reloj del teléfono, y
+ * dos escrituras en el mismo milisegundo siguen siendo dos.
+ *
+ * Vive en memoria a propósito: la carrera es entre dos tareas del mismo
+ * proceso. Si la app se reinicia, ninguna descarga en vuelo sobrevive.
+ */
+let secuenciaEscritura = 0;
+const ultimaEscrituraLocal = new Map<number, number>();
+
+function marcarEscrituraLocal(hojaId: number): void {
+  ultimaEscrituraLocal.set(hojaId, ++secuenciaEscritura);
+}
+
+async function refrescarEstadoDesdeServidor(db: DbSqlite, hoja: HojaConteo, descargaDesde: number): Promise<void> {
   const pendientes = await db.getFirstAsync<{ n: number }>('SELECT COUNT(*) as n FROM cola_sync WHERE hoja_id = ?', [hoja.id]);
   if ((pendientes?.n ?? 0) > 0) return;
+  if ((ultimaEscrituraLocal.get(hoja.id) ?? 0) > descargaDesde) return;
 
   await db.withTransactionAsync(async () => {
     await db.runAsync(
@@ -686,6 +722,9 @@ export function ultimaDescargaExitosa(inventarioId: number, alcance: 'mias' | 't
  * Bajar hojas es un refresco, no un requisito para poder seguir contando.
  */
 async function descargarHojas(inventarioId: number, alcance: 'mias' | 'todas', ronda: number): Promise<ResultadoDescarga> {
+  // Desde cuándo es la foto que va a llegar: se anota ANTES de pedirla. Ver
+  // `ultimaEscrituraLocal`.
+  const descargaDesde = secuenciaEscritura;
   let remotas: HojaConteo[];
   try {
     const respuesta = alcance === 'mias' ? await hojasApi.mias(inventarioId, ronda) : await hojasApi.todas(inventarioId, ronda);
@@ -759,7 +798,7 @@ async function descargarHojas(inventarioId: number, alcance: 'mias' | 'todas', r
       // `refrescarEstadoDesdeServidor`, que no toca una hoja con algo
       // pendiente en `cola_sync`. Lo que la persona cargó y todavía no subió
       // sigue intocable; lo que ya no tiene nada pendiente se pone al día.
-      await refrescarEstadoDesdeServidor(db, hoja);
+      await refrescarEstadoDesdeServidor(db, hoja, descargaDesde);
       guardadas++;
     }
   } catch {
@@ -1139,6 +1178,7 @@ export const hojasSqlite: RepositorioHojas = {
          DO UPDATE SET creado_en = excluded.creado_en, intentos = 0, estado = 'pendiente', razon = NULL`,
         [hojaId, conteo.productoId, ahora],
       );
+      marcarEscrituraLocal(hojaId);
     });
     // Devuelve cuando SQLite ya confirmó, no antes: el operario está
     // parado frente a la góndola, pero lo que ve como "guardado" tiene
@@ -1187,6 +1227,7 @@ export const hojasSqlite: RepositorioHojas = {
          DO UPDATE SET creado_en = excluded.creado_en, intentos = 0, estado = 'pendiente', razon = NULL`,
         [hojaId, ahora],
       );
+      marcarEscrituraLocal(hojaId);
     });
 
     // sync: 'local', NO 'sincronizado' — finalizar también es una
