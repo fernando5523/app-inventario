@@ -24,6 +24,7 @@ import {
   esFallaDeRed,
   pedir,
   recordarToken,
+  registrarAlVencerSesion,
   registrarLectorDeToken,
   sondear,
   urlBase,
@@ -227,6 +228,42 @@ describe('clasificación de errores', () => {
     fetchFalso(respuestaError(401));
     const error = (await pedir('/api/usuarios').catch((e) => e)) as ErrorApi;
     expect(error.clase).toBe('sesion-vencida');
+  });
+
+  describe('el aviso de sesión vencida (vuelve al ingreso)', () => {
+    afterEach(() => registrarAlVencerSesion(null));
+
+    it('un 401 con la sesión de la persona avisa', async () => {
+      const aviso = vi.fn();
+      registrarAlVencerSesion(aviso);
+      fetchFalso(respuestaError(401, { error: 'Falta el token de sesion.' }));
+      await pedir('/api/usuarios').catch(() => undefined);
+      expect(aviso).toHaveBeenCalledTimes(1);
+    });
+
+    it('un PIN incorrecto en el ingreso no avisa', async () => {
+      const aviso = vi.fn();
+      registrarAlVencerSesion(aviso);
+      fetchFalso(respuestaError(401, { error: 'PIN incorrecto.' }));
+      await pedir('/api/sesion/ingresar', { metodo: 'POST', sinSesion: true }).catch(() => undefined);
+      expect(aviso).not.toHaveBeenCalled();
+    });
+
+    it('un 401 con un token propio no avisa: no es la sesión de la persona', async () => {
+      const aviso = vi.fn();
+      registrarAlVencerSesion(aviso);
+      fetchFalso(respuestaError(401));
+      await pedir('/api/aprobacion', { token: 'otro' }).catch(() => undefined);
+      expect(aviso).not.toHaveBeenCalled();
+    });
+
+    it('un 403 no avisa', async () => {
+      const aviso = vi.fn();
+      registrarAlVencerSesion(aviso);
+      fetchFalso(respuestaError(403));
+      await pedir('/api/usuarios').catch(() => undefined);
+      expect(aviso).not.toHaveBeenCalled();
+    });
   });
 
   it.each([

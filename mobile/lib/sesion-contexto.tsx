@@ -10,17 +10,21 @@
  * un adaptador directo — mismo principio que el resto de la app.
  */
 
+import { router } from 'expo-router';
 import {
   createContext,
   useCallback,
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type JSX,
   type PropsWithChildren,
 } from 'react';
+import { Alert } from 'react-native';
 
+import { registrarAlVencerSesion } from './adaptadores/_http';
 import { repositorioSesion } from './contenedor';
 import type { Sesion } from './dominio/tipos';
 
@@ -80,8 +84,30 @@ export function SesionProvider({ children }: PropsWithChildren): JSX.Element {
     };
   }, []);
 
+  // El servidor rechazó la sesión (venció a las 12 horas): se cierra y se
+  // vuelve al ingreso, en vez de dejar las pantallas del rol con cada pedido
+  // fallando. Varios pedidos rechazados a la vez (o los que llegan después)
+  // cierran una sola vez: la marca se levanta recién al volver a ingresar.
+  const cerrandoPorVencida = useRef(false);
+  useEffect(() => {
+    registrarAlVencerSesion(() => {
+      if (cerrandoPorVencida.current) return;
+      cerrandoPorVencida.current = true;
+      void repositorioSesion
+        .cerrar()
+        .catch(() => {})
+        .finally(() => {
+          setSesion(null);
+          router.replace('/');
+          Alert.alert('Tu sesión venció', 'Ingresa de nuevo con tu PIN.');
+        });
+    });
+    return () => registrarAlVencerSesion(null);
+  }, []);
+
   const ingresar = useCallback(async (colaboradorId: number, pin: string) => {
     const nueva = await repositorioSesion.ingresar(colaboradorId, pin);
+    cerrandoPorVencida.current = false;
     setSesion(nueva);
     return nueva;
   }, []);

@@ -257,6 +257,21 @@ export function registrarLectorDeToken(leer: () => Promise<string | null>): void
   lectorPersistido = leer;
 }
 
+/**
+ * Quién se entera de que el servidor rechazó la sesión (un 401 en una ruta
+ * con sesión). Lo registra el contexto de sesión para volver al ingreso.
+ *
+ * Sin esto, una app que queda abierta más de 12 horas (de un día para otro)
+ * seguía mostrando las pantallas del rol con cada pedido rechazado: el Inicio
+ * del Auditor decía «no hay un inventario en curso» y el panel, «Falta el
+ * token de sesion.». Visto en el teléfono el 2026-11-19.
+ */
+let alVencerSesion: (() => void) | null = null;
+
+export function registrarAlVencerSesion(aviso: (() => void) | null): void {
+  alVencerSesion = aviso;
+}
+
 async function tokenActual(): Promise<string | null> {
   if (tokenEnMemoria) return tokenEnMemoria;
   if (!lectorPersistido) return null;
@@ -554,6 +569,9 @@ async function intentarUnaVez<T>(
 
   if (!respuesta.ok) {
     const clase = clasificarPorEstado(respuesta.status, sinSesion);
+    // Solo con el token de la sesión: un token propio que vence no es la
+    // sesión de la persona.
+    if (clase === 'sesion-vencida' && tokenPropio === undefined) alVencerSesion?.();
     // El backend (error.middleware.ts) ya escribe mensajes en castellano y
     // pensados para el operario ("PIN incorrecto.", "Demasiados intentos de
     // ingreso..."). Se prefieren SIEMPRE al genérico: son más específicos y
