@@ -541,22 +541,28 @@ export function InicioScreen(): JSX.Element {
       // Sin red, totalHojas/items son null: se muestran como "—", nunca
       // como "0 hojas" (que diría "no hay ninguna" en vez de "no lo sé").
       const sinRed = inventario.totalHojas === null || inventario.items === null || sinDatosDeRonda;
+      // En un reconteo las cifras son de la RONDA, no del inventario entero:
+      // en el 4to conteo decía «0 / 23» hojas y «955 ítems» con una sola hoja
+      // de un ítem (teléfono, 2026-11-19).
+      const esReconteo = !sinRonda && (rondaActual ?? 1) > 1;
+      const hojasRonda = esReconteo ? hojasDeLaRonda.length : inventario.totalHojas;
+      const itemsRonda = esReconteo ? hojasDeLaRonda.reduce((n, h) => n + h.productos.length, 0) : inventario.items;
       // Concordancia con 1 en las tres cifras: un reconteo (rondas 2 y 3) deja
       // UNA hoja de UN ítem, y las asignadas empiezan en una. Con `null` (sin
       // red) va el plural: es como se lee el "—" (mismo criterio que 536b6ca
       // en "— hojas asignadas").
-      cifras = `${cifraOSinRed(inventario.totalHojas)} ${pluralizar(inventario.totalHojas ?? 0, 'hoja', 'hojas')} · ${cifraOSinRed(inventario.items, formatoMiles)} ${pluralizar(inventario.items ?? 0, 'ítem', 'ítems')} · ${cifraOSinRed(asignadas)} ${pluralizar(asignadas ?? 0, 'asignada', 'asignadas')}${sinRed ? ' · sin red' : ''}`;
+      cifras = `${cifraOSinRed(hojasRonda)} ${pluralizar(hojasRonda ?? 0, 'hoja', 'hojas')} · ${cifraOSinRed(itemsRonda, formatoMiles)} ${pluralizar(itemsRonda ?? 0, 'ítem', 'ítems')} · ${cifraOSinRed(asignadas)} ${pluralizar(asignadas ?? 0, 'asignada', 'asignadas')}${sinRed ? ' · sin red' : ''}`;
       filasEstado = [
         {
           etiqueta: 'Hojas asignadas',
           valor: cifraOSinRed(asignadas),
-          pct: asignadas === null ? 'sin red' : filaPct(asignadas, inventario.totalHojas),
+          pct: asignadas === null ? 'sin red' : filaPct(asignadas, hojasRonda),
           icono: ClipboardList,
         },
         {
           etiqueta: 'Hojas finalizadas',
           valor: cifraOSinRed(finalizadas),
-          pct: finalizadas === null ? 'sin red' : filaPct(finalizadas, inventario.totalHojas),
+          pct: finalizadas === null ? 'sin red' : filaPct(finalizadas, hojasRonda),
           color: colors.ok,
           icono: CheckCircle2,
         },

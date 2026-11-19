@@ -503,7 +503,14 @@ export function CicloScreen({ rol }: CicloScreenProps): JSX.Element {
   // La ronda MÁS AVANZADA que ya tiene datos: es la que dice dónde quedó el
   // ciclo. No se suman las tres -- un ítem que pasó de la 1 a la 2 está en las
   // dos, y sumarlas lo contaría dos veces.
-  const ultimoComparativo = comparativoT3
+  // Una pasada extra del Auditor (4to conteo en adelante) también cuenta: sin
+  // esto, cerrado el 4to, el resumen seguía mostrando el 3ro (2026-11-19).
+  const rondaExtraConDatos = [...rondasExtra].reverse().find((r) => comparativoVisible(resumenPorRonda[r] ?? null) !== null);
+  const comparativoExtra = rondaExtraConDatos !== undefined ? comparativoVisible(resumenPorRonda[rondaExtraConDatos] ?? null) : null;
+  const ultimoComparativo: { ronda: number; datos: NonNullable<typeof comparativoT1> } | null =
+    rondaExtraConDatos !== undefined && comparativoExtra
+      ? { ronda: rondaExtraConDatos, datos: comparativoExtra }
+      : comparativoT3
     ? { ronda: 3 as const, datos: comparativoT3 }
     : comparativoT2
       ? { ronda: 2 as const, datos: comparativoT2 }
@@ -830,7 +837,9 @@ export function CicloScreen({ rol }: CicloScreenProps): JSX.Element {
                     Al cierre del {ORDINAL[ultimoComparativo.ronda]} conteo: {ultimoComparativo.datos.detalle}
                     {ultimoComparativo.datos.avance.pct >= 100
                       ? ' El ciclo puede cerrarse: no queda nada por recontar.'
-                      : ` Los que no cuadren tras el ${ORDINAL[RONDA_MAX]} pasan al auditor, que decide si manda otra pasada o los ajusta él.`}
+                      : ultimoComparativo.ronda >= RONDA_MAX
+                        ? ' Los que no cuadraron pasan al auditor, que decide si manda otra pasada o los ajusta él.'
+                        : ` Los que no cuadren tras el ${ORDINAL[RONDA_MAX]} pasan al auditor, que decide si manda otra pasada o los ajusta él.`}
                   </Text>
                 ) : (
                   <Text style={styles.textoTarjeta}>
