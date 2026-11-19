@@ -1,6 +1,19 @@
 import { KeyRound, Lock, MapPin, SquarePen, Trash2, User, UserCheck, UserCog, UserPlus, Users, UserX, X } from 'lucide-react-native';
 import { useCallback, useMemo, useRef, useState, type JSX } from 'react';
-import { ActivityIndicator, Alert, Animated, Modal, Pressable, RefreshControl, ScrollView, StyleSheet, Text, View } from 'react-native';
+import {
+  ActivityIndicator,
+  Alert,
+  Animated,
+  Keyboard,
+  KeyboardAvoidingView,
+  Modal,
+  Pressable,
+  RefreshControl,
+  ScrollView,
+  StyleSheet,
+  Text,
+  View,
+} from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { useRefrescoAlEnfocar } from '../hooks/useRefrescoAlEnfocar';
@@ -585,10 +598,21 @@ export function UsuariosScreen({ rol }: UsuariosScreenProps): JSX.Element {
         visible={modalEditarVisible}
         transparent
         animationType="fade"
-        onRequestClose={() => setModalEditarVisible(false)}
+        onRequestClose={() => {
+          // «Atrás» con el teclado abierto baja el teclado, no tira el
+          // formulario: visto en el teléfono (2026-11-18), la persona escribía
+          // el nombre, apretaba Atrás para ver el botón y perdía la edición.
+          if (Keyboard.isVisible()) {
+            Keyboard.dismiss();
+            return;
+          }
+          setModalEditarVisible(false);
+        }}
       >
         <Pressable style={styles.modalFondo} onPress={() => setModalEditarVisible(false)} />
-        <View pointerEvents="box-none" style={styles.modalCentrado}>
+        {/* Sube la caja por encima del teclado: sin esto "Guardar cambios" queda
+            debajo y el toque cae en una tecla. Mismo patrón que ModalDecision. */}
+        <KeyboardAvoidingView behavior="padding" pointerEvents="box-none" style={styles.modalCentrado}>
           <View style={styles.modalCaja}>
             <View style={styles.modalCabecera}>
               <Text style={styles.modalTitulo}>Editar cuenta</Text>
@@ -657,7 +681,7 @@ export function UsuariosScreen({ rol }: UsuariosScreenProps): JSX.Element {
               loading={guardandoEdicion}
             />
           </View>
-        </View>
+        </KeyboardAvoidingView>
       </Modal>
 
       <TecladoPin
