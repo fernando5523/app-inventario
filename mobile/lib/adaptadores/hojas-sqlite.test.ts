@@ -2489,3 +2489,35 @@ describe('ARREGLADO (2026-11-18): una descarga que salió antes de guardar no pi
     expect(despues!.conteos.map((c) => c.productoId)).toEqual([productoId]);
   });
 });
+
+describe('ARREGLADO (2026-11-19): una hoja recién bajada del servidor no figura «sin sincronizar»', () => {
+  /**
+   * El servidor guarda `sync = 'local'` en una hoja que nadie tocó todavía.
+   * Se copiaba tal cual, y el Inicio del Coordinador decía «1 hoja sin
+   * sincronizar» por la hoja nueva del 4to conteo, sin nada pendiente en el
+   * teléfono.
+   */
+  it('lo que viene del servidor, sin nada pendiente acá, queda sincronizado', async () => {
+    const INV = 555401;
+    const hoja = {
+      id: 555402,
+      inventarioId: INV,
+      numero: '023',
+      zona: 'Zona C',
+      gondola: 'C1',
+      tamano: 50,
+      estado: 'pendiente' as const,
+      sync: 'local' as const,
+      asignados: [],
+      productos: [
+        { id: 555403, codigo: '0001', codigoBarras: '7750000000001', descripcion: 'Producto', empaques: [] },
+      ],
+      conteos: [],
+    };
+    vi.mocked(hojasApi.todas).mockResolvedValueOnce([hoja]);
+
+    const [bajada] = await hojasSqlite.todas(INV, 4);
+
+    expect(bajada!.sync).toBe('sincronizado');
+  });
+});

@@ -633,7 +633,12 @@ async function refrescarEstadoDesdeServidor(db: DbSqlite, hoja: HojaConteo, desc
     await db.runAsync(
       `INSERT INTO hoja_estado_local (hoja_id, estado, sync) VALUES (?, ?, ?)
        ON CONFLICT(hoja_id) DO UPDATE SET estado = excluded.estado, sync = excluded.sync`,
-      [hoja.id, hoja.estado, hoja.sync],
+      // 'sincronizado', no `hoja.sync`: acá no hay nada pendiente en este
+      // teléfono (ver los dos chequeos de arriba), así que la copia es la del
+      // servidor. El `sync` del servidor vale 'local' en una hoja que nadie
+      // tocó todavía, y el Inicio del Coordinador decía «1 hoja sin
+      // sincronizar» por cada hoja recién creada (teléfono, 2026-11-19).
+      [hoja.id, hoja.estado, 'sincronizado'],
     );
     // Reemplaza los conteos ENTEROS de esta hoja por los que acaba de
     // mandar el servidor -- mismo criterio que ModalConteo.tsx ya usa
