@@ -1023,6 +1023,11 @@ export async function cerrarAjuste(actor: ColaboradorAutenticado, inventarioId: 
         // liberarlo antes dejaria abrir el del mes siguiente encima de uno que
         // todavia se esta decidiendo.
         abierto: null,
+        // El cierre del CONTEO (ver Inventario.cerradoEn en el schema). Nunca
+        // se llenaba: el sello del lacrado salia con `cerradoEn: null`
+        // (2026-11-19, Raymondi).
+        cerradoEn: new Date(),
+        cerradoPorId: actor.colaboradorId,
       },
     }),
     prisma.resultadoInventario.create({

@@ -673,7 +673,16 @@ describe('cerrarAjuste: el ajuste cierra y con el, el conteo', () => {
 
     expect(prismaMock.inventario.update).toHaveBeenCalledWith({
       where: { id: 9 },
-      data: { estado: 'conteo_cerrado', abierto: null },
+      data: expect.objectContaining({ estado: 'conteo_cerrado', abierto: null }),
+    });
+  });
+
+  it('deja la fecha y quién cerró el conteo -- el sello del lacrado salía sin fecha (2026-11-19)', async () => {
+    await cerrarAjuste(AUDITOR, 9);
+
+    expect(prismaMock.inventario.update).toHaveBeenCalledWith({
+      where: { id: 9 },
+      data: expect.objectContaining({ cerradoEn: expect.any(Date), cerradoPorId: AUDITOR.colaboradorId }),
     });
   });
 
