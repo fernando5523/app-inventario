@@ -1192,6 +1192,11 @@ export interface Liquidacion {
    * NUNCA se habilitaba — la planilla solo se llena AL liquidar.
    */
   proyectada: boolean;
+  /** Cuándo y quién liquidó (de la bitácora del servidor). null mientras sea proyectada. */
+  liquidadoEn: string | null;
+  liquidadoPor: string | null;
+  /** El inventario ya está lacrado. */
+  lacrado: boolean;
   /** Ver AdvertenciaLiquidacion. Siempre viene; `mensaje: null` si no hay nada que decir. */
   advertencia: AdvertenciaLiquidacion;
 }

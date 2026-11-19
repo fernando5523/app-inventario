@@ -160,6 +160,9 @@ export const liquidacionMemoria: RepositorioLiquidacion = {
       inventarioId: INVENTARIO_LUZURIAGA_ID,
       // Espeja al backend: proyectada hasta que se liquide.
       proyectada: !liquidados.has(INVENTARIO_LUZURIAGA_ID),
+      liquidadoEn: null,
+      liquidadoPor: null,
+      lacrado: false,
       periodo,
       periodoAnio,
       periodoMes,

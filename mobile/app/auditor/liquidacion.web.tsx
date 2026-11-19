@@ -29,6 +29,7 @@ import {
   type EntradaExportacionCuadros,
 } from '../../lib/dominio/exportar-cuadros';
 import { pluralizar } from '../../lib/dominio/plural';
+import { textoPlanillaCerrada } from '../../lib/dominio/planilla-cerrada';
 import { asistentesConCentavoExtra, resumirAsistencia } from '../../lib/dominio/reparto-visible';
 import {
   nombreArchivoReporteGerencia,
@@ -460,6 +461,7 @@ export default function LiquidacionWeb(): JSX.Element {
   }, [cargar]);
 
   const visibles = useMemo(() => (liquidacion ? filtrar(liquidacion.planilla, filtro) : []), [liquidacion, filtro]);
+  const textoCierre = liquidacion ? textoPlanillaCerrada(liquidacion, formatoFechaHora, soles) : null;
 
   if (!sesion) return <View style={styles.centro} />;
 
@@ -989,18 +991,11 @@ export default function LiquidacionWeb(): JSX.Element {
               ponerlo arriba invitaría a firmar sin haber mirado los números que
               se firman.
             */}
-            {cerrado !== null ? (
+            {textoCierre !== null && (cerrado !== null || !liquidacion.proyectada) ? (
               <TarjetaWeb titulo="Planilla cerrada" sub="Liquidado" icono={Check} tono="ok">
-                <Text style={styles.parrafo}>
-                  Liquidado el {formatoFechaHora(new Date().toISOString())} por {sesion.colaborador.nombre}. Los
-                  descuentos de {cerrado.colaboradores}{' '}
-                  {pluralizar(cerrado.colaboradores, 'colaborador', 'colaboradores')} quedaron firmes por{' '}
-                  {soles(cerrado.totalDescontado)} en total.
-                </Text>
-                <Text style={styles.parrafo}>
-                  El paso que sigue es la aprobación y el lacrado: el sello incluye esta planilla.
-                </Text>
-                <BotonWeb etiqueta="Ir a aprobación y lacrado" onPress={() => router.push('/auditor/lacrado')} />
+                <Text style={styles.parrafo}>{textoCierre.resumen}</Text>
+                <Text style={styles.parrafo}>{textoCierre.siguiente}</Text>
+                <BotonWeb etiqueta={textoCierre.boton} onPress={() => router.push('/auditor/lacrado')} />
               </TarjetaWeb>
             ) : (
               <CierreDePlanilla

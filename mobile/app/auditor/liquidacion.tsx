@@ -20,6 +20,7 @@ import {
   type EntradaExportacionCuadros,
 } from '../../lib/dominio/exportar-cuadros';
 import { pluralizar } from '../../lib/dominio/plural';
+import { textoPlanillaCerrada } from '../../lib/dominio/planilla-cerrada';
 import { asistentesConCentavoExtra, resumirAsistencia } from '../../lib/dominio/reparto-visible';
 import {
   nombreArchivoReporteGerencia,
@@ -359,6 +360,7 @@ export default function LiquidacionScreen(): JSX.Element {
   }, [cargar]);
 
   const visibles = useMemo(() => (liquidacion ? filtrar(liquidacion.planilla, filtro) : []), [liquidacion, filtro]);
+  const textoCierre = liquidacion ? textoPlanillaCerrada(liquidacion, formatoFechaHora, soles) : null;
 
   if (!sesion) return <View />;
 
@@ -932,21 +934,16 @@ export default function LiquidacionScreen(): JSX.Element {
             ponerlo arriba invitaría a firmar sin haber mirado los números que
             se firman.
           */}
-          {cerrado !== null ? (
+          {textoCierre !== null && (cerrado !== null || !liquidacion.proyectada) ? (
             <View style={styles.tarjeta}>
               <View style={styles.tarjetaCabecera}>
                 <Check size={18} color={colors.ok} />
                 <Text style={styles.tarjetaTitulo}>Planilla cerrada</Text>
                 <Badge label="Liquidado" variant="ok" />
               </View>
-              <Text style={styles.tarjetaTexto}>
-                Liquidado el {formatoFechaHora(new Date().toISOString())} por {sesion.colaborador.nombre}. Los descuentos de{' '}
-                {cerrado.colaboradores} colaboradores quedaron firmes por {soles(cerrado.totalDescontado)} en total.
-              </Text>
-              <Text style={styles.tarjetaTexto}>
-                El paso que sigue es la aprobación y el lacrado: el sello incluye esta planilla.
-              </Text>
-              <Button label="Ir a aprobación y lacrado" variant="outline" onPress={() => router.push('/auditor/lacrado')} />
+              <Text style={styles.tarjetaTexto}>{textoCierre.resumen}</Text>
+              <Text style={styles.tarjetaTexto}>{textoCierre.siguiente}</Text>
+              <Button label={textoCierre.boton} variant="outline" onPress={() => router.push('/auditor/lacrado')} />
             </View>
           ) : (
             <CierreDePlanilla
