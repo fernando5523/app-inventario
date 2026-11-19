@@ -23,7 +23,7 @@ import {
 import { aplicarClasificacionVigente, resolverMontosDeClasificacion } from '../liquidacion/liquidacion.reclasificacion';
 import { armarMatriz } from '../auditoria/auditoria.service';
 import { cuadrosParaExportar } from '../auditoria/auditoria.calculos';
-import { armarLibroDeCuadros, nombreArchivoCuadros } from './historial.exportar-cuadros';
+import { armarLibroDeCuadros, cuotaDelEncabezado, nombreArchivoCuadros } from './historial.exportar-cuadros';
 import { bonoBase } from '../../dominio/reparto-de-fondo';
 import {
   armarLibroDiferencias,
@@ -699,12 +699,11 @@ export async function exportarCuadros(
   const diferencia = redondear(totalFaltantes + totalSobrantes);
 
   const personas = inv.resultado?.colaboradoresAlcanzados ?? inv.liquidaciones.length;
-  const cuotaBase =
-    inv.liquidaciones[0] !== undefined
-      ? aNumeroObligatorio(inv.liquidaciones[0].cuotaBase)
-      : personas === 0
-        ? 0
-        : redondear(diferencia / personas);
+  const cuotaBase = cuotaDelEncabezado(
+    inv.liquidaciones[0] !== undefined ? aNumeroObligatorio(inv.liquidaciones[0].cuotaBase) : undefined,
+    diferencia,
+    personas,
+  );
 
   return {
     buffer: await armarLibroDeCuadros({

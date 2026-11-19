@@ -10,6 +10,7 @@
 import ExcelJS from 'exceljs';
 import { describe, expect, it } from 'vitest';
 import {
+  cuotaDelEncabezado,
   armarLibroDeCuadros,
   nombreArchivoCuadros,
   type FilaCuadro,
@@ -209,5 +210,18 @@ describe('armarLibroDeCuadros — un cuadro sin ítems', () => {
     const numeros: unknown[] = [];
     h.eachRow((f) => f.eachCell((c) => numeros.push(c.value)));
     expect(numeros).toContain(0);
+  });
+});
+
+describe('cuotaDelEncabezado: el encabezado de DESCUENTO va con el signo de las filas (2026-11-19)', () => {
+  it('ya liquidado: la cuota de la app (positivo descuenta) va negativa, como la columna CUOTA', () => {
+    expect(cuotaDelEncabezado(75, -150, 2)).toBe(-75);
+    // Neto negativo (los ajustes superan al faltante): la cuota devuelve.
+    expect(cuotaDelEncabezado(-0.75, -9, 2)).toBe(0.75);
+  });
+
+  it('sin liquidar: sale de la diferencia, que ya trae el signo de su archivo', () => {
+    expect(cuotaDelEncabezado(undefined, -371.9, 12)).toBe(-30.99);
+    expect(cuotaDelEncabezado(undefined, -10, 0)).toBe(0);
   });
 });

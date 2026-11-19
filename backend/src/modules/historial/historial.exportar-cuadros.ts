@@ -263,3 +263,17 @@ export function nombreArchivoCuadros(
     .replace(/^-|-$/g, '');
   return `inventario-cuadros-${limpia}-${periodoAnio}-${String(periodoMes).padStart(2, '0')}-inv${inventarioId}.xlsx`;
 }
+
+/**
+ * LA CUOTA DEL ENCABEZADO de la hoja DESCUENTO, con el signo de SU archivo
+ * (negativo = descuenta), el mismo que la columna CUOTA de cada fila: en su
+ * archivo cada fila es `$E$11 + asistencia`.
+ *
+ * Bug real (2026-11-19, Raymondi): ya liquidado, el encabezado llevaba la
+ * cuota con el signo de la app (positivo = descuenta) y las filas con el de
+ * su archivo, asi que un mes normal decia "+75" arriba y "-75" en cada fila.
+ */
+export function cuotaDelEncabezado(cuotaLiquidada: number | undefined, diferencia: number, personas: number): number {
+  if (cuotaLiquidada !== undefined) return cuotaLiquidada === 0 ? 0 : -cuotaLiquidada;
+  return personas === 0 ? 0 : Math.round((diferencia / personas) * 100) / 100;
+}
