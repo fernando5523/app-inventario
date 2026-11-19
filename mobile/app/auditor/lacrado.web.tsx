@@ -116,6 +116,8 @@ export default function LacradoWeb(): JSX.Element {
   const [inventarioId, setInventarioId] = useState<number | null>(null);
   const [items, setItems] = useState<number | null>(null);
   const [periodo, setPeriodo] = useState<string | null>(null);
+  /** El período del último inventario si YA está lacrado: no queda nada por sellar y se mira en el Historial. */
+  const [periodoLacrado, setPeriodoLacrado] = useState<string | null>(null);
   const [auditores, setAuditores] = useState<Colaborador[]>([]);
   const [estado, setEstado] = useState<EstadoLacrado | null>(null);
 
@@ -166,6 +168,8 @@ export default function LacradoWeb(): JSX.Element {
        * listado viene ordenado del más nuevo al más viejo.
        */
       const pendiente = pagina.inventarios.find((i) => i.estado === 'conteo_cerrado' || i.estado === 'liquidado');
+      const ultimo = pagina.inventarios[0];
+      setPeriodoLacrado(!pendiente && ultimo?.estado === 'lacrado' ? ultimo.periodo : null);
 
       if (pendiente) {
         setInventarioId(pendiente.id);
@@ -191,6 +195,7 @@ export default function LacradoWeb(): JSX.Element {
     setInventarioId(null);
     setItems(null);
     setPeriodo(null);
+    setPeriodoLacrado(null);
     setEstado(null);
     setAviso(null);
     setCargando(true);
@@ -355,6 +360,15 @@ export default function LacradoWeb(): JSX.Element {
         <TarjetaWeb titulo="No se pudo cargar el lacrado" icono={Lock} tono="neutro">
           <Text style={styles.parrafo}>{error}</Text>
           <BotonWeb etiqueta="Reintentar" variante="principal" onPress={() => void cargar()} />
+        </TarjetaWeb>
+      ) : !inventarioId && periodoLacrado !== null ? (
+        // Ya sellado: ver lacrado.tsx.
+        <TarjetaWeb titulo="Inventario ya lacrado" icono={Lock} tono="ok">
+          <Text style={styles.parrafo}>
+            El inventario de {periodoLacrado} ya está lacrado: en esta sucursal no queda nada por sellar. Su sello se ve
+            en el Historial.
+          </Text>
+          <BotonWeb etiqueta="Ver el historial" onPress={() => router.push('/auditor/historial')} />
         </TarjetaWeb>
       ) : !inventarioId ? (
         <TarjetaWeb titulo="Todavía no hay nada que lacrar" icono={Lock} tono="neutro">

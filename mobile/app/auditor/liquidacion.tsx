@@ -943,7 +943,7 @@ export default function LiquidacionScreen(): JSX.Element {
               </View>
               <Text style={styles.tarjetaTexto}>{textoCierre.resumen}</Text>
               <Text style={styles.tarjetaTexto}>{textoCierre.siguiente}</Text>
-              <Button label={textoCierre.boton} variant="outline" onPress={() => router.push('/auditor/lacrado')} />
+              <Button label={textoCierre.boton} variant="outline" onPress={() => router.push(textoCierre.destino)} />
             </View>
           ) : (
             <CierreDePlanilla

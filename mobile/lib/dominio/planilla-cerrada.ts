@@ -15,7 +15,7 @@ export function textoPlanillaCerrada(
   l: Pick<Liquidacion, 'liquidadoEn' | 'liquidadoPor' | 'lacrado' | 'planilla'>,
   fecha: (iso: string) => string,
   soles: (n: number) => string,
-): { resumen: string; siguiente: string; boton: string } {
+): { resumen: string; siguiente: string; boton: string; destino: '/auditor/historial' | '/auditor/lacrado' } {
   const n = l.planilla.length;
   const total = l.planilla.reduce((c, p) => c + Math.round(p.monto * 100), 0) / 100;
   const cuando =
@@ -25,8 +25,9 @@ export function textoPlanillaCerrada(
   return {
     resumen: `${cuando} Los descuentos de ${n} ${pluralizar(n, 'colaborador', 'colaboradores')} quedaron firmes por ${soles(total)} en total.`,
     siguiente: l.lacrado
-      ? 'El inventario ya está lacrado: esta planilla quedó dentro del sello.'
+      ? 'El inventario ya está lacrado: esta planilla quedó dentro del sello. El sello se ve en el Historial.'
       : 'El paso que sigue es la aprobación y el lacrado: el sello incluye esta planilla.',
-    boton: l.lacrado ? 'Ver el lacrado' : 'Ir a aprobación y lacrado',
+    boton: l.lacrado ? 'Ver el historial' : 'Ir a aprobación y lacrado',
+    destino: l.lacrado ? '/auditor/historial' : '/auditor/lacrado',
   };
 }
