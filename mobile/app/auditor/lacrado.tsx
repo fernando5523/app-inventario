@@ -352,7 +352,10 @@ export default function LacradoScreen(): JSX.Element {
             <View style={styles.tarjetaCabecera}>
               <Lock size={18} color={colors.rojo} />
               <Text style={styles.tarjetaTitulo}>Lacrado digital</Text>
-              <Badge label={estado?.lacrado ? 'Lacrado' : 'Bloqueado'} variant={estado?.lacrado ? 'ok' : 'default'} />
+              <Badge
+                label={estado?.lacrado ? 'Lacrado' : puedeLacrar ? 'Listo para lacrar' : 'Bloqueado'}
+                variant={estado?.lacrado ? 'ok' : 'default'}
+              />
             </View>
             {estado?.lacrado ? (
               <View style={styles.resultadoLacrado}>

@@ -286,6 +286,17 @@ export default function AjusteScreen(): JSX.Element {
           <EmptyState icon={TriangleAlert} title="No se pudo cargar el ajuste" subtitle={error}>
             <Button label="Volver a intentar" onPress={refrescar} />
           </EmptyState>
+        ) : fase === null ? (
+          // SIN inventario contando ni en ajuste. No es "todavía no empezó":
+          // eso le decía al Auditor, con el ajuste YA cerrado, que el
+          // coordinador todavía podía corregir (2026-11-19, Raymondi).
+          <EmptyState
+            icon={Lock}
+            title="No hay un ajuste abierto"
+            subtitle="Esta sucursal no tiene un inventario contando ni en ajuste. Si el ajuste ya se cerró, lo que sigue es la liquidación."
+          >
+            <Button label="Ir a liquidación" variant="outline" onPress={() => router.push('/auditor/liquidacion')} />
+          </EmptyState>
         ) : !enAjuste ? (
           // NO dice "vuelve a intentar": mientras el ajuste no se inicie esto
           // no cambia solo, y una regla de negocio disfrazada de error deja a

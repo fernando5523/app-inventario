@@ -440,7 +440,7 @@ export default function LacradoWeb(): JSX.Element {
             <View style={styles.columnaAngosta}>
               <TarjetaWeb
                 titulo="Lacrado digital"
-                sub={estado?.lacrado ? 'Lacrado' : 'Bloqueado'}
+                sub={estado?.lacrado ? 'Lacrado' : puedeLacrar ? 'Listo para lacrar' : 'Bloqueado'}
                 icono={Lock}
                 tono={estado?.lacrado ? 'ok' : 'marca'}
               >

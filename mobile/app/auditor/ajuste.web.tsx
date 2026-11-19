@@ -456,6 +456,15 @@ export default function AjusteWebScreen(): JSX.Element {
             <Text style={styles.parrafo}>{error}</Text>
             <BotonWeb etiqueta="Volver a intentar" variante="principal" onPress={refrescar} />
           </TarjetaWeb>
+        ) : fase === null ? (
+          // SIN inventario contando ni en ajuste: ver ajuste.tsx.
+          <TarjetaWeb titulo="No hay un ajuste abierto" icono={Lock} tono="neutro">
+            <Text style={styles.parrafo}>
+              Esta sucursal no tiene un inventario contando ni en ajuste. Si el ajuste ya se cerró, lo que sigue es la
+              liquidación.
+            </Text>
+            <BotonWeb etiqueta="Ir a liquidación" onPress={() => router.push('/auditor/liquidacion')} />
+          </TarjetaWeb>
         ) : !enAjuste ? (
           // NO dice "vuelve a intentar": mientras el ajuste no se inicie esto
           // no cambia solo, y una regla de negocio disfrazada de error deja a
