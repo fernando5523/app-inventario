@@ -214,16 +214,21 @@ export async function eliminar(actor: ColaboradorAutenticado, id: number): Promi
     throw new Conflicto('No puedes eliminar tu propia cuenta.');
   }
 
-  // Elimina sesiones asociadas
-  await prisma.sesionToken.deleteMany({ where: { colaboradorId: id } });
-
-  // Limpiar referencias para evitar fallas por FK
-  await prisma.colaborador.updateMany({ where: { creadoPorId: id }, data: { creadoPorId: null } });
-  await prisma.hojaConteo.updateMany({ where: { asignadoAId: id }, data: { asignadoAId: null } });
-  await prisma.hojaConteo.updateMany({ where: { asignadoA2Id: id }, data: { asignadoA2Id: null } });
-
+  // Todo o nada. Si el borrado falla porque la persona tiene historia
+  // (conteos, asistencia), nada de lo anterior queda hecho. Antes cada paso se
+  // guardaba por separado: intentar eliminar a un Contador que ya contó
+  // fallaba, pero le dejaba sus hojas sin asignar y la sesión cerrada, a mitad
+  // del inventario. Comprobado en producción el 2026-11-19 con una
+  // transacción deshecha: 22 hojas del Contador de Raymondi quedaban sin dueño.
   try {
-    await prisma.colaborador.delete({ where: { id } });
+    await prisma.$transaction(async (tx) => {
+      await tx.sesionToken.deleteMany({ where: { colaboradorId: id } });
+      // Limpiar referencias para evitar fallas por FK
+      await tx.colaborador.updateMany({ where: { creadoPorId: id }, data: { creadoPorId: null } });
+      await tx.hojaConteo.updateMany({ where: { asignadoAId: id }, data: { asignadoAId: null } });
+      await tx.hojaConteo.updateMany({ where: { asignadoA2Id: id }, data: { asignadoA2Id: null } });
+      await tx.colaborador.delete({ where: { id } });
+    });
   } catch (err) {
     if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2003') {
       throw new Conflicto('No se puede eliminar el usuario porque tiene registros históricos asociados.');
