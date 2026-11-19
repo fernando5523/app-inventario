@@ -185,6 +185,7 @@ describe('deSucursal', () => {
     expect(r!.faltanteNeto).toBeNull();
     expect(r!.cuotaBase).toBeNull();
     expect(r!.bonoAsistencia).toBeNull();
+    expect(r!.fondoMultas).toBeNull();
     expect(r!.totalFaltas).toBeNull();
     // Lo que SÍ es real sigue viniendo real, no todo se apaga.
     expect(r!.faltanteBruto).toBe(500);
@@ -426,6 +427,8 @@ describe('conciliacion', () => {
     expect(liq.diasFaltadosEnTotal).toBe(6);
     expect(liq.totalFaltas * liq.multaInasistencia).not.toBe(120);
     expect(liq.diasFaltadosEnTotal * liq.multaInasistencia).toBe(120);
+    // El fondo viaja hecho: sin el, el teléfono escribía "S/ NaN" (2026-11-19).
+    expect((liq as unknown as { fondoMultas: number }).fondoMultas).toBe(120);
     // Y cada fila lleva sus dias, que es lo que la pantalla muestra como "2/3".
     expect(liq.planilla.map((p) => p.diasAsistidos)).toEqual([3, 3, 2, 1, 0]);
   });

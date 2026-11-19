@@ -137,6 +137,13 @@ export interface LiquidacionDto {
    */
   bonoAsistencia: number | null;
   /**
+   * EL FONDO DE MULTAS YA CALCULADO, de las filas de la planilla (ver
+   * `fondoDeCartel`). Lo que la pantalla muestra como "N días × S/20 = S/X".
+   * Faltaba en esta respuesta y el teléfono escribía "S/ NaN" (2026-11-19,
+   * Raymondi). null, mismo criterio que `faltanteNeto`.
+   */
+  fondoMultas: number | null;
+  /**
    * CUANTAS PERSONAS no completaron el inventario. PERSONAS, no días -- va al
    * lado de `planilla.length` y de "cuántos asistieron", y esos tres números
    * tienen que sumar entre sí: `asistieron + faltaron === colaboradores`. Fue
@@ -220,7 +227,7 @@ export interface LiquidacionDto {
  * seria peor que decir el minimo que todos cobran. El monto exacto de cada uno
  * esta en su fila.
  */
-function bonoDeCartel(
+function fondoDeCartel(
   resumen: ResumenLiquidacion | null,
   planilla: readonly DetalleLiquidacionDto[],
 ): number | null {
@@ -228,11 +235,19 @@ function bonoDeCartel(
   // deriva un numero con apariencia de dato.
   if (resumen === null) return null;
 
-  const fondo = planilla
+  const centavos = planilla
     .filter((p) => !p.asistio)
     .reduce((total, p) => total + Math.round((p.monto - resumen.cuotaBase) * 100), 0);
+  return centavos / 100;
+}
 
-  return bonoBase(fondo / 100, planilla.filter((p) => p.asistio).length);
+function bonoDeCartel(
+  resumen: ResumenLiquidacion | null,
+  planilla: readonly DetalleLiquidacionDto[],
+): number | null {
+  const fondo = fondoDeCartel(resumen, planilla);
+  if (fondo === null) return null;
+  return bonoBase(fondo, planilla.filter((p) => p.asistio).length);
 }
 
 /**
@@ -477,6 +492,7 @@ export async function deSucursal(actor: ColaboradorAutenticado, sucursalId: numb
      * de `proyectarPlanilla`, que lo deriva de las filas que va a escribir.
      */
     bonoAsistencia: bonoDeCartel(resumen, planilla),
+    fondoMultas: fondoDeCartel(resumen, planilla),
     /**
      * CUANTOS NO COMPLETARON la asistencia -- los que pagan multa. Sale de la
      * planilla y no de `resumen.faltantes` por la misma razon: con la multa por
