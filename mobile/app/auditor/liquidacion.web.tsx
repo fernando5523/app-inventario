@@ -995,7 +995,7 @@ export default function LiquidacionWeb(): JSX.Element {
               <TarjetaWeb titulo="Planilla cerrada" sub="Liquidado" icono={Check} tono="ok">
                 <Text style={styles.parrafo}>{textoCierre.resumen}</Text>
                 <Text style={styles.parrafo}>{textoCierre.siguiente}</Text>
-                <BotonWeb etiqueta={textoCierre.boton} onPress={() => router.push(textoCierre.destino)} />
+                <BotonWeb etiqueta={textoCierre.boton} onPress={() => router.push('/auditor/lacrado')} />
               </TarjetaWeb>
             ) : (
               <CierreDePlanilla

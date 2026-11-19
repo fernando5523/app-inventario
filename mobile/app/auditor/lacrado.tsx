@@ -37,8 +37,6 @@ export default function LacradoScreen(): JSX.Element {
   const [inventarioId, setInventarioId] = useState<number | null>(null);
   const [items, setItems] = useState<number | null>(null);
   const [periodo, setPeriodo] = useState<string | null>(null);
-  /** El período del último inventario si YA está lacrado: no queda nada por sellar y se mira en el Historial. */
-  const [periodoLacrado, setPeriodoLacrado] = useState<string | null>(null);
   const [auditores, setAuditores] = useState<Colaborador[]>([]);
   const [estado, setEstado] = useState<EstadoLacrado | null>(null);
 
@@ -90,18 +88,24 @@ export default function LacradoScreen(): JSX.Element {
        * inventario equivocado y solo se enteraba al apretar el botón.
        *
        * Se toma el más reciente que ya cerró el conteo y todavía no está
-       * lacrado; el listado viene ordenado del más nuevo al más viejo. Un
-       * inventario ya lacrado no vuelve acá: se mira desde el Historial.
+       * lacrado; el listado viene ordenado del más nuevo al más viejo.
        */
       const pendiente = pagina.inventarios.find((i) => i.estado === 'conteo_cerrado' || i.estado === 'liquidado');
+      /**
+       * SIN PENDIENTE, EL ÚLTIMO YA LACRADO. Antes un inventario lacrado no
+       * volvía a esta pantalla, y con él se perdía el único lugar desde donde
+       * TI marca "registrado manualmente en Dynamics" -- cosa que hace días
+       * después de lacrar, no en la misma sesión (2026-11-19, Raymondi). Se
+       * muestra sellado: con su hash, sin botones de firmar ni de lacrar.
+       */
       const ultimo = pagina.inventarios[0];
-      setPeriodoLacrado(!pendiente && ultimo?.estado === 'lacrado' ? ultimo.periodo : null);
+      const elegido = pendiente ?? (ultimo?.estado === 'lacrado' ? ultimo : undefined);
 
-      if (pendiente) {
-        setInventarioId(pendiente.id);
-        setItems(pendiente.snapshotItems);
-        setPeriodo(pendiente.periodo);
-        const estadoLacrado = await repositorioLacrado.estado(pendiente.id);
+      if (elegido) {
+        setInventarioId(elegido.id);
+        setItems(elegido.snapshotItems);
+        setPeriodo(elegido.periodo);
+        const estadoLacrado = await repositorioLacrado.estado(elegido.id);
         setEstado(estadoLacrado);
       }
     } catch (e) {
@@ -125,7 +129,6 @@ export default function LacradoScreen(): JSX.Element {
     setInventarioId(null);
     setItems(null);
     setPeriodo(null);
-    setPeriodoLacrado(null);
     setEstado(null);
     setCargando(true);
     void cargar();
@@ -282,17 +285,6 @@ export default function LacradoScreen(): JSX.Element {
           <Text style={styles.tarjetaTitulo}>No se pudo cargar el lacrado</Text>
           <Text style={styles.tarjetaTexto}>{error}</Text>
           <Button label="Reintentar" onPress={cargar} />
-        </View>
-      ) : !inventarioId && periodoLacrado !== null ? (
-        // Ya sellado: antes decía "no hay nada listo... todavía se puede
-        // recontar", que es falso para un inventario lacrado (2026-11-19).
-        <View style={styles.tarjeta}>
-          <Text style={styles.tarjetaTitulo}>Inventario ya lacrado</Text>
-          <Text style={styles.tarjetaTexto}>
-            El inventario de {periodoLacrado} ya está lacrado: en esta sucursal no queda nada por sellar. Su sello se ve
-            en el Historial.
-          </Text>
-          <Button label="Ver el historial" variant="outline" onPress={() => router.push('/auditor/historial')} />
         </View>
       ) : !inventarioId ? (
         <Text style={styles.tarjetaTexto}>

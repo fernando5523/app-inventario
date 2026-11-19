@@ -16,14 +16,12 @@ describe('textoPlanillaCerrada (2026-11-19)', () => {
       'Liquidado el F(2026-11-19T20:57:00.000Z) por Auditor Raymondi. Los descuentos de 2 colaboradores quedaron firmes por S/ -1.50 en total.',
     );
     expect(t.boton).toBe('Ir a aprobación y lacrado');
-    expect(t.destino).toBe('/auditor/lacrado');
   });
 
   it('lacrado: no dice que el paso que sigue es el lacrado', () => {
     const t = textoPlanillaCerrada({ liquidadoEn: null, liquidadoPor: null, lacrado: true, planilla }, fecha, soles);
     expect(t.resumen.startsWith('Planilla liquidada.')).toBe(true);
     expect(t.siguiente).toContain('ya está lacrado');
-    expect(t.boton).toBe('Ver el historial');
-    expect(t.destino).toBe('/auditor/historial');
+    expect(t.boton).toBe('Ver el lacrado');
   });
 });
