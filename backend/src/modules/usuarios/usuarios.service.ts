@@ -62,8 +62,31 @@ export async function listar(actor: ColaboradorAutenticado, sucursalIdFiltro?: n
   return usuarios.map(aDto);
 }
 
+/**
+ * Un DNI es una persona: no puede estar en dos cuentas habilitadas a la vez.
+ *
+ * El índice único de la base es por sucursal (sucursal_id, dni), así que no
+ * frenaba el mismo DNI en dos tiendas, ni entre un administrador (sin
+ * sucursal: Postgres trata cada NULL como distinto) y un empleado de tienda.
+ * Visto en producción el 2026-11-18: el Administrador y el Contador de
+ * Raymondi con el mismo DNI.
+ *
+ * Las cuentas DESHABILITADAS no cuentan, a propósito: quien se cambia de
+ * tienda se deshabilita en la vieja y se da de alta en la nueva.
+ */
+async function validarDniLibre(dni: string, excluirId?: number): Promise<void> {
+  const otra = await prisma.colaborador.findFirst({
+    where: { dni, activo: true, ...(excluirId !== undefined ? { id: { not: excluirId } } : {}) },
+    select: { sucursal: { select: { nombre: true } } },
+  });
+  if (!otra) return;
+  const donde = otra.sucursal ? `en ${otra.sucursal.nombre}` : 'de administrador';
+  throw new Conflicto(`Ese DNI ya está en otra cuenta habilitada ${donde}. Esa cuenta se tiene que deshabilitar primero.`);
+}
+
 export async function crear(actor: ColaboradorAutenticado, input: CrearUsuarioInput): Promise<UsuarioDto> {
   validarPermisoDeAlta(actor, { rol: input.rol, sucursalId: input.sucursalId });
+  await validarDniLibre(input.dni);
 
   // Sin colaboradorId: al crear, el id lo autogenera Prisma, asi que aca
   // solo se puede frenar el trivial (123456, 111111...). El predecible se
@@ -118,7 +141,9 @@ async function obtenerConAlcance(actor: ColaboradorAutenticado, id: number) {
 }
 
 export async function actualizarEstado(actor: ColaboradorAutenticado, id: number, activo: boolean): Promise<UsuarioDto> {
-  await obtenerConAlcance(actor, id);
+  const objetivo = await obtenerConAlcance(actor, id);
+  // Habilitar de nuevo no puede dejar dos cuentas habilitadas con el mismo DNI.
+  if (activo && !objetivo.activo) await validarDniLibre(objetivo.dni, id);
 
   const actualizado = await prisma.colaborador.update({ where: { id }, data: { activo } });
 
@@ -155,7 +180,12 @@ export async function resetearPin(actor: ColaboradorAutenticado, id: number, pin
 }
 
 export async function editar(actor: ColaboradorAutenticado, id: number, input: EditarUsuarioInput): Promise<UsuarioDto> {
-  await obtenerConAlcance(actor, id);
+  const objetivo = await obtenerConAlcance(actor, id);
+  // Solo si el DNI CAMBIA: editar el nombre de una cuenta que ya comparte DNI
+  // (datos de antes de esta regla) no tiene que fallar por eso.
+  if (input.dni !== undefined && input.dni !== objetivo.dni && objetivo.activo) {
+    await validarDniLibre(input.dni, id);
+  }
 
   if (actor.rol === 'auditor') {
     if (input.rol && !ROLES_GESTIONABLES_POR_AUDITOR.includes(input.rol)) {
