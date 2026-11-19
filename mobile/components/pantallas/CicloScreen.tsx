@@ -16,6 +16,7 @@ import {
   ORDINAL,
   RONDA_MAX,
   textoBotonCierre,
+  textoConfirmarCierre,
   textoCierreExplicacion,
   textoRondaYaCerrada,
   type EstadoPaso,
@@ -452,6 +453,16 @@ export function CicloScreen({ rol }: CicloScreenProps): JSX.Element {
   // que ya trajo `cargarResumenDeRondas` para el embudo, no una segunda llamada
   // que podría discrepar. `null` si no hay ronda activa (inventario cerrado).
   const resumenActivo = rondaActiva !== null ? resumenPorRonda[rondaActiva] ?? null : null;
+
+  // Cerrar un conteo no se deshace: primero se confirma, nombrando lo que pasa.
+  function confirmarCierre(): void {
+    if (rondaActiva === null || resumenActivo === null || !resumenActivo.sePuedeCerrar) return;
+    const { titulo, texto, boton } = textoConfirmarCierre(rondaActiva, resumenActivo.aRecontar, formatoMiles);
+    Alert.alert(titulo, texto, [
+      { text: 'Todavía no', style: 'cancel' },
+      { text: boton, onPress: () => void cerrarRondaAhora() },
+    ]);
+  }
 
   async function cerrarRondaAhora(): Promise<void> {
     if (inventarioId === null || rondaActiva === null || resumenActivo === null || !resumenActivo.sePuedeCerrar) return;
@@ -905,7 +916,7 @@ export function CicloScreen({ rol }: CicloScreenProps): JSX.Element {
                     : 'Termina las hojas para poder cerrar'
                 }
                 icon={Lock}
-                onPress={cerrarRondaAhora}
+                onPress={confirmarCierre}
                 disabled={!resumenActivo.sePuedeCerrar}
                 loading={cerrandoRonda}
               />

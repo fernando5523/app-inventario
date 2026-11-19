@@ -9,6 +9,7 @@ import {
   ORDINAL,
   textoBotonCierre,
   textoCierreExplicacion,
+  textoConfirmarCierre,
 } from './texto-cierre-ronda';
 
 /**
@@ -162,5 +163,23 @@ describe('textoRondaYaCerrada', () => {
 
   it('sirve para una ronda extra del auditor', () => {
     expect(textoRondaYaCerrada(5)).toContain('5to conteo');
+  });
+});
+
+describe('textoConfirmarCierre', () => {
+  const f = (n: number) => String(n);
+
+  it('con ítems para recontar, dice qué conteo se abre y con cuántos', () => {
+    expect(textoConfirmarCierre(1, 7, f)).toEqual({
+      titulo: 'Cerrar el 1er conteo',
+      texto: 'Se abre el 2do conteo con 7 ítems para recontar. No se puede deshacer.',
+      boton: 'Cerrar el conteo',
+    });
+    expect(textoConfirmarCierre(2, 1, f).texto).toBe('Se abre el 3er conteo con 1 ítem para recontar. No se puede deshacer.');
+  });
+
+  it('en la última pasada, dice que pasa al auditor', () => {
+    expect(textoConfirmarCierre(3, 1, f).texto).toMatch(/^El conteo pasa al auditor/);
+    expect(textoConfirmarCierre(1, 0, f).texto).toMatch(/^El conteo pasa al auditor/);
   });
 });

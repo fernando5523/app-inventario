@@ -86,6 +86,23 @@ export function textoBotonCierre(rondaActiva: number, aRecontar: number, formato
 }
 
 /**
+ * La confirmación antes de cerrar un conteo. Cerrar no se deshace y antes
+ * bastaba un toque en el botón: visto en el teléfono el 2026-11-18. Nombra la
+ * consecuencia en vez de preguntar "¿estás seguro?", como la del ajuste.
+ */
+export function textoConfirmarCierre(
+  rondaActiva: number,
+  aRecontar: number,
+  formato: (n: number) => string,
+): { titulo: string; texto: string; boton: string } {
+  const titulo = `Cerrar el ${ORDINAL[rondaActiva]} conteo`;
+  const texto = esUltimaPasada(rondaActiva, aRecontar)
+    ? 'El conteo pasa al auditor, que decide si hace otro conteo o el ajuste final. No se puede deshacer.'
+    : `Se abre el ${ORDINAL[rondaActiva + 1]} conteo con ${formato(aRecontar)} ${pluralizar(aRecontar, 'ítem', 'ítems')} para recontar. No se puede deshacer.`;
+  return { titulo, texto, boton: 'Cerrar el conteo' };
+}
+
+/**
  * Estado de un PASO (una ronda) del embudo del ciclo, comparando su número
  * con la ronda ACTIVA del backend — NUNCA un literal. Ese era el bug: el
  * Paso 2 decía "En curso" fijo aunque el inventario ya estuviera en la 3ra.

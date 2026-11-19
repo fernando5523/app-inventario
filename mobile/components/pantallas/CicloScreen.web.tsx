@@ -37,6 +37,7 @@ import {
   ORDINAL,
   RONDA_MAX,
   textoBotonCierre,
+  textoConfirmarCierre,
   textoCierreExplicacion,
   textoRondaYaCerrada,
   type EstadoPaso,
@@ -248,7 +249,10 @@ export function CicloScreen({ rol }: CicloScreenProps): JSX.Element {
 
   /** El reemplazo de `Alert.alert` en web. Ver la cabecera del archivo. */
   const [aviso, setAviso] = useState<Aviso | null>(null);
-  const [confirmacionVisible, setConfirmacionVisible] = useState(false);
+  // Qué se está confirmando: el ajuste final o el cierre de un conteo. Los dos
+  // no se deshacen, y en el navegador no hay diálogo del sistema (ver arriba).
+  const [confirmacion, setConfirmacion] = useState<'ajuste' | 'cierre' | null>(null);
+  const confirmacionVisible = confirmacion !== null;
   /**
    * El aviso nace arriba de todo, y el botón que lo produjo puede estar al pie
    * de la página: sin esto, cerrar una ronda deja un aviso que nadie ve.
@@ -369,6 +373,18 @@ export function CicloScreen({ rol }: CicloScreenProps): JSX.Element {
   // que ya trajo `cargarResumenDeRondas`, no una segunda llamada que podría
   // discrepar.
   const resumenActivo = rondaActiva !== null ? resumenPorRonda[rondaActiva] ?? null : null;
+
+  // Mismos textos que en el teléfono: el ajuste, palabra por palabra, y el
+  // cierre desde `textoConfirmarCierre`.
+  const textoConfirmacion =
+    confirmacion === 'cierre' && rondaActiva !== null && resumenActivo !== null
+      ? textoConfirmarCierre(rondaActiva, resumenActivo.aRecontar, formatoMiles)
+      : {
+          titulo: 'Empezar el ajuste final',
+          texto:
+            'A partir de ahora el coordinador ya no puede corregir los conteos de este inventario: los valores los cambias tú, viendo el stock. Se puede empezar una sola vez.',
+          boton: 'Empezar el ajuste',
+        };
 
   async function cerrarRondaAhora(): Promise<void> {
     if (inventarioId === null || rondaActiva === null || resumenActivo === null || !resumenActivo.sePuedeCerrar) return;
@@ -679,7 +695,7 @@ export function CicloScreen({ rol }: CicloScreenProps): JSX.Element {
                   etiqueta={accionAuditor === 'ajuste' ? 'Iniciando el ajuste…' : 'Empezar el ajuste final'}
                   icono={Scale}
                   variante="principal"
-                  onPress={() => setConfirmacionVisible(true)}
+                  onPress={() => setConfirmacion('ajuste')}
                   deshabilitado={accionAuditor !== null}
                   cargando={accionAuditor === 'ajuste'}
                 />
@@ -780,7 +796,7 @@ export function CicloScreen({ rol }: CicloScreenProps): JSX.Element {
                   }
                   icono={Lock}
                   variante="principal"
-                  onPress={() => void cerrarRondaAhora()}
+                  onPress={() => setConfirmacion('cierre')}
                   deshabilitado={!resumenActivo.sePuedeCerrar}
                   cargando={cerrandoRonda}
                 />
@@ -846,19 +862,19 @@ export function CicloScreen({ rol }: CicloScreenProps): JSX.Element {
         visible={confirmacionVisible}
         transparent
         animationType="fade"
-        onRequestClose={() => setConfirmacionVisible(false)}
+        onRequestClose={() => setConfirmacion(null)}
       >
         <Pressable
           style={styles.modalFondo}
-          onPress={() => setConfirmacionVisible(false)}
+          onPress={() => setConfirmacion(null)}
           accessibilityLabel="Cerrar la confirmación"
         />
         <View pointerEvents="box-none" style={styles.modalCentrado}>
           <View style={[styles.modalCaja, shadow.modal]}>
             <View style={styles.modalCabecera}>
-              <Text style={styles.modalTitulo}>Empezar el ajuste final</Text>
+              <Text style={styles.modalTitulo}>{textoConfirmacion.titulo}</Text>
               <Pressable
-                onPress={() => setConfirmacionVisible(false)}
+                onPress={() => setConfirmacion(null)}
                 style={styles.modalCerrar}
                 accessibilityRole="button"
                 accessibilityLabel="Cerrar la confirmación"
@@ -868,19 +884,18 @@ export function CicloScreen({ rol }: CicloScreenProps): JSX.Element {
             </View>
             {/* La confirmación NOMBRA LA CONSECUENCIA, no pregunta "¿estás
                 seguro?": es el mismo texto del teléfono. */}
-            <Text style={styles.modalTexto}>
-              A partir de ahora el coordinador ya no puede corregir los conteos de este inventario: los valores los
-              cambias tú, viendo el stock. Se puede empezar una sola vez.
-            </Text>
+            <Text style={styles.modalTexto}>{textoConfirmacion.texto}</Text>
             <View style={styles.modalBotones}>
-              <BotonWeb etiqueta="Todavía no" onPress={() => setConfirmacionVisible(false)} />
+              <BotonWeb etiqueta="Todavía no" onPress={() => setConfirmacion(null)} />
               <BotonWeb
-                etiqueta="Empezar el ajuste"
-                icono={Scale}
+                etiqueta={textoConfirmacion.boton}
+                icono={confirmacion === 'cierre' ? Lock : Scale}
                 variante="principal"
                 onPress={() => {
-                  setConfirmacionVisible(false);
-                  void ejecutarAccionAuditor('ajuste');
+                  const cual = confirmacion;
+                  setConfirmacion(null);
+                  if (cual === 'cierre') void cerrarRondaAhora();
+                  else void ejecutarAccionAuditor('ajuste');
                 }}
               />
             </View>
