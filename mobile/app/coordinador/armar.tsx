@@ -790,12 +790,18 @@ export default function ArmarHojasScreen(): JSX.Element {
    */
   const conteoTerminado = fase !== null && fase !== 'contando' && fase !== 'sin-hojas';
 
-  const cifras = items
+  // En un reconteo se arman solo los ítems que pasan, no el catálogo entero:
+  // el encabezado decía «955 ítems» en el 2do y el 3er conteo (visto en el
+  // teléfono el 2026-11-18). Con las hojas ya creadas, lo que tienen; antes,
+  // lo que trajo el stock de la ronda.
+  const itemsDeLaRonda =
+    ronda > 1 ? (hojas.length > 0 ? hojas.reduce((n, h) => n + h.productos.length, 0) : stockRondaItems) : items;
+  const cifras = itemsDeLaRonda
     ? hojas.length > 0
-      ? `${formatoMiles(hojas.length)} hoja${sufijoPlural(hojas.length)} creada${sufijoPlural(hojas.length)} · ${formatoMiles(items)} ítem${sufijoPlural(items)}`
+      ? `${formatoMiles(hojas.length)} hoja${sufijoPlural(hojas.length)} creada${sufijoPlural(hojas.length)} · ${formatoMiles(itemsDeLaRonda)} ítem${sufijoPlural(itemsDeLaRonda)}`
       : previa
-        ? `Saldrían ${formatoMiles(previa.total)} hoja${sufijoPlural(previa.total)} · ${formatoMiles(items)} ítem${sufijoPlural(items)}`
-        : `${formatoMiles(items)} ítem${sufijoPlural(items)}`
+        ? `Saldrían ${formatoMiles(previa.total)} hoja${sufijoPlural(previa.total)} · ${formatoMiles(itemsDeLaRonda)} ítem${sufijoPlural(itemsDeLaRonda)}`
+        : `${formatoMiles(itemsDeLaRonda)} ítem${sufijoPlural(itemsDeLaRonda)}`
     : undefined;
 
   return (

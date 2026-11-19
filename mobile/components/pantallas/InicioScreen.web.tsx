@@ -533,9 +533,11 @@ export function InicioScreen(): JSX.Element {
       const sinRonda = sinDatosDeRonda || rondaActual === null;
       const asignadas = sinRonda ? null : hojasDeLaRonda.filter((h) => h.asignados.length > 0).length;
       const finalizadas = sinRonda ? null : hojasDeLaRonda.filter((h) => h.estado === 'finalizada').length;
+      // Solo hojas EN PROCESO: quien ya finalizó no está contando. Con las 20
+      // hojas finalizadas decía «Contando ahora 1» (teléfono, 2026-11-18).
       const contando = sinRonda
         ? null
-        : new Set(hojasDeLaRonda.filter((h) => h.estado !== 'pendiente').flatMap((h) => h.asignados)).size;
+        : new Set(hojasDeLaRonda.filter((h) => h.estado === 'en-proceso').flatMap((h) => h.asignados)).size;
       // Sin red, totalHojas/items son null: se muestran como "—", nunca
       // como "0 hojas" (que diría "no hay ninguna" en vez de "no lo sé").
       const sinRed = inventario.totalHojas === null || inventario.items === null || sinDatosDeRonda;

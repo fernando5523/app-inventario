@@ -52,7 +52,10 @@ export function TarjetaHoja({ numero, titulo, codigos, asignados, estado, contad
       ? 'Hoja contada por completo'
       : estado === 'finalizada'
         ? 'Finalizada'
-        : 'Contando ahora'
+        : estado === 'en-proceso'
+          ? 'Contando ahora'
+          : // Una hoja pendiente decía «Contando ahora» debajo del rótulo «Pendiente».
+            'Sin empezar'
     : 'Sin catálogo cargado todavía';
   const puedeAbrir = habilitada && onPress !== undefined;
 
