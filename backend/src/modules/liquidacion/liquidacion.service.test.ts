@@ -13,6 +13,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const prismaMock = vi.hoisted(() => ({
   inventario: { findUnique: vi.fn(),  findFirst: vi.fn() },
+  registroAuditoria: { findFirst: vi.fn(async () => null) },
   diferenciaItem: { count: vi.fn(), findMany: vi.fn(async () => []) },
   // Los usa `resolverMontosDeClasificacion` (liquidacion.reclasificacion.ts)
   // cuando el inventario TODAVÍA no está liquidado: `deSucursal` recalcula
@@ -145,6 +146,44 @@ describe('deSucursal', () => {
     // igual que el resto y no puede cambiar (ver `montoPaqueteCongelado`).
     expect(prismaMock.clasificacionProducto.findMany).not.toHaveBeenCalled();
     expect(prismaMock.clasificacionProducto.findMany).not.toHaveBeenCalled();
+  });
+
+  it('ya liquidado: dice cuándo y quién liquidó (de la bitácora) y si está lacrado -- 2026-11-19', async () => {
+    prismaMock.inventario.findFirst.mockResolvedValue({
+      ...inventarioCon(resultadoCompleto(), 'lacrado'),
+      liquidaciones: [
+        {
+          colaboradorId: 1,
+          nombreAlLiquidar: 'Nancy Quispe',
+          rolAlLiquidar: 'conteo',
+          asistio: true,
+          cuotaBase: decimal(40),
+          multaInasistencia: decimal(0),
+          bonoAsistencia: decimal(0),
+          colaborador: { id: 1, nombre: 'Nancy Quispe', rol: 'conteo' },
+        },
+      ],
+    });
+    prismaMock.registroAuditoria.findFirst.mockResolvedValueOnce({
+      createdAt: new Date('2026-11-19T20:57:00.000Z'),
+      actor: { nombre: 'Auditor Raymondi' },
+    } as never);
+
+    const r = await deSucursal(AUDITOR, 1);
+
+    expect(prismaMock.registroAuditoria.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { entidad: 'inventario', entidadId: expect.any(Number), accion: 'inventario.liquidado' } }),
+    );
+    expect(r).toMatchObject({ liquidadoEn: '2026-11-19T20:57:00.000Z', liquidadoPor: 'Auditor Raymondi', lacrado: true });
+  });
+
+  it('proyectada: sin fecha ni autor de liquidación, y no lacrado', async () => {
+    prismaMock.inventario.findFirst.mockResolvedValue(inventarioCon(resultadoCompleto()));
+
+    const r = await deSucursal(AUDITOR, 1);
+
+    expect(r).toMatchObject({ proyectada: true, liquidadoEn: null, liquidadoPor: null, lacrado: false });
+    expect(prismaMock.registroAuditoria.findFirst).not.toHaveBeenCalled();
   });
 
   it('con asistencia y ajustes capturados, calcula el neto normalmente', async () => {

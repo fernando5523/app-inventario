@@ -199,6 +199,18 @@ export interface LiquidacionDto {
    */
   proyectada: boolean;
   /**
+   * CUANDO Y QUIEN liquido, de la bitacora (`inventario.liquidado`). null
+   * mientras la planilla sea proyectada. Antes la pantalla escribia la hora
+   * del reloj y el nombre de quien la estuviera mirando (2026-11-19).
+   */
+  liquidadoEn: string | null;
+  liquidadoPor: string | null;
+  /**
+   * El inventario ya esta lacrado: la pantalla deja de decir "el paso que
+   * sigue es el lacrado" sobre un inventario sellado.
+   */
+  lacrado: boolean;
+  /**
    * Campo NUEVO respecto del puerto del front (`Liquidacion`): hay que
    * sumarlo alla y mostrarlo en la pantalla. Ver AdvertenciaLiquidacion.
    */
@@ -412,6 +424,13 @@ export async function deSucursal(actor: ColaboradorAutenticado, sucursalId: numb
    * hay cuota base con la que armar ninguna fila.
    */
   const persistida = inventario.liquidaciones.length > 0;
+  const firmaLiquidacion = persistida
+    ? await prisma.registroAuditoria.findFirst({
+        where: { entidad: 'inventario', entidadId: inventario.id, accion: 'inventario.liquidado' },
+        orderBy: { id: 'desc' },
+        select: { createdAt: true, actor: { select: { nombre: true } } },
+      })
+    : null;
   const proyeccion =
     persistida || resumen === null
       ? null
@@ -520,6 +539,9 @@ export async function deSucursal(actor: ColaboradorAutenticado, sucursalId: numb
      * ofrece editarla despues.
      */
     proyectada: !persistida,
+    liquidadoEn: firmaLiquidacion?.createdAt.toISOString() ?? null,
+    liquidadoPor: firmaLiquidacion?.actor.nombre ?? null,
+    lacrado: inventario.estado === 'lacrado',
     advertencia: armarAdvertencia({ itemsSinPrecio, asistenciaSinRegistrar, ajustesSinRegistrar }),
   };
 }
